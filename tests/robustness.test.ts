@@ -76,3 +76,51 @@ describe("R5: --exclude-domains re-applied after a redirect", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("R7: --concurrency bounds hydration fetches", () => {
+  it("never exceeds the configured number of in-flight page fetches", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight--;
+        return {
+          ok: true,
+          status: 200,
+          url: "https://x.test/p",
+          headers: { get: (k: string) => (k.toLowerCase() === "content-type" ? "text/html" : null) },
+          async arrayBuffer() {
+            return new TextEncoder().encode("<p>rate limiting content here for this page</p>").buffer;
+          },
+          async text() {
+            return "<p>rate limiting content here</p>";
+          },
+        } as unknown as Response;
+      }),
+    );
+    const dir = mkdtempSync(join(tmpdir(), "us-conc-"));
+    const urls = Array.from({ length: 12 }, (_, i) => `https://x.test/page-${i}`);
+    await runGather(opts({ backends: ["generic"], urls, concurrency: 2, out: dir }));
+    expect(peak).toBeLessThanOrEqual(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("R8: User-Agent", () => {
+  it("sends a realistic browser UA by default", async () => {
+    const spy = installFetchMock(() => ({ body: "<p>ok</p>" }));
+    await httpGet("https://x.test/a");
+    const ua = (spy.mock.calls[0]![1] as any).headers["user-agent"];
+    expect(ua).toMatch(/Mozilla\/5\.0.*Chrome/);
+  });
+
+  it("honors a per-call UA override (contact UA for polite APIs)", async () => {
+    const spy = installFetchMock(() => ({ body: "{}", contentType: "application/json" }));
+    await httpGet("https://api.test/a", { userAgent: "ultrasearch/1.x (+url)" });
+    expect((spy.mock.calls[0]![1] as any).headers["user-agent"]).toMatch(/ultrasearch/);
+  });
+});

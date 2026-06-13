@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Manifest, RawSource, Source } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
-import { bestExcerpt, capExtract } from "./backends/fetch.js";
+import { focusedSnippet, capExtract } from "./backends/fetch.js";
 
 // The grounding contract, inlined into DOSSIER.md so the model writing the
 // tiers has the rules in front of it. `check` enforces exactly this.
@@ -44,7 +44,9 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
     trust: trustScore(rs.url, rs.backend),
     score: Number(rs.score.toFixed(4)),
     extract: `sources/${id}.md`,
-    snippet: (rs.snippet || bestExcerpt(text, question)).slice(0, 360),
+    // A richer multi-sentence digest snippet when we have full text; a backend's
+    // own snippet (already short) is used as-is. Capped modestly for the digest.
+    snippet: (rs.snippet || focusedSnippet(text, question, { maxChars: 480, maxSentences: 3 })).slice(0, 480),
     meta: rs.meta,
   };
 }

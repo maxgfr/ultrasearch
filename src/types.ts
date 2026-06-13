@@ -11,6 +11,9 @@ export const VERSION = "1.1.0";
 export type BackendKind =
   | "searxng"
   | "duckduckgo"
+  | "ddglite"
+  | "mojeek"
+  | "marginalia"
   | "wikipedia"
   | "stackexchange"
   | "hackernews"
@@ -28,6 +31,9 @@ export type BackendKind =
 export const ALL_BACKENDS: readonly BackendKind[] = [
   "searxng",
   "duckduckgo",
+  "ddglite",
+  "mojeek",
+  "marginalia",
   "wikipedia",
   "stackexchange",
   "hackernews",
@@ -63,9 +69,11 @@ export const DEPTH_CAPS: Record<Depth, { maxSources: number; perSource: number; 
   deep: { maxSources: 60, perSource: 10, deepOnly: true },
 };
 
-// Which keyless discovery engine the web layer uses; "auto" tries
-// searxng → duckduckgo, then emits a hint to use the agent's own WebSearch.
-export type WebEngine = "auto" | "searxng" | "ddg" | "claude";
+// Which keyless discovery engine the web layer uses. "auto" runs a resilient
+// fallback cascade (searxng → duckduckgo → ddglite → mojeek → marginalia),
+// short-circuiting once one yields enough results; the named engines pin to that
+// one; "claude" drops web discovery so the agent drives it via its own WebSearch.
+export type WebEngine = "auto" | "searxng" | "ddg" | "ddglite" | "mojeek" | "marginalia" | "claude";
 
 // Optional, backend-specific metadata carried on a source.
 export interface SourceMeta {
@@ -144,6 +152,7 @@ export interface GatherOptions {
   mode: ModeName;
   depth: Depth;
   backends?: BackendKind[]; // explicit override of the mode profile
+  queries?: string[]; // agent-supplied query variants (override the planner)
   maxSources: number;
   perSource: number;
   lang: string;
@@ -152,6 +161,8 @@ export interface GatherOptions {
   urls?: string[]; // explicit URLs for the `generic` backend / `search --backend generic`
   since?: string; // recency filter where a backend supports it
   excludeDomains: string[];
+  concurrency?: number; // in-flight page hydration fetches (default 6)
+  rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
   out?: string;
   json: boolean;
   fresh: boolean;

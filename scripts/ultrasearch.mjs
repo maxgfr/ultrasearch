@@ -10,6 +10,9 @@ var VERSION = "1.1.0";
 var ALL_BACKENDS = [
   "searxng",
   "duckduckgo",
+  "ddglite",
+  "mojeek",
+  "marginalia",
   "wikipedia",
   "stackexchange",
   "hackernews",
@@ -563,6 +566,9 @@ function planVariants(question, depth) {
   if (kw && kw.toLowerCase() !== base.toLowerCase()) variants.push(kw);
   const idents = extractIdentifiers(question);
   if (idents.length) variants.push(idents.join(" "));
+  const ordered = keywords(question);
+  if (ordered.length >= 2) variants.push(`"${ordered.slice(0, 4).join(" ")}"`);
+  if (idents.length && ordered.length) variants.push([ordered[0], ...idents].join(" "));
   const seen = /* @__PURE__ */ new Set();
   const uniq = [];
   for (const v of variants) {
@@ -575,14 +581,151 @@ function planVariants(question, depth) {
   const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
   return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
 }
-function contentCoverage(matcher, text) {
-  if (!matcher.canonicals.length || !text) return 0;
-  const hit = /* @__PURE__ */ new Set();
-  for (const line of text.split("\n")) {
-    for (const c of matcher.matchLine(line)) hit.add(c);
-    if (hit.size === matcher.canonicals.length) break;
+function bm25Tokenize(text) {
+  if (!text) return [];
+  const out = [];
+  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
+    if (raw.length < 2) continue;
+    if (STOPWORDS.has(raw.toLowerCase())) continue;
+    const t = foldTerm(raw);
+    if (t.length >= 2) out.push(t);
   }
-  return hit.size / matcher.canonicals.length;
+  return out;
+}
+function docTokens(doc, titleWeight, headingWeight) {
+  const out = bm25Tokenize(doc.body);
+  const headings = bm25Tokenize(doc.headings);
+  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  const title = bm25Tokenize(doc.title);
+  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  return out;
+}
+function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
+  if (queryTerms.length < 2) return 0;
+  const q = new Set(queryTerms);
+  const hits = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (q.has(tok)) hits.push({ pos: i, term: tok });
+  }
+  if (hits.length < 2) return 0;
+  let close = 0;
+  for (let i = 1; i < hits.length; i++) {
+    if (hits[i].term !== hits[i - 1].term && hits[i].pos - hits[i - 1].pos <= window) close++;
+  }
+  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
+}
+function buildBm25Index(question, docs, opts = {}) {
+  const k1 = opts.k1 ?? 1.2;
+  const b = opts.b ?? 0.75;
+  const titleWeight = 3;
+  const headingWeight = 2;
+  const queryTerms = [...new Set(bm25Tokenize(question))];
+  const N = docs.length;
+  const df = /* @__PURE__ */ new Map();
+  let totalLen = 0;
+  for (const doc of docs) {
+    const toks = docTokens(doc, titleWeight, headingWeight);
+    totalLen += toks.length;
+    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const avgdl = N ? totalLen / N : 0;
+  const idf = /* @__PURE__ */ new Map();
+  for (const t of queryTerms) {
+    if (N < 3) {
+      idf.set(t, 1);
+      continue;
+    }
+    const dfi = df.get(t) ?? 0;
+    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
+  }
+  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+function bm25Score(index, doc) {
+  if (!index.queryTerms.length) return 0;
+  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
+  const dl = toks.length;
+  if (!dl) return 0;
+  const tf = /* @__PURE__ */ new Map();
+  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+  const { k1, b, avgdl } = index;
+  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
+  let score = 0;
+  for (const term of index.queryTerms) {
+    const f = tf.get(term);
+    if (!f) continue;
+    const idf = index.idf.get(term) ?? 0;
+    score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
+  }
+  return score * (1 + proximityBonus(toks, index.queryTerms));
+}
+function recencyScore(meta, minYear, maxYear) {
+  const y = typeof meta?.year === "number" ? meta.year : void 0;
+  if (y === void 0 || maxYear <= minYear) return 0.5;
+  const clamped = Math.min(maxYear, Math.max(minYear, y));
+  return (clamped - minYear) / (maxYear - minYear);
+}
+var FNV_OFFSET = 0xcbf29ce484222325n;
+var FNV_PRIME = 0x100000001b3n;
+var MASK64 = (1n << 64n) - 1n;
+function fnv1a64(s) {
+  let h = FNV_OFFSET;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = h * FNV_PRIME & MASK64;
+  }
+  return h;
+}
+function simhash(text) {
+  const toks = bm25Tokenize(text);
+  const shingles = [];
+  if (toks.length < 3) shingles.push(...toks);
+  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
+  if (!shingles.length) return 0n;
+  const v = new Array(64).fill(0);
+  for (const sh of shingles) {
+    const h = fnv1a64(sh);
+    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
+  }
+  let out = 0n;
+  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
+  return out;
+}
+function hammingDistance(a, b) {
+  let x = a ^ b;
+  let count = 0;
+  while (x) {
+    x &= x - 1n;
+    count++;
+  }
+  return count;
+}
+function betterSource(a, b) {
+  if (a.score !== b.score) return a.score > b.score;
+  return a.url.localeCompare(b.url) < 0;
+}
+function dedupeNearDuplicates(items, opts = {}) {
+  const maxBits = opts.maxBits ?? 3;
+  const minChars = opts.minChars ?? 500;
+  const kept = [];
+  let dropped = 0;
+  for (const it of items) {
+    const text = it.text || "";
+    const hash = text.length >= minChars ? simhash(text) : null;
+    if (hash !== null) {
+      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
+      if (dup) {
+        dropped++;
+        if (betterSource(it, dup.it)) {
+          dup.it = it;
+          dup.hash = hash;
+        }
+        continue;
+      }
+    }
+    kept.push({ it, hash });
+  }
+  return { items: kept.map((k) => k.it), dropped };
 }
 function sinceEpochSeconds(since) {
   if (!since) return null;
@@ -607,11 +750,98 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
+// src/backends/pdf.ts
+import { inflateSync, inflateRawSync } from "zlib";
+function decodePdfString(tok) {
+  if (!tok || tok[0] !== "(") return "";
+  const inner = tok.slice(1, -1);
+  const simple = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
+  return inner.replace(/\\([nrtbf()\\])/g, (_m, c) => simple[c] ?? c).replace(/\\([0-7]{1,3})/g, (_m, o) => String.fromCharCode(parseInt(o, 8) & 255));
+}
+function decodeTJArray(tok) {
+  let out = "";
+  const re = /\((?:\\.|[^\\()])*\)|-?\d+(?:\.\d+)?/g;
+  let m;
+  while (m = re.exec(tok)) {
+    const t = m[0];
+    if (t[0] === "(") out += decodePdfString(t);
+    else if (Number(t) <= -100) out += " ";
+  }
+  return out;
+}
+function extractTextOps(content) {
+  let out = "";
+  let lastString = "";
+  let lastArray = "";
+  const re = /\((?:\\.|[^\\()])*\)|\[(?:\\.|[^\]\\])*\]|\bT\*|\bTd\b|\bTD\b|\bTj\b|\bTJ\b|'|"/g;
+  let m;
+  while (m = re.exec(content)) {
+    const tok = m[0];
+    if (tok[0] === "(") lastString = tok;
+    else if (tok[0] === "[") lastArray = tok;
+    else if (tok === "Tj") {
+      out += decodePdfString(lastString) + " ";
+      lastString = "";
+    } else if (tok === "'" || tok === '"') {
+      out += "\n" + decodePdfString(lastString) + " ";
+      lastString = "";
+    } else if (tok === "TJ") {
+      out += decodeTJArray(lastArray) + " ";
+      lastArray = "";
+    } else if (tok === "T*") {
+      out += "\n";
+    }
+  }
+  return out;
+}
+function extractStreams(buf) {
+  const out = [];
+  const s = buf.toString("latin1");
+  const re = /stream\r?\n/g;
+  let m;
+  while (m = re.exec(s)) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf("endstream", start);
+    if (end < 0) continue;
+    let stop = end;
+    if (s[stop - 1] === "\n") stop--;
+    if (s[stop - 1] === "\r") stop--;
+    const chunk = buf.subarray(start, stop);
+    let data;
+    try {
+      data = inflateSync(chunk);
+    } catch {
+      try {
+        data = inflateRawSync(chunk);
+      } catch {
+        data = chunk;
+      }
+    }
+    out.push(data.toString("latin1"));
+  }
+  return out;
+}
+function pdfToText(buf) {
+  let out = "";
+  try {
+    for (const stream of extractStreams(buf)) {
+      if (/\b(Tj|TJ)\b/.test(stream) || /\)\s*'/.test(stream)) out += extractTextOps(stream) + "\n";
+    }
+  } catch {
+  }
+  return out.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // src/backends/fetch.ts
-var UA = "ultrasearch/0.x (+https://github.com/maxgfr/ultrasearch)";
+var BROWSER_UA = process.env.ULTRASEARCH_UA || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+var CONTACT_UA = "ultrasearch/1.x (+https://github.com/maxgfr/ultrasearch)";
 var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
-var MAX_ATTEMPTS = 2;
-var DEFAULT_RETRY_MS = 600;
+function envInt(name, def, min, max) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.floor(v))) : def;
+}
+var MAX_ATTEMPTS = envInt("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
+var DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5e3);
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -631,14 +861,16 @@ async function httpGet(url, opts = {}) {
       const res = await fetch(url, {
         signal: ctrl.signal,
         redirect: "follow",
-        headers: { "user-agent": UA, accept: opts.accept ?? "*/*" }
+        headers: { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" }
       });
       const buf = Buffer.from(await res.arrayBuffer());
       const max = opts.maxBytes ?? 4 * 1024 * 1024;
+      const capped = buf.subarray(0, max);
       const result = {
         ok: res.ok,
         status: res.status,
-        body: buf.subarray(0, max).toString("utf8"),
+        body: opts.binary ? "" : capped.toString("utf8"),
+        bytes: opts.binary ? capped : void 0,
         contentType: res.headers.get("content-type") ?? "",
         url: res.url || url
       };
@@ -669,7 +901,7 @@ async function httpJson(method, url, body, opts = {}) {
         headers: {
           "content-type": "application/json",
           accept: opts.accept ?? "application/json",
-          "user-agent": UA
+          "user-agent": opts.userAgent ?? BROWSER_UA
         },
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
@@ -745,14 +977,53 @@ function htmlTitle(html) {
   const t = decodeEntities(m[1].replace(/\s+/g, " ").trim());
   return t || void 0;
 }
+function extractMainHtml(html) {
+  const visible = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().length;
+  const tiers = [
+    /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
+    /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
+    /<(?:div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>([\s\S]*?)<\/(?:div|section)>/gi
+  ];
+  let candidates = [];
+  for (const re of tiers) {
+    let m;
+    while (m = re.exec(html)) candidates.push(m[1]);
+    if (candidates.length) break;
+  }
+  if (!candidates.length) return html;
+  let best = candidates[0];
+  let bestLen = visible(best);
+  for (const c of candidates.slice(1)) {
+    const len = visible(c);
+    if (len > bestLen) {
+      best = c;
+      bestLen = len;
+    }
+  }
+  const fullLen = visible(html);
+  if (bestLen < 500 && bestLen < fullLen * 0.3) return html;
+  return best;
+}
+var PDF_URL_RE = /\.pdf($|[?#])/i;
+var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
 async function fetchAndExtract(url) {
-  const res = await httpGet(url, { accept: "text/html,text/plain,*/*" });
+  const wantsPdf = PDF_URL_RE.test(url);
+  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*" });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
   }
+  if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
+    const bytes = res.bytes ?? (await httpGet(url, PDF_FETCH_OPTS)).bytes;
+    const text2 = bytes ? pdfToText(bytes) : "";
+    return {
+      text: text2,
+      finalUrl: res.url,
+      note: text2 ? void 0 : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`
+    };
+  }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
-  const text = isHtml ? htmlToText(res.body) : res.body;
+  const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
   return { text, title, finalUrl: res.url };
 }
@@ -771,25 +1042,31 @@ function nearestHeading(lines, anchor) {
   }
   return heading;
 }
-function bestExcerpt(text, question, maxChars = 360) {
+function focusedSnippet(text, question, opts = {}) {
+  const maxChars = opts.maxChars ?? 360;
+  const maxSentences = opts.maxSentences ?? 3;
   const lines = text.split("\n");
   const matcher = buildMatcher(question);
-  let bestIdx = -1;
-  let bestCov = 0;
+  const sentences = [];
   for (let i = 0; i < lines.length; i++) {
-    const cov = matcher.matchLine(lines[i]).size;
-    if (cov > bestCov) {
-      bestCov = cov;
-      bestIdx = i;
+    const line = lines[i];
+    if (/^#{1,6}\s/.test(line)) continue;
+    for (const raw of line.split(/(?<=[.!?])\s+/)) {
+      const t = raw.trim();
+      if (t.length < 20) continue;
+      sentences.push({ text: t, line: i, score: matcher.matchLine(t).size });
     }
   }
-  if (bestIdx < 0) {
-    return lines.slice(0, 4).join(" ").slice(0, maxChars).trim();
-  }
-  const start = Math.max(0, bestIdx - 1);
-  const window = lines.slice(start, start + 6).join(" ").slice(0, maxChars).trim();
-  const heading = nearestHeading(lines, bestIdx);
-  return heading && !window.startsWith(heading) ? `${heading} \u2014 ${window}` : window;
+  if (!sentences.length) return lines.slice(0, 4).join(" ").slice(0, maxChars).trim();
+  const hits = sentences.filter((s) => s.score > 0);
+  const chosen = (hits.length ? hits : sentences).map((s, idx) => ({ s, idx })).sort((a, b) => b.s.score - a.s.score || a.idx - b.idx).slice(0, maxSentences).sort((a, b) => a.idx - b.idx).map((x) => x.s);
+  const heading = nearestHeading(lines, chosen[0].line);
+  let out = chosen.map((s) => s.text).join(" ");
+  if (heading && !out.startsWith(heading)) out = `${heading} \u2014 ${out}`;
+  return out.slice(0, maxChars).trim();
+}
+function bestExcerpt(text, question, maxChars = 360) {
+  return focusedSnippet(text, question, { maxChars, maxSentences: 2 });
 }
 function capExtract(text, depth) {
   const cap = depth === "deep" ? Infinity : depth === "standard" ? 8e3 : 4e3;
@@ -897,6 +1174,103 @@ var duckduckgoBackend = async (ctx) => {
     backend: "duckduckgo",
     items,
     notes: items.length ? [`DuckDuckGo returned ${items.length} result(s).`] : [`DuckDuckGo returned no results.`]
+  };
+};
+
+// src/backends/ddglite.ts
+var ddgliteBackend = async (ctx) => {
+  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(ctx.question)}`;
+  const r = await httpGet(url, { accept: "text/html", timeoutMs: 12e3 });
+  if (!r.ok || !r.body) {
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+    return { backend: "ddglite", items: [], notes: [`DuckDuckGo Lite ${why}.`] };
+  }
+  const found = [];
+  const blockRe = /<a\b([^>]*\bresult-link\b[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bresult-link\b|$)/gi;
+  let m;
+  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
+    const href0 = /\bhref="([^"]+)"/.exec(m[1]);
+    if (!href0) continue;
+    const href = realUrl(href0[1]);
+    if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
+    const snipM = /class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i.exec(m[3]);
+    found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
+  }
+  const items = found.map((f, i) => ({
+    url: f.url,
+    title: f.title,
+    backend: "ddglite",
+    score: found.length - i,
+    snippet: f.snippet.slice(0, 360),
+    lang: ctx.options.lang
+  }));
+  return {
+    backend: "ddglite",
+    items,
+    notes: items.length ? [`DuckDuckGo Lite returned ${items.length} result(s).`] : [`DuckDuckGo Lite returned no results.`]
+  };
+};
+
+// src/backends/mojeek.ts
+var mojeekBackend = async (ctx) => {
+  const url = `https://www.mojeek.com/search?q=${encodeURIComponent(ctx.question)}`;
+  const r = await httpGet(url, { accept: "text/html", timeoutMs: 12e3 });
+  if (!r.ok || !r.body) {
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+    return { backend: "mojeek", items: [], notes: [`Mojeek ${why}.`] };
+  }
+  const found = [];
+  const blockRe = /<a\b([^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bclass="[^"]*\btitle\b|$)/gi;
+  let m;
+  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
+    const href0 = /\bhref="([^"]+)"/.exec(m[1]);
+    if (!href0) continue;
+    let href = href0[1];
+    if (href.startsWith("//")) href = "https:" + href;
+    if (!/^https?:\/\//.test(href) || /mojeek\.com/.test(href)) continue;
+    const snipM = /<p\b[^>]*\bclass="[^"]*\bs\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(m[3]);
+    found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
+  }
+  const items = found.map((f, i) => ({
+    url: f.url,
+    title: f.title,
+    backend: "mojeek",
+    score: found.length - i,
+    snippet: f.snippet.slice(0, 360),
+    lang: ctx.options.lang
+  }));
+  return {
+    backend: "mojeek",
+    items,
+    notes: items.length ? [`Mojeek returned ${items.length} result(s).`] : [`Mojeek returned no results.`]
+  };
+};
+
+// src/backends/marginalia.ts
+var marginaliaBackend = async (ctx) => {
+  const url = `https://api.marginalia-search.com/public/search/${encodeURIComponent(ctx.question)}?count=${ctx.options.perSource * 2}`;
+  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  if (!r.ok) {
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status || 0})`;
+    return { backend: "marginalia", items: [], notes: [`Marginalia ${why}.`] };
+  }
+  const results = Array.isArray(r.data?.results) ? r.data.results : [];
+  const items = [];
+  results.slice(0, ctx.options.perSource * 2).forEach((x, i) => {
+    if (!x?.url || typeof x.url !== "string") return;
+    items.push({
+      url: x.url,
+      title: String(x.title ?? x.url),
+      backend: "marginalia",
+      score: results.length - i,
+      snippet: String(x.description ?? "").slice(0, 360),
+      lang: ctx.options.lang
+    });
+  });
+  return {
+    backend: "marginalia",
+    items,
+    notes: items.length ? [`Marginalia returned ${items.length} result(s).`] : [`Marginalia returned no results.`]
   };
 };
 
@@ -1142,7 +1516,7 @@ function tag(block, name) {
 var arxivBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
-  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3 });
+  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: CONTACT_UA });
   if (!r.ok || !r.body) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
     return { backend: "arxiv", items: [], notes: [`arXiv search ${why}.`] };
@@ -1155,16 +1529,19 @@ var arxivBackend = async (ctx) => {
     const year = Number(/<published>(\d{4})/.exec(block)?.[1] ?? 0) || void 0;
     const title = tag(block, "title");
     const summary = tag(block, "summary");
+    const absUrl = idUrl || `https://arxiv.org/abs/${arxivId}`;
+    const htmlUrl = `https://arxiv.org/html/${arxivId}`;
     return {
-      url: idUrl || `https://arxiv.org/abs/${arxivId}`,
+      // Point at the HTML full text so the gatherer hydrates the whole paper,
+      // not just the abstract. No `text` here → hydration fetches htmlUrl; if
+      // that paper has no HTML rendering, the fetch falls back to the abstract
+      // snippet (gather sets text = snippet when a fetch yields nothing).
+      url: htmlUrl,
       title,
       backend: "arxiv",
       score: n - i,
       snippet: summary.slice(0, 360),
-      text: `${title}
-
-${summary}`,
-      meta: { arxivId, authors, year }
+      meta: { arxivId, authors, year, htmlUrl, absUrl }
     };
   });
   return {
@@ -1179,7 +1556,7 @@ var crossrefBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` + (since ? `&filter=from-pub-date:${since}` : "");
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3, userAgent: CONTACT_UA });
   const items0 = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
     return { backend: "crossref", items: [], notes: [`Crossref search failed or empty (status ${r.status}).`] };
@@ -1355,6 +1732,9 @@ var pubmedBackend = async (ctx) => {
 var HANDLERS = {
   searxng: searxngBackend,
   duckduckgo: duckduckgoBackend,
+  ddglite: ddgliteBackend,
+  mojeek: mojeekBackend,
+  marginalia: marginaliaBackend,
   wikipedia: wikipediaBackend,
   generic: genericBackend,
   fixture: fixtureBackend,
@@ -1458,7 +1838,9 @@ function buildSource(rs, id, builtAt, question) {
     trust: trustScore(rs.url, rs.backend),
     score: Number(rs.score.toFixed(4)),
     extract: `sources/${id}.md`,
-    snippet: (rs.snippet || bestExcerpt(text, question)).slice(0, 360),
+    // A richer multi-sentence digest snippet when we have full text; a backend's
+    // own snippet (already short) is used as-is. Capped modestly for the digest.
+    snippet: (rs.snippet || focusedSnippet(text, question, { maxChars: 480, maxSentences: 3 })).slice(0, 480),
     meta: rs.meta
   };
 }
@@ -1591,16 +1973,44 @@ function toBibtex(sources) {
 import { writeFileSync as writeFileSync2 } from "fs";
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
+function headingLines(text) {
+  return text.split("\n").filter((l) => /^#{1,6}\s/.test(l)).join("\n");
+}
 var ENRICH_NUDGE = "agent: enrich thin areas with your own WebSearch, then ingest each good URL via `ultrasearch fetch --url <u> --out <dir>` before writing the report.";
 function defaultRunDir(mode, question, d) {
   return join2(tmpdir(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
 }
-var DISCOVERY = ["searxng", "duckduckgo"];
+var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
+var ENGINE_BACKEND = {
+  searxng: "searxng",
+  ddg: "duckduckgo",
+  ddglite: "ddglite",
+  mojeek: "mojeek",
+  marginalia: "marginalia"
+};
 function applyWebEngine(kinds, engine) {
   if (engine === "auto") return kinds;
   if (engine === "claude") return kinds.filter((k) => !DISCOVERY.includes(k));
-  const keep = engine === "searxng" ? "searxng" : "duckduckgo";
-  return kinds.filter((k) => !DISCOVERY.includes(k) || k === keep);
+  const keep = ENGINE_BACKEND[engine];
+  if (kinds.includes(keep)) return kinds.filter((k) => !DISCOVERY.includes(k) || k === keep);
+  return [...kinds.filter((k) => !DISCOVERY.includes(k)), keep];
+}
+async function runWebCascade(engines, ctx) {
+  const out = [];
+  const tried = [];
+  for (const engine of engines) {
+    const [r] = await runBackends([engine], ctx);
+    if (!r) continue;
+    out.push(r);
+    tried.push(engine);
+    if (r.items.length >= ctx.options.perSource) break;
+  }
+  const producers = out.filter((r) => r.items.length > 0).map((r) => r.backend);
+  if (tried.length > 1 && producers.length) {
+    const lead = out.find((r) => r.items.length > 0);
+    if (lead) lead.notes = [...lead.notes, `Web cascade tried ${tried.join(" \u2192 ")}; results from ${producers.join(", ")}.`];
+  }
+  return out;
 }
 function resolveBackends(options, mode) {
   if (options.backends && options.backends.length) return [...new Set(options.backends)];
@@ -1628,63 +2038,131 @@ function fuse(lists) {
   merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
   return merged;
 }
+function resolveVariants(options) {
+  if (options.queries && options.queries.length) {
+    const cap = options.depth === "summary" ? 2 : options.depth === "standard" ? 4 : 6;
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const q of options.queries) {
+      const t = q.trim();
+      const key = t.toLowerCase();
+      if (t && !seen.has(key)) {
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    if (out.length) return out.slice(0, cap);
+  }
+  return planVariants(options.question, options.depth);
+}
 async function runGather(options) {
   const t0 = Date.now();
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
-  const variants = planVariants(options.question, options.depth);
+  const variants = resolveVariants(options);
   const ctx = { question: options.question, mode, options, variants };
-  const results = await runBackends(backends, ctx);
-  const lists = results.map((r) => [...r.items].sort((a, b) => b.score - a.score));
-  let merged = fuse(lists);
-  const droppedDup = lists.reduce((n, l) => n + l.length, 0) - merged.length;
-  if (options.excludeDomains.length) {
-    merged = merged.filter((it) => {
-      const d = domainOf(it.url);
-      return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
-    });
+  const explicit = !!(options.backends && options.backends.length);
+  const webBackends = backends.filter((b) => DISCOVERY.includes(b));
+  let results;
+  if (explicit || webBackends.length === 0) {
+    results = await runBackends(backends, ctx);
+  } else {
+    const rest = backends.filter((b) => !DISCOVERY.includes(b));
+    const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
+    const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx)]);
+    results = [...restResults, ...webResults];
   }
-  const overshoot = OVERSHOOT[options.depth] ?? 10;
-  const pool = merged.slice(0, Math.min(merged.length, options.maxSources + overshoot));
-  const hydrateNotes = [];
-  await mapLimit(pool, HYDRATE_CONCURRENCY, async (it) => {
-    if (it.text && it.text.trim()) return;
-    const { text, title, note, finalUrl } = await fetchAndExtract(it.url);
-    if (finalUrl && finalUrl !== it.url) it.url = finalUrl;
-    if (note) hydrateNotes.push(note);
-    if (text && text.trim()) {
-      it.text = text;
-      if (!it.snippet) it.snippet = bestExcerpt(text, options.question);
-      if ((!it.title || it.title === it.url) && title) it.title = title;
-    } else {
-      it.text = it.snippet || "";
+  const excluded = (it) => {
+    const d = domainOf(it.url);
+    return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
+  };
+  const hydrateCache = /* @__PURE__ */ new Map();
+  async function assemble(rawLists) {
+    let merged2 = fuse(rawLists);
+    const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
+    if (options.excludeDomains.length) merged2 = merged2.filter(excluded);
+    const overshoot = OVERSHOOT[options.depth] ?? 10;
+    const pool = merged2.slice(0, Math.min(merged2.length, options.maxSources + overshoot));
+    const hydrateNotes = [];
+    await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
+      if (it.text && it.text.trim()) return;
+      const key = canonicalizeUrl(it.url);
+      let res = hydrateCache.get(key);
+      if (!res) {
+        res = await fetchAndExtract(it.url);
+        hydrateCache.set(key, res);
+      }
+      if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
+      if (res.note) hydrateNotes.push(res.note);
+      if (res.text && res.text.trim()) {
+        it.text = res.text;
+        if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
+        if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
+      } else {
+        it.text = it.snippet || "";
+      }
+    });
+    let withContent = pool.filter((it) => it.text && it.text.trim() || it.snippet.trim());
+    if (options.excludeDomains.length) withContent = withContent.filter(excluded);
+    const docs = withContent.map((it) => ({
+      id: it.url,
+      title: it.title || "",
+      headings: headingLines(it.text || ""),
+      body: it.text || it.snippet || ""
+    }));
+    const bm25 = buildBm25Index(options.question, docs);
+    const rawContent = docs.map((d) => bm25Score(bm25, d));
+    const contentMax = Math.max(1e-9, ...rawContent);
+    const rrfMax = Math.max(1e-9, ...withContent.map((it) => it.score));
+    const years = withContent.map((it) => it.meta?.year).filter((y) => typeof y === "number");
+    const minYear = years.length ? Math.min(...years) : 0;
+    const maxYear = years.length ? Math.max(...years) : 0;
+    withContent.forEach((it, i) => {
+      const content = rawContent[i] / contentMax;
+      const rrfN = it.score / rrfMax;
+      const trust = trustScore(it.url, it.backend);
+      const recency = recencyScore(it.meta, minYear, maxYear);
+      it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
+    });
+    withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+    const near = dedupeNearDuplicates(withContent);
+    return { merged: near.items.slice(0, options.maxSources), withContent, hydrateNotes, droppedDup, nearDropped: near.dropped, queryTerms: bm25.queryTerms };
+  }
+  const lists = results.map((r2) => [...r2.items].sort((a, b) => b.score - a.score));
+  let r = await assemble(lists);
+  let gapNote;
+  if ((options.rounds ?? 1) >= 2 && webBackends.length > 0 && !explicit) {
+    const top = r.withContent.slice(0, Math.min(10, r.withContent.length));
+    const gaps = r.queryTerms.filter((term) => {
+      let cov = 0;
+      for (const it of top) if (bm25Tokenize(it.text || it.snippet || "").includes(term)) cov++;
+      return cov < 2;
+    });
+    if (gaps.length) {
+      const seenTerm = /* @__PURE__ */ new Set();
+      const gapQuery = [...rankedKeywords(options.question).slice(0, 2), ...gaps].filter((t) => {
+        const k = t.toLowerCase();
+        return seenTerm.has(k) ? false : (seenTerm.add(k), true);
+      }).join(" ");
+      const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
+      const gapResults = await runWebCascade(cascade, { ...ctx, question: gapQuery, variants: [gapQuery] });
+      results = [...results, ...gapResults];
+      const gapLists = gapResults.map((rr) => [...rr.items].sort((a, b) => b.score - a.score));
+      r = await assemble([...lists, ...gapLists]);
+      gapNote = `Gap round searched "${gapQuery}" for under-covered term(s): ${gaps.join(", ")}.`;
     }
-  });
-  let withContent = pool.filter((it) => it.text && it.text.trim() || it.snippet.trim());
-  if (options.excludeDomains.length) {
-    withContent = withContent.filter((it) => {
-      const d = domainOf(it.url);
-      return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
-    });
   }
-  const matcher = buildMatcher(options.question);
-  const rrfMax = Math.max(1e-9, ...withContent.map((it) => it.score));
-  for (const it of withContent) {
-    const cov = contentCoverage(matcher, it.text || it.snippet);
-    const rrfN = it.score / rrfMax;
-    const trust = trustScore(it.url, it.backend);
-    it.score = Number((0.5 * rrfN + 0.35 * cov + 0.15 * trust).toFixed(6));
-  }
-  withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  merged = withContent.slice(0, options.maxSources);
-  const backendsUsed = results.filter((r) => r.items.length > 0).map((r) => r.backend);
+  const merged = r.merged;
+  const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
   const timings = {};
-  for (const r of results) if (r.ms !== void 0) timings[r.backend] = r.ms;
+  for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
   const notes = [
-    ...results.flatMap((r) => r.notes),
-    ...hydrateNotes,
-    ...droppedDup > 0 ? [`Dropped ${droppedDup} duplicate result(s) across backends.`] : [],
+    ...results.flatMap((res) => res.notes),
+    ...r.hydrateNotes,
+    ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
+    ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
+    ...gapNote ? [gapNote] : [],
     ENRICH_NUDGE
   ];
   const manifest = {
@@ -2285,14 +2763,20 @@ Options:
   --depth <d>          ${ALL_DEPTHS.join(" | ")}            (default: standard)
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
+  --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
+                       built-in planner \u2014 use to drive recall with your own phrasings)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Preferred language                (default: en)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
-  --web-engine <e>     auto | searxng | ddg | claude     (default: auto)
+  --web-engine <e>     auto | searxng | ddg | ddglite | mojeek | marginalia | claude
+                       auto = resilient fallback cascade        (default: auto)
   --url <u,...>        URLs for the 'generic' backend / 'fetch'
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
+  --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
+                       search for under-covered terms          (default: 1)
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check: the dossier dir to operate on
   --json               Machine-readable output
@@ -2313,8 +2797,11 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "depth",
   "backends",
   "backend",
+  "queries",
   "max-sources",
   "per-source",
+  "concurrency",
+  "rounds",
   "out",
   "run",
   "lang",
@@ -2426,6 +2913,9 @@ function buildGatherOptions(p, opts = {}) {
     "auto",
     "searxng",
     "ddg",
+    "ddglite",
+    "mojeek",
+    "marginalia",
     "claude"
   ]);
   return {
@@ -2433,6 +2923,7 @@ function buildGatherOptions(p, opts = {}) {
     mode,
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : void 0,
+    queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : void 0,
     maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
@@ -2441,6 +2932,8 @@ function buildGatherOptions(p, opts = {}) {
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
+    rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
     out: p.values.out ? resolve(p.values.out) : void 0,
     json: p.bools.has("json"),
     fresh: p.bools.has("fresh")
@@ -2571,5 +3064,6 @@ if (isInvokedDirectly()) {
 }
 export {
   COMMANDS,
+  buildGatherOptions,
   parseArgs
 };

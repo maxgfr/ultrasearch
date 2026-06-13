@@ -1,12 +1,13 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpGet, decodeEntities } from "./fetch.js";
 
-function stripTags(s: string): string {
+export function stripTags(s: string): string {
   return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
 }
 
 // Decode DDG's redirector link: the real URL rides in the `uddg` query param.
-function realUrl(href: string): string {
+// Shared by the DuckDuckGo HTML and Lite backends.
+export function realUrl(href: string): string {
   const uddg = /[?&]uddg=([^&]+)/.exec(href);
   if (uddg) {
     try {

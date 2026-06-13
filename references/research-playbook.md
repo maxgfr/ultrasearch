@@ -23,7 +23,10 @@ The keyless backends search literally. Lead with the distinctive terms:
 - author or method names for `research` mode.
 
 `gather` once with the best phrasing; use `search --backend <kind> --q "<variant>"`
-to probe other phrasings cheaply (it writes nothing).
+to probe other phrasings cheaply (it writes nothing). When you already know the
+distinctive phrasings, pass them all at once with
+`--queries "natural phrasing|exact error text|author method"` — they override the
+built-in planner and fan out across the multi-query backends in a single run.
 
 ## 3. Read, then find the gaps
 
@@ -32,6 +35,10 @@ Open `DOSSIER.md`. The dossier is **thin** when:
 - no source actually addresses the specific sub-question, or
 - one backend dominated and a needed angle is missing (e.g. `bug` has SO answers
   but no GitHub issue confirming the fix).
+
+For deep runs, `--rounds 2` automatically issues one extra web search for any
+question terms the first pass under-covered — a cheap recall top-up before you
+reach for your own WebSearch.
 
 ## 4. Enrich with your own WebSearch (the bridge)
 

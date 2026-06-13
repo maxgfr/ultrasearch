@@ -2,6 +2,9 @@ import type { Backend, BackendKind, BackendResult, RawSource, RunContext } from 
 import { rrf, canonicalizeUrl } from "../util.js";
 import { searxngBackend } from "./searxng.js";
 import { duckduckgoBackend } from "./duckduckgo.js";
+import { ddgliteBackend } from "./ddglite.js";
+import { mojeekBackend } from "./mojeek.js";
+import { marginaliaBackend } from "./marginalia.js";
 import { wikipediaBackend } from "./wikipedia.js";
 import { genericBackend } from "./generic.js";
 import { fixtureBackend } from "./fixture.js";
@@ -22,6 +25,9 @@ import { pubmedBackend } from "./pubmed.js";
 const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   searxng: searxngBackend,
   duckduckgo: duckduckgoBackend,
+  ddglite: ddgliteBackend,
+  mojeek: mojeekBackend,
+  marginalia: marginaliaBackend,
   wikipedia: wikipediaBackend,
   generic: genericBackend,
   fixture: fixtureBackend,

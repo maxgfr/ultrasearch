@@ -10,6 +10,9 @@ import {
   rankedKeywords,
   buildMatcher,
   rrf,
+  simhash,
+  hammingDistance,
+  dedupeNearDuplicates,
 } from "../src/util.js";
 import type { RawSource } from "../src/types.js";
 
@@ -118,5 +121,43 @@ describe("rrf", () => {
     const fused = rrf([a, b], (s) => s);
     const ranked = [...fused.entries()].sort((p, q) => q[1] - p[1]).map(([k]) => k);
     expect(ranked[0]).toBe("x");
+  });
+});
+
+describe("simhash / near-duplicate dedup", () => {
+  const base =
+    "token bucket rate limiting controls the request rate by adding tokens to a bucket at a fixed rate and rejecting requests when the bucket is empty leaky bucket is a related smoothing algorithm used by api gateways ".repeat(
+      4,
+    );
+
+  it("scores near-identical text closer than unrelated text", () => {
+    const a = simhash(base);
+    const b = simhash(base + " a small trailing clause about retry budgets");
+    const c = simhash("gardening tips for growing tomatoes in cold climates with proper soil moisture and sunlight ".repeat(4));
+    expect(hammingDistance(a, b)).toBeLessThan(hammingDistance(a, c));
+  });
+
+  it("is deterministic", () => {
+    expect(simhash(base)).toBe(simhash(base));
+  });
+
+  it("collapses syndicated copies across domains, keeping the higher-scored", () => {
+    const mk = (url: string, score: number, text: string): RawSource => ({
+      url,
+      title: url,
+      backend: "duckduckgo",
+      score,
+      snippet: "",
+      text,
+    });
+    const { items, dropped } = dedupeNearDuplicates([
+      mk("https://a.test/x", 0.9, base),
+      mk("https://b.test/y", 0.5, base + " trivially different tail"),
+      mk("https://c.test/z", 0.4, "completely unrelated gardening prose about tomatoes and soil ".repeat(12)),
+    ]);
+    expect(dropped).toBe(1);
+    expect(items).toHaveLength(2);
+    expect(items.some((i) => i.url.includes("a.test"))).toBe(true); // higher-scored survivor
+    expect(items.some((i) => i.url.includes("b.test"))).toBe(false);
   });
 });

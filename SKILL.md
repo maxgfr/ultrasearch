@@ -58,6 +58,9 @@ not hand control back mid-retrieval.
    It prints the dossier path. If a local SearXNG instance is up, pass
    `--searxng <url>`. The keyless backends are best-effort — some may be
    rate-limited or empty, and the engine records that honestly in the notes.
+   You can steer recall with `--queries "phrasing one|phrasing two|exact term"`
+   (pipe-separated) — your own query variants override the built-in planner and
+   fan out across the multi-query backends.
 
 3. **Read the dossier.** Open `DOSSIER.md` in the run folder: it lists every
    source with an id (`[S1]`, `[S2]`, …), a snippet, and the path to its cleaned
@@ -115,7 +118,12 @@ are always all three. The engine handles recall for you: it expands the question
 into query variants, re-ranks sources by how well their text covers the
 question, dedupes the same work across scholarly backends, and retries once on
 throttling. `--since <date>` restricts date-capable backends; `--web-engine`
-pins the general-web discovery layer.
+pins the general-web discovery layer (default `auto` runs a keyless fallback
+cascade: SearXNG → DuckDuckGo → DuckDuckGo Lite → Mojeek → Marginalia, stopping
+at the first engine that returns enough — so recall survives one engine blocking).
+`--rounds 2` adds a gap-driven follow-up web search for question terms the first
+pass under-covered; `--concurrency` tunes page-fetch parallelism. PDFs (incl.
+arXiv papers) are read for full text, not just the abstract.
 
 ## References
 

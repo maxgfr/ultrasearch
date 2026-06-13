@@ -103,3 +103,118 @@ describe("E2: content-aware re-rank promotes the on-topic page over backend rank
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("E3: BM25 re-rank resists keyword stuffing", () => {
+  it("a page covering many distinct query terms beats one repeating a single keyword", async () => {
+    const stuff = "rate ".repeat(50);
+    installFetchMock((url) => {
+      if (url.includes("page-stuff")) return { body: `<p>${stuff}</p>` };
+      if (url.includes("page-cover"))
+        return { body: "<p>the token bucket and leaky bucket algorithms control the request rate for limiting traffic</p>" };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-bm25-"));
+    // generic preserves --url order, so page-stuff starts ranked above page-cover;
+    // BM25 must promote the page that covers more distinct query terms.
+    await runGather(
+      opts({
+        question: "token bucket leaky bucket rate limiting requests",
+        backends: ["generic"],
+        urls: ["https://t.test/page-stuff", "https://t.test/page-cover"],
+        out: dir,
+      }),
+    );
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources[0]!.url).toContain("page-cover");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("E5: --queries overrides the planner and drives the multi-query fan-out", () => {
+  it("issues the agent-supplied queries instead of the planned variants", async () => {
+    const SEARCH = JSON.stringify({ pages: [{ key: "X", title: "X", excerpt: "x" }] });
+    const SUMMARY = JSON.stringify({ extract: "Some text.", content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/X" } } });
+    const spy = installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: SEARCH, contentType: "application/json" };
+      if (url.includes("/summary/")) return { body: SUMMARY, contentType: "application/json" };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-queries-"));
+    await runGather(
+      opts({
+        backends: ["wikipedia"],
+        depth: "standard",
+        queries: ["leaky bucket smoothing", "sliding window counter"],
+        out: dir,
+      }),
+    );
+    const searchUrls = spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/search/page"));
+    expect(searchUrls.some((u) => u.includes("leaky%20bucket%20smoothing"))).toBe(true);
+    expect(searchUrls.some((u) => u.includes("sliding%20window%20counter"))).toBe(true);
+    expect(searchUrls.some((u) => u.includes("rate%20limiting"))).toBe(false); // planner NOT used
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("E6: --rounds 2 issues a gap-driven follow-up web search", () => {
+  it("searches once more for under-covered terms and records a gap note", async () => {
+    const DDG_ONE = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fpage-a">Token bucket</a>
+<a class="result__snippet">token bucket only</a>`;
+    const mock = () =>
+      installFetchMock((url) => {
+        if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+        if (url.includes("html.duckduckgo.com")) return { body: DDG_ONE };
+        if (url.includes("real.test")) return { body: "<p>token bucket token bucket token bucket</p>" }; // misses sliding/window/rate/counter
+        return undefined;
+      });
+    const ddgCalls = (spy: any) =>
+      spy.mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => u.includes("html.duckduckgo.com")).length;
+    const q = "token bucket sliding window rate counter";
+
+    const d1 = mkdtempSync(join(tmpdir(), "us-r1-"));
+    let spy = mock();
+    await runGather(opts({ question: q, webEngine: "ddg", rounds: 1, out: d1 }));
+    const c1 = ddgCalls(spy);
+    vi.unstubAllGlobals();
+
+    const d2 = mkdtempSync(join(tmpdir(), "us-r2-"));
+    spy = mock();
+    const r2 = await runGather(opts({ question: q, webEngine: "ddg", rounds: 2, out: d2 }));
+    const c2 = ddgCalls(spy);
+
+    expect(c2).toBeGreaterThan(c1); // the gap round issued an extra search
+    expect(r2.manifest.notes.join(" ")).toMatch(/Gap round/);
+    rmSync(d1, { recursive: true, force: true });
+    rmSync(d2, { recursive: true, force: true });
+  });
+});
+
+describe("E4: web cascade falls through a blocked engine to a working fallback", () => {
+  it("uses DuckDuckGo Lite when DuckDuckGo is blocked, and records provenance", async () => {
+    const LITE_HTML = `
+<table>
+<tr><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fone">One</a></td></tr>
+<tr><td class="result-snippet">rate limiting one</td></tr>
+<tr><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Ftwo">Two</a></td></tr>
+<tr><td class="result-snippet">rate limiting two</td></tr>
+</table>`;
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      if (url.includes("html.duckduckgo.com")) return { status: 503, body: "" }; // primary blocked
+      if (url.includes("lite.duckduckgo.com")) return { body: LITE_HTML }; // fallback works
+      if (url.includes("real.test")) return { body: "<p>rate limiting content about token buckets</p>" };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-cascade-"));
+    // mode topic + auto cascade; perSource 2 so the Lite results short-circuit
+    // before mojeek/marginalia are queried. searxng is unconfigured (skipped).
+    const r = await runGather(opts({ depth: "standard", perSource: 2, out: dir }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((s) => s.url.includes("real.test"))).toBe(true);
+    expect(sources.some((s) => s.backend === "ddglite")).toBe(true);
+    expect(r.manifest.notes.join(" ")).toMatch(/cascade.*ddglite/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

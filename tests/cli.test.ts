@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseArgs } from "../src/cli.js";
+import { parseArgs, buildGatherOptions } from "../src/cli.js";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can
 // assert on it without killing the test runner, and silence the writes.
@@ -46,5 +46,15 @@ describe("parseArgs", () => {
   it("exits 0 on --help and --version", () => {
     expect(() => parseArgs(["--help"])).toThrow(/exit:0/);
     expect(() => parseArgs(["-v"])).toThrow(/exit:0/);
+  });
+});
+
+describe("buildGatherOptions", () => {
+  it("splits --queries on '|' into a trimmed, non-empty list", () => {
+    const opts = buildGatherOptions(parseArgs(["gather", "--q", "x", "--queries", "a | b |  | c"]));
+    expect(opts.queries).toEqual(["a", "b", "c"]);
+  });
+  it("leaves queries undefined when the flag is absent", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).queries).toBeUndefined();
   });
 });

@@ -41,14 +41,20 @@ Options:
   --depth <d>          ${ALL_DEPTHS.join(" | ")}            (default: standard)
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
+  --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
+                       built-in planner — use to drive recall with your own phrasings)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Preferred language                (default: en)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
-  --web-engine <e>     auto | searxng | ddg | claude     (default: auto)
+  --web-engine <e>     auto | searxng | ddg | ddglite | mojeek | marginalia | claude
+                       auto = resilient fallback cascade        (default: auto)
   --url <u,...>        URLs for the 'generic' backend / 'fetch'
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
+  --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
+                       search for under-covered terms          (default: 1)
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check: the dossier dir to operate on
   --json               Machine-readable output
@@ -64,8 +70,8 @@ Grounding:
 
 export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes"]);
 const VALUE_FLAGS = new Set([
-  "q", "question", "mode", "depth", "backends", "backend", "max-sources", "per-source",
-  "out", "run", "lang", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
+  "q", "question", "mode", "depth", "backends", "backend", "queries", "max-sources", "per-source",
+  "concurrency", "rounds", "out", "run", "lang", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
 ]);
 const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "verbose"]);
 
@@ -174,20 +180,21 @@ function num(name: string, raw: string | undefined, fallback: number): number {
   return Math.floor(n);
 }
 
-function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {}): GatherOptions {
+export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {}): GatherOptions {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
   const mode = oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
   const depth = oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
   const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", [
-    "auto", "searxng", "ddg", "claude",
+    "auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude",
   ]);
   return {
     question,
     mode,
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : undefined,
+    queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : undefined,
     maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
@@ -196,6 +203,8 @@ function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {})
     urls: p.values.url ? parseList(p.values.url) : undefined,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : undefined,
+    rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
     fresh: p.bools.has("fresh"),

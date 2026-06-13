@@ -71,6 +71,12 @@ describe("research backends", () => {
     expect(r.items[0]!.meta?.arxivId).toBe("1706.03762");
     expect(r.items[0]!.meta?.authors).toContain("Ashish Vaswani");
     expect(r.items[0]!.meta?.year).toBe(2017);
+    // Points at the HTML full text so the gatherer hydrates the whole paper;
+    // the abstract is kept as the snippet/fallback (no inline text).
+    expect(r.items[0]!.url).toBe("https://arxiv.org/html/1706.03762");
+    expect(r.items[0]!.meta?.htmlUrl).toBe("https://arxiv.org/html/1706.03762");
+    expect(r.items[0]!.snippet).toContain("Transformer");
+    expect(r.items[0]!.text).toBeUndefined();
   });
 
   it("crossref parses title/abstract/doi/year", async () => {

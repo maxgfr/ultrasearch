@@ -1,0 +1,27 @@
+{
+  "query": "rate limiting",
+  "number_of_results": 3,
+  "results": [
+    {
+      "url": "https://en.wikipedia.org/wiki/Rate_limiting",
+      "title": "Rate limiting - Wikipedia",
+      "content": "In computer networks, rate limiting controls the rate of requests sent or received.",
+      "engine": "wikipedia",
+      "score": 1.0
+    },
+    {
+      "url": "https://stripe.com/blog/rate-limiters",
+      "title": "Scaling your API with rate limiters",
+      "content": "Stripe uses the token bucket algorithm to throttle requests fairly.",
+      "engine": "duckduckgo",
+      "score": 0.9
+    },
+    {
+      "url": "https://www.nginx.com/blog/rate-limiting-nginx/",
+      "title": "Rate Limiting with NGINX",
+      "content": "Configure NGINX to limit request rates per client with the limit_req module.",
+      "engine": "google",
+      "score": 0.8
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import type { BackendKind, Depth, RawSource } from "./types.js";
+import type { BackendKind, Depth, RawSource, SourceMeta } from "./types.js";
 
 // Escape a string for safe inclusion as a literal inside a RegExp.
 export function escapeRegExp(s: string): string {
@@ -397,6 +397,12 @@ export function planVariants(question: string, depth: Depth): string[] {
   if (kw && kw.toLowerCase() !== base.toLowerCase()) variants.push(kw);
   const idents = extractIdentifiers(question);
   if (idents.length) variants.push(idents.join(" "));
+  // Lower-priority candidates (only reached at deeper depths / when earlier ones
+  // are absent, so pinned counts stay 1/2/3): a quoted exact-phrase of the lead
+  // content words (phrase recall), and a head-noun + identifiers query.
+  const ordered = keywords(question);
+  if (ordered.length >= 2) variants.push(`"${ordered.slice(0, 4).join(" ")}"`);
+  if (idents.length && ordered.length) variants.push([ordered[0], ...idents].join(" "));
   const seen = new Set<string>();
   const uniq: string[] = [];
   for (const v of variants) {
@@ -420,6 +426,228 @@ export function contentCoverage(matcher: KeywordMatcher, text: string): number {
     if (hit.size === matcher.canonicals.length) break;
   }
   return hit.size / matcher.canonicals.length;
+}
+
+// ---------------------------------------------------------------------------
+// BM25F lexical relevance — the content-aware re-ranking signal. Scores a
+// fetched document against the question with TF saturation + IDF computed over
+// the candidate pool, field weighting (title > headings > body, via token
+// duplication) and a bounded phrase-proximity bonus. Deterministic, zero-dep.
+// Replaces the old binary keyword coverage for re-ranking because it (a)
+// resists keyword-stuffing — a single term's contribution saturates at k1 —
+// and (b) rewards covering more *distinct* query terms. `contentCoverage`
+// above is kept for snippet selection and back-compat.
+// ---------------------------------------------------------------------------
+
+export interface Bm25Doc {
+  id: string;
+  title: string;
+  headings: string;
+  body: string;
+}
+
+export interface Bm25Index {
+  idf: Map<string, number>;
+  avgdl: number;
+  N: number;
+  queryTerms: string[];
+  k1: number;
+  b: number;
+  titleWeight: number;
+  headingWeight: number;
+}
+
+// Tokenize text into canonical (deaccented, plural-folded, stopword-free) terms
+// WITH repetition so term frequency is preserved. Uses the same `foldTerm`
+// canonicalization as `buildMatcher`, so the two scorers agree on what a term
+// is (e.g. "requests" and "request" collapse, accents are folded).
+export function bm25Tokenize(text: string): string[] {
+  if (!text) return [];
+  const out: string[] = [];
+  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
+    if (raw.length < 2) continue;
+    if (STOPWORDS.has(raw.toLowerCase())) continue;
+    const t = foldTerm(raw);
+    if (t.length >= 2) out.push(t);
+  }
+  return out;
+}
+
+// Field-weighted token stream: body once, heading terms `headingWeight`× and
+// title terms `titleWeight`× — so a query term in the title/headings carries
+// more weight than the same term buried in the body.
+function docTokens(doc: Bm25Doc, titleWeight: number, headingWeight: number): string[] {
+  const out = bm25Tokenize(doc.body);
+  const headings = bm25Tokenize(doc.headings);
+  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  const title = bm25Tokenize(doc.title);
+  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  return out;
+}
+
+// Bounded phrase-proximity bonus in [0, cap]: rewards query terms that occur
+// close together in the field-weighted token stream (so "token bucket" adjacent
+// beats the two words scattered far apart). Returns a multiplier addend.
+function proximityBonus(tokens: string[], queryTerms: string[], window = 6, cap = 0.1): number {
+  if (queryTerms.length < 2) return 0;
+  const q = new Set(queryTerms);
+  const hits: { pos: number; term: string }[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]!;
+    if (q.has(tok)) hits.push({ pos: i, term: tok });
+  }
+  if (hits.length < 2) return 0;
+  let close = 0;
+  for (let i = 1; i < hits.length; i++) {
+    if (hits[i]!.term !== hits[i - 1]!.term && hits[i]!.pos - hits[i - 1]!.pos <= window) close++;
+  }
+  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
+}
+
+// Build the BM25 index over the candidate pool: IDF per query term (the pool IS
+// the corpus), average field-weighted document length, and the distinct query
+// terms. On a tiny pool (N<3) IDF is too noisy to trust, so it degrades to a
+// uniform IDF (pure TF scoring).
+export function buildBm25Index(question: string, docs: Bm25Doc[], opts: { k1?: number; b?: number } = {}): Bm25Index {
+  const k1 = opts.k1 ?? 1.2;
+  const b = opts.b ?? 0.75;
+  const titleWeight = 3;
+  const headingWeight = 2;
+  const queryTerms = [...new Set(bm25Tokenize(question))];
+  const N = docs.length;
+  const df = new Map<string, number>();
+  let totalLen = 0;
+  for (const doc of docs) {
+    const toks = docTokens(doc, titleWeight, headingWeight);
+    totalLen += toks.length;
+    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const avgdl = N ? totalLen / N : 0;
+  const idf = new Map<string, number>();
+  for (const t of queryTerms) {
+    if (N < 3) {
+      idf.set(t, 1);
+      continue;
+    }
+    const dfi = df.get(t) ?? 0;
+    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
+  }
+  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+
+// BM25F score of one document against the index (raw, ≥0). Callers normalize by
+// the pool max (see gather.ts) the same way fusion rank is normalized.
+export function bm25Score(index: Bm25Index, doc: Bm25Doc): number {
+  if (!index.queryTerms.length) return 0;
+  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
+  const dl = toks.length;
+  if (!dl) return 0;
+  const tf = new Map<string, number>();
+  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+  const { k1, b, avgdl } = index;
+  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
+  let score = 0;
+  for (const term of index.queryTerms) {
+    const f = tf.get(term);
+    if (!f) continue;
+    const idf = index.idf.get(term) ?? 0;
+    score += (idf * (f * (k1 + 1))) / (f + k1 * lenNorm);
+  }
+  return score * (1 + proximityBonus(toks, index.queryTerms));
+}
+
+// Pool-relative recency in 0..1 (newer = higher), neutral 0.5 when a source
+// carries no year or the pool has no year spread. Deliberately relative to the
+// result set (not wall-clock) so test/eval ordering stays stable over time.
+export function recencyScore(meta: SourceMeta | undefined, minYear: number, maxYear: number): number {
+  const y = typeof meta?.year === "number" ? meta.year : undefined;
+  if (y === undefined || maxYear <= minYear) return 0.5;
+  const clamped = Math.min(maxYear, Math.max(minYear, y));
+  return (clamped - minYear) / (maxYear - minYear);
+}
+
+// ---------------------------------------------------------------------------
+// SimHash near-duplicate detection. Identity dedup (DOI/arXiv/URL, see
+// identityKey + fuse) collapses the *same* resource; this catches the same
+// CONTENT syndicated across different URLs/domains (mirrored articles, scraper
+// copies) that would otherwise each eat a source slot. 64-bit, deterministic.
+// ---------------------------------------------------------------------------
+
+const FNV_OFFSET = 0xcbf29ce484222325n;
+const FNV_PRIME = 0x100000001b3n;
+const MASK64 = (1n << 64n) - 1n;
+
+function fnv1a64(s: string): bigint {
+  let h = FNV_OFFSET;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = (h * FNV_PRIME) & MASK64;
+  }
+  return h;
+}
+
+// 64-bit SimHash over 3-gram token shingles: near-duplicate documents land a
+// few bits apart, unrelated documents ~32 bits apart.
+export function simhash(text: string): bigint {
+  const toks = bm25Tokenize(text);
+  const shingles: string[] = [];
+  if (toks.length < 3) shingles.push(...toks);
+  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
+  if (!shingles.length) return 0n;
+  const v = new Array<number>(64).fill(0);
+  for (const sh of shingles) {
+    const h = fnv1a64(sh);
+    for (let b = 0; b < 64; b++) v[b]! += ((h >> BigInt(b)) & 1n) === 1n ? 1 : -1;
+  }
+  let out = 0n;
+  for (let b = 0; b < 64; b++) if (v[b]! > 0) out |= 1n << BigInt(b);
+  return out;
+}
+
+// Population count of the XOR — how many bits two SimHashes differ by.
+export function hammingDistance(a: bigint, b: bigint): number {
+  let x = a ^ b;
+  let count = 0;
+  while (x) {
+    x &= x - 1n;
+    count++;
+  }
+  return count;
+}
+
+function betterSource(a: RawSource, b: RawSource): boolean {
+  if (a.score !== b.score) return a.score > b.score;
+  return a.url.localeCompare(b.url) < 0;
+}
+
+// Collapse near-duplicate sources by SimHash over their extracted text, keeping
+// the best-scored copy. Short texts are skipped (too little signal to trust).
+// Expects items pre-sorted best-first; preserves their order. Deterministic.
+export function dedupeNearDuplicates(
+  items: RawSource[],
+  opts: { maxBits?: number; minChars?: number } = {},
+): { items: RawSource[]; dropped: number } {
+  const maxBits = opts.maxBits ?? 3;
+  const minChars = opts.minChars ?? 500;
+  const kept: { it: RawSource; hash: bigint | null }[] = [];
+  let dropped = 0;
+  for (const it of items) {
+    const text = it.text || "";
+    const hash = text.length >= minChars ? simhash(text) : null;
+    if (hash !== null) {
+      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
+      if (dup) {
+        dropped++;
+        if (betterSource(it, dup.it)) {
+          dup.it = it;
+          dup.hash = hash;
+        }
+        continue;
+      }
+    }
+    kept.push({ it, hash });
+  }
+  return { items: kept.map((k) => k.it), dropped };
 }
 
 // Parse a --since value (any Date-parseable string, e.g. "2023" or
