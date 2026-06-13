@@ -6,7 +6,7 @@ import { pathToFileURL, fileURLToPath } from "url";
 import { realpathSync } from "fs";
 
 // src/types.ts
-var VERSION = "1.0.0";
+var VERSION = "1.1.0";
 var ALL_BACKENDS = [
   "searxng",
   "duckduckgo",
