@@ -1,0 +1,8 @@
+{
+  "id": "topic-fixture",
+  "question": "what is rate limiting",
+  "mode": "topic",
+  "backends": ["fixture"],
+  "minSources": 3,
+  "mustInclude": "Rate limiting"
+}

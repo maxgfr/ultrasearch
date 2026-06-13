@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "question": "what is rate limiting",
+  "mode": "topic",
+  "depth": "standard",
+  "lang": "en",
+  "backends": [
+    "fixture"
+  ],
+  "backendsUsed": [
+    "fixture"
+  ],
+  "sourceCount": 3,
+  "maxSources": 25,
+  "builtAt": "2026-06-13T10:41:19.578Z",
+  "slug": "topic-what-is-rate-limiting",
+  "tiers": [
+    "SUMMARY.md",
+    "REPORT.md",
+    "FULL.md"
+  ],
+  "extras": [],
+  "notes": [
+    "fixture backend: offline canned sources (testing only).",
+    "agent: enrich thin areas with your own WebSearch, then ingest each good URL via `ultrasearch fetch --url <u> --out <dir>` before writing the report."
+  ],
+  "timings": {
+    "fixture": 0,
+    "total": 0
+  }
+}

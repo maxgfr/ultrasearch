@@ -1,0 +1,20 @@
+# Optional local SearXNG instance for ultrasearch's `searxng` discovery backend.
+#
+#   docker compose up -d
+#   node scripts/ultrasearch.mjs gather --q "..." --searxng http://localhost:8888
+#
+# SearXNG is keyless and self-hosted — nothing leaves your machine. ultrasearch
+# works without it (it falls through to DuckDuckGo + your own WebSearch); this
+# just gives the SearXNG backend something to talk to, with JSON output enabled.
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: ultrasearch-searxng
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+      - SEARXNG_PORT=8888
+    restart: unless-stopped

@@ -1,0 +1,168 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { Manifest, RawSource, Source } from "./types.js";
+import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
+import { bestExcerpt, capExtract } from "./backends/fetch.js";
+
+// The grounding contract, inlined into DOSSIER.md so the model writing the
+// tiers has the rules in front of it. `check` enforces exactly this.
+export const CITATION_RULES = [
+  "**Cite every factual claim** with the id of the source it rests on, e.g. `[S1]`",
+  "(multiple sources: `[S1][S4]`). The ids are listed below and in `sources.json`.",
+  "",
+  "If you state something from your **own background knowledge** that no fetched",
+  "source backs, you must FLAG it as unverified — either end the sentence with",
+  "`[M]`, or put the passage in a `> [model-hint] …` blockquote. `ultrasearch check`",
+  "tolerates flagged hints but FAILS on any *unmarked* unsourced claim, and on any",
+  "`[S#]` that does not resolve to a real source.",
+].join("\n");
+
+// Parse the numeric suffix of an "S<n>" id.
+function idNum(id: string): number {
+  const m = /^S(\d+)$/.exec(id);
+  return m ? Number(m[1]) : 0;
+}
+
+// The next free "S<n>" id given the existing sources (used by `fetch`).
+export function nextSourceId(sources: Source[]): string {
+  const max = sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
+  return `S${max + 1}`;
+}
+
+// Build a Source record (no file written) from a backend's RawSource.
+export function buildSource(rs: RawSource, id: string, builtAt: string, question: string): Source {
+  const text = rs.text ?? rs.snippet ?? "";
+  return {
+    id,
+    url: rs.url,
+    canonicalUrl: canonicalizeUrl(rs.url),
+    title: rs.title || rs.url,
+    backend: rs.backend,
+    fetchedAt: builtAt,
+    lang: rs.lang,
+    domain: domainOf(rs.url),
+    trust: trustScore(rs.url, rs.backend),
+    score: Number(rs.score.toFixed(4)),
+    extract: `sources/${id}.md`,
+    snippet: (rs.snippet || bestExcerpt(text, question)).slice(0, 360),
+    meta: rs.meta,
+  };
+}
+
+// The on-disk content of sources/S#.md: a small header + the cleaned, depth-
+// capped extract. Shared by writeDossier and the `fetch`/enrich path.
+export function renderSourceExtract(s: Source, text: string, depth: Manifest["depth"]): string {
+  const head = [
+    `# ${s.id} — ${s.title}`,
+    `- url: ${s.url}`,
+    `- backend: ${s.backend} · fetched: ${s.fetchedAt} · trust: ${s.trust} · score: ${s.score}`,
+    "",
+  ].join("\n");
+  return head + capExtract(text, depth) + "\n";
+}
+
+export interface DossierPaths {
+  dir: string;
+  sourcesJson: string;
+  dossierMd: string;
+  manifestJson: string;
+}
+
+export interface WriteDossierResult {
+  dir: string;
+  sources: Source[];
+  paths: DossierPaths;
+}
+
+// Persist a run's dossier: sources.json (what `check` validates against),
+// sources/S#.md (cleaned extracts), manifest.json, and DOSSIER.md (the
+// model-facing brief). The tiered reports (SUMMARY/REPORT/FULL.md) are written
+// by the model afterward, then `render` + `check` run.
+export function writeDossier(
+  dir: string,
+  rawSources: RawSource[],
+  manifest: Manifest,
+  template: string,
+): WriteDossierResult {
+  mkdirSync(join(dir, "sources"), { recursive: true });
+
+  const sources: Source[] = rawSources.map((rs, i) => {
+    const id = `S${i + 1}`;
+    const s = buildSource(rs, id, manifest.builtAt, manifest.question);
+    writeFileSync(join(dir, s.extract), renderSourceExtract(s, rs.text ?? rs.snippet ?? "", manifest.depth));
+    return s;
+  });
+
+  const m: Manifest = { ...manifest, sourceCount: sources.length };
+  const sourcesJson = join(dir, "sources.json");
+  const dossierMd = join(dir, "DOSSIER.md");
+  const manifestJson = join(dir, "manifest.json");
+  writeFileSync(sourcesJson, JSON.stringify(sources, null, 2));
+  writeFileSync(manifestJson, JSON.stringify(m, null, 2));
+  writeFileSync(dossierMd, renderDossierMarkdown(sources, m, template));
+
+  return { dir, sources, paths: { dir, sourcesJson, dossierMd, manifestJson } };
+}
+
+// The model-facing dossier digest: the run's facts, the template to fill, the
+// grounding rules, and every source with its id/snippet to cite.
+export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string): string {
+  const out: string[] = [];
+  out.push(`# Search dossier`);
+  out.push("");
+  out.push(`**Question:** ${manifest.question}`);
+  out.push(
+    `**Mode:** ${manifest.mode} · **depth:** ${manifest.depth} · **lang:** ${manifest.lang} · ` +
+      `**sources:** ${sources.length} · **built:** ${manifest.builtAt}`,
+  );
+  out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
+  out.push("");
+  out.push(
+    `> Write three tiers from these sources: \`SUMMARY.md\` (TL;DR), \`REPORT.md\` ` +
+      `(the full template below), and \`FULL.md\` (exhaustive — use every relevant source). ` +
+      `Then run \`render\` and \`check\`. Do not answer from memory.`,
+  );
+  out.push("");
+  out.push(`## Grounding rules`);
+  out.push("");
+  out.push(CITATION_RULES);
+  out.push("");
+  out.push(`## Report template (${manifest.mode})`);
+  out.push("");
+  out.push("```markdown");
+  out.push(template);
+  out.push("```");
+  if (manifest.extras.length) {
+    out.push("");
+    out.push(`_Also produce: ${manifest.extras.join(", ")}._`);
+  }
+  out.push("");
+
+  if (manifest.notes.length) {
+    out.push(`## Retrieval notes`);
+    out.push("");
+    for (const n of manifest.notes) out.push(`- ${n}`);
+    out.push("");
+  }
+
+  out.push(`## Sources`);
+  out.push("");
+  if (sources.length === 0) {
+    out.push(`_No sources were retrieved. Broaden the query, add backends, or enrich with your own WebSearch via \`fetch --url\`._`);
+  }
+  for (const s of sources) {
+    out.push(`### [${s.id}] ${s.title}`);
+    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · extract: \`${s.extract}\``);
+    out.push("");
+    out.push(s.snippet);
+    out.push("");
+  }
+  return out.join("\n");
+}
+
+// Read back a persisted dossier (for check / render / enrich).
+export function readDossier(dir: string): { sources: Source[]; manifest: Manifest } {
+  const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+  return { sources, manifest };
+}

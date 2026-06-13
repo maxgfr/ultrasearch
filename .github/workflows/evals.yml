@@ -1,0 +1,26 @@
+name: Evals (network)
+
+# The network eval suite hits real keyless backends (Wikipedia, arXiv, Hacker
+# News, …). The live web drifts and rate-limits, so this is report-only and
+# never gates a PR — it runs weekly and on manual dispatch to surface drift.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  network-evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build the bundle
+        run: pnpm run build
+      - name: Network evals (report-only)
+        run: pnpm run eval:network

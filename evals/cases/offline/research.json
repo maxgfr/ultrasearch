@@ -1,0 +1,8 @@
+{
+  "id": "research-fixture",
+  "question": "rate limiting algorithms",
+  "mode": "research",
+  "backends": ["fixture"],
+  "minSources": 3,
+  "expectFile": "refs.bib"
+}

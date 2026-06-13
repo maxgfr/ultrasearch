@@ -1,0 +1,41 @@
+[
+  {
+    "id": "S1",
+    "url": "https://fixture.test/rate-limiting-overview",
+    "canonicalUrl": "https://fixture.test/rate-limiting-overview",
+    "title": "Rate limiting — overview",
+    "backend": "fixture",
+    "fetchedAt": "2026-06-13T10:41:19.578Z",
+    "domain": "fixture.test",
+    "trust": 0.5,
+    "score": 0.0164,
+    "extract": "sources/S1.md",
+    "snippet": "Rate limiting controls how many requests a client may make in a window of time."
+  },
+  {
+    "id": "S2",
+    "url": "https://fixture.test/rate-limiting-algorithms",
+    "canonicalUrl": "https://fixture.test/rate-limiting-algorithms",
+    "title": "Rate limiting algorithms",
+    "backend": "fixture",
+    "fetchedAt": "2026-06-13T10:41:19.578Z",
+    "domain": "fixture.test",
+    "trust": 0.5,
+    "score": 0.0161,
+    "extract": "sources/S2.md",
+    "snippet": "Common algorithms include the token bucket, leaky bucket, fixed window, and sliding window."
+  },
+  {
+    "id": "S3",
+    "url": "https://fixture.test/rate-limiting-http-429",
+    "canonicalUrl": "https://fixture.test/rate-limiting-http-429",
+    "title": "HTTP 429 and Retry-After",
+    "backend": "fixture",
+    "fetchedAt": "2026-06-13T10:41:19.578Z",
+    "domain": "fixture.test",
+    "trust": 0.5,
+    "score": 0.0159,
+    "extract": "sources/S3.md",
+    "snippet": "A rate-limited request returns HTTP 429 Too Many Requests, often with a Retry-After header."
+  }
+]

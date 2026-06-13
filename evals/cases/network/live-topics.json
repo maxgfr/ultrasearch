@@ -1,0 +1,5 @@
+[
+  { "id": "wikipedia-token-bucket", "question": "token bucket algorithm", "mode": "topic", "backends": ["wikipedia"] },
+  { "id": "arxiv-transformers", "question": "transformer attention mechanism", "mode": "research", "backends": ["arxiv"] },
+  { "id": "hn-rate-limiting", "question": "api rate limiting", "mode": "startup", "backends": ["hackernews"] }
+]

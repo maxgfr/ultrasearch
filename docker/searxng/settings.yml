@@ -1,0 +1,16 @@
+# Minimal SearXNG config for ultrasearch's optional local discovery backend.
+# The important bit is enabling the JSON output format — most PUBLIC instances
+# disable it, which is why ultrasearch ships a local one.
+use_default_settings: true
+
+server:
+  # Override with a real random secret if you expose this beyond localhost.
+  secret_key: "ultrasearch-local-dev-change-me"
+  bind_address: "0.0.0.0"
+  port: 8888
+
+search:
+  # Enable JSON so `GET /search?format=json` works (ultrasearch's searxng backend).
+  formats:
+    - html
+    - json
