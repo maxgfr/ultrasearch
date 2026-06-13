@@ -1,7 +1,7 @@
 // Single source of truth for the version the CLI/bundle reports. Kept in
 // lockstep with package.json and SKILL.md by scripts/sync-version.mjs during a
 // semantic-release run. Do not edit by hand outside a release.
-export const VERSION = "1.1.0";
+export const VERSION = "1.2.0";
 
 // Every retrieval backend a run can draw from. Search/discovery backends
 // (searxng, duckduckgo) yield candidate URLs the gatherer then fetches;

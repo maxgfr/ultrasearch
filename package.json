@@ -1,6 +1,6 @@
 {
   "name": "ultrasearch",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Recap everything the web says about a topic — fan out keyless web search across many backends, fetch + dedupe sources into an evidence dossier, and write a citation-checked, tiered report (with self-contained HTML) in five research modes. A skills.sh agent skill.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",

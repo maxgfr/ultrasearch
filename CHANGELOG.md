@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.2.0](https://github.com/maxgfr/ultrasearch/compare/v1.1.0...v1.2.0) (2026-06-13)
+
+
+### Features
+
+* maximize search quality (BM25F, multi-engine cascade, full-text extraction) ([900c771](https://github.com/maxgfr/ultrasearch/commit/900c77157583215ed1825a3fd7c41ef2c154e558))
+
 # [1.1.0](https://github.com/maxgfr/ultrasearch/compare/v1.0.0...v1.1.0) (2026-06-13)
 
 
