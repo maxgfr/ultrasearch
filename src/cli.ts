@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       if (!backendStr) fail("missing --backend <kind>");
       const [backend] = parseBackends(backendStr);
       const options = buildGatherOptions(p);
-      const ctx = { question: options.question, mode: getMode(options.mode), options };
+      const ctx = { question: options.question, mode: getMode(options.mode), options, variants: [options.question] };
       const [res] = await runBackends([backend!], ctx);
       if (!res) return;
       if (p.bools.has("json")) {

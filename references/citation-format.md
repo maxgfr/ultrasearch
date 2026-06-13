@@ -49,6 +49,20 @@ can tell them apart from sourced claims.
   dangling `[S#]` anywhere still fails.
 - Uncited sources are fine (informational warning only).
 
+## What `check` verifies (and its limits)
+
+`check` is a mechanical guard, not a proof. It verifies coverage at
+**paragraph / list-item / table-row granularity**: a unit passes if it contains
+at least one `[S#]` (or a model-hint flag). Known limits you should not lean on:
+
+- A single `[S#]` grounds its whole paragraph, so a fabrication appended to a
+  genuinely-cited sentence in the same paragraph can ride along. Cite each
+  distinct claim, and split unrelated claims into separate sentences/paragraphs.
+- Citations inside fenced/inline code and **HTML comments** are ignored (a
+  comment can't ground a claim). Markdown links are not citations.
+- Section **headings** are treated as structure, not claims — don't smuggle a
+  factual assertion into a heading.
+
 ## Good practice
 
 - Prefer citing the highest-trust source for a claim (see `trust` in

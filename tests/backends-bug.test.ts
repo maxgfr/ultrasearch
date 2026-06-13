@@ -49,6 +49,14 @@ describe("bug backends", () => {
     expect(r.items[0]!.meta?.answerScore).toBe(42);
   });
 
+  it("stackexchange fans out across multiple network sites", async () => {
+    const spy = installFetchMock(routes([["api.stackexchange.com", { body: SE, contentType: "application/json" }]]));
+    await stackexchangeBackend(makeCtx("429 too many requests"));
+    const sites = spy.mock.calls.map((c) => String(c[0])).map((u) => /site=([^&]+)/.exec(u)?.[1]);
+    expect(sites).toEqual(expect.arrayContaining(["stackoverflow", "serverfault", "superuser"]));
+    expect(new Set(sites).size).toBeGreaterThanOrEqual(4); // distinct sites queried
+  });
+
   it("hackernews falls back to the discussion url for Ask HN posts", async () => {
     installFetchMock(routes([["hn.algolia.com", { body: HN, contentType: "application/json" }]]));
     const r = await hackernewsBackend(makeCtx("rate limiter"));

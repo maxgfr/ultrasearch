@@ -52,7 +52,7 @@ Each mode is a **report template** + a **backend-priority profile**:
 |------|-----|--------|
 | `topic` *(default)* | a general briefing on any subject | Wikipedia + general web |
 | `bug` | debugging an error / symptom | Stack Overflow, GitHub issues, Hacker News, changelogs |
-| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar (+ `refs.bib`) |
+| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed (+ `refs.bib`) |
 | `learn` | learning a topic from scratch | general web + docs → glossary, lesson, exercises, rich HTML |
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
 
@@ -78,8 +78,14 @@ node scripts/ultrasearch.mjs check  --run /tmp/rl     # exit≠0 if ungrounded
 Discovery is layered and free, mirroring ultradoc:
 **SearXNG** (local, optional) → **DuckDuckGo** (HTML scrape) → the agent's own
 **WebSearch** (URLs fed back via `fetch --url`). Mode-specific backends add
-Wikipedia, the keyless StackExchange / Hacker News / GitHub APIs, and the
-scholarly APIs (arXiv / Crossref / OpenAlex / Semantic Scholar) — all keyless.
+Wikipedia, the keyless StackExchange (multi-site) / Hacker News / GitHub APIs,
+and the scholarly APIs (arXiv / Crossref / OpenAlex / Semantic Scholar /
+Europe PMC / PubMed) — all keyless.
+
+Each run plans **query variants** and fans backends out across them, re-ranks
+sources by how well their fetched text covers the question, dedupes the same
+work across scholarly backends by DOI/arXiv id, and retries once on throttling
+— so you get broad, relevant, de-duplicated coverage.
 
 ## Commands
 

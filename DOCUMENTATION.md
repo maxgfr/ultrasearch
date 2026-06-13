@@ -11,9 +11,12 @@ ungrounded claims), pointed at the open web instead of a git repo.
 question
   │  gather
   ▼
-[ backends ] ── fan out (concurrent, keyless) ──► RawSource[] per backend
-  │  fuse (RRF over canonical URL) + dedupe + exclude-domains + cap (by depth)
-  │  hydrate (fetch + clean any source lacking text)
+plan query variants (full question + keywords + identifiers, by depth)
+  │
+[ backends ] ── fan out concurrent, keyless, per-variant ──► RawSource[] per backend
+  │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
+  │  hydrate a candidate pool (bounded concurrency, retry on 429/503)
+  │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
   ▼
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
   │  (research mode also writes refs.bib)

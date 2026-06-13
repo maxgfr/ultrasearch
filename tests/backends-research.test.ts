@@ -3,6 +3,8 @@ import { arxivBackend } from "../src/backends/arxiv.js";
 import { crossrefBackend } from "../src/backends/crossref.js";
 import { openalexBackend } from "../src/backends/openalex.js";
 import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
+import { europepmcBackend } from "../src/backends/europepmc.js";
+import { pubmedBackend } from "../src/backends/pubmed.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -91,5 +93,52 @@ describe("research backends", () => {
     const r = await semanticscholarBackend(makeCtx("gpt-3 few shot"));
     expect(r.items[0]!.meta?.arxivId).toBe("2005.14165");
     expect(r.items[0]!.meta?.venue).toBe("NeurIPS");
+  });
+
+  it("europepmc parses the inline abstract + biomedical metadata", async () => {
+    const EPMC = JSON.stringify({
+      resultList: {
+        result: [
+          {
+            title: "CRISPR gene editing.",
+            abstractText: "<p>We review CRISPR-based genome editing.</p>",
+            authorString: "Doudna J, Charpentier E",
+            pubYear: "2014",
+            journalInfo: { journal: { title: "Science" } },
+            doi: "10.1126/science.epmc",
+            source: "MED",
+            id: "999",
+          },
+        ],
+      },
+    });
+    installFetchMock(routes([["ebi.ac.uk/europepmc", { body: EPMC, contentType: "application/json" }]]));
+    const r = await europepmcBackend(makeCtx("crispr genome editing"));
+    expect(r.items[0]!.text).toContain("genome editing");
+    expect(r.items[0]!.meta?.doi).toBe("10.1126/science.epmc");
+    expect(r.items[0]!.meta?.year).toBe(2014);
+    expect(r.items[0]!.url).toBe("https://doi.org/10.1126/science.epmc");
+  });
+
+  it("pubmed does esearch→esummary and returns metadata (no text → hydrate later)", async () => {
+    const ESEARCH = JSON.stringify({ esearchresult: { idlist: ["111", "222"] } });
+    const ESUMMARY = JSON.stringify({
+      result: {
+        uids: ["111", "222"],
+        "111": { title: "Trial of drug A.", pubdate: "2020 Jan", source: "NEJM", authors: [{ name: "Doe J" }], articleids: [{ idtype: "doi", value: "10.1056/pm.a" }] },
+        "222": { title: "Trial of drug B.", pubdate: "2019", source: "Lancet", authors: [], articleids: [] },
+      },
+    });
+    installFetchMock((url) => {
+      if (url.includes("esearch.fcgi")) return { body: ESEARCH, contentType: "application/json" };
+      if (url.includes("esummary.fcgi")) return { body: ESUMMARY, contentType: "application/json" };
+      return undefined;
+    });
+    const r = await pubmedBackend(makeCtx("clinical trial drug"));
+    expect(r.items).toHaveLength(2);
+    expect(r.items[0]!.url).toBe("https://doi.org/10.1056/pm.a");
+    expect(r.items[0]!.text).toBeUndefined(); // metadata-only; gather hydrates the landing page
+    expect(r.items[0]!.meta?.year).toBe(2020);
+    expect(r.items[1]!.url).toContain("pubmed.ncbi.nlm.nih.gov/222");
   });
 });

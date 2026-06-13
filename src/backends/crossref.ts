@@ -1,11 +1,15 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpJson, htmlToText } from "./fetch.js";
+import { sinceDate } from "../util.js";
 
 // Crossref via its keyless REST API (polite UA). Returns work metadata; the
 // abstract (when present, often JATS XML) is stripped to text.
 export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}`;
+  const since = sinceDate(ctx.options.since);
+  const url =
+    `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` +
+    (since ? `&filter=from-pub-date:${since}` : "");
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
   const items0: any[] = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {

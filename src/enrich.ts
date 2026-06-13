@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BackendKind, RawSource } from "./types.js";
-import { readDossier, buildSource, renderSourceExtract, renderDossierMarkdown } from "./dossier.js";
+import { readDossier, buildSource, renderSourceExtract, renderDossierMarkdown, nextSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { fetchAndExtract, bestExcerpt } from "./backends/fetch.js";
 import { canonicalizeUrl } from "./util.js";
@@ -35,7 +35,7 @@ export async function addSource(
     return { id: "", added: false, note: note ?? `no readable content at ${url}` };
   }
 
-  const id = `S${sources.reduce((max, s) => Math.max(max, Number(/^S(\d+)$/.exec(s.id)?.[1] ?? 0)), 0) + 1}`;
+  const id = nextSourceId(sources); // shares the S<n> scheme the grounding contract depends on
   const backend: BackendKind = opts.backend ?? "claude";
   const raw: RawSource = {
     url,

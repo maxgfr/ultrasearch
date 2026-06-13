@@ -13,7 +13,8 @@ export const arxivBackend: Backend = async (ctx): Promise<BackendResult> => {
   const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
   const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12000 });
   if (!r.ok || !r.body) {
-    return { backend: "arxiv", items: [], notes: [`arXiv search failed (status ${r.status}).`] };
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
+    return { backend: "arxiv", items: [], notes: [`arXiv search ${why}.`] };
   }
   const entries = r.body.split(/<entry>/).slice(1);
   const items: RawSource[] = entries.slice(0, n).map((block, i): RawSource => {

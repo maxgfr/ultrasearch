@@ -19,6 +19,8 @@ export type BackendKind =
   | "crossref"
   | "openalex"
   | "semanticscholar"
+  | "europepmc"
+  | "pubmed"
   | "generic"
   | "fixture"
   | "claude";
@@ -34,6 +36,8 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "crossref",
   "openalex",
   "semanticscholar",
+  "europepmc",
+  "pubmed",
   "generic",
   "fixture",
   "claude",
@@ -153,11 +157,14 @@ export interface GatherOptions {
   fresh: boolean;
 }
 
-// Context handed to every backend for a run.
+// Context handed to every backend for a run. `question` is the active query (a
+// backend may be invoked once per variant by the registry); `variants` is the
+// full planned set the registry fans out over.
 export interface RunContext {
   question: string;
   mode: ModeProfile;
   options: GatherOptions;
+  variants: string[];
 }
 
 // manifest.json — run metadata. `notes` carries retrieval hints (incl. the

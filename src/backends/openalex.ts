@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpJson } from "./fetch.js";
+import { sinceDate } from "../util.js";
 
 // Reconstruct an abstract from OpenAlex's inverted index {word: [positions]}.
 function fromInverted(idx: Record<string, number[]> | null | undefined): string {
@@ -13,7 +14,10 @@ function fromInverted(idx: Record<string, number[]> | null | undefined): string 
 // abstract for the report and BibTeX.
 export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url = `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}`;
+  const since = sinceDate(ctx.options.since);
+  const url =
+    `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` +
+    (since ? `&filter=from_publication_date:${since}` : "");
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
   const results: any[] = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {

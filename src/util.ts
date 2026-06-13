@@ -1,10 +1,4 @@
-import type { BackendKind, RawSource } from "./types.js";
-
-// Truncate a string to a max length with an ellipsis marker, for snippets.
-export function clip(s: string, max: number): string {
-  if (s.length <= max) return s;
-  return s.slice(0, max) + `\n… [truncated ${s.length - max} chars]`;
-}
+import type { BackendKind, Depth, RawSource } from "./types.js";
 
 // Escape a string for safe inclusion as a literal inside a RegExp.
 export function escapeRegExp(s: string): string {
@@ -41,32 +35,39 @@ export function runId(d: Date = new Date()): string {
 
 const TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$)/i;
 
-// Canonical form of a URL for deduplication: lowercase host, drop the fragment
-// and tracking query params, drop a default port, strip a trailing slash. Path
-// case is preserved logically but lowercased for the dedupe key since most
-// content URLs are case-insensitive in practice. Falls back to the lowercased
-// input when the URL can't be parsed.
+// Canonical form of a URL for deduplication. Lowercases ONLY scheme + host
+// (paths and query values are case-sensitive — github.com/Microsoft/TypeScript
+// is not github.com/microsoft/typescript, and YouTube ?v= ids are case-bearing).
+// Drops the fragment, tracking params and default port, sorts the remaining
+// query params, re-encodes their values (so an encoded '&' in a value isn't
+// turned into a delimiter), and strips a trailing slash. Built from components
+// rather than URL.toString().toLowerCase().
 export function canonicalizeUrl(raw: string): string {
   try {
     const u = new URL(raw.trim());
-    u.hash = "";
-    u.hostname = u.hostname.toLowerCase().replace(/^www\./, "");
-    u.pathname = u.pathname.replace(/\/+$/, "");
-    if ((u.protocol === "http:" && u.port === "80") || (u.protocol === "https:" && u.port === "443")) {
-      u.port = "";
-    }
+    const proto = u.protocol.toLowerCase();
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    let port = u.port;
+    if ((proto === "http:" && port === "80") || (proto === "https:" && port === "443")) port = "";
+    const path = u.pathname.replace(/\/+$/, ""); // case preserved
     const keep: [string, string][] = [];
     for (const [k, v] of u.searchParams) {
       if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
     }
-    keep.sort((a, b) => a[0].localeCompare(b[0]));
-    u.search = keep.length ? "?" + keep.map(([k, v]) => `${k}=${v}`).join("&") : "";
-    let out = u.toString().toLowerCase();
-    out = out.replace(/\/$/, "");
-    return out;
+    keep.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    const search = keep.length
+      ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&")
+      : "";
+    return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
   } catch {
-    return raw.trim().toLowerCase().replace(/#.*$/, "").replace(/\/$/, "");
+    return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
   }
+}
+
+// Normalize a DOI to a bare lowercase identifier (strip any doi.org prefix) so
+// the same work cited as a DOI URL and a bare DOI dedupes to one key.
+export function normalizeDoi(doi: string): string {
+  return doi.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
 }
 
 // Bare hostname of a URL (no leading www), or "" when unparseable.
@@ -85,6 +86,8 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   crossref: 0.9,
   openalex: 0.9,
   semanticscholar: 0.9,
+  europepmc: 0.9,
+  pubmed: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -347,4 +350,107 @@ export function rrf<T>(lists: T[][], keyOf: (item: T) => string, k = 60): Map<st
     });
   }
   return score;
+}
+
+// Identity key for de-duplication that is stronger than URL: the same work
+// surfaced as an arXiv abstract, a DOI URL and a journal landing page (across
+// arxiv/crossref/openalex/semanticscholar) collapses to one key so it doesn't
+// eat several source slots. Falls back to canonical URL.
+export function identityKey(item: RawSource): string {
+  const doi = item.meta?.doi;
+  if (doi) return "doi:" + normalizeDoi(String(doi));
+  const arxiv = item.meta?.arxivId;
+  if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  return canonicalizeUrl(item.url);
+}
+
+// Pull distinctive identifiers out of a question — versions (v1.2.3), status
+// codes / years (3+ digits), CamelCase / snake_case symbols, DOIs, arXiv ids,
+// and quoted spans — to drive an identifier-focused query variant.
+export function extractIdentifiers(question: string): string[] {
+  const out = new Set<string>();
+  const add = (re: RegExp, group = 0) => {
+    for (const m of question.matchAll(re)) {
+      const v = (m[group] ?? m[0]).trim();
+      if (v) out.add(v);
+    }
+  };
+  add(/\bv?\d+(?:\.\d+){1,}\b/g); // versions
+  add(/\b10\.\d{4,}\/\S+/g); // DOI
+  add(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g); // arXiv id
+  add(/\b[a-z]+(?:[A-Z][a-z0-9]+)+\b/g); // camelCase
+  add(/\b[A-Za-z]+_[A-Za-z0-9_]+\b/g); // snake_case
+  add(/\b\d{3,}\b/g); // status codes / years
+  add(/"([^"\n]{3,})"/g, 1); // quoted spans
+  return [...out];
+}
+
+// Plan the query variants a run searches with. variant[0] is the full question
+// (good for discovery/semantic backends); then a distinctive-keyword query
+// (recall for keyword APIs that otherwise choke on stopwords); then an
+// identifier query at deep. Count is gated by depth (summary 1 / standard 2 /
+// deep 3) so summary stays cheap.
+export function planVariants(question: string, depth: Depth): string[] {
+  const base = question.trim();
+  const variants: string[] = base ? [base] : [];
+  const kw = rankedKeywords(question).slice(0, 8).join(" ");
+  if (kw && kw.toLowerCase() !== base.toLowerCase()) variants.push(kw);
+  const idents = extractIdentifiers(question);
+  if (idents.length) variants.push(idents.join(" "));
+  const seen = new Set<string>();
+  const uniq: string[] = [];
+  for (const v of variants) {
+    const key = v.toLowerCase();
+    if (v && !seen.has(key)) {
+      seen.add(key);
+      uniq.push(v);
+    }
+  }
+  const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
+  return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
+}
+
+// What fraction of the question's distinctive keywords appear in a body of
+// text — used to re-rank fetched candidates by actual content relevance.
+export function contentCoverage(matcher: KeywordMatcher, text: string): number {
+  if (!matcher.canonicals.length || !text) return 0;
+  const hit = new Set<string>();
+  for (const line of text.split("\n")) {
+    for (const c of matcher.matchLine(line)) hit.add(c);
+    if (hit.size === matcher.canonicals.length) break;
+  }
+  return hit.size / matcher.canonicals.length;
+}
+
+// Parse a --since value (any Date-parseable string, e.g. "2023" or
+// "2023-01-15") into epoch seconds / an ISO date, for backends with date
+// filters. Returns null when absent or unparseable.
+export function sinceEpochSeconds(since?: string): number | null {
+  if (!since) return null;
+  const ms = Date.parse(since.length === 4 ? `${since}-01-01` : since);
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+}
+export function sinceDate(since?: string): string | null {
+  const secs = sinceEpochSeconds(since);
+  return secs === null ? null : new Date(secs * 1000).toISOString().slice(0, 10);
+}
+
+// Bounded-concurrency async map (dependency-free) — keeps the hydrate step
+// polite (a handful of in-flight fetches) instead of firing dozens at once.
+export async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) break;
+      results[idx] = await fn(items[idx]!, idx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }

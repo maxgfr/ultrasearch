@@ -2,78 +2,122 @@ import { buildMatcher } from "../util.js";
 
 const UA = "ultrasearch/0.x (+https://github.com/maxgfr/ultrasearch)";
 
+// Transient statuses worth one retry; a single throttled call would otherwise
+// silently zero out a whole high-signal backend (Stack Overflow, GitHub, S2).
+const RETRY_STATUS = new Set([429, 503, 502, 504]);
+const MAX_ATTEMPTS = 2;
+const DEFAULT_RETRY_MS = 600;
+
 export interface HttpResult {
   ok: boolean;
   status: number;
   body: string;
   contentType: string;
+  url: string; // final URL after redirects (for post-redirect exclude re-check)
   error?: string;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// How long to wait before a retry: honor Retry-After (seconds) clamped to 5s,
+// else a small fixed backoff.
+function retryDelayMs(retryAfter: string | null): number {
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    if (Number.isFinite(secs)) return Math.min(Math.max(secs * 1000, 0), 5000);
+  }
+  return DEFAULT_RETRY_MS;
+}
+
 // Minimal HTTP GET on Node's built-in fetch (Node ≥18) — no dependencies.
-// Times out, sends a UA, caps the body so a huge page can't blow up memory,
-// and never throws (errors come back as { ok:false }).
+// Times out, sends a UA, caps the body, never throws (errors come back as
+// { ok:false }), and retries ONCE on a transient status or network error.
 export async function httpGet(
   url: string,
   opts: { timeoutMs?: number; accept?: string; maxBytes?: number } = {},
 ): Promise<HttpResult> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
-  try {
-    const res = await fetch(url, {
-      signal: ctrl.signal,
-      redirect: "follow",
-      headers: { "user-agent": UA, accept: opts.accept ?? "*/*" },
-    });
-    const buf = Buffer.from(await res.arrayBuffer());
-    const max = opts.maxBytes ?? 4 * 1024 * 1024;
-    return {
-      ok: res.ok,
-      status: res.status,
-      body: buf.subarray(0, max).toString("utf8"),
-      contentType: res.headers.get("content-type") ?? "",
-    };
-  } catch (e) {
-    return { ok: false, status: 0, body: "", contentType: "", error: (e as Error).message };
-  } finally {
-    clearTimeout(t);
+  let last: HttpResult = { ok: false, status: 0, body: "", contentType: "", url };
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
+    try {
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        redirect: "follow",
+        headers: { "user-agent": UA, accept: opts.accept ?? "*/*" },
+      });
+      const buf = Buffer.from(await res.arrayBuffer());
+      const max = opts.maxBytes ?? 4 * 1024 * 1024;
+      const result: HttpResult = {
+        ok: res.ok,
+        status: res.status,
+        body: buf.subarray(0, max).toString("utf8"),
+        contentType: res.headers.get("content-type") ?? "",
+        url: res.url || url,
+      };
+      if (RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
+        last = result;
+        await sleep(retryDelayMs(res.headers.get("retry-after")));
+        continue;
+      }
+      return result;
+    } catch (e) {
+      last = { ok: false, status: 0, body: "", contentType: "", url, error: (e as Error).message };
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(DEFAULT_RETRY_MS);
+    } finally {
+      clearTimeout(t);
+    }
   }
+  return last;
 }
 
 // JSON request helper for the keyless search APIs. Returns parsed JSON or an
-// error; never throws.
+// error; never throws; retries once on a transient status / network error.
 export async function httpJson(
   method: string,
   url: string,
   body?: unknown,
   opts: { timeoutMs?: number; accept?: string } = {},
 ): Promise<{ ok: boolean; status: number; data: any; error?: string }> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
-  try {
-    const res = await fetch(url, {
-      method,
-      signal: ctrl.signal,
-      headers: {
-        "content-type": "application/json",
-        accept: opts.accept ?? "application/json",
-        "user-agent": UA,
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    const text = await res.text();
-    let data: any;
+  let last: { ok: boolean; status: number; data: any; error?: string } = { ok: false, status: 0, data: undefined };
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
     try {
-      data = text ? JSON.parse(text) : undefined;
-    } catch {
-      data = text;
+      const res = await fetch(url, {
+        method,
+        signal: ctrl.signal,
+        headers: {
+          "content-type": "application/json",
+          accept: opts.accept ?? "application/json",
+          "user-agent": UA,
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await res.text();
+      let data: any;
+      try {
+        data = text ? JSON.parse(text) : undefined;
+      } catch {
+        data = text;
+      }
+      const result = { ok: res.ok, status: res.status, data };
+      if (RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
+        last = result;
+        await sleep(retryDelayMs(res.headers.get("retry-after")));
+        continue;
+      }
+      return result;
+    } catch (e) {
+      last = { ok: false, status: 0, data: undefined, error: (e as Error).message };
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(DEFAULT_RETRY_MS);
+    } finally {
+      clearTimeout(t);
     }
-    return { ok: res.ok, status: res.status, data };
-  } catch (e) {
-    return { ok: false, status: 0, data: undefined, error: (e as Error).message };
-  } finally {
-    clearTimeout(t);
   }
+  return last;
 }
 
 const ENTITIES: Record<string, string> = {
@@ -134,15 +178,16 @@ export function htmlTitle(html: string): string | undefined {
 // Returns a `note` instead of throwing when the page can't be fetched.
 export async function fetchAndExtract(
   url: string,
-): Promise<{ text: string; title?: string; note?: string }> {
+): Promise<{ text: string; title?: string; note?: string; finalUrl: string }> {
   const res = await httpGet(url, { accept: "text/html,text/plain,*/*" });
   if (!res.ok) {
-    return { text: "", note: `Could not fetch ${url} (status ${res.status}${res.error ? ", " + res.error : ""}).` };
+    const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
+    return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(res.body) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
-  return { text, title };
+  return { text, title, finalUrl: res.url };
 }
 
 // The markdown heading a line sits under, ignoring fenced code blocks.

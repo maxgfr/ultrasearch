@@ -67,6 +67,12 @@ function hintMask(lines: string[]): { mask: boolean[]; regions: number } {
   return { mask, regions };
 }
 
+// Remove inline-code spans so a [S#] (or a whole claim) hidden in backticks is
+// not treated as a citation or as covered prose (audit C1).
+function stripInlineCode(line: string): string {
+  return line.replace(/`[^`\n]*`/g, " ");
+}
+
 // Count substantive words in a unit, ignoring citation/hint tokens, markdown
 // link URLs, and pure punctuation — so a short heading-ish or link-only line
 // isn't treated as a factual claim.
@@ -93,24 +99,98 @@ function hasHintMarker(unit: string): boolean {
   return false;
 }
 
-// Is this line ineligible to be a factual claim (heading, table, rule, bare
-// list/blockquote scaffold)?
-function isStructural(line: string): boolean {
-  const t = line.trim();
-  if (!t) return true;
-  if (/^#{1,6}\s/.test(t)) return true; // heading
-  if (/^([-*_])\1{2,}$/.test(t)) return true; // hr ---/***
-  if (/^\|/.test(t) || /^[:\-\s|]+$/.test(t)) return true; // table row/separator
-  if (/^([-*+]|\d+\.)\s*$/.test(t)) return true; // empty list bullet
-  return false;
+function isHeadingOrRule(t: string): boolean {
+  return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
 }
-
+function isTableSeparator(line: string): boolean {
+  return /\|/.test(line) && /^[\s:|-]+$/.test(line.trim()) && /-/.test(line);
+}
+function isTableRow(line: string): boolean {
+  return /\|/.test(line.trim()) && !isTableSeparator(line);
+}
+function tableCells(line: string): string {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
+}
 function isListItem(line: string): boolean {
   return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
 }
 
+// A claim unit is either a single block of prose/table-row text, or a list
+// group (its items, evaluated individually and as an aggregate).
+type Unit = { kind: "text"; text: string } | { kind: "list"; items: string[] };
+
+// Split a hard-checked file into claim units. Headings, rules, code, table
+// separators and model-hint regions are excluded; plain blockquotes are
+// de-quoted into prose (audit C2); table data rows become units (C3); list
+// items fold in their continuation lines (C5) and also get a group aggregate
+// (C4). Inline code is stripped throughout (C1).
+function extractUnits(lines: string[], code: boolean[], hint: boolean[]): Unit[] {
+  const units: Unit[] = [];
+  let prose: string[] = [];
+  const flush = () => {
+    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
+    prose = [];
+  };
+
+  let i = 0;
+  while (i < lines.length) {
+    if (code[i] || hint[i]) {
+      flush();
+      i++;
+      continue;
+    }
+    let line = stripInlineCode(lines[i]!);
+    const t = line.trim();
+    if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
+      flush();
+      i++;
+      continue;
+    }
+    if (isTableRow(line)) {
+      flush();
+      units.push({ kind: "text", text: tableCells(line) });
+      i++;
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      // Plain (non-hint) blockquote → treat the quoted text as prose.
+      const dequoted = line.replace(/^\s*>\s?/, "").trim();
+      if (dequoted) prose.push(dequoted);
+      i++;
+      continue;
+    }
+    if (isListItem(line)) {
+      flush();
+      const items: string[] = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const l = stripInlineCode(lines[i]!);
+        const tt = l.trim();
+        if (tt === "" || isHeadingOrRule(tt) || isTableSeparator(l) || isTableRow(l)) break;
+        if (isListItem(l)) {
+          items.push(l.replace(/^\s*([-*+]|\d+\.)\s+/, "").trim());
+        } else if (items.length) {
+          items[items.length - 1] += " " + tt; // continuation line folded in (C5)
+        } else {
+          items.push(tt);
+        }
+        i++;
+      }
+      units.push({ kind: "list", items });
+      continue;
+    }
+    prose.push(line);
+    i++;
+  }
+  flush();
+  return units;
+}
+
 function analyzeFile(file: string, text: string): FileAnalysis {
-  const lines = text.split("\n");
+  // Strip HTML comments first (blanking their characters but preserving line
+  // breaks) so a citation hidden in `<!-- [S1] -->` cannot ground a claim — the
+  // renderer escapes comments to literal text, so they must not count here
+  // either. Mirrors htmlToText's comment handling.
+  const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
 
@@ -118,12 +198,15 @@ function analyzeFile(file: string, text: string): FileAnalysis {
   const unknownTokens: string[] = [];
   let mMarkers = 0;
 
-  // Tokenize over non-code lines.
+  // Tokenize over non-code lines (inline code stripped), excluding model-hint
+  // regions from the [M]/source accounting is unnecessary — but a [S#] inside
+  // backticks must not count (C1), hence stripInlineCode.
   for (let i = 0; i < lines.length; i++) {
     if (code[i]) continue;
+    const masked = stripInlineCode(lines[i]!);
     TOKEN_RE.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = TOKEN_RE.exec(lines[i]!))) {
+    while ((m = TOKEN_RE.exec(masked))) {
       const tok = m[1]!.trim();
       if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
       else if (tok === "M") mMarkers++;
@@ -132,41 +215,39 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     }
   }
 
-  // Claim-coverage: build blocks from non-code, non-hint lines. A list block is
-  // checked item by item; a prose block is checked as one unit.
   const unsourcedClaims: string[] = [];
-  let block: string[] = [];
-  const flush = () => {
-    if (!block.length) return;
-    const isList = block.some(isListItem);
-    const units = isList ? block.filter(isListItem) : [block.join(" ")];
-    for (const unit of units) {
-      if (claimWordCount(unit) < MIN_CLAIM_WORDS) continue;
-      if (hasSourceToken(unit) || hasHintMarker(unit)) continue;
-      unsourcedClaims.push(unit.trim().slice(0, 120));
-    }
-    block = [];
+  const flag = (unit: string) => {
+    if (claimWordCount(unit) < MIN_CLAIM_WORDS) return false;
+    if (hasSourceToken(unit) || hasHintMarker(unit)) return false;
+    unsourcedClaims.push(unit.trim().slice(0, 120));
+    return true;
   };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (code[i] || hint[i] || /^\s*>/.test(line) || isStructural(line)) {
-      flush();
-      continue;
+
+  for (const u of extractUnits(lines, code, hint)) {
+    if (u.kind === "text") {
+      flag(u.text);
+    } else {
+      // Each item is a claim unit; if none of them tripped (e.g. a claim
+      // fragmented across sub-threshold bullets), check the joined group (C4).
+      let any = false;
+      for (const it of u.items) any = flag(it) || any;
+      if (!any) {
+        const joined = u.items.join(" ");
+        const grouped = u.items.join("\n");
+        if (claimWordCount(joined) >= MIN_CLAIM_WORDS && !hasSourceToken(grouped) && !hasHintMarker(grouped)) {
+          unsourcedClaims.push(joined.trim().slice(0, 120));
+        }
+      }
     }
-    if (line.trim() === "") {
-      flush();
-      continue;
-    }
-    block.push(line);
   }
-  flush();
 
   return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 
 // Validate that the report tiers are grounded in the dossier's sources. Fails
 // on a dangling [S#], on an unmarked unsourced claim in REPORT/FULL, or when no
-// source is cited at all. Flagged model-hints are tolerated.
+// source is cited at all. Flagged model-hints are tolerated; uncited sources
+// and unknown tokens only warn.
 export function runCheck(dir: string): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -190,7 +271,6 @@ export function runCheck(dir: string): CheckResult {
 
   const analyses = present.map((f) => analyzeFile(f, readFileSync(join(dir, f), "utf8")));
 
-  // Dangling citations (any file) and global source usage.
   const danglingSet = new Set<string>();
   const citedIds = new Set<string>();
   let sourceCitations = 0;
@@ -209,7 +289,6 @@ export function runCheck(dir: string): CheckResult {
       }
     }
     for (const u of a.unknownTokens) unknown.add(u);
-    // Per-claim coverage only enforced on the hard files.
     if (HARD_FILES.includes(a.file)) {
       for (const c of a.unsourcedClaims) unmarkedUnsourced.push({ file: a.file, text: c });
     }

@@ -35,9 +35,17 @@ describe("runId", () => {
 });
 
 describe("canonicalizeUrl", () => {
-  it("drops fragment, tracking params, www and trailing slash", () => {
+  it("drops fragment, tracking params, www and trailing slash; lowercases host but preserves path case", () => {
     const a = canonicalizeUrl("https://www.Example.com/Page/?utm_source=x&q=1#frag");
-    expect(a).toBe("https://example.com/page?q=1");
+    expect(a).toBe("https://example.com/Page?q=1");
+  });
+  it("preserves case-sensitive paths (distinct GitHub repos are not collapsed)", () => {
+    expect(canonicalizeUrl("https://github.com/Microsoft/TypeScript")).not.toBe(
+      canonicalizeUrl("https://github.com/microsoft/typescript"),
+    );
+  });
+  it("re-encodes a query value so an encoded '&' stays part of the value", () => {
+    expect(canonicalizeUrl("https://x.com/a?q=a%26b")).toBe("https://x.com/a?q=a%26b");
   });
   it("treats www/non-www and trailing slash as the same resource", () => {
     expect(canonicalizeUrl("https://en.wikipedia.org/wiki/Rate_limiting/")).toBe(

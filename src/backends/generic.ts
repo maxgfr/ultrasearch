@@ -18,12 +18,12 @@ export const genericBackend: Backend = async (ctx): Promise<BackendResult> => {
   const notes: string[] = [];
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i]!;
-    const { text, title, note } = await fetchAndExtract(url);
+    const { text, title, note, finalUrl } = await fetchAndExtract(url);
     if (note) notes.push(note);
     if (!text) continue;
     items.push({
-      url,
-      title: title || url,
+      url: finalUrl || url, // record the post-redirect URL for provenance + exclude
+      title: title || finalUrl || url,
       backend: "generic",
       score: urls.length - i,
       snippet: bestExcerpt(text, ctx.question),

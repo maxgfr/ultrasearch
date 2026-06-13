@@ -9,9 +9,29 @@ modes`.
 |------|--------------------|-------------|--------|
 | `topic` | wikipedia, searxng, duckduckgo | — | — |
 | `bug` | stackexchange, github, duckduckgo, hackernews | searxng | — |
-| `research` | arxiv, openalex, crossref, semanticscholar | duckduckgo, wikipedia | `bibtex` (refs.bib) |
+| `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, duckduckgo, wikipedia | `bibtex` (refs.bib) |
 | `learn` | wikipedia, duckduckgo, searxng | — | `glossary`, `exercises` |
 | `startup` | duckduckgo, searxng, hackernews | wikipedia | — |
+
+`stackexchange` fans out across Stack Overflow + Server Fault + Super User +
+Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers and
+`pubmed` (deep) adds MeSH-indexed/clinical records — so research mode is no
+longer physics/CS-only.
+
+## Recall behavior
+
+- **Query variants** — every run plans a few query variants (the full question,
+  a distinctive-keyword query, and an identifier query at `deep`) and fans the
+  general/scholarly backends out across them, fusing the results — so keyword
+  APIs aren't choked by stopwords. Count scales with `--depth`.
+- **Content-aware ranking** — sources are re-ranked by how well their fetched
+  text actually covers the question (plus fusion rank and trust) before the
+  `--max-sources` cut, so a deeply-relevant page a backend ranked low survives.
+- **Identity dedup** — the same work across arXiv/Crossref/OpenAlex/Semantic
+  Scholar/Europe PMC collapses to one source by DOI/arXiv id.
+- **`--since`** filters date-capable backends (Crossref, OpenAlex, GitHub,
+  Stack Exchange, Hacker News); **`--web-engine`** pins or drops the general-web
+  discovery backends (`searxng` | `ddg` | `claude` | `auto`).
 
 ## Extras
 

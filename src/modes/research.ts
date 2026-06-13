@@ -4,8 +4,8 @@ import type { ModeProfile } from "../types.js";
 export const researchMode: ModeProfile = {
   name: "research",
   description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar) + refs.bib.",
-  backends: ["arxiv", "openalex", "crossref", "semanticscholar"],
-  deepOnly: ["duckduckgo", "wikipedia"],
+  backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
+  deepOnly: ["pubmed", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
   template: [
     "## Abstract / TL;DR",

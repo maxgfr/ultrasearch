@@ -104,14 +104,18 @@ not hand control back mid-retrieval.
 - `topic` — Wikipedia + general web → a neutral briefing.
 - `bug` — Stack Overflow + GitHub issues + Hacker News + changelogs → cause +
   ranked candidate fixes + workarounds.
-- `research` — arXiv + Crossref + OpenAlex + Semantic Scholar → a literature
-  review + `refs.bib` (BibTeX).
+- `research` — arXiv + Crossref + OpenAlex + Semantic Scholar + Europe PMC
+  (+ PubMed at `deep`) → a literature review + `refs.bib` (BibTeX).
 - `learn` — general web + docs → objectives, glossary, lesson, worked examples,
   exercises; the richest HTML.
 - `startup` — general web + community → market sizing, competitors, pricing, GTM.
 
 `--depth deep` keeps more sources and runs each mode's deep-only backends; tiers
-are always all three.
+are always all three. The engine handles recall for you: it expands the question
+into query variants, re-ranks sources by how well their text covers the
+question, dedupes the same work across scholarly backends, and retries once on
+throttling. `--since <date>` restricts date-capable backends; `--web-engine`
+pins the general-web discovery layer.
 
 ## References
 

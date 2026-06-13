@@ -22,16 +22,24 @@ describe("searxngBackend", () => {
     expect(r.items[0]!.score).toBeGreaterThan(r.items[1]!.score);
   });
 
-  it("falls through with a note when unreachable", async () => {
+  it("is opt-in: skips without calling fetch when no instance is configured", async () => {
+    const spy = installFetchMock(() => ({ status: 200, body: "{}" }));
+    const r = await searxngBackend(makeCtx("x")); // no --searxng, no env
+    expect(r.items).toHaveLength(0);
+    expect(r.notes.join(" ")).toMatch(/not configured/i);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("falls through with a note when a configured instance is unreachable", async () => {
     installFetchMock(() => ({ status: 0, body: "" }));
-    const r = await searxngBackend(makeCtx("x"));
+    const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888" }));
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/unreachable/i);
   });
 
   it("notes when the instance returns non-JSON (json disabled)", async () => {
     installFetchMock(() => ({ status: 200, body: "<html>blocked</html>", contentType: "text/html" }));
-    const r = await searxngBackend(makeCtx("x"));
+    const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888" }));
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/did not return JSON/i);
   });

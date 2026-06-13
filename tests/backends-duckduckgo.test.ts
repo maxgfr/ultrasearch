@@ -32,6 +32,20 @@ describe("duckduckgoBackend", () => {
     expect(r.items[0]!.snippet).toContain("token bucket");
   });
 
+  it("keeps each result's own snippet even when a skipped ad has a snippet (no index shift)", async () => {
+    const html = `
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fa">Result A</a>
+<a class="result__snippet">snippet for A</a></div>
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fy.com%2Fad">Ad</a>
+<a class="result__snippet">snippet for the AD</a></div>
+<div class="result"><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fb">Result B</a>
+<a class="result__snippet">snippet for B</a></div>`;
+    installFetchMock(routes([["duckduckgo.com/html", { body: html }]]));
+    const r = await duckduckgoBackend(makeCtx("x"));
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/a", "https://real.test/b"]);
+    expect(r.items[1]!.snippet).toBe("snippet for B"); // NOT "snippet for the AD"
+  });
+
   it("notes when unreachable", async () => {
     installFetchMock(() => ({ status: 0, body: "" }));
     const r = await duckduckgoBackend(makeCtx("x"));

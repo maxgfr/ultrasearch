@@ -1,11 +1,15 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpJson, htmlToText } from "./fetch.js";
+import { sinceEpochSeconds } from "../util.js";
 
 // Hacker News via the keyless Algolia API. Stories (not comments) ranked by
 // relevance; text is the story text when present, else title + discussion link.
 export const hackernewsBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url = `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(ctx.question)}&tags=story&hitsPerPage=${n}`;
+  const since = sinceEpochSeconds(ctx.options.since);
+  const url =
+    `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(ctx.question)}&tags=story&hitsPerPage=${n}` +
+    (since ? `&numericFilters=created_at_i>${since}` : "");
   const r = await httpJson("GET", url, undefined, { timeoutMs: 10000 });
   if (!r.ok || !Array.isArray(r.data?.hits)) {
     return { backend: "hackernews", items: [], notes: [`Hacker News search failed (status ${r.status}).`] };

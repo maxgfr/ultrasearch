@@ -28,31 +28,31 @@ export const duckduckgoBackend: Backend = async (ctx): Promise<BackendResult> =>
   const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(ctx.question)}`;
   const r = await httpGet(url, { accept: "text/html", timeoutMs: 12000 });
   if (!r.ok || !r.body) {
-    return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo unreachable (status ${r.status}).`] };
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) — consider your own WebSearch` : `unreachable (status ${r.status})`;
+    return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
   }
 
-  const titles: { href: string; title: string }[] = [];
-  const anchorRe = /<a\b([^>]*\bresult__a\b[^>]*)>([\s\S]*?)<\/a>/gi;
+  // Parse each result as a BLOCK — the title anchor plus everything up to the
+  // next result anchor — so a skipped result (an ad, DDG's own domain) cannot
+  // shift snippets onto the wrong result (index-zip misalignment).
+  const found: { url: string; title: string; snippet: string }[] = [];
+  const blockRe = /<a\b([^>]*\bresult__a\b[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bresult__a\b|$)/gi;
   let m: RegExpExecArray | null;
-  while ((m = anchorRe.exec(r.body))) {
+  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]!);
     if (!href0) continue;
     const href = realUrl(href0[1]!);
     if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
-    titles.push({ href, title: stripTags(m[2]!) || href });
+    const snipM = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i.exec(m[3]!);
+    found.push({ url: href, title: stripTags(m[2]!) || href, snippet: snipM ? stripTags(snipM[1]!) : "" });
   }
 
-  const snippets: string[] = [];
-  const snipRe = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-  let s: RegExpExecArray | null;
-  while ((s = snipRe.exec(r.body))) snippets.push(stripTags(s[1]!));
-
-  const items: RawSource[] = titles.slice(0, ctx.options.perSource * 2).map((t, i) => ({
-    url: t.href,
-    title: t.title,
+  const items: RawSource[] = found.map((f, i) => ({
+    url: f.url,
+    title: f.title,
     backend: "duckduckgo" as const,
-    score: titles.length - i,
-    snippet: (snippets[i] ?? "").slice(0, 360),
+    score: found.length - i,
+    snippet: f.snippet.slice(0, 360),
     lang: ctx.options.lang,
   }));
 
