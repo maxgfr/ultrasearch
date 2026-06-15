@@ -3,7 +3,7 @@
 // src/cli.ts
 import { resolve } from "path";
 import { pathToFileURL, fileURLToPath } from "url";
-import { realpathSync } from "fs";
+import { realpathSync, existsSync as existsSync5 } from "fs";
 
 // src/types.ts
 var VERSION = "1.2.0";
@@ -33,6 +33,12 @@ var DEPTH_CAPS = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
   standard: { maxSources: 25, perSource: 6, deepOnly: false },
   deep: { maxSources: 60, perSource: 10, deepOnly: true }
+};
+var DEEP_CAPS = {
+  maxSubQuestions: 6,
+  maxRounds: 3,
+  maxVerify: 40,
+  perSubQuestionSources: 60
 };
 
 // src/gather.ts
@@ -1804,7 +1810,7 @@ async function runBackends(kinds, ctx) {
 }
 
 // src/dossier.ts
-import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 var CITATION_RULES = [
   "**Cite every factual claim** with the id of the source it rests on, e.g. `[S1]`",
@@ -1852,6 +1858,14 @@ function renderSourceExtract(s, text, depth) {
     ""
   ].join("\n");
   return head + capExtract(text, depth) + "\n";
+}
+function readSourceText(dir, s) {
+  const p = join(dir, s.extract);
+  if (!existsSync(p)) return s.snippet ?? "";
+  const lines = readFileSync(p, "utf8").split("\n");
+  const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
+  const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
+  return body || s.snippet || "";
 }
 function writeDossier(dir, rawSources, manifest, template) {
   mkdirSync(join(dir, "sources"), { recursive: true });
@@ -2230,8 +2244,9 @@ async function addSource(dir, url, opts = {}) {
 }
 
 // src/render.ts
-import { existsSync, readFileSync as readFileSync2, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync4 } from "fs";
 import { join as join4 } from "path";
+var VERDICT_SEVERITY = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 var TIERS = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
   { id: "report", label: "Report", file: "REPORT.md" },
@@ -2241,22 +2256,28 @@ var TIERS = [
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-function renderInline(escaped) {
+function renderInline(escaped, verdicts) {
   let s = escaped;
   s = s.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
   s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}" rel="noopener" target="_blank">${t}</a>`);
-  s = s.replace(/\[(S\d+)\]/g, (_m, id) => `<a class="cite" href="#src-${id}" title="source ${id}">[${id}]</a>`);
+  s = s.replace(/\[(S\d+)\]/g, (_m, id) => {
+    const v = verdicts?.get(id);
+    const cls = v ? `cite v-${v}` : "cite";
+    const title = v ? `source ${id} \u2014 ${v}` : `source ${id}`;
+    return `<a class="${cls}" href="#src-${id}" title="${title}">[${id}]</a>`;
+  });
   s = s.replace(/\[M\]/g, `<sup class="mhint" title="model hint \u2014 not from a fetched source">[M]</sup>`);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   s = s.replace(/(^|[^\w])_([^_\n]+)_/g, "$1<em>$2</em>");
   return s;
 }
-function mdToHtml(md, idPrefix) {
+function mdToHtml(md, idPrefix, opts = {}) {
   const lines = md.split("\n");
   const out = [];
   const headings = [];
   const usedIds = /* @__PURE__ */ new Set();
+  const inline = (text) => renderInline(text, opts.verdicts);
   let i = 0;
   const headingId = (text) => {
     let base = `${idPrefix}-${slugify(text)}`;
@@ -2287,7 +2308,7 @@ function mdToHtml(md, idPrefix) {
       const text = h[2];
       const id = headingId(text);
       headings.push({ level, text, id });
-      out.push(`<h${level} id="${id}">${renderInline(escapeHtml(text))}</h${level}>`);
+      out.push(`<h${level} id="${id}">${inline(escapeHtml(text))}</h${level}>`);
       i++;
       continue;
     }
@@ -2308,7 +2329,7 @@ function mdToHtml(md, idPrefix) {
         quote.push(q);
         i++;
       }
-      const inner = renderInline(escapeHtml(quote.join(" ").trim()));
+      const inner = inline(escapeHtml(quote.join(" ").trim()));
       if (isHint) {
         out.push(`<blockquote class="model-hint"><span class="mhint-badge">model hint \xB7 unverified</span> ${inner}</blockquote>`);
       } else {
@@ -2324,8 +2345,8 @@ function mdToHtml(md, idPrefix) {
         rows.push(lines[i]);
         i++;
       }
-      const thead = `<thead><tr>${header.map((c) => `<th>${renderInline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
-      const tbody = rows.map((r) => `<tr>${splitRow(r).map((c) => `<td>${renderInline(escapeHtml(c))}</td>`).join("")}</tr>`).join("");
+      const thead = `<thead><tr>${header.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
+      const tbody = rows.map((r) => `<tr>${splitRow(r).map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`).join("");
       out.push(`<table>${thead}<tbody>${tbody}</tbody></table>`);
       continue;
     }
@@ -2334,7 +2355,7 @@ function mdToHtml(md, idPrefix) {
       const items = [];
       while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) {
         const item = lines[i].replace(/^\s*([-*+]|\d+\.)\s+/, "");
-        items.push(`<li>${renderInline(escapeHtml(item))}</li>`);
+        items.push(`<li>${inline(escapeHtml(item))}</li>`);
         i++;
       }
       out.push(`<${ordered ? "ol" : "ul"}>${items.join("")}</${ordered ? "ol" : "ul"}>`);
@@ -2349,7 +2370,7 @@ function mdToHtml(md, idPrefix) {
       para.push(lines[i]);
       i++;
     }
-    out.push(`<p>${renderInline(escapeHtml(para.join(" ")))}</p>`);
+    out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
   }
   return { html: out.join("\n"), headings };
 }
@@ -2386,18 +2407,58 @@ table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.92rem}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
 th{background:#f4f4f6}
 .sources li{margin-bottom:10px}
-.sources .s-meta{color:var(--muted);font-size:.82rem}
+.sources .s-meta,.subq .s-meta{color:var(--muted);font-size:.82rem}
+.subq li{margin-bottom:10px}
 .trust{display:inline-block;font-size:.72rem;padding:0 6px;border-radius:4px;background:#eef3fa;color:var(--accent)}
+.callout{background:#fff8e6;border-left:4px solid var(--hint)}
+.vbadge{display:inline-block;font-size:.72rem;font-weight:600;padding:0 6px;border-radius:4px;text-transform:uppercase;letter-spacing:.02em}
+.v-supported{background:#e6f4ea;color:#1a7f37}
+.v-partial{background:#fff4d6;color:#9a6700}
+.v-unsupported{background:#f0f0f2;color:#555}
+.v-refuted{background:#fbe9e7;color:#c1121f}
+a.cite.v-supported{color:#1a7f37}
+a.cite.v-partial{color:#9a6700}
+a.cite.v-unsupported{color:#777}
+a.cite.v-refuted{color:#c1121f;font-weight:700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
+function readVerify(dir) {
+  const p = join4(dir, "VERIFY.json");
+  if (!existsSync2(p)) return void 0;
+  try {
+    return JSON.parse(readFileSync2(p, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function worstBySource(verify) {
+  const m = /* @__PURE__ */ new Map();
+  for (const v of verify?.verdicts ?? []) {
+    if (!v.verdict) continue;
+    const cur = m.get(v.sourceId);
+    if (!cur || VERDICT_SEVERITY[v.verdict] > VERDICT_SEVERITY[cur]) m.set(v.sourceId, v.verdict);
+  }
+  return m;
+}
 function renderHtml(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync(join4(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync2(join4(dir, t.file)));
+  const verify = readVerify(dir);
+  const verdicts = worstBySource(verify);
   const rendered = present.map((t) => {
     const md = readFileSync2(join4(dir, t.file), "utf8");
-    const { html, headings } = mdToHtml(md, t.id);
+    const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
+  let contradictionsId;
+  for (const t of rendered) {
+    const h = t.headings.find((x) => /open question|contradiction/i.test(x.text));
+    if (h) {
+      contradictionsId = h.id;
+      break;
+    }
+  }
+  const subs = manifest.subQuestions ?? [];
   const toc = ['<nav><div class="tier"><a href="#top">\u2191 Top</a></div>'];
   for (const t of rendered) {
     toc.push(`<div class="tier"><a href="#tier-${t.id}">${t.label}</a></div>`);
@@ -2405,11 +2466,20 @@ function renderHtml(dir) {
       toc.push(`<a class="h3" href="#${h.id}">${escapeHtml(h.text)}</a>`);
     }
   }
+  if (verify) toc.push(`<div class="tier"><a href="#verification">Verification</a></div>`);
+  if (subs.length) toc.push(`<div class="tier"><a href="#subquestions">Sub-questions (${subs.length})</a></div>`);
   toc.push(`<div class="tier"><a href="#sources">Sources (${sources.length})</a></div></nav>`);
   const main2 = ["<main>"];
+  if (contradictionsId) {
+    main2.push(
+      `<section class="callout"><strong>\u26A0 Open questions / contradictions</strong> \u2014 this report flags unresolved or conflicting findings. <a href="#${contradictionsId}">Jump to the section \u2193</a></section>`
+    );
+  }
   for (const t of rendered) {
     main2.push(`<section id="tier-${t.id}"><h1>${t.label}</h1>${t.html}</section>`);
   }
+  if (verify) main2.push(verificationSection(verify));
+  if (subs.length) main2.push(subQuestionsSection(manifest, sources));
   main2.push(sourcesSection(sources));
   main2.push("</main>");
   const title = escapeHtml(manifest.question || "ultrasearch report");
@@ -2433,6 +2503,23 @@ ${main2.join("\n")}
 </html>
 `;
 }
+function verificationSection(r) {
+  const summary = `supported ${r.supported} \xB7 partial ${r.partial} \xB7 refuted ${r.refuted} \xB7 unsupported ${r.unsupported}`;
+  const status = r.ok ? `<span class="vbadge v-supported">grounded</span>` : `<span class="vbadge v-refuted">${r.failures.length} claim(s) failed</span>`;
+  const rows = (r.verdicts ?? []).map(
+    (v) => `<tr><td>${escapeHtml(v.claimId)}</td><td><a href="#src-${v.sourceId}">[${escapeHtml(v.sourceId)}]</a></td><td><span class="vbadge v-${v.verdict}">${escapeHtml(v.verdict ?? "\u2014")}</span></td><td>${escapeHtml(v.claim)}</td><td>${escapeHtml(v.note || "")}</td></tr>`
+  ).join("");
+  const table = rows ? `<table><thead><tr><th>Claim</th><th>Source</th><th>Verdict</th><th>Statement</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+  return `<section id="verification"><h1>Verification</h1><p>${status} \u2014 ${escapeHtml(summary)}</p>${table}</section>`;
+}
+function subQuestionsSection(manifest, sources) {
+  const items = (manifest.subQuestions ?? []).map((sq) => {
+    const ids = sources.filter((s) => (s.meta?.provenance ?? []).some((p) => p.subQuestion === sq.question)).map((s) => `<a href="#src-${s.id}">[${s.id}]</a>`);
+    const links = ids.length ? ids.join(" ") : `<span class="s-meta">(no sources)</span>`;
+    return `<li><strong>${escapeHtml(sq.id)}</strong> ${escapeHtml(sq.question)}<br><span class="s-meta">${links}</span></li>`;
+  }).join("");
+  return `<section id="subquestions"><h1>Sub-questions</h1><ol class="subq">${items}</ol></section>`;
+}
 function sourcesSection(sources) {
   const items = sources.map((s) => {
     const meta = [
@@ -2452,7 +2539,7 @@ function writeHtml(dir, out) {
 }
 
 // src/check.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
 import { join as join5 } from "path";
 var HARD_FILES = ["REPORT.md", "FULL.md"];
 var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
@@ -2588,6 +2675,26 @@ function extractUnits(lines, code, hint) {
   flush();
   return units;
 }
+function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+function unitsOfFile(text) {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const { mask: hint } = hintMask(lines);
+  return extractUnits(lines, code, hint);
+}
+function unitSourceTokens(text) {
+  const masked = stripInlineCode(text);
+  const out = [];
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(masked)) {
+    const tok = m[1].trim();
+    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
+  }
+  return out;
+}
 function analyzeFile(file, text) {
   const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
   const code = codeMask(lines);
@@ -2632,11 +2739,35 @@ function analyzeFile(file, text) {
   }
   return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
-function runCheck(dir) {
+function applySemantic(dir, result) {
+  const p = join5(dir, "VERIFY.json");
+  if (!existsSync3(p)) {
+    result.warnings.push(
+      "--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped."
+    );
+    return;
+  }
+  try {
+    const sem = JSON.parse(readFileSync3(p, "utf8"));
+    result.semantic = sem;
+    if (!sem.ok) {
+      result.ok = false;
+      result.errors.push(
+        `Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`
+      );
+    }
+    if (sem.unadjudicated?.length) {
+      result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
+    }
+  } catch (e) {
+    result.warnings.push(`--semantic: VERIFY.json is unreadable (${e.message}).`);
+  }
+}
+function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
   const sourcesPath = join5(dir, "sources.json");
-  if (!existsSync2(sourcesPath)) {
+  if (!existsSync3(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
@@ -2646,7 +2777,7 @@ function runCheck(dir) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync2(join5(dir, f)));
+  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync3(join5(dir, f)));
   if (!present.some((f) => HARD_FILES.includes(f))) {
     return blank(false, [`No REPORT.md or FULL.md in ${dir} \u2014 write the report tiers, then re-run check.`]);
   }
@@ -2691,7 +2822,7 @@ function runCheck(dir) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
-  return {
+  const result = {
     ok: errors.length === 0,
     filesChecked: present,
     sourceCitations,
@@ -2703,6 +2834,8 @@ function runCheck(dir) {
     errors,
     warnings
   };
+  if (opts.semantic) applySemantic(dir, result);
+  return result;
 }
 function blank(ok, errors) {
   return {
@@ -2726,9 +2859,292 @@ function formatCheckReport(r, dir) {
     `  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`
   );
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  \u2717 [${u.file}] unsourced: "${u.text}\u2026"`);
+  if (r.semantic) {
+    const s = r.semantic;
+    lines.push(
+      `  semantic: supported ${s.supported} \xB7 partial ${s.partial} \xB7 refuted ${s.refuted} \xB7 unsupported ${s.unsupported}`
+    );
+    for (const f of s.failures.slice(0, 8)) lines.push(`  \u2717 semantic ${f.claimId} (${f.sourceId}): ${f.verdict}`);
+  }
   for (const e of r.errors) lines.push(`  \u2717 ${e}`);
   for (const w of r.warnings) lines.push(`  \u26A0 ${w}`);
   lines.push(r.ok ? `  \u2713 report is grounded \u2014 every claim cites a source or is a flagged hint` : `  \u2717 report is NOT grounded`);
+  return lines.join("\n");
+}
+
+// src/plan.ts
+var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
+function mk(question, facet, rationale) {
+  return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
+}
+function templateFacets(question, template) {
+  const out = [];
+  for (const line of template.split("\n")) {
+    const m = /^##\s+(.+?)\s*$/.exec(line.trim());
+    if (!m) continue;
+    const heading = m[1].trim();
+    if (SKIP_HEADING.test(heading)) continue;
+    out.push(mk(`${question} \u2014 ${heading}`, "template", `mode facet: ${heading}`));
+  }
+  return out;
+}
+function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions) {
+  const q = question.trim();
+  let subs;
+  if (override && override.length) {
+    subs = override.map((s) => mk(s.trim(), "agent", "agent-supplied"));
+  } else {
+    subs = [];
+    const idents = extractIdentifiers(q);
+    if (idents.length) subs.push(mk(`${q} ${idents.join(" ")}`, "identifier", `identifiers: ${idents.join(", ")}`));
+    subs.push(...templateFacets(q, getMode(mode).template));
+    if (subs.length < 3) {
+      for (const term of rankedKeywords(q).slice(0, 3 - subs.length)) {
+        subs.push(mk(`${q} ${term}`, "keyword", `distinctive term: ${term}`));
+      }
+    }
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const uniq = [];
+  const limit = Math.max(1, Math.floor(cap));
+  for (const s of subs) {
+    const key = s.question.toLowerCase();
+    if (!s.question || seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(s);
+    if (uniq.length >= limit) break;
+  }
+  uniq.forEach((s, i) => s.id = `Q${i + 1}`);
+  return { question: q, mode, subQuestions: uniq };
+}
+
+// src/merge.ts
+import { writeFileSync as writeFileSync5 } from "fs";
+import { join as join6 } from "path";
+function toRawSource(s, text) {
+  return {
+    url: s.url,
+    title: s.title,
+    backend: s.backend,
+    score: s.score,
+    snippet: s.snippet,
+    text,
+    lang: s.lang,
+    meta: s.meta
+  };
+}
+function runMerge(options) {
+  if (!options.runs.length) throw new Error("merge needs at least one --runs dossier");
+  const dossiers = options.runs.map((dir2) => ({ dir: dir2, ...readDossier(dir2) }));
+  const lists = [];
+  const provByKey = /* @__PURE__ */ new Map();
+  for (const d of dossiers) {
+    const subQuestion = d.manifest.question;
+    const list = [];
+    for (const s of d.sources) {
+      const raw = toRawSource(s, readSourceText(d.dir, s));
+      list.push(raw);
+      const key = identityKey(raw);
+      const prov = provByKey.get(key) ?? [];
+      if (!prov.some((pv) => pv.runDir === d.dir && pv.subQuestion === subQuestion)) {
+        prov.push({ subQuestion, runDir: d.dir });
+      }
+      provByKey.set(key, prov);
+    }
+    lists.push(list);
+  }
+  const fused = fuse(lists);
+  const deduped = dedupeNearDuplicates(fused);
+  const merged = deduped.items;
+  for (const it of merged) {
+    const prov = (provByKey.get(identityKey(it)) ?? []).slice().sort((a, b) => a.runDir.localeCompare(b.runDir) || a.subQuestion.localeCompare(b.subQuestion));
+    it.meta = { ...it.meta, provenance: prov };
+  }
+  const question = options.question ?? dossiers[0].manifest.question;
+  const modeName = options.mode ?? dossiers[0].manifest.mode;
+  const mode = getMode(modeName);
+  const builtAt = dossiers.map((d) => d.manifest.builtAt).sort().at(-1) ?? dossiers[0].manifest.builtAt;
+  const subQuestions = dossiers.map((d, i) => ({ id: `Q${i + 1}`, question: d.manifest.question }));
+  const manifest = {
+    version: VERSION,
+    question,
+    mode: modeName,
+    depth: "deep",
+    lang: dossiers[0].manifest.lang ?? "en",
+    backends: [...new Set(dossiers.flatMap((d) => d.manifest.backends))],
+    backendsUsed: [...new Set(dossiers.flatMap((d) => d.manifest.backendsUsed))],
+    sourceCount: merged.length,
+    maxSources: merged.length,
+    builtAt,
+    slug: `${modeName}-${slugify(question)}`,
+    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    extras: mode.extras,
+    notes: [
+      `Merged ${dossiers.length} sub-dossier(s) \u2192 ${merged.length} source(s) (${deduped.dropped} near-duplicate(s) collapsed).`,
+      "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic."
+    ],
+    timings: {},
+    mergedFrom: options.runs.slice(),
+    subQuestions
+  };
+  const dir = options.master ?? defaultRunDir(modeName, question);
+  const { sources } = writeDossier(dir, merged, manifest, mode.template);
+  if (mode.extras.includes("bibtex")) {
+    writeFileSync5(join6(dir, "refs.bib"), toBibtex(sources));
+  }
+  return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
+}
+
+// src/verify.ts
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
+import { join as join7 } from "path";
+var HARD_FILES2 = ["REPORT.md", "FULL.md"];
+var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
+function claimStrings(text) {
+  const out = [];
+  for (const u of unitsOfFile(text)) {
+    if (u.kind === "text") out.push(u.text);
+    else for (const it of u.items) out.push(it);
+  }
+  return out;
+}
+function runVerify(dir, opts = {}) {
+  const sources = JSON.parse(readFileSync4(join7(dir, "sources.json"), "utf8"));
+  const byId = new Map(sources.map((s) => [s.id, s]));
+  const textCache = /* @__PURE__ */ new Map();
+  const textOf = (s) => {
+    let t = textCache.get(s.id);
+    if (t === void 0) {
+      t = readSourceText(dir, s);
+      textCache.set(s.id, t);
+    }
+    return t;
+  };
+  const pairs = [];
+  let claimNo = 0;
+  for (const file of HARD_FILES2) {
+    const p = join7(dir, file);
+    if (!existsSync4(p)) continue;
+    const text = readFileSync4(p, "utf8");
+    for (const claim of claimStrings(text)) {
+      const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
+      if (!ids.length) continue;
+      claimNo++;
+      const claimId = `C${claimNo}`;
+      for (const id of ids) {
+        const s = byId.get(id);
+        pairs.push({
+          claimId,
+          file,
+          sourceId: id,
+          claim: claim.trim().slice(0, 400),
+          extractPath: s.extract,
+          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
+          trust: s.trust
+        });
+      }
+    }
+  }
+  const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
+  const kept = pairs.length > max ? pairs.slice().sort(
+    (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId)
+  ).slice(0, max) : pairs;
+  const worklist = { run: dir, pairs: kept.map(({ trust, ...rest }) => rest) };
+  const todo = {
+    run: dir,
+    pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
+  };
+  writeFileSync6(join7(dir, "VERIFY.todo.json"), JSON.stringify(todo, null, 2));
+  writeFileSync6(join7(dir, "VERIFY.md"), renderWorklistMd(worklist, pairs.length, kept.length));
+  return worklist;
+}
+function renderWorklistMd(wl, total, kept) {
+  const out = [];
+  out.push(`# Verification worklist`);
+  out.push("");
+  out.push(
+    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`.`
+  );
+  if (kept < total) out.push(`
+_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
+  out.push("");
+  for (const p of wl.pairs) {
+    out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
+    out.push(`**Claim:** ${p.claim}`);
+    out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
+    out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
+    out.push("");
+  }
+  return out.join("\n");
+}
+function applyVerdicts(dir, verdictsPath) {
+  const raw = JSON.parse(readFileSync4(verdictsPath, "utf8"));
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
+  const verdicts = [];
+  for (const v of list) {
+    if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
+    const verdict = VALID_VERDICTS.includes(v.verdict) ? v.verdict : void 0;
+    verdicts.push({
+      claimId: v.claimId,
+      file: typeof v.file === "string" ? v.file : "",
+      sourceId: v.sourceId,
+      claim: typeof v.claim === "string" ? v.claim : "",
+      extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
+      extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
+      verdict,
+      note: typeof v.note === "string" ? v.note : ""
+    });
+  }
+  const result = reduceVerdicts(verdicts);
+  writeFileSync6(join7(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  return result;
+}
+function reduceVerdicts(verdicts) {
+  const counts = { supported: 0, partial: 0, refuted: 0, unsupported: 0 };
+  for (const v of verdicts) if (v.verdict && counts[v.verdict] !== void 0) counts[v.verdict]++;
+  const byClaim = /* @__PURE__ */ new Map();
+  for (const v of verdicts) {
+    const group = byClaim.get(v.claimId) ?? [];
+    group.push(v);
+    byClaim.set(v.claimId, group);
+  }
+  const failures = [];
+  const unadjudicated = [];
+  for (const [claimId, group] of byClaim) {
+    const adjudicated = group.filter((g) => !!g.verdict);
+    if (adjudicated.length < group.length) unadjudicated.push(claimId);
+    const refuted = adjudicated.find((g) => g.verdict === "refuted");
+    const hasSupport = adjudicated.some((g) => g.verdict === "supported" || g.verdict === "partial");
+    if (refuted) {
+      failures.push({ claimId, sourceId: refuted.sourceId, verdict: "refuted", note: refuted.note });
+    } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
+      const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
+      failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
+    }
+  }
+  return {
+    ok: failures.length === 0,
+    pairs: verdicts.length,
+    adjudicated: verdicts.filter((v) => !!v.verdict).length,
+    supported: counts.supported,
+    partial: counts.partial,
+    refuted: counts.refuted,
+    unsupported: counts.unsupported,
+    failures,
+    unadjudicated
+  };
+}
+function formatVerifyReport(r) {
+  const lines = [];
+  lines.push(`ultrasearch verify: ${r.adjudicated}/${r.pairs} pair(s) adjudicated`);
+  lines.push(`  supported: ${r.supported} \xB7 partial: ${r.partial} \xB7 refuted: ${r.refuted} \xB7 unsupported: ${r.unsupported}`);
+  for (const f of r.failures.slice(0, 12)) {
+    lines.push(`  \u2717 ${f.claimId} (${f.sourceId}): ${f.verdict}${f.note ? " \u2014 " + f.note : ""}`);
+  }
+  if (r.unadjudicated.length) {
+    lines.push(`  \u26A0 ${r.unadjudicated.length} claim(s) not fully adjudicated: ${r.unadjudicated.join(", ")}`);
+  }
+  lines.push(r.ok ? `  \u2713 every claim is backed by a cited source` : `  \u2717 some claims are refuted or unsupported`);
   return lines.join("\n");
 }
 
@@ -2743,8 +3159,11 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"]
   ultrasearch render --run <dossier-dir>
-  ultrasearch check  --run <dossier-dir>
+  ultrasearch check  --run <dossier-dir> [--semantic]
   ultrasearch modes  [--json]
+  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"]
+  ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
+  ultrasearch verify --run <dossier-dir> [--apply <verdicts.json>]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -2754,8 +3173,16 @@ Commands:
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html.
-  check    Validate citation grounding of SUMMARY/REPORT/FULL.md.
+  check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
+           also folds in the verify verdicts: fails on unsupported claims).
   modes    List the report modes and their backend profiles.
+
+Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
+  plan     Decompose a question into sub-questions (JSON) for the fan-out:
+           run one 'gather' per sub-question, then 'merge'.
+  merge    Union sub-dossiers into one master dossier with stable [S#] ids.
+  verify   Emit a claim\u2194source worklist for adversarial verification, then
+           (--apply <verdicts.json>) gate on refuted/unsupported claims.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -2789,7 +3216,18 @@ Grounding:
     ultrasearch render --run <dir>   # \u2192 index.html
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
 `;
-var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes"]);
+var COMMANDS = /* @__PURE__ */ new Set([
+  "gather",
+  "search",
+  "fetch",
+  "add-source",
+  "render",
+  "check",
+  "modes",
+  "plan",
+  "merge",
+  "verify"
+]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
   "question",
@@ -2810,9 +3248,15 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "url",
   "since",
   "exclude-domains",
-  "title"
+  "title",
+  "subquestions",
+  "runs",
+  "master",
+  "apply",
+  "max-subquestions",
+  "max-verify"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "fresh", "no-html", "verbose"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -3000,6 +3444,42 @@ async function main() {
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
+    case "plan": {
+      const options = buildGatherOptions(p);
+      const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
+      const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : void 0;
+      const result = runPlan(options.question, options.mode, override, cap);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      process.stderr.write(
+        `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" (mode ${options.mode}) \u2014 fan out a gather per sub-question, then \`merge\`.
+`
+      );
+      return;
+    }
+    case "merge": {
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve(d)) : [];
+      if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
+      for (const d of runs) if (!existsSync5(d)) fail(`run dir not found: ${d}`);
+      const mode = p.values.mode ? oneOf("mode", p.values.mode, ALL_MODES) : void 0;
+      const result = runMerge({
+        runs,
+        master: p.values.master ? resolve(p.values.master) : void 0,
+        question: p.values.q ?? p.values.question,
+        mode
+      });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
+        return;
+      }
+      const lines = [
+        `ultrasearch: merged ${runs.length} sub-dossier(s) \u2192 ${result.sources.length} source(s)`,
+        `  master:   ${result.dir}`,
+        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md citing the MASTER [S#] ids, then:`,
+        `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`
+      ];
+      process.stderr.write(lines.join("\n") + "\n");
+      return;
+    }
     case "fetch":
     case "add-source": {
       const dir = p.values.out ?? p.values.run;
@@ -3035,10 +3515,34 @@ async function main() {
       if (p.bools.has("json")) process.stdout.write(JSON.stringify({ html: path }, null, 2) + "\n");
       return;
     }
+    case "verify": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve(dir);
+      if (p.values.apply) {
+        const result = applyVerdicts(rdir, resolve(p.values.apply));
+        if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        else process.stdout.write(formatVerifyReport(result) + "\n");
+        if (!result.ok) process.exit(1);
+        return;
+      }
+      const maxVerify = p.values["max-verify"] ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
+      const wl = runVerify(rdir, { maxVerify });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
+        return;
+      }
+      process.stderr.write(
+        `ultrasearch: ${wl.pairs.length} claim\u2194source pair(s) \u2192 ${rdir}/VERIFY.md & VERIFY.todo.json
+  adjudicate each verdict, save as verdicts.json, then: ultrasearch verify --apply verdicts.json --run ${rdir}
+`
+      );
+      return;
+    }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const res = runCheck(resolve(dir));
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic") });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

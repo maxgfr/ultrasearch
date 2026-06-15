@@ -18,6 +18,11 @@ Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers and
 `pubmed` (deep) adds MeSH-indexed/clinical records — so research mode is no
 longer physics/CS-only.
 
+All five modes compose with the **deep research tier** (`plan` / `merge` /
+`verify`): `plan` derives its sub-question facets from the mode's report
+template, so the decomposition is mode-aware. See
+`references/deep-research-playbook.md`.
+
 ## Recall behavior
 
 - **Query variants** — every run plans a few query variants (the full question,

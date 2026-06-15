@@ -69,6 +69,51 @@ export const DEPTH_CAPS: Record<Depth, { maxSources: number; perSource: number; 
   deep: { maxSources: 60, perSource: 10, deepOnly: true },
 };
 
+// ---------------------------------------------------------------------------
+// Deep-research tier. The agentic orchestration (driven by SKILL.md) that fans
+// out one `gather` per sub-question, merges the dossiers, and adversarially
+// verifies each claim before synthesis. These are ORCHESTRATION caps that bound
+// the long (10–20 min) loop — distinct from Depth, which is a per-`gather`
+// retrieval cap. Each sub-question fan-out is itself a `gather --depth deep`.
+// ---------------------------------------------------------------------------
+export interface DeepCaps {
+  maxSubQuestions: number; // sub-questions `plan` emits / the loop fans out on
+  maxRounds: number; // loop-until-dry rounds before a forced stop
+  maxVerify: number; // claim↔source pairs `verify` emits per run
+  perSubQuestionSources: number; // suggested --max-sources for each fan-out gather
+}
+export const DEEP_CAPS: DeepCaps = {
+  maxSubQuestions: 6,
+  maxRounds: 3,
+  maxVerify: 40,
+  perSubQuestionSources: 60,
+};
+
+// One facet of a decomposed question, emitted by `plan`. `queries` are the
+// ready-to-use variants to pass straight to `gather --queries`; `facet` records
+// where it came from (a mode-template heading, a distinctive keyword, an
+// identifier, or the agent's own --subquestions override).
+export type SubQuestionFacet = "template" | "keyword" | "identifier" | "agent";
+export interface SubQuestion {
+  id: string; // "Q1", "Q2", … (parallel to the S# source scheme)
+  question: string;
+  facet: SubQuestionFacet;
+  queries: string[];
+  rationale: string;
+}
+export interface PlanResult {
+  question: string;
+  mode: ModeName;
+  subQuestions: SubQuestion[];
+}
+
+// Which sub-question(s) surfaced a source — recorded on SourceMeta.provenance by
+// `merge` so the enriched render can draw the decomposition tree.
+export interface Provenance {
+  subQuestion: string;
+  runDir: string;
+}
+
 // Which keyless discovery engine the web layer uses. "auto" runs a resilient
 // fallback cascade (searxng → duckduckgo → ddglite → mojeek → marginalia),
 // short-circuiting once one yields enough results; the named engines pin to that
@@ -86,6 +131,7 @@ export interface SourceMeta {
   answerScore?: number; // stackoverflow accepted/top answer score
   points?: number; // hacker news
   heading?: string; // nearest heading for a web excerpt
+  provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   [k: string]: unknown;
 }
 
@@ -196,6 +242,8 @@ export interface Manifest {
   extras: ModeExtra[];
   notes: string[];
   timings: Record<string, number>; // backend kind -> ms, plus "total"
+  mergedFrom?: string[]; // (merge dossiers) the sub-dossier run dirs unioned
+  subQuestions?: { id: string; question: string }[]; // (merge dossiers) the decomposition
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on
@@ -212,4 +260,48 @@ export interface CheckResult {
   unknownTokens: string[]; // bracketed non-citations (informational)
   errors: string[];
   warnings: string[];
+  semantic?: VerifyResult; // populated only by `check --semantic` (folds VERIFY.json)
+}
+
+// ---------------------------------------------------------------------------
+// Semantic claim verification. The mechanical `check` only proves a [S#] is
+// PRESENT next to a claim; `verify` asks whether the cited source actually
+// SUPPORTS it. `verify --run` emits ClaimEvidencePair[] (a deterministic
+// worklist); agents fill a Verdict per pair; `verify --apply` / `check
+// --semantic` then FAIL the gate on any refuted/unsupported claim — the
+// semantic extension of the citation-presence gate.
+// ---------------------------------------------------------------------------
+export type VerdictKind = "supported" | "partial" | "refuted" | "unsupported";
+
+// A claim-unit paired with one of the sources it cites + a claim-focused digest
+// of that source's extract, for an agent to adjudicate.
+export interface ClaimEvidencePair {
+  claimId: string; // "C1", "C2", …
+  file: string; // "REPORT.md" | "FULL.md"
+  sourceId: string; // the cited [S#]
+  claim: string; // the claim-unit text (capped)
+  extractPath: string; // relative path, e.g. "sources/S2.md"
+  extractDigest: string; // claim-focused snippet of the cited extract
+}
+
+// A ClaimEvidencePair with the agent's judgement filled in.
+export interface Verdict extends ClaimEvidencePair {
+  verdict: VerdictKind;
+  note: string;
+}
+
+// Outcome of folding the adjudicated verdicts back in. `ok` is false when any
+// claim is refuted/unsupported. `unadjudicated` lists pairs still missing a
+// verdict (warn, not fail).
+export interface VerifyResult {
+  ok: boolean;
+  pairs: number;
+  adjudicated: number;
+  supported: number;
+  partial: number;
+  refuted: number;
+  unsupported: number;
+  failures: { claimId: string; sourceId: string; verdict: VerdictKind; note: string }[];
+  unadjudicated: string[];
+  verdicts?: Verdict[]; // the full adjudicated list, persisted for `render` (not needed by the gate)
 }

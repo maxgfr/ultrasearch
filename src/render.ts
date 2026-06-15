@@ -1,8 +1,11 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Source } from "./types.js";
+import type { Manifest, Source, VerdictKind, VerifyResult } from "./types.js";
 import { readDossier } from "./dossier.js";
 import { slugify } from "./util.js";
+
+// Verdict severity (worst wins) for the per-source citation badge.
+const VERDICT_SEVERITY: Record<VerdictKind, number> = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 
 // Tiers rendered into the HTML, in order, plus the learn-mode glossary.
 const TIERS: { id: string; label: string; file: string }[] = [
@@ -22,13 +25,19 @@ function escapeHtml(s: string): string {
 
 // Inline markdown → HTML on already-escaped text. Order matters: code spans
 // first (so their content isn't re-formatted), then links, citations, hint
-// markers, then emphasis. `[S#]` becomes an anchor into the Sources appendix;
-// `[M]` becomes an "unverified" badge.
-function renderInline(escaped: string): string {
+// markers, then emphasis. `[S#]` becomes an anchor into the Sources appendix
+// (tinted by its semantic-verification verdict when one is known); `[M]`
+// becomes an "unverified" badge.
+function renderInline(escaped: string, verdicts?: Map<string, VerdictKind>): string {
   let s = escaped;
   s = s.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
   s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}" rel="noopener" target="_blank">${t}</a>`);
-  s = s.replace(/\[(S\d+)\]/g, (_m, id) => `<a class="cite" href="#src-${id}" title="source ${id}">[${id}]</a>`);
+  s = s.replace(/\[(S\d+)\]/g, (_m, id) => {
+    const v = verdicts?.get(id);
+    const cls = v ? `cite v-${v}` : "cite";
+    const title = v ? `source ${id} — ${v}` : `source ${id}`;
+    return `<a class="${cls}" href="#src-${id}" title="${title}">[${id}]</a>`;
+  });
   s = s.replace(/\[M\]/g, `<sup class="mhint" title="model hint — not from a fetched source">[M]</sup>`);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
@@ -45,11 +54,16 @@ export interface Heading {
 // Render one markdown document to HTML, collecting its headings for the TOC.
 // Deterministic and dependency-free; supports headings, paragraphs, lists,
 // blockquotes (with model-hint callout styling), fenced code, tables and rules.
-export function mdToHtml(md: string, idPrefix: string): { html: string; headings: Heading[] } {
+export function mdToHtml(
+  md: string,
+  idPrefix: string,
+  opts: { verdicts?: Map<string, VerdictKind> } = {},
+): { html: string; headings: Heading[] } {
   const lines = md.split("\n");
   const out: string[] = [];
   const headings: Heading[] = [];
   const usedIds = new Set<string>();
+  const inline = (text: string): string => renderInline(text, opts.verdicts);
   let i = 0;
 
   const headingId = (text: string): string => {
@@ -86,7 +100,7 @@ export function mdToHtml(md: string, idPrefix: string): { html: string; headings
       const text = h[2]!;
       const id = headingId(text);
       headings.push({ level, text, id });
-      out.push(`<h${level} id="${id}">${renderInline(escapeHtml(text))}</h${level}>`);
+      out.push(`<h${level} id="${id}">${inline(escapeHtml(text))}</h${level}>`);
       i++;
       continue;
     }
@@ -111,7 +125,7 @@ export function mdToHtml(md: string, idPrefix: string): { html: string; headings
         quote.push(q);
         i++;
       }
-      const inner = renderInline(escapeHtml(quote.join(" ").trim()));
+      const inner = inline(escapeHtml(quote.join(" ").trim()));
       if (isHint) {
         out.push(`<blockquote class="model-hint"><span class="mhint-badge">model hint · unverified</span> ${inner}</blockquote>`);
       } else {
@@ -129,9 +143,9 @@ export function mdToHtml(md: string, idPrefix: string): { html: string; headings
         rows.push(lines[i]!);
         i++;
       }
-      const thead = `<thead><tr>${header.map((c) => `<th>${renderInline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
+      const thead = `<thead><tr>${header.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
       const tbody = rows
-        .map((r) => `<tr>${splitRow(r).map((c) => `<td>${renderInline(escapeHtml(c))}</td>`).join("")}</tr>`)
+        .map((r) => `<tr>${splitRow(r).map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`)
         .join("");
       out.push(`<table>${thead}<tbody>${tbody}</tbody></table>`);
       continue;
@@ -143,7 +157,7 @@ export function mdToHtml(md: string, idPrefix: string): { html: string; headings
       const items: string[] = [];
       while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i]!)) {
         const item = lines[i]!.replace(/^\s*([-*+]|\d+\.)\s+/, "");
-        items.push(`<li>${renderInline(escapeHtml(item))}</li>`);
+        items.push(`<li>${inline(escapeHtml(item))}</li>`);
         i++;
       }
       out.push(`<${ordered ? "ol" : "ul"}>${items.join("")}</${ordered ? "ol" : "ul"}>`);
@@ -170,7 +184,7 @@ export function mdToHtml(md: string, idPrefix: string): { html: string; headings
       para.push(lines[i]!);
       i++;
     }
-    out.push(`<p>${renderInline(escapeHtml(para.join(" ")))}</p>`);
+    out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
   }
 
   return { html: out.join("\n"), headings };
@@ -215,23 +229,71 @@ table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.92rem}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
 th{background:#f4f4f6}
 .sources li{margin-bottom:10px}
-.sources .s-meta{color:var(--muted);font-size:.82rem}
+.sources .s-meta,.subq .s-meta{color:var(--muted);font-size:.82rem}
+.subq li{margin-bottom:10px}
 .trust{display:inline-block;font-size:.72rem;padding:0 6px;border-radius:4px;background:#eef3fa;color:var(--accent)}
+.callout{background:#fff8e6;border-left:4px solid var(--hint)}
+.vbadge{display:inline-block;font-size:.72rem;font-weight:600;padding:0 6px;border-radius:4px;text-transform:uppercase;letter-spacing:.02em}
+.v-supported{background:#e6f4ea;color:#1a7f37}
+.v-partial{background:#fff4d6;color:#9a6700}
+.v-unsupported{background:#f0f0f2;color:#555}
+.v-refuted{background:#fbe9e7;color:#c1121f}
+a.cite.v-supported{color:#1a7f37}
+a.cite.v-partial{color:#9a6700}
+a.cite.v-unsupported{color:#777}
+a.cite.v-refuted{color:#c1121f;font-weight:700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
+
+// Read the resolved semantic-verification record, if one exists.
+function readVerify(dir: string): VerifyResult | undefined {
+  const p = join(dir, "VERIFY.json");
+  if (!existsSync(p)) return undefined;
+  try {
+    return JSON.parse(readFileSync(p, "utf8")) as VerifyResult;
+  } catch {
+    return undefined;
+  }
+}
+
+// The worst verdict observed for each source (refuted > unsupported > partial >
+// supported), used to tint that source's citation anchors.
+function worstBySource(verify?: VerifyResult): Map<string, VerdictKind> {
+  const m = new Map<string, VerdictKind>();
+  for (const v of verify?.verdicts ?? []) {
+    if (!v.verdict) continue;
+    const cur = m.get(v.sourceId);
+    if (!cur || VERDICT_SEVERITY[v.verdict] > VERDICT_SEVERITY[cur]) m.set(v.sourceId, v.verdict);
+  }
+  return m;
+}
 
 // Build the self-contained index.html for a dossier directory.
 export function renderHtml(dir: string): string {
   const { sources, manifest } = readDossier(dir);
   const present = TIERS.filter((t) => existsSync(join(dir, t.file)));
+  const verify = readVerify(dir);
+  const verdicts = worstBySource(verify);
 
   const rendered = present.map((t) => {
     const md = readFileSync(join(dir, t.file), "utf8");
-    const { html, headings } = mdToHtml(md, t.id);
+    const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
 
-  // TOC: tier label + its h2 headings.
+  // Hoist an "open questions / contradictions" heading into a top callout.
+  let contradictionsId: string | undefined;
+  for (const t of rendered) {
+    const h = t.headings.find((x) => /open question|contradiction/i.test(x.text));
+    if (h) {
+      contradictionsId = h.id;
+      break;
+    }
+  }
+
+  const subs = manifest.subQuestions ?? [];
+
+  // TOC: tier label + its h2 headings, then the deep-research sections.
   const toc: string[] = ['<nav><div class="tier"><a href="#top">↑ Top</a></div>'];
   for (const t of rendered) {
     toc.push(`<div class="tier"><a href="#tier-${t.id}">${t.label}</a></div>`);
@@ -239,12 +301,22 @@ export function renderHtml(dir: string): string {
       toc.push(`<a class="h3" href="#${h.id}">${escapeHtml(h.text)}</a>`);
     }
   }
+  if (verify) toc.push(`<div class="tier"><a href="#verification">Verification</a></div>`);
+  if (subs.length) toc.push(`<div class="tier"><a href="#subquestions">Sub-questions (${subs.length})</a></div>`);
   toc.push(`<div class="tier"><a href="#sources">Sources (${sources.length})</a></div></nav>`);
 
   const main: string[] = ["<main>"];
+  if (contradictionsId) {
+    main.push(
+      `<section class="callout"><strong>⚠ Open questions / contradictions</strong> — this report flags ` +
+        `unresolved or conflicting findings. <a href="#${contradictionsId}">Jump to the section ↓</a></section>`,
+    );
+  }
   for (const t of rendered) {
     main.push(`<section id="tier-${t.id}"><h1>${t.label}</h1>${t.html}</section>`);
   }
+  if (verify) main.push(verificationSection(verify));
+  if (subs.length) main.push(subQuestionsSection(manifest, sources));
   main.push(sourcesSection(sources));
   main.push("</main>");
 
@@ -269,6 +341,42 @@ ${main.join("\n")}
 </body>
 </html>
 `;
+}
+
+// Per-claim verdict table + headline status (deep-research semantic check).
+function verificationSection(r: VerifyResult): string {
+  const summary = `supported ${r.supported} · partial ${r.partial} · refuted ${r.refuted} · unsupported ${r.unsupported}`;
+  const status = r.ok
+    ? `<span class="vbadge v-supported">grounded</span>`
+    : `<span class="vbadge v-refuted">${r.failures.length} claim(s) failed</span>`;
+  const rows = (r.verdicts ?? [])
+    .map(
+      (v) =>
+        `<tr><td>${escapeHtml(v.claimId)}</td>` +
+        `<td><a href="#src-${v.sourceId}">[${escapeHtml(v.sourceId)}]</a></td>` +
+        `<td><span class="vbadge v-${v.verdict}">${escapeHtml(v.verdict ?? "—")}</span></td>` +
+        `<td>${escapeHtml(v.claim)}</td><td>${escapeHtml(v.note || "")}</td></tr>`,
+    )
+    .join("");
+  const table = rows
+    ? `<table><thead><tr><th>Claim</th><th>Source</th><th>Verdict</th><th>Statement</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>`
+    : "";
+  return `<section id="verification"><h1>Verification</h1><p>${status} — ${escapeHtml(summary)}</p>${table}</section>`;
+}
+
+// The decomposition tree: each sub-question and the sources its fan-out surfaced
+// (from each source's merge provenance).
+function subQuestionsSection(manifest: Manifest, sources: Source[]): string {
+  const items = (manifest.subQuestions ?? [])
+    .map((sq) => {
+      const ids = sources
+        .filter((s) => (s.meta?.provenance ?? []).some((p) => p.subQuestion === sq.question))
+        .map((s) => `<a href="#src-${s.id}">[${s.id}]</a>`);
+      const links = ids.length ? ids.join(" ") : `<span class="s-meta">(no sources)</span>`;
+      return `<li><strong>${escapeHtml(sq.id)}</strong> ${escapeHtml(sq.question)}<br><span class="s-meta">${links}</span></li>`;
+    })
+    .join("");
+  return `<section id="subquestions"><h1>Sub-questions</h1><ol class="subq">${items}</ol></section>`;
 }
 
 function sourcesSection(sources: Source[]): string {

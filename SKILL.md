@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, citation-grounded recap of what the WEB says about a topic — not an answer from the model's training memory. Fans out keyless web search across many backends (SearXNG, DuckDuckGo, Wikipedia, the keyless StackExchange/Hacker News/GitHub APIs, and the scholarly arXiv/Crossref/OpenAlex/Semantic Scholar APIs), fetches + cleans + de-duplicates the pages into an evidence dossier, and has you write a tiered report (SUMMARY/REPORT/FULL) where every claim cites a fetched source [S#] — verified by `ultrasearch check` — plus a self-contained HTML report. Five modes tailor the sources and report shape: topic (general briefing), bug (debug an error via Stack Overflow/GitHub/HN), research (scholarly literature review with a BibTeX file), learn (a pedagogical lesson with glossary + exercises), startup (market/competitor/pricing research). Triggers: 'research <topic>', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. The web-facing sibling of ultradoc."
+description: "Use when the user wants a thorough, citation-grounded recap of what the WEB says about a topic — not an answer from the model's training memory. Fans out keyless web search across many backends (SearXNG, DuckDuckGo, Wikipedia, the keyless StackExchange/Hacker News/GitHub APIs, and the scholarly arXiv/Crossref/OpenAlex/Semantic Scholar APIs), fetches + cleans + de-duplicates the pages into an evidence dossier, and has you write a tiered report (SUMMARY/REPORT/FULL) where every claim cites a fetched source [S#] — verified by `ultrasearch check` — plus a self-contained HTML report. Five modes tailor the sources and report shape: topic (general briefing), bug (debug an error via Stack Overflow/GitHub/HN), research (scholarly literature review with a BibTeX file), learn (a pedagogical lesson with glossary + exercises), startup (market/competitor/pricing research). Triggers: 'research <topic>', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. An opt-in **deep** tier decomposes the question, fans out a sub-search per facet, merges the dossiers, and adversarially verifies every claim against its cited source (`verify` + `check --semantic`) — triggers 'deep research on X', 'exhaustively research/verify X'. The web-facing sibling of ultradoc."
 license: MIT
 metadata:
   version: 1.2.0
@@ -37,9 +37,21 @@ No `npm install`, no API keys. Run `--help` for the full surface. Key commands:
   with your own WebSearch into the dossier; prints the new `S#`. This is the
   bridge between the harness's WebSearch and the dossier.
 - `render --run <dir>` — render SUMMARY/REPORT/FULL.md (+ glossary) into a
-  self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations).
-- `check --run <dir>` — validate citation grounding. Exit non-zero ⇒ ungrounded.
+  self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations,
+  and — in deep mode — verdict badges + the sub-question tree).
+- `check --run <dir> [--semantic]` — validate citation grounding. Exit non-zero ⇒
+  ungrounded. `--semantic` also fails on a claim its cited source does not
+  support (folds in `verify`'s verdicts).
 - `modes [--json]` — list modes and their backend profiles.
+
+**Deep research tier** (the agentic loop — see `references/deep-research-playbook.md`):
+
+- `plan --q "<question>" [--mode <m>] [--subquestions "a|b|c"]` — decompose the
+  question into sub-questions (JSON) to fan out on.
+- `merge --runs "<d1,d2,…>" --master <dir>` — union the sub-dossiers into one
+  master dossier with **stable `[S#]` ids** (re-fused + de-duplicated).
+- `verify --run <dir>` then `verify --apply <verdicts.json>` — emit a claim↔source
+  worklist, then gate on refuted/unsupported claims (adversarial verification).
 
 ## Workflow
 
@@ -102,6 +114,65 @@ not hand control back mid-retrieval.
 7. **Present.** Give the user the SUMMARY, the path to the run folder and
    `index.html`, the source count, and any gaps or contradictions you found.
 
+## Deep research mode (the agentic tier)
+
+When the user wants an exhaustive, *verified* deep-dive — they say "deep
+research", "exhaustively research/verify X", or it is a high-stakes briefing —
+run the multi-agent loop instead of the single pass. It grafts **decompose →
+parallel fan-out → adversarial verification → loop-until-dry** onto the same
+keyless engine. Every step is a plain CLI call, so it works on any harness;
+parallel subagents are an *optimization*, never a requirement. Full playbook:
+`references/deep-research-playbook.md`.
+
+1. **Decompose.** `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m>`
+   prints sub-questions (JSON, each with ready `queries`). Review them; augment or
+   replace with your own via `--subquestions "facet a|facet b|facet c"` when you
+   know the domain better.
+
+2. **Fan out — one `gather` per sub-question.** If your harness has parallel
+   subagents, dispatch one per sub-question; otherwise loop sequentially (same
+   commands, identical artifacts). Each runs into its OWN dir:
+   ```
+   node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<its queries>" \
+     --mode <m> --depth deep --out <runN>
+   ```
+   then enriches thin areas with its own WebSearch + `fetch` (step 4 above).
+
+3. **Merge.** Union the sub-dossiers into one master with stable ids:
+   ```
+   node scripts/ultrasearch.mjs merge --runs "<run1,run2,…>" --master <masterDir> \
+     --q "<original question>" --mode <m>
+   ```
+   From here, **cite only the MASTER `[S#]` ids** — sub-run ids all restart at S1.
+
+4. **Write the tiers** against the master dossier (SUMMARY/REPORT/FULL), exactly
+   as in the standard workflow — every claim `[S#]`, your own knowledge `[M]`.
+
+5. **Verify (adversarial).** `node scripts/ultrasearch.mjs verify --run <masterDir>`
+   writes a claim↔source worklist (`VERIFY.todo.json` + `VERIFY.md`). For each
+   pair, open the cited `sources/S#.md` and judge whether it actually SUPPORTS the
+   claim — set `verdict` to supported · partial · refuted · unsupported (+ a short
+   note). Use skeptic subagents in parallel if available; else adjudicate inline.
+   Save the filled file as `verdicts.json`.
+
+6. **Gate.**
+   ```
+   node scripts/ultrasearch.mjs verify --apply verdicts.json --run <masterDir>
+   node scripts/ultrasearch.mjs check  --semantic --run <masterDir>
+   ```
+   Fails on dangling/unsourced (mechanical) AND on any refuted/unsupported claim
+   (semantic). Fix the claim — re-cite, drop it, or `fetch` a better source — and
+   re-verify until it passes.
+
+7. **Loop until dry.** Inspect the master dossier + report for residual gaps,
+   contradictions, or new sub-questions. If any surface and you are under the
+   round budget, fan out the new sub-questions (step 2), `merge` them into the
+   SAME master, and re-verify only the new claims. Stop when nothing new emerges.
+
+8. **Render & present.** `render --run <masterDir>` → `index.html` with verdict
+   badges + the sub-question tree. Present the SUMMARY, the master folder, the
+   per-claim verdict summary, and any contradictions.
+
 ## Modes & depth
 
 - `topic` — Wikipedia + general web → a neutral briefing.
@@ -128,6 +199,8 @@ arXiv papers) are read for full text, not just the abstract.
 ## References
 
 - `references/research-playbook.md` — how to pick a mode, query, enrich, iterate.
+- `references/deep-research-playbook.md` — the agentic deep tier: decompose →
+  fan-out → merge → verify → loop-until-dry.
 - `references/citation-format.md` — the citation grammar `check` enforces.
 - `references/report-templates.md` — the per-mode report skeletons.
 - `references/modes.md` — mode → backend profile + extras mapping.

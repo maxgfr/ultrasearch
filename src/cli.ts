@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { realpathSync } from "node:fs";
-import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, DEPTH_CAPS } from "./types.js";
+import { realpathSync, existsSync } from "node:fs";
+import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
 import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
 import { runGather } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
@@ -10,6 +10,9 @@ import { buildSource } from "./dossier.js";
 import { addSource } from "./enrich.js";
 import { writeHtml } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
+import { runPlan } from "./plan.js";
+import { runMerge } from "./merge.js";
+import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 
 const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -21,8 +24,11 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"]
   ultrasearch render --run <dossier-dir>
-  ultrasearch check  --run <dossier-dir>
+  ultrasearch check  --run <dossier-dir> [--semantic]
   ultrasearch modes  [--json]
+  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"]
+  ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
+  ultrasearch verify --run <dossier-dir> [--apply <verdicts.json>]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -32,8 +38,16 @@ Commands:
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html.
-  check    Validate citation grounding of SUMMARY/REPORT/FULL.md.
+  check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
+           also folds in the verify verdicts: fails on unsupported claims).
   modes    List the report modes and their backend profiles.
+
+Deep research (the agentic tier — see references/deep-research-playbook.md):
+  plan     Decompose a question into sub-questions (JSON) for the fan-out:
+           run one 'gather' per sub-question, then 'merge'.
+  merge    Union sub-dossiers into one master dossier with stable [S#] ids.
+  verify   Emit a claim↔source worklist for adversarial verification, then
+           (--apply <verdicts.json>) gate on refuted/unsupported claims.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -68,12 +82,15 @@ Grounding:
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
 `;
 
-export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes"]);
+export const COMMANDS = new Set([
+  "gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify",
+]);
 const VALUE_FLAGS = new Set([
   "q", "question", "mode", "depth", "backends", "backend", "queries", "max-sources", "per-source",
   "concurrency", "rounds", "out", "run", "lang", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
+  "subquestions", "runs", "master", "apply", "max-subquestions", "max-verify",
 ]);
-const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "verbose"]);
+const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -276,6 +293,48 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "plan": {
+      const options = buildGatherOptions(p);
+      const override = p.values.subquestions
+        ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      const cap = p.values["max-subquestions"]
+        ? num("max-subquestions", p.values["max-subquestions"], 6)
+        : undefined;
+      const result = runPlan(options.question, options.mode, override, cap);
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      process.stderr.write(
+        `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" ` +
+          `(mode ${options.mode}) — fan out a gather per sub-question, then \`merge\`.\n`,
+      );
+      return;
+    }
+
+    case "merge": {
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve(d)) : [];
+      if (!runs.length) fail('missing --runs "<dir1,dir2,…>"');
+      for (const d of runs) if (!existsSync(d)) fail(`run dir not found: ${d}`);
+      const mode = p.values.mode ? oneOf<ModeName>("mode", p.values.mode, ALL_MODES) : undefined;
+      const result = runMerge({
+        runs,
+        master: p.values.master ? resolve(p.values.master) : undefined,
+        question: p.values.q ?? p.values.question,
+        mode,
+      });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
+        return;
+      }
+      const lines = [
+        `ultrasearch: merged ${runs.length} sub-dossier(s) → ${result.sources.length} source(s)`,
+        `  master:   ${result.dir}`,
+        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md citing the MASTER [S#] ids, then:`,
+        `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`,
+      ];
+      process.stderr.write(lines.join("\n") + "\n");
+      return;
+    }
+
     case "fetch":
     case "add-source": {
       const dir = p.values.out ?? p.values.run;
@@ -308,10 +367,37 @@ async function main(): Promise<void> {
       return;
     }
 
+    case "verify": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve(dir);
+      if (p.values.apply) {
+        const result = applyVerdicts(rdir, resolve(p.values.apply));
+        if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        else process.stdout.write(formatVerifyReport(result) + "\n");
+        if (!result.ok) process.exit(1);
+        return;
+      }
+      const maxVerify = p.values["max-verify"]
+        ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify)
+        : undefined;
+      const wl = runVerify(rdir, { maxVerify });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
+        return;
+      }
+      process.stderr.write(
+        `ultrasearch: ${wl.pairs.length} claim↔source pair(s) → ${rdir}/VERIFY.md & VERIFY.todo.json\n` +
+          `  adjudicate each verdict, save as verdicts.json, then: ` +
+          `ultrasearch verify --apply verdicts.json --run ${rdir}\n`,
+      );
+      return;
+    }
+
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const res = runCheck(resolve(dir));
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic") });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

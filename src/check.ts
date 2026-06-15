@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CheckResult, Source } from "./types.js";
+import type { CheckResult, Source, VerifyResult } from "./types.js";
 
 // Tiers + extra docs that may carry citations. REPORT/FULL are hard-checked for
 // per-claim coverage; SUMMARY/glossary are warn-only (a digest needn't repeat a
@@ -26,7 +26,7 @@ interface FileAnalysis {
 
 // Lines inside ``` / ~~~ fences are code — exclude from citation and claim
 // analysis so example snippets don't trip the checker.
-function codeMask(lines: string[]): boolean[] {
+export function codeMask(lines: string[]): boolean[] {
   const mask = new Array(lines.length).fill(false);
   let inFence = false;
   for (let i = 0; i < lines.length; i++) {
@@ -43,7 +43,7 @@ function codeMask(lines: string[]): boolean[] {
 // Mark each line that belongs to a model-hint blockquote region: a maximal run
 // of consecutive blockquote lines (^\s*>) in which any line contains
 // "[model-hint]". Returns the per-line mask plus the region count.
-function hintMask(lines: string[]): { mask: boolean[]; regions: number } {
+export function hintMask(lines: string[]): { mask: boolean[]; regions: number } {
   const mask = new Array(lines.length).fill(false);
   let regions = 0;
   let i = 0;
@@ -117,14 +117,14 @@ function isListItem(line: string): boolean {
 
 // A claim unit is either a single block of prose/table-row text, or a list
 // group (its items, evaluated individually and as an aggregate).
-type Unit = { kind: "text"; text: string } | { kind: "list"; items: string[] };
+export type Unit = { kind: "text"; text: string } | { kind: "list"; items: string[] };
 
 // Split a hard-checked file into claim units. Headings, rules, code, table
 // separators and model-hint regions are excluded; plain blockquotes are
 // de-quoted into prose (audit C2); table data rows become units (C3); list
 // items fold in their continuation lines (C5) and also get a group aggregate
 // (C4). Inline code is stripped throughout (C1).
-function extractUnits(lines: string[], code: boolean[], hint: boolean[]): Unit[] {
+export function extractUnits(lines: string[], code: boolean[], hint: boolean[]): Unit[] {
   const units: Unit[] = [];
   let prose: string[] = [];
   const flush = () => {
@@ -183,6 +183,38 @@ function extractUnits(lines: string[], code: boolean[], hint: boolean[]): Unit[]
   }
   flush();
   return units;
+}
+
+// Blank HTML comments (preserving line breaks) the way analyzeFile does, so a
+// citation hidden in `<!-- [S1] -->` can't ground a claim downstream either.
+function stripHtmlComments(text: string): string {
+  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+
+// Split a hard-checked report file's raw text into claim units, applying the
+// SAME masking `runCheck` uses (HTML comments blanked, code fences and
+// model-hint regions excluded). Exposed so `verify` extracts exactly the claims
+// the grounding gate scores — the two can never disagree on what a claim is.
+export function unitsOfFile(text: string): Unit[] {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const { mask: hint } = hintMask(lines);
+  return extractUnits(lines, code, hint);
+}
+
+// The distinct [S#] source ids cited within a piece of claim text, in order.
+// Inline code is stripped first (a [S#] in backticks is not a citation, audit
+// C1), mirroring runCheck's accounting.
+export function unitSourceTokens(text: string): string[] {
+  const masked = stripInlineCode(text);
+  const out: string[] = [];
+  TOKEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TOKEN_RE.exec(masked))) {
+    const tok = m[1]!.trim();
+    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
+  }
+  return out;
 }
 
 function analyzeFile(file: string, text: string): FileAnalysis {
@@ -244,11 +276,42 @@ function analyzeFile(file: string, text: string): FileAnalysis {
   return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 
+// Fold the resolved semantic-verification record (VERIFY.json) into a check
+// result when `--semantic` is requested. Strictly additive: it can only ADD a
+// failure (a refuted/unsupported claim) on top of the mechanical gate, never
+// relax it. Missing VERIFY.json warns (run `verify` first) but never fails.
+function applySemantic(dir: string, result: CheckResult): void {
+  const p = join(dir, "VERIFY.json");
+  if (!existsSync(p)) {
+    result.warnings.push(
+      "--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.",
+    );
+    return;
+  }
+  try {
+    const sem = JSON.parse(readFileSync(p, "utf8")) as VerifyResult;
+    result.semantic = sem;
+    if (!sem.ok) {
+      result.ok = false;
+      result.errors.push(
+        `Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`,
+      );
+    }
+    if (sem.unadjudicated?.length) {
+      result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
+    }
+  } catch (e) {
+    result.warnings.push(`--semantic: VERIFY.json is unreadable (${(e as Error).message}).`);
+  }
+}
+
 // Validate that the report tiers are grounded in the dossier's sources. Fails
 // on a dangling [S#], on an unmarked unsourced claim in REPORT/FULL, or when no
 // source is cited at all. Flagged model-hints are tolerated; uncited sources
-// and unknown tokens only warn.
-export function runCheck(dir: string): CheckResult {
+// and unknown tokens only warn. With `opts.semantic`, ALSO folds in the
+// VERIFY.json verdicts (fails on a refuted/unsupported claim) — additive: plain
+// `check` (no opts) is byte-for-byte unchanged.
+export function runCheck(dir: string, opts: { semantic?: boolean } = {}): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -316,7 +379,7 @@ export function runCheck(dir: string): CheckResult {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
 
-  return {
+  const result: CheckResult = {
     ok: errors.length === 0,
     filesChecked: present,
     sourceCitations,
@@ -328,6 +391,8 @@ export function runCheck(dir: string): CheckResult {
     errors,
     warnings,
   };
+  if (opts.semantic) applySemantic(dir, result);
+  return result;
 }
 
 function blank(ok: boolean, errors: string[]): CheckResult {
@@ -353,6 +418,13 @@ export function formatCheckReport(r: CheckResult, dir: string): string {
     `  citations: ${r.sourceCitations} · model-hints: ${r.modelHints} · dangling: ${r.dangling.length} · unsourced: ${r.unmarkedUnsourced.length}`,
   );
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  ✗ [${u.file}] unsourced: "${u.text}…"`);
+  if (r.semantic) {
+    const s = r.semantic;
+    lines.push(
+      `  semantic: supported ${s.supported} · partial ${s.partial} · refuted ${s.refuted} · unsupported ${s.unsupported}`,
+    );
+    for (const f of s.failures.slice(0, 8)) lines.push(`  ✗ semantic ${f.claimId} (${f.sourceId}): ${f.verdict}`);
+  }
   for (const e of r.errors) lines.push(`  ✗ ${e}`);
   for (const w of r.warnings) lines.push(`  ⚠ ${w}`);
   lines.push(r.ok ? `  ✓ report is grounded — every claim cites a source or is a flagged hint` : `  ✗ report is NOT grounded`);
