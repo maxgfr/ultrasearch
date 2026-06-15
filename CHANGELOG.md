@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.3.0](https://github.com/maxgfr/ultrasearch/compare/v1.2.0...v1.3.0) (2026-06-15)
+
+
+### Features
+
+* deep research tier — decompose, merge, adversarial verify ([#5](https://github.com/maxgfr/ultrasearch/issues/5)) ([f0c49b9](https://github.com/maxgfr/ultrasearch/commit/f0c49b92bf113dbee0fa00d0508ca2909c461c29))
+
 # [1.2.0](https://github.com/maxgfr/ultrasearch/compare/v1.1.0...v1.2.0) (2026-06-13)
 
 
