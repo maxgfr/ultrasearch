@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Manifest, RawSource, Source } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
@@ -61,6 +61,24 @@ export function renderSourceExtract(s: Source, text: string, depth: Manifest["de
     "",
   ].join("\n");
   return head + capExtract(text, depth) + "\n";
+}
+
+// Inverse of renderSourceExtract: recover a source's cleaned text from its
+// on-disk extract. The writer emits exactly three header lines (# id — title /
+// - url: / - backend:) then the body, so strip those. Defensive — if the header
+// isn't where expected (a hand-written/legacy extract), fall back to the whole
+// file, then to the snippet, so a malformed extract never crashes a reader.
+export function readSourceText(dir: string, s: Source): string {
+  const p = join(dir, s.extract);
+  if (!existsSync(p)) return s.snippet ?? "";
+  const lines = readFileSync(p, "utf8").split("\n");
+  const hasHeader =
+    lines.length >= 3 &&
+    lines[0]!.startsWith("# ") &&
+    lines[1]!.startsWith("- url:") &&
+    lines[2]!.startsWith("- backend:");
+  const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
+  return body || s.snippet || "";
 }
 
 export interface DossierPaths {

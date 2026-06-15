@@ -13,6 +13,13 @@ easy to share or learn from.
   `glossary.md` if present, rendered from markdown.
 - **Sources appendix** — built from `sources.json`: each source as
   `[S#] title` (linked to the original URL) with backend · domain · trust.
+- **Verification section** (deep tier, when `VERIFY.json` is present) — a table
+  of every claim's verdict (supported · partial · refuted · unsupported) with the
+  cited source and note, plus a headline grounded/failed status.
+- **Sub-question tree** (merge dossiers, when `manifest.subQuestions` is present)
+  — each sub-question and the sources its fan-out surfaced (from provenance).
+- **Contradictions callout** — when a tier has an "Open questions / contradictions"
+  heading, a callout near the top links to it.
 
 ## Citations & hints in the HTML
 
@@ -22,6 +29,9 @@ easy to share or learn from.
 - A `> [model-hint] …` blockquote renders as a distinct amber callout labelled
   "model hint · unverified", so a reader instantly sees what is sourced vs. what
   is the model's own background knowledge.
+- In deep mode, each `[S#]` is tinted by its source's worst semantic verdict
+  (green supported · amber partial · grey unsupported · red refuted), so a reader
+  spots a contested citation at a glance.
 
 ## Markdown supported
 

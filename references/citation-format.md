@@ -58,10 +58,29 @@ at least one `[S#]` (or a model-hint flag). Known limits you should not lean on:
 - A single `[S#]` grounds its whole paragraph, so a fabrication appended to a
   genuinely-cited sentence in the same paragraph can ride along. Cite each
   distinct claim, and split unrelated claims into separate sentences/paragraphs.
+  (The deep tier's semantic verification — below — closes this gap by judging
+  whether the cited source actually supports the claim.)
 - Citations inside fenced/inline code and **HTML comments** are ignored (a
   comment can't ground a claim). Markdown links are not citations.
 - Section **headings** are treated as structure, not claims — don't smuggle a
   factual assertion into a heading.
+
+## Semantic verification (the deep tier)
+
+Mechanical `check` proves a `[S#]` is *present* next to a claim; it does not
+prove the cited source *supports* it. The deep tier closes that gap:
+
+- `verify --run <dir>` pairs every `(claim, [S#])` with a digest of the cited
+  extract (`VERIFY.todo.json` / `VERIFY.md`), reusing the same claim parser as
+  `check`.
+- You adjudicate each pair: `supported` · `partial` · `unsupported` · `refuted`
+  (+ a short note), and save the filled file.
+- `verify --apply <verdicts.json>` then `check --semantic` **fail** the report
+  when a claim's source refutes it, or when every cited source is unsupported —
+  on top of the mechanical gate, never relaxing it.
+
+A source's worst verdict tints its citations in the HTML, and a Verification
+section lists every claim's verdict. See `references/deep-research-playbook.md`.
 
 ## Good practice
 
