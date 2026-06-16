@@ -38,22 +38,28 @@ On top of the single pass, an opt-in tier adds a deep-research harness, driven b
 SKILL.md and bounded by `DEEP_CAPS`:
 
 ```
-plan (decompose into sub-questions)
+plan --run-root (decompose into sub-questions, each with a deterministic out dir)
   │  one `gather --depth deep` per sub-question (parallel subagents or sequential)
   ▼
 merge (re-fuse the combined pool by identity + near-dup, stable S# ids, provenance)
   ▼
 the AGENT writes the tiers against the MASTER dossier
-  │  verify (extract claim↔source pairs)  →  agents adjudicate support/refute
+  │  verify [--shards N --shard I] (claim↔source worklist) → skeptics adjudicate
   ▼
-verify --apply + check --semantic  (fail on refuted/unsupported claims)
+verify --apply <files|dir> + check --semantic  (fail on refuted/unsupported;
+  │  also surfaces contradictions — claims whose cited sources disagree)
   │  loop until a round surfaces no new sub-questions / gaps
   ▼
-render (verdict badges + sub-question tree)
+render (verdict badges + contradictions panel + sub-question tree)
 ```
 
 Retrieval stays deterministic and keyless; the agent supplies decomposition,
-enrichment, report writing, and verdicts. See `references/deep-research-playbook.md`.
+enrichment, report writing, and verdicts. `plan --run-root` hands the orchestrator
+the sub-run dirs up front (no stdout parsing) and `verify --shards` partitions the
+worklist for parallel skeptics. Three quality signals are surfaced for the agent
+to act on: a **recall floor** (thin-dossier warning + `check --min-sources`),
+**source quality** (`fullText:false` snippet-only marker when a page fetch fails),
+and **contradictions**. See `references/deep-research-playbook.md`.
 
 ## Modules (`src/`)
 

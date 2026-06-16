@@ -1,5 +1,16 @@
 [
-  { "id": "wikipedia-token-bucket", "question": "token bucket algorithm", "mode": "topic", "backends": ["wikipedia"] },
-  { "id": "arxiv-transformers", "question": "transformer attention mechanism", "mode": "research", "backends": ["arxiv"] },
-  { "id": "hn-rate-limiting", "question": "api rate limiting", "mode": "startup", "backends": ["hackernews"] }
+  { "id": "wikipedia", "question": "rate limiting", "mode": "topic", "backends": ["wikipedia"] },
+  { "id": "duckduckgo", "question": "token bucket rate limiting algorithm", "mode": "topic", "backends": ["duckduckgo"] },
+  { "id": "ddglite", "question": "token bucket rate limiting algorithm", "mode": "topic", "backends": ["ddglite"] },
+  { "id": "mojeek", "question": "token bucket rate limiting algorithm", "mode": "topic", "backends": ["mojeek"] },
+  { "id": "marginalia", "question": "token bucket rate limiting", "mode": "topic", "backends": ["marginalia"] },
+  { "id": "hackernews", "question": "api rate limiting", "mode": "startup", "backends": ["hackernews"] },
+  { "id": "github", "question": "rate limiting", "mode": "bug", "backends": ["github"] },
+  { "id": "stackexchange", "question": "python requests 429 too many requests", "mode": "bug", "backends": ["stackexchange"] },
+  { "id": "arxiv", "question": "transformer attention mechanism", "mode": "research", "backends": ["arxiv"] },
+  { "id": "crossref", "question": "attention is all you need", "mode": "research", "backends": ["crossref"] },
+  { "id": "openalex", "question": "rate limiting algorithms", "mode": "research", "backends": ["openalex"] },
+  { "id": "semanticscholar", "question": "attention is all you need", "mode": "research", "backends": ["semanticscholar"] },
+  { "id": "europepmc", "question": "crispr gene editing", "mode": "research", "backends": ["europepmc"] },
+  { "id": "pubmed", "question": "crispr gene editing", "mode": "research", "backends": ["pubmed"] }
 ]

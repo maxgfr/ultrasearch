@@ -73,11 +73,39 @@ node scripts/ultrasearch.mjs render --run /tmp/rl     # → index.html
 node scripts/ultrasearch.mjs check  --run /tmp/rl     # exit≠0 if ungrounded
 ```
 
+## Deep research tier (opt-in)
+
+For an exhaustive, *verified* deep-dive, ultrasearch runs an agentic loop instead
+of a single pass — **decompose → fan out → merge → adversarially verify →
+loop-until-dry** — grafted onto the same keyless engine. Every step is a plain
+CLI call, so it works on any harness; parallel subagents are an *optimization*,
+never a requirement (full playbook + the copy-pasteable subagent contract:
+[`references/deep-research-playbook.md`](references/deep-research-playbook.md)).
+
+```bash
+# decompose into sub-questions, each with a deterministic out dir to gather into
+node scripts/ultrasearch.mjs plan   --q "<question>" --run-root /tmp/deep
+# fan out one `gather --depth deep` per sub-question (parallel subagents or a loop), then:
+node scripts/ultrasearch.mjs merge  --runs "/tmp/deep/q1,/tmp/deep/q2" --master /tmp/deep/master
+# write the tiers against the master, then verify every claim against its source:
+node scripts/ultrasearch.mjs verify --run /tmp/deep/master [--shards N --shard I]  # one skeptic per shard
+node scripts/ultrasearch.mjs verify --apply <verdicts|dir> --run /tmp/deep/master
+node scripts/ultrasearch.mjs check  --semantic --run /tmp/deep/master   # fails on refuted/unsupported claims
+```
+
+`check --semantic` also surfaces **contradictions** — claims whose cited sources
+disagree. Retrieval flags two more quality signals to act on: a **thin dossier**
+(too few on-topic sources — `check --min-sources N` enforces a floor) and
+**snippet-only** sources (the page fetch failed, so only the search snippet is on
+file, marked `⚠ snippet only`).
+
 ## Keyless, no API keys
 
-Discovery is layered and free, mirroring ultradoc:
-**SearXNG** (local, optional) → **DuckDuckGo** (HTML scrape) → the agent's own
-**WebSearch** (URLs fed back via `fetch --url`). Mode-specific backends add
+Discovery is a layered, free fallback cascade, mirroring ultradoc:
+**SearXNG** (local, optional) → **DuckDuckGo** → **DuckDuckGo Lite** → **Mojeek**
+→ **Marginalia** — it stops at the first engine that returns enough, so recall
+survives one engine blocking — then the agent's own **WebSearch** (URLs fed back
+via `fetch --url`). Mode-specific backends add
 Wikipedia, the keyless StackExchange (multi-site) / Hacker News / GitHub APIs,
 and the scholarly APIs (arXiv / Crossref / OpenAlex / Semantic Scholar /
 Europe PMC / PubMed) — all keyless.
@@ -93,8 +121,11 @@ work across scholarly backends by DOI/arXiv id, and retries once on throttling
 - `search --backend <kind>` — drill one backend (debugging retrieval).
 - `fetch` / `add-source` — ingest a URL into a dossier (the WebSearch bridge).
 - `render --run <dir>` — render the report tiers to a self-contained `index.html`.
-- `check --run <dir>` — validate citation grounding.
+- `check --run <dir>` — validate citation grounding (`--semantic` folds in the
+  verify verdicts + contradictions; `--min-sources N` fails a too-thin dossier).
 - `modes` — list modes and their backend profiles.
+- `plan` / `merge` / `verify` — the deep-research tier (decompose → merge →
+  adversarially verify; `verify --shards` for parallel skeptics).
 
 Run `node scripts/ultrasearch.mjs --help` for the full surface, and see
 [`DOCUMENTATION.md`](DOCUMENTATION.md) for the architecture.

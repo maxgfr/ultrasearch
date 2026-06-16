@@ -3,7 +3,7 @@
 // src/cli.ts
 import { resolve } from "path";
 import { pathToFileURL, fileURLToPath } from "url";
-import { realpathSync, existsSync as existsSync5 } from "fs";
+import { realpathSync, existsSync as existsSync5, statSync, readdirSync } from "fs";
 
 // src/types.ts
 var VERSION = "1.3.0";
@@ -33,6 +33,11 @@ var DEPTH_CAPS = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
   standard: { maxSources: 25, perSource: 6, deepOnly: false },
   deep: { maxSources: 60, perSource: 10, deepOnly: true }
+};
+var RECALL_FLOORS = {
+  summary: 3,
+  standard: 6,
+  deep: 12
 };
 var DEEP_CAPS = {
   maxSubQuestions: 6,
@@ -965,6 +970,9 @@ function decodeEntities(s) {
   for (const [k, v] of Object.entries(ENTITIES)) out = out.split(k).join(v);
   return out;
 }
+function cleanInline(s) {
+  return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
 function htmlToText(html) {
   let s = html;
   s = s.replace(/<!--[\s\S]*?-->/g, " ");
@@ -1298,14 +1306,14 @@ var wikipediaBackend = async (ctx) => {
     if (!p?.key) continue;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
-    const extract = dr.ok ? String(dr.data?.extract ?? "") : "";
+    const extract = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
-    const descExcerpt = String(p.excerpt ?? "").replace(/<[^>]+>/g, "");
+    const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
     if (!text) continue;
     items.push({
       url: pageUrl,
-      title: String(p.title ?? p.key),
+      title: decodeEntities(String(p.title ?? p.key)),
       backend: "wikipedia",
       score: top.length - i,
       snippet: (descExcerpt || extract).slice(0, 360),
@@ -1568,11 +1576,11 @@ var crossrefBackend = async (ctx) => {
     return { backend: "crossref", items: [], notes: [`Crossref search failed or empty (status ${r.status}).`] };
   }
   const items = items0.slice(0, n).map((w, i) => {
-    const title = Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled");
+    const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
     const abstract = w.abstract ? htmlToText(String(w.abstract)) : "";
     const authors = Array.isArray(w.author) ? w.author.map((a) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean) : [];
     const year = w.issued?.["date-parts"]?.[0]?.[0];
-    const venue = Array.isArray(w["container-title"]) ? w["container-title"][0] : void 0;
+    const venue = cleanInline(Array.isArray(w["container-title"]) ? String(w["container-title"][0] ?? "") : "") || void 0;
     return {
       url: String(w.URL ?? (w.DOI ? `https://doi.org/${w.DOI}` : "")),
       title,
@@ -1674,11 +1682,11 @@ var europepmcBackend = async (ctx) => {
     return { backend: "europepmc", items: [], notes: [`Europe PMC search ${why}.`] };
   }
   const items = results.slice(0, n).map((w, i) => {
-    const title = String(w.title ?? "Untitled").replace(/\.$/, "");
-    const abstract = String(w.abstractText ?? "").replace(/<[^>]+>/g, "");
+    const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
+    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<[^>]+>/g, "");
     const authors = w.authorString ? String(w.authorString).split(/,\s*/).filter(Boolean) : [];
     const year = w.pubYear ? Number(w.pubYear) : void 0;
-    const venue = w.journalInfo?.journal?.title ?? w.journalTitle;
+    const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || void 0;
     const doi = w.doi;
     const link = doi ? `https://doi.org/${doi}` : `https://europepmc.org/article/${w.source}/${w.id}`;
     return {
@@ -1847,7 +1855,10 @@ function buildSource(rs, id, builtAt, question) {
     // A richer multi-sentence digest snippet when we have full text; a backend's
     // own snippet (already short) is used as-is. Capped modestly for the digest.
     snippet: (rs.snippet || focusedSnippet(text, question, { maxChars: 480, maxSentences: 3 })).slice(0, 480),
-    meta: rs.meta
+    meta: rs.meta,
+    // Only record the flag when we positively know the page fetch failed; absent
+    // (the common case, incl. enrich/search callers) means full text on file.
+    ...rs.fullText === false ? { fullText: false } : {}
   };
 }
 function renderSourceExtract(s, text, depth) {
@@ -1894,6 +1905,12 @@ function renderDossierMarkdown(sources, manifest, template) {
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
   out.push("");
+  if (manifest.recallFloor) {
+    out.push(
+      `> \u26A0 **Thin dossier** \u2014 only ${manifest.recallFloor.count} on-topic source(s) were retrieved (recall floor ${manifest.recallFloor.floor}). Enrich the thin areas with your own WebSearch + \`fetch --url\` BEFORE writing, or the report will rest on too little evidence.`
+    );
+    out.push("");
+  }
   out.push(
     `> Write three tiers from these sources: \`SUMMARY.md\` (TL;DR), \`REPORT.md\` (the full template below), and \`FULL.md\` (exhaustive \u2014 use every relevant source). Then run \`render\` and \`check\`. Do not answer from memory.`
   );
@@ -1925,7 +1942,8 @@ function renderDossierMarkdown(sources, manifest, template) {
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
-    out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 extract: \`${s.extract}\``);
+    const quality = s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
+    out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 extract: \`${s.extract}\`${quality}`);
     out.push("");
     out.push(s.snippet);
     out.push("");
@@ -2099,7 +2117,10 @@ async function runGather(options) {
     const pool = merged2.slice(0, Math.min(merged2.length, options.maxSources + overshoot));
     const hydrateNotes = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
-      if (it.text && it.text.trim()) return;
+      if (it.text && it.text.trim()) {
+        it.fullText = true;
+        return;
+      }
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
@@ -2110,10 +2131,12 @@ async function runGather(options) {
       if (res.note) hydrateNotes.push(res.note);
       if (res.text && res.text.trim()) {
         it.text = res.text;
+        it.fullText = true;
         if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
         if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
       } else {
         it.text = it.snippet || "";
+        it.fullText = false;
       }
     });
     let withContent = pool.filter((it) => it.text && it.text.trim() || it.snippet.trim());
@@ -2171,12 +2194,15 @@ async function runGather(options) {
   const timings = {};
   for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
+  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+  const thin = merged.length < floor;
   const notes = [
     ...results.flatMap((res) => res.notes),
     ...r.hydrateNotes,
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
     ...gapNote ? [gapNote] : [],
+    ...thin ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`] : [],
     ENRICH_NUDGE
   ];
   const manifest = {
@@ -2194,7 +2220,8 @@ async function runGather(options) {
     tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
     extras: mode.extras,
     notes,
-    timings
+    timings,
+    ...thin ? { recallFloor: { count: merged.length, floor } } : {}
   };
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
@@ -2420,6 +2447,9 @@ a.cite.v-supported{color:#1a7f37}
 a.cite.v-partial{color:#9a6700}
 a.cite.v-unsupported{color:#777}
 a.cite.v-refuted{color:#c1121f;font-weight:700}
+.contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
+.contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
+.snippet-only{color:#9a6700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
 function readVerify(dir) {
@@ -2458,6 +2488,7 @@ function renderHtml(dir) {
       break;
     }
   }
+  if (!contradictionsId && verify?.contradictions?.length) contradictionsId = "contradictions";
   const subs = manifest.subQuestions ?? [];
   const toc = ['<nav><div class="tier"><a href="#top">\u2191 Top</a></div>'];
   for (const t of rendered) {
@@ -2467,6 +2498,8 @@ function renderHtml(dir) {
     }
   }
   if (verify) toc.push(`<div class="tier"><a href="#verification">Verification</a></div>`);
+  if (verify?.contradictions?.length)
+    toc.push(`<a class="h3" href="#contradictions">Contradictions (${verify.contradictions.length})</a>`);
   if (subs.length) toc.push(`<div class="tier"><a href="#subquestions">Sub-questions (${subs.length})</a></div>`);
   toc.push(`<div class="tier"><a href="#sources">Sources (${sources.length})</a></div></nav>`);
   const main2 = ["<main>"];
@@ -2510,7 +2543,12 @@ function verificationSection(r) {
     (v) => `<tr><td>${escapeHtml(v.claimId)}</td><td><a href="#src-${v.sourceId}">[${escapeHtml(v.sourceId)}]</a></td><td><span class="vbadge v-${v.verdict}">${escapeHtml(v.verdict ?? "\u2014")}</span></td><td>${escapeHtml(v.claim)}</td><td>${escapeHtml(v.note || "")}</td></tr>`
   ).join("");
   const table = rows ? `<table><thead><tr><th>Claim</th><th>Source</th><th>Verdict</th><th>Statement</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>` : "";
-  return `<section id="verification"><h1>Verification</h1><p>${status} \u2014 ${escapeHtml(summary)}</p>${table}</section>`;
+  const srcLinks = (ids) => ids.map((s) => `<a href="#src-${escapeHtml(s)}">[${escapeHtml(s)}]</a>`).join(" ");
+  const contras = r.contradictions ?? [];
+  const contra = contras.length ? `<div class="contradictions" id="contradictions"><h2>Contradictions (${contras.length})</h2><p>Claims whose cited sources disagree \u2014 read both sides before relying on them.</p><ul>` + contras.map(
+    (c) => `<li><strong>${escapeHtml(c.claimId)}</strong>: supported by ${srcLinks(c.supporting)} \xB7 refuted by ${srcLinks(c.refuting)}${c.note ? ` \u2014 ${escapeHtml(c.note)}` : ""}</li>`
+  ).join("") + `</ul></div>` : "";
+  return `<section id="verification"><h1>Verification</h1><p>${status} \u2014 ${escapeHtml(summary)}</p>${table}${contra}</section>`;
 }
 function subQuestionsSection(manifest, sources) {
   const items = (manifest.subQuestions ?? []).map((sq) => {
@@ -2525,7 +2563,8 @@ function sourcesSection(sources) {
     const meta = [
       s.backend,
       s.domain,
-      `<span class="trust" title="trust score">trust ${s.trust}</span>`
+      `<span class="trust" title="trust score">trust ${s.trust}</span>`,
+      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : []
     ].join(" \xB7 ");
     return `<li id="src-${s.id}"><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
   }).join("\n");
@@ -2759,8 +2798,20 @@ function applySemantic(dir, result) {
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
     }
+    if (sem.contradictions?.length) {
+      result.warnings.push(
+        `${sem.contradictions.length} claim(s) have contradicting cited sources: ${sem.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`
+      );
+    }
   } catch (e) {
     result.warnings.push(`--semantic: VERIFY.json is unreadable (${e.message}).`);
+  }
+}
+function readManifestSafe(dir) {
+  try {
+    return JSON.parse(readFileSync3(join5(dir, "manifest.json"), "utf8"));
+  } catch {
+    return void 0;
   }
 }
 function runCheck(dir, opts = {}) {
@@ -2822,6 +2873,17 @@ function runCheck(dir, opts = {}) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
+  const manifest = readManifestSafe(dir);
+  if (manifest?.recallFloor) {
+    warnings.push(
+      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 consider enriching with \`fetch --url\` before relying on it.`
+    );
+  }
+  if (opts.minSources !== void 0 && sources.length < opts.minSources) {
+    errors.push(
+      `Only ${sources.length} source(s) in the dossier (--min-sources ${opts.minSources}). Enrich with \`fetch --url\` or broaden the gather before relying on this report.`
+    );
+  }
   const result = {
     ok: errors.length === 0,
     filesChecked: present,
@@ -2873,6 +2935,7 @@ function formatCheckReport(r, dir) {
 }
 
 // src/plan.ts
+import { join as join6 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function mk(question, facet, rationale) {
   return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
@@ -2888,7 +2951,7 @@ function templateFacets(question, template) {
   }
   return out;
 }
-function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions) {
+function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runRoot) {
   const q = question.trim();
   let subs;
   if (override && override.length) {
@@ -2914,13 +2977,16 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions) {
     uniq.push(s);
     if (uniq.length >= limit) break;
   }
-  uniq.forEach((s, i) => s.id = `Q${i + 1}`);
+  uniq.forEach((s, i) => {
+    s.id = `Q${i + 1}`;
+    if (runRoot) s.out = join6(runRoot, s.id.toLowerCase());
+  });
   return { question: q, mode, subQuestions: uniq };
 }
 
 // src/merge.ts
 import { writeFileSync as writeFileSync5 } from "fs";
-import { join as join6 } from "path";
+import { join as join7 } from "path";
 function toRawSource(s, text) {
   return {
     url: s.url,
@@ -2930,7 +2996,11 @@ function toRawSource(s, text) {
     snippet: s.snippet,
     text,
     lang: s.lang,
-    meta: s.meta
+    meta: s.meta,
+    // Carry the snippet-only quality flag into the master dossier so the
+    // deep-research report (written against the master) still sees it. Only when
+    // false, so full-text sources keep a byte-identical merged sources.json.
+    ...s.fullText === false ? { fullText: false } : {}
   };
 }
 function runMerge(options) {
@@ -2990,14 +3060,14 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync5(join6(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync5(join7(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
 // src/verify.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
-import { join as join7 } from "path";
+import { join as join8 } from "path";
 var HARD_FILES2 = ["REPORT.md", "FULL.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function claimStrings(text) {
@@ -3009,7 +3079,7 @@ function claimStrings(text) {
   return out;
 }
 function runVerify(dir, opts = {}) {
-  const sources = JSON.parse(readFileSync4(join7(dir, "sources.json"), "utf8"));
+  const sources = JSON.parse(readFileSync4(join8(dir, "sources.json"), "utf8"));
   const byId = new Map(sources.map((s) => [s.id, s]));
   const textCache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -3023,7 +3093,7 @@ function runVerify(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES2) {
-    const p = join7(dir, file);
+    const p = join8(dir, file);
     if (!existsSync4(p)) continue;
     const text = readFileSync4(p, "utf8");
     for (const claim of claimStrings(text)) {
@@ -3045,17 +3115,21 @@ function runVerify(dir, opts = {}) {
       }
     }
   }
+  const cmp = (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
   const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
-  const kept = pairs.length > max ? pairs.slice().sort(
-    (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId)
-  ).slice(0, max) : pairs;
-  const worklist = { run: dir, pairs: kept.map(({ trust, ...rest }) => rest) };
+  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
+  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
+  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
+  const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
+  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
   const todo = {
     run: dir,
     pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
   };
-  writeFileSync6(join7(dir, "VERIFY.todo.json"), JSON.stringify(todo, null, 2));
-  writeFileSync6(join7(dir, "VERIFY.md"), renderWorklistMd(worklist, pairs.length, kept.length));
+  const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
+  const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
+  writeFileSync6(join8(dir, todoName), JSON.stringify(todo, null, 2));
+  writeFileSync6(join8(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -3077,7 +3151,7 @@ _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources.
   }
   return out.join("\n");
 }
-function applyVerdicts(dir, verdictsPath) {
+function parseVerdictFile(verdictsPath) {
   const raw = JSON.parse(readFileSync4(verdictsPath, "utf8"));
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
   const verdicts = [];
@@ -3095,8 +3169,19 @@ function applyVerdicts(dir, verdictsPath) {
       note: typeof v.note === "string" ? v.note : ""
     });
   }
+  return verdicts;
+}
+function applyVerdicts(dir, verdictsPath) {
+  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
+  const merged = /* @__PURE__ */ new Map();
+  for (const p of paths) {
+    for (const v of parseVerdictFile(p)) {
+      merged.set(`${v.claimId} ${v.sourceId}`, v);
+    }
+  }
+  const verdicts = [...merged.values()];
   const result = reduceVerdicts(verdicts);
-  writeFileSync6(join7(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeFileSync6(join8(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -3110,6 +3195,8 @@ function reduceVerdicts(verdicts) {
   }
   const failures = [];
   const unadjudicated = [];
+  const contradictions = [];
+  const uniqSorted = (ids) => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
   for (const [claimId, group] of byClaim) {
     const adjudicated = group.filter((g) => !!g.verdict);
     if (adjudicated.length < group.length) unadjudicated.push(claimId);
@@ -3121,6 +3208,17 @@ function reduceVerdicts(verdicts) {
       const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
       failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
     }
+    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
+    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
+    if (supporting.length && refuting.length) {
+      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
+      contradictions.push({
+        claimId,
+        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
+        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
+        note
+      });
+    }
   }
   return {
     ok: failures.length === 0,
@@ -3131,7 +3229,8 @@ function reduceVerdicts(verdicts) {
     refuted: counts.refuted,
     unsupported: counts.unsupported,
     failures,
-    unadjudicated
+    unadjudicated,
+    ...contradictions.length ? { contradictions } : {}
   };
 }
 function formatVerifyReport(r) {
@@ -3159,11 +3258,11 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"]
   ultrasearch render --run <dossier-dir>
-  ultrasearch check  --run <dossier-dir> [--semantic]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
   ultrasearch modes  [--json]
-  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"]
+  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
-  ultrasearch verify --run <dossier-dir> [--apply <verdicts.json>]
+  ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -3174,15 +3273,20 @@ Commands:
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html.
   check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
-           also folds in the verify verdicts: fails on unsupported claims).
+           also folds in the verify verdicts: fails on unsupported claims;
+           --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
 
 Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
   plan     Decompose a question into sub-questions (JSON) for the fan-out:
-           run one 'gather' per sub-question, then 'merge'.
+           run one 'gather' per sub-question, then 'merge'. With --run-root <dir>
+           each sub-question carries a deterministic 'out' dir (<dir>/q1\u2026) so you
+           can dispatch one gather per sub-question without parsing stdout.
   merge    Union sub-dossiers into one master dossier with stable [S#] ids.
   verify   Emit a claim\u2194source worklist for adversarial verification, then
-           (--apply <verdicts.json>) gate on refuted/unsupported claims.
+           (--apply <files>) gate on refuted/unsupported claims. --shards <n>
+           --shard <i> writes shard i only (one skeptic subagent per shard);
+           --apply accepts several verdict files (comma list or a directory).
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -3254,7 +3358,11 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "master",
   "apply",
   "max-subquestions",
-  "max-verify"
+  "max-verify",
+  "run-root",
+  "shards",
+  "shard",
+  "min-sources"
 ]);
 var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
 function fail(message) {
@@ -3329,6 +3437,36 @@ function parseArgs(argv) {
 }
 function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
+}
+function resolveApplyPaths(spec) {
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve(x));
+  const abs = resolve(spec);
+  if (existsSync5(abs) && statSync(abs).isDirectory()) {
+    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve(abs, f));
+    if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
+    return files;
+  }
+  return [abs];
+}
+function parseShardArgs(shardsRaw, shardRaw) {
+  let shards;
+  if (shardsRaw !== void 0) {
+    const n = Number(shardsRaw);
+    if (!Number.isInteger(n) || n < 1) return { ok: false, error: `invalid --shards "${shardsRaw}" (expected an integer \u2265 1)` };
+    shards = n;
+  }
+  let shard;
+  if (shardRaw !== void 0) {
+    const n = Number(shardRaw);
+    if (!Number.isInteger(n) || n < 0) return { ok: false, error: `invalid --shard "${shardRaw}" (expected an integer \u2265 0)` };
+    shard = n;
+  }
+  if (shards !== void 0 && shard === void 0) return { ok: false, error: "--shards requires --shard <i> (0-based)" };
+  if (shards === void 0 && shard !== void 0) return { ok: false, error: "--shard requires --shards <n>" };
+  if (shards !== void 0 && shard !== void 0 && shard >= shards) {
+    return { ok: false, error: `--shard ${shard} is out of range for --shards ${shards} (use 0..${shards - 1})` };
+  }
+  return { ok: true, shards, shard };
 }
 function parseBackends(s) {
   const out = [];
@@ -3448,10 +3586,12 @@ async function main() {
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const result = runPlan(options.question, options.mode, override, cap);
+      const runRoot = p.values["run-root"] ? resolve(p.values["run-root"]) : void 0;
+      const result = runPlan(options.question, options.mode, override, cap, runRoot);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      const rootHint = runRoot ? ` \u2014 each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(
-        `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" (mode ${options.mode}) \u2014 fan out a gather per sub-question, then \`merge\`.
+        `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" (mode ${options.mode}) \u2014 fan out a gather per sub-question, then \`merge\`${rootHint}.
 `
       );
       return;
@@ -3520,29 +3660,41 @@ async function main() {
       if (!dir) fail("missing --run <dossier-dir>");
       const rdir = resolve(dir);
       if (p.values.apply) {
-        const result = applyVerdicts(rdir, resolve(p.values.apply));
+        const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
         else process.stdout.write(formatVerifyReport(result) + "\n");
         if (!result.ok) process.exit(1);
         return;
       }
       const maxVerify = p.values["max-verify"] ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
-      const wl = runVerify(rdir, { maxVerify });
+      const sh = parseShardArgs(p.values.shards, p.values.shard);
+      if (!sh.ok) fail(sh.error);
+      const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
         return;
       }
-      process.stderr.write(
-        `ultrasearch: ${wl.pairs.length} claim\u2194source pair(s) \u2192 ${rdir}/VERIFY.md & VERIFY.todo.json
+      if (sh.shards !== void 0) {
+        process.stderr.write(
+          `ultrasearch: ${wl.pairs.length} pair(s) (shard ${sh.shard} of ${sh.shards}) \u2192 ${rdir}/VERIFY.todo.${sh.shard}.json
+  adjudicate each verdict, save as verdicts.${sh.shard}.json, then (once all shards are done):
+  ultrasearch verify --apply ${rdir} --run ${rdir}   # a dir picks up every verdicts*.json
+`
+        );
+      } else {
+        process.stderr.write(
+          `ultrasearch: ${wl.pairs.length} claim\u2194source pair(s) \u2192 ${rdir}/VERIFY.todo.json
   adjudicate each verdict, save as verdicts.json, then: ultrasearch verify --apply verdicts.json --run ${rdir}
 `
-      );
+        );
+      }
       return;
     }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic") });
+      const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
@@ -3569,5 +3721,7 @@ if (isInvokedDirectly()) {
 export {
   COMMANDS,
   buildGatherOptions,
-  parseArgs
+  parseArgs,
+  parseShardArgs,
+  resolveApplyPaths
 };

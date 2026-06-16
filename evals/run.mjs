@@ -8,7 +8,7 @@
 // structural checks: the committed example dossier must pass `check`, and it
 // must `render` to a self-contained page. Network cases just print recall.
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -81,8 +81,16 @@ function offline() {
   console.log("offline evals: all green");
 }
 
+// A raw HTML entity must never survive into a title/snippet — backends decode
+// before emitting. This is an invariant (not web drift), so a leak is a real bug.
+const RAW_ENTITY = /&(amp|lt|gt|quot|apos|nbsp|#0?39|#x27|#\d+);/i;
+
 function network() {
   console.log("ultrasearch evals — network (report-only)\n");
+
+  // 1. Per-backend recall: each keyless backend returns something (or is openly
+  //    rate-limited). Report-only — the live web drifts and throttles.
+  console.log("backend recall:");
   for (const c of loadCases("network")) {
     const out = mkdtempSync(join(tmpdir(), "us-eval-net-"));
     try {
@@ -92,14 +100,86 @@ function network() {
         continue;
       }
       const sources = JSON.parse(readFileSync(join(out, "sources.json"), "utf8"));
-      console.log(`  · [${c.id}] ${sources.length} sources via ${(c.backends || []).join(",")}`);
+      const mark = sources.length ? "·" : "○"; // ○ = empty (often rate-limited; expected)
+      console.log(`  ${mark} [${c.id}] ${sources.length} sources via ${(c.backends || []).join(",")}`);
     } catch (e) {
       console.log(`  · [${c.id}] ${e.message}`);
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
   }
+
+  // 2. Entity hygiene: no raw HTML entity may leak into a title/snippet (catches
+  //    the kind of decode bug that hid in the Wikipedia/Crossref/Europe PMC
+  //    backends — their APIs return &amp; and escaped JATS markup).
+  console.log("\nentity hygiene (no raw HTML entities in titles/snippets):");
+  const hygiene = [
+    { id: "wikipedia", q: "rate limiting 429 error handling" },
+    { id: "crossref", q: "R&D innovation policy" },
+    { id: "europepmc", q: "p53 apoptosis cancer" },
+  ];
+  for (const h of hygiene) {
+    const out = mkdtempSync(join(tmpdir(), "us-eval-ent-"));
+    try {
+      const r = run(["gather", "--q", h.q, "--mode", "topic", "--backends", h.id, "--out", out]);
+      if (r.status !== 0) { console.log(`  ○ [${h.id}] gather failed (skipped)`); continue; }
+      const sources = JSON.parse(readFileSync(join(out, "sources.json"), "utf8"));
+      const leaks = sources.filter((s) => RAW_ENTITY.test(s.title || "") || RAW_ENTITY.test(s.snippet || ""));
+      if (!sources.length) console.log(`  ○ [${h.id}] returned nothing (skipped)`);
+      else if (leaks.length) fail(`[${h.id}] raw entities leaked in ${leaks.length}/${sources.length}: ${leaks.map((s) => s.id).join(", ")}`);
+      else pass(`[${h.id}] ${sources.length} source(s), all decoded`);
+    } catch (e) {
+      console.log(`  · [${h.id}] entity hygiene: ${e.message}`);
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  }
+
+  // 3. Deep-tier end-to-end smoke against the real web: plan → fan out 2
+  //    sub-questions → merge → grounded report → check → render.
+  console.log("\ndeep-tier end-to-end (real web):");
+  deepSmoke();
+
   console.log("\nnetwork evals: report-only (does not gate CI)");
+}
+
+function deepSmoke() {
+  const root = mkdtempSync(join(tmpdir(), "us-eval-deep-"));
+  try {
+    const q = "how do token bucket and leaky bucket rate limiting differ";
+    const planR = run(["plan", "--q", q, "--mode", "topic", "--run-root", join(root, "deep")]);
+    if (planR.status !== 0) return console.log("  ○ plan failed (skipped)");
+    const subs = JSON.parse(planR.stdout).subQuestions.slice(0, 2);
+    for (const s of subs) {
+      run(["gather", "--q", s.question, "--queries", (s.queries || []).join("|"), "--mode", "topic", "--depth", "deep", "--out", s.out]);
+    }
+    const master = join(root, "deep", "master");
+    const mr = run(["merge", "--runs", subs.map((s) => s.out).join(","), "--master", master, "--q", q, "--mode", "topic"]);
+    if (mr.status !== 0) return console.log("  ○ merge failed (skipped)");
+    const sources = JSON.parse(readFileSync(join(master, "sources.json"), "utf8"));
+    if (!sources.length) return console.log("  ○ no sources after merge (network thin; skipped)");
+    const cited = sources.slice(0, Math.min(3, sources.length));
+    writeFileSync(
+      join(master, "REPORT.md"),
+      "# Token vs leaky bucket\n## How it works\n" +
+        cited.map((s) => `Real fetched sources describe rate-limiting behaviour in detail [${s.id}].`).join("\n") + "\n",
+    );
+    const chk = run(["check", "--run", master]);
+    const rnd = run(["render", "--run", master]);
+    const html = existsSync(join(master, "index.html"));
+    const stages = [
+      `plan ${subs.length} sub-q`,
+      `merge ${sources.length} sources`,
+      `check ${chk.status === 0 ? "✓" : "✗"}`,
+      `render ${html ? "✓" : "✗"}`,
+    ];
+    if (chk.status === 0 && html) pass(`pipeline green — ${stages.join(" · ")}`);
+    else fail(`pipeline issue — ${stages.join(" · ")}`);
+  } catch (e) {
+    console.log(`  · deep smoke: ${e.message}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 if (!existsSync(BUNDLE)) {
