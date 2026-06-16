@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson } from "./fetch.js";
+import { httpJson, decodeEntities, cleanInline } from "./fetch.js";
 
 // Europe PMC via its keyless REST API — biomedical & life-sciences literature,
 // the single largest corpus the physics/CS-leaning scholarly backends miss.
@@ -16,11 +16,12 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
     return { backend: "europepmc", items: [], notes: [`Europe PMC search ${why}.`] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
-    const title = String(w.title ?? "Untitled").replace(/\.$/, "");
-    const abstract = String(w.abstractText ?? "").replace(/<[^>]+>/g, "");
+    // Europe PMC titles/abstracts carry escaped JATS markup (&lt;i&gt;…&lt;/i&gt;).
+    const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
+    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<[^>]+>/g, "");
     const authors = w.authorString ? String(w.authorString).split(/,\s*/).filter(Boolean) : [];
     const year = w.pubYear ? Number(w.pubYear) : undefined;
-    const venue = w.journalInfo?.journal?.title ?? w.journalTitle;
+    const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || undefined;
     const doi = w.doi as string | undefined;
     const link = doi ? `https://doi.org/${doi}` : `https://europepmc.org/article/${w.source}/${w.id}`;
     return {

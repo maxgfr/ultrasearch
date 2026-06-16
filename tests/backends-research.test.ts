@@ -87,6 +87,19 @@ describe("research backends", () => {
     expect(r.items[0]!.meta?.year).toBe(2016);
   });
 
+  it("crossref decodes entities + strips JATS tags in title AND venue/snippet (real-API regression)", async () => {
+    // no abstract → snippet falls back to "title — venue year", so the venue
+    // entity (the field that leaked live) must be decoded too.
+    const body = JSON.stringify({
+      message: { items: [{ title: ["Knowledge Production and R&amp;D in <i>vivo</i>"], DOI: "10.1/x", URL: "https://doi.org/10.1/x", "container-title": ["R&amp;D Decisions"], issued: { "date-parts": [[2002]] } }] },
+    });
+    installFetchMock(routes([["api.crossref.org", { body, contentType: "application/json" }]]));
+    const r = await crossrefBackend(makeCtx("r&d"));
+    expect(r.items[0]!.title).toBe("Knowledge Production and R&D in vivo");
+    expect(r.items[0]!.meta?.venue).toBe("R&D Decisions");
+    expect(`${r.items[0]!.title} ${r.items[0]!.snippet}`).not.toMatch(/&(amp|lt|gt|quot);|<\/?i>/);
+  });
+
   it("openalex reconstructs the inverted-index abstract", async () => {
     installFetchMock(routes([["api.openalex.org", { body: OPENALEX, contentType: "application/json" }]]));
     const r = await openalexBackend(makeCtx("bert"));
@@ -124,6 +137,23 @@ describe("research backends", () => {
     expect(r.items[0]!.meta?.doi).toBe("10.1126/science.epmc");
     expect(r.items[0]!.meta?.year).toBe(2014);
     expect(r.items[0]!.url).toBe("https://doi.org/10.1126/science.epmc");
+  });
+
+  it("europepmc decodes escaped JATS markup in titles + abstracts (real-API regression)", async () => {
+    const EPMC = JSON.stringify({
+      resultList: {
+        result: [{
+          title: "Reactivation of &lt;i&gt;P53&lt;/i&gt; pathways.",
+          abstractText: "Effects on &lt;sup&gt;13&lt;/sup&gt;C uptake &amp; growth.",
+          pubYear: "2021", source: "MED", id: "1",
+        }],
+      },
+    });
+    installFetchMock(routes([["ebi.ac.uk/europepmc", { body: EPMC, contentType: "application/json" }]]));
+    const r = await europepmcBackend(makeCtx("p53"));
+    expect(r.items[0]!.title).toBe("Reactivation of P53 pathways");
+    expect(r.items[0]!.text).toContain("13C uptake & growth");
+    expect(`${r.items[0]!.title} ${r.items[0]!.text}`).not.toMatch(/&(amp|lt|gt);/);
   });
 
   it("pubmed does esearch→esummary and returns metadata (no text → hydrate later)", async () => {

@@ -163,6 +163,15 @@ export function decodeEntities(s: string): string {
   return out;
 }
 
+// Clean a backend-provided inline field (a title or one-line snippet) that may
+// carry escaped or literal markup: decode entities FIRST (so escaped tags like
+// `&lt;i&gt;` become real tags), THEN strip the tags, then collapse whitespace.
+// Decode-then-strip handles both `R&amp;D` → `R&D` and `&lt;i&gt;P53&lt;/i&gt;`
+// → `P53` (and literal `<i>P53</i>` → `P53`).
+export function cleanInline(s: string): string {
+  return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
 // Extract readable text from an HTML page. Zero-dep and intentionally simple:
 // drop script/style/head/nav/footer, turn block tags into newlines, keep
 // heading structure as markdown markers, decode common entities, collapse

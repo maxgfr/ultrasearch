@@ -36,6 +36,30 @@ describe("wikipediaBackend", () => {
     expect(rl.snippet).toContain("controls request rate");
   });
 
+  it("decodes HTML entities in titles, excerpts and extracts (real-API regression)", async () => {
+    // The live REST API returns &amp; &quot; &#039; in titles/excerpts/extracts.
+    const search = JSON.stringify({
+      pages: [{ key: "AT&T", title: "AT&amp;T", excerpt: `the <span>client&#039;s</span> &quot;rate&quot;` }],
+    });
+    const summary = JSON.stringify({
+      extract: `It reduces the client&#039;s request rate &amp; backs off.`,
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/AT%26T" } },
+    });
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: search, contentType: "application/json" };
+      if (url.includes("/summary/")) return { body: summary, contentType: "application/json" };
+      return undefined;
+    });
+    const r = await wikipediaBackend(makeCtx("att"));
+    const it = r.items[0]!;
+    expect(it.title).toBe("AT&T");
+    expect(it.snippet).toContain("client's");
+    expect(it.snippet).toContain('"rate"');
+    expect(it.text).toContain("client's request rate & backs off");
+    // no raw entities leak through anywhere
+    expect(`${it.title} ${it.snippet} ${it.text}`).not.toMatch(/&(amp|quot|#0?39);/);
+  });
+
   it("notes a failed search", async () => {
     installFetchMock(() => ({ status: 500, body: "" }));
     const r = await wikipediaBackend(makeCtx("x"));

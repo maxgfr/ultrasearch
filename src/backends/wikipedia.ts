@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson } from "./fetch.js";
+import { httpJson, decodeEntities } from "./fetch.js";
 
 // Wikipedia via the keyless REST API: search for pages, then pull each top
 // page's summary extract as the source text. Language-aware via --lang.
@@ -22,15 +22,19 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
     if (!p?.key) continue;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, undefined, { timeoutMs: 10000 });
-    const extract: string = dr.ok ? String(dr.data?.extract ?? "") : "";
+    // The REST API returns HTML entities (&amp; &quot; &#039;) in extracts and
+    // search excerpts, and the excerpt also carries <span class="searchmatch">
+    // highlight tags. Strip tags, then decode entities so titles/snippets/text
+    // are clean prose (they surface verbatim in DOSSIER.md and the HTML report).
+    const extract: string = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl: string =
       dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
-    const descExcerpt = String(p.excerpt ?? "").replace(/<[^>]+>/g, "");
+    const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
     if (!text) continue;
     items.push({
       url: pageUrl,
-      title: String(p.title ?? p.key),
+      title: decodeEntities(String(p.title ?? p.key)),
       backend: "wikipedia",
       score: top.length - i,
       snippet: (descExcerpt || extract).slice(0, 360),
