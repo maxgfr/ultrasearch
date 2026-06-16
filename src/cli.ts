@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { realpathSync, existsSync } from "node:fs";
+import { realpathSync, existsSync, statSync, readdirSync } from "node:fs";
 import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
 import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
 import { runGather } from "./gather.js";
@@ -24,11 +24,11 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"]
   ultrasearch render --run <dossier-dir>
-  ultrasearch check  --run <dossier-dir> [--semantic]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
   ultrasearch modes  [--json]
-  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"]
+  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
-  ultrasearch verify --run <dossier-dir> [--apply <verdicts.json>]
+  ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -39,15 +39,20 @@ Commands:
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html.
   check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
-           also folds in the verify verdicts: fails on unsupported claims).
+           also folds in the verify verdicts: fails on unsupported claims;
+           --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
 
 Deep research (the agentic tier — see references/deep-research-playbook.md):
   plan     Decompose a question into sub-questions (JSON) for the fan-out:
-           run one 'gather' per sub-question, then 'merge'.
+           run one 'gather' per sub-question, then 'merge'. With --run-root <dir>
+           each sub-question carries a deterministic 'out' dir (<dir>/q1…) so you
+           can dispatch one gather per sub-question without parsing stdout.
   merge    Union sub-dossiers into one master dossier with stable [S#] ids.
   verify   Emit a claim↔source worklist for adversarial verification, then
-           (--apply <verdicts.json>) gate on refuted/unsupported claims.
+           (--apply <files>) gate on refuted/unsupported claims. --shards <n>
+           --shard <i> writes shard i only (one skeptic subagent per shard);
+           --apply accepts several verdict files (comma list or a directory).
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -88,7 +93,7 @@ export const COMMANDS = new Set([
 const VALUE_FLAGS = new Set([
   "q", "question", "mode", "depth", "backends", "backend", "queries", "max-sources", "per-source",
   "concurrency", "rounds", "out", "run", "lang", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
-  "subquestions", "runs", "master", "apply", "max-subquestions", "max-verify",
+  "subquestions", "runs", "master", "apply", "max-subquestions", "max-verify", "run-root", "shards", "shard", "min-sources",
 ]);
 const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
 
@@ -176,6 +181,50 @@ export function parseArgs(argv: string[]): Parsed {
 
 function parseList(s: string): string[] {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
+}
+
+// Resolve the `--apply` spec into a list of verdict files: a comma-separated
+// list, or a directory (its `*verdict*.json` files, sorted — which naturally
+// excludes VERIFY.todo.*.json / VERIFY.json), or a single file. Exported for tests.
+export function resolveApplyPaths(spec: string): string[] {
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve(x));
+  const abs = resolve(spec);
+  if (existsSync(abs) && statSync(abs).isDirectory()) {
+    const files = readdirSync(abs)
+      .filter((f) => /verdict/i.test(f) && /\.json$/i.test(f))
+      .sort()
+      .map((f) => resolve(abs, f));
+    if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
+    return files;
+  }
+  return [abs];
+}
+
+// Pure validation of the verify sharding flags (--shards N --shard I, 0-based).
+// Returns the parsed pair or an error message; the CLI turns the message into
+// `fail`. Exported so the boundary logic is unit-tested without driving main().
+export function parseShardArgs(
+  shardsRaw: string | undefined,
+  shardRaw: string | undefined,
+): { ok: true; shards?: number; shard?: number } | { ok: false; error: string } {
+  let shards: number | undefined;
+  if (shardsRaw !== undefined) {
+    const n = Number(shardsRaw);
+    if (!Number.isInteger(n) || n < 1) return { ok: false, error: `invalid --shards "${shardsRaw}" (expected an integer ≥ 1)` };
+    shards = n;
+  }
+  let shard: number | undefined;
+  if (shardRaw !== undefined) {
+    const n = Number(shardRaw);
+    if (!Number.isInteger(n) || n < 0) return { ok: false, error: `invalid --shard "${shardRaw}" (expected an integer ≥ 0)` };
+    shard = n;
+  }
+  if (shards !== undefined && shard === undefined) return { ok: false, error: "--shards requires --shard <i> (0-based)" };
+  if (shards === undefined && shard !== undefined) return { ok: false, error: "--shard requires --shards <n>" };
+  if (shards !== undefined && shard !== undefined && shard >= shards) {
+    return { ok: false, error: `--shard ${shard} is out of range for --shards ${shards} (use 0..${shards - 1})` };
+  }
+  return { ok: true, shards, shard };
 }
 
 function parseBackends(s: string): BackendKind[] {
@@ -301,11 +350,15 @@ async function main(): Promise<void> {
       const cap = p.values["max-subquestions"]
         ? num("max-subquestions", p.values["max-subquestions"], 6)
         : undefined;
-      const result = runPlan(options.question, options.mode, override, cap);
+      const runRoot = p.values["run-root"] ? resolve(p.values["run-root"]) : undefined;
+      const result = runPlan(options.question, options.mode, override, cap, runRoot);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      const rootHint = runRoot
+        ? ` — each carries an \`out\` dir under ${runRoot} to gather into`
+        : "";
       process.stderr.write(
         `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" ` +
-          `(mode ${options.mode}) — fan out a gather per sub-question, then \`merge\`.\n`,
+          `(mode ${options.mode}) — fan out a gather per sub-question, then \`merge\`${rootHint}.\n`,
       );
       return;
     }
@@ -372,7 +425,7 @@ async function main(): Promise<void> {
       if (!dir) fail("missing --run <dossier-dir>");
       const rdir = resolve(dir);
       if (p.values.apply) {
-        const result = applyVerdicts(rdir, resolve(p.values.apply));
+        const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
         else process.stdout.write(formatVerifyReport(result) + "\n");
         if (!result.ok) process.exit(1);
@@ -381,23 +434,37 @@ async function main(): Promise<void> {
       const maxVerify = p.values["max-verify"]
         ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify)
         : undefined;
-      const wl = runVerify(rdir, { maxVerify });
+      // Optional sharding for parallel skeptics: --shards N --shard I (0-based).
+      const sh = parseShardArgs(p.values.shards, p.values.shard);
+      if (!sh.ok) fail(sh.error);
+      const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
         return;
       }
-      process.stderr.write(
-        `ultrasearch: ${wl.pairs.length} claim↔source pair(s) → ${rdir}/VERIFY.md & VERIFY.todo.json\n` +
-          `  adjudicate each verdict, save as verdicts.json, then: ` +
-          `ultrasearch verify --apply verdicts.json --run ${rdir}\n`,
-      );
+      if (sh.shards !== undefined) {
+        process.stderr.write(
+          `ultrasearch: ${wl.pairs.length} pair(s) (shard ${sh.shard} of ${sh.shards}) → ${rdir}/VERIFY.todo.${sh.shard}.json\n` +
+            `  adjudicate each verdict, save as verdicts.${sh.shard}.json, then (once all shards are done):\n` +
+            `  ultrasearch verify --apply ${rdir} --run ${rdir}   # a dir picks up every verdicts*.json\n`,
+        );
+      } else {
+        process.stderr.write(
+          `ultrasearch: ${wl.pairs.length} claim↔source pair(s) → ${rdir}/VERIFY.todo.json\n` +
+            `  adjudicate each verdict, save as verdicts.json, then: ` +
+            `ultrasearch verify --apply verdicts.json --run ${rdir}\n`,
+        );
+      }
       return;
     }
 
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic") });
+      const minSources = p.values["min-sources"]
+        ? num("min-sources", p.values["min-sources"], 1)
+        : undefined;
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

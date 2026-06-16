@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseArgs, buildGatherOptions } from "../src/cli.js";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { join, basename } from "node:path";
+import { tmpdir } from "node:os";
+import { parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths } from "../src/cli.js";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can
 // assert on it without killing the test runner, and silence the writes.
@@ -39,6 +42,18 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["gather", "--json=1"])).toThrow(/exit:1/);
   });
 
+  it("accepts the deep-tier value flags (--run-root, --shards, --shard, --min-sources)", () => {
+    const p = parseArgs([
+      "verify", "--run", "/d", "--shards", "3", "--shard", "0",
+    ]);
+    expect(p.values.shards).toBe("3");
+    expect(p.values.shard).toBe("0");
+    const q = parseArgs(["plan", "--q", "x", "--run-root", "/tmp/deep"]);
+    expect(q.values["run-root"]).toBe("/tmp/deep");
+    const c = parseArgs(["check", "--run", "/d", "--min-sources", "5"]);
+    expect(c.values["min-sources"]).toBe("5");
+  });
+
   it("rejects a missing value at end of argv", () => {
     expect(() => parseArgs(["gather", "--q"])).toThrow(/exit:1/);
   });
@@ -56,5 +71,56 @@ describe("buildGatherOptions", () => {
   });
   it("leaves queries undefined when the flag is absent", () => {
     expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).queries).toBeUndefined();
+  });
+});
+
+describe("parseShardArgs (verify --shards/--shard validation)", () => {
+  it("accepts a valid shards/shard pair", () => {
+    expect(parseShardArgs("3", "0")).toEqual({ ok: true, shards: 3, shard: 0 });
+    expect(parseShardArgs("3", "2")).toEqual({ ok: true, shards: 3, shard: 2 });
+  });
+  it("is a no-op when neither flag is given", () => {
+    expect(parseShardArgs(undefined, undefined)).toEqual({ ok: true, shards: undefined, shard: undefined });
+  });
+  it("rejects --shards without --shard and vice versa", () => {
+    expect(parseShardArgs("3", undefined)).toMatchObject({ ok: false });
+    expect((parseShardArgs("3", undefined) as any).error).toMatch(/requires --shard/);
+    expect((parseShardArgs(undefined, "0") as any).error).toMatch(/requires --shards/);
+  });
+  it("rejects an out-of-range shard (shard >= shards) at the boundary", () => {
+    expect((parseShardArgs("3", "3") as any).error).toMatch(/out of range/);
+    expect(parseShardArgs("3", "2").ok).toBe(true); // last valid index
+  });
+  it("rejects non-integer / negative inputs", () => {
+    expect((parseShardArgs("0", "0") as any).error).toMatch(/invalid --shards/);
+    expect((parseShardArgs("2", "-1") as any).error).toMatch(/invalid --shard/);
+    expect((parseShardArgs("2.5", "0") as any).error).toMatch(/invalid --shards/);
+  });
+});
+
+describe("resolveApplyPaths (verify --apply file | comma-list | directory)", () => {
+  it("returns a single resolved path for a plain file spec", () => {
+    const r = resolveApplyPaths("verdicts.json");
+    expect(r).toHaveLength(1);
+    expect(basename(r[0]!)).toBe("verdicts.json");
+  });
+  it("splits a comma list into resolved paths", () => {
+    const r = resolveApplyPaths("a.json, b.json");
+    expect(r.map((p) => basename(p))).toEqual(["a.json", "b.json"]);
+  });
+  it("picks up only *verdict*.json from a directory, sorted, excluding VERIFY.* outputs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-apply-"));
+    for (const f of ["verdicts.1.json", "verdicts.0.json", "VERIFY.json", "VERIFY.todo.0.json", "scratch.json"]) {
+      writeFileSync(join(dir, f), "{}");
+    }
+    const r = resolveApplyPaths(dir);
+    expect(r.map((p) => basename(p))).toEqual(["verdicts.0.json", "verdicts.1.json"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  it("fails on a directory with no verdict files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-apply-empty-"));
+    writeFileSync(join(dir, "VERIFY.json"), "{}");
+    expect(() => resolveApplyPaths(dir)).toThrow(/exit:1/);
+    rmSync(dir, { recursive: true, force: true });
   });
 });

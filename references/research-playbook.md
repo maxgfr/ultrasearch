@@ -30,7 +30,11 @@ built-in planner and fan out across the multi-query backends in a single run.
 
 ## 3. Read, then find the gaps
 
-Open `DOSSIER.md`. The dossier is **thin** when:
+Open `DOSSIER.md`. A **⚠ Thin dossier** banner at the top means too few on-topic
+sources were kept (below the depth's recall floor) — treat enrichment (step 4) as
+mandatory. A source tagged **⚠ snippet only** had a failed page fetch, so only its
+search snippet is on file: don't lean on it, re-`fetch` it or find a primary
+source. More generally, the dossier is **thin** when:
 - fewer than ~3 on-topic sources, or
 - no source actually addresses the specific sub-question, or
 - one backend dominated and a needed angle is missing (e.g. `bug` has SO answers

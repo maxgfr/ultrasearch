@@ -31,6 +31,10 @@ function toRawSource(s: Source, text: string): RawSource {
     text,
     lang: s.lang,
     meta: s.meta,
+    // Carry the snippet-only quality flag into the master dossier so the
+    // deep-research report (written against the master) still sees it. Only when
+    // false, so full-text sources keep a byte-identical merged sources.json.
+    ...(s.fullText === false ? { fullText: false } : {}),
   };
 }
 

@@ -48,6 +48,9 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
     // own snippet (already short) is used as-is. Capped modestly for the digest.
     snippet: (rs.snippet || focusedSnippet(text, question, { maxChars: 480, maxSentences: 3 })).slice(0, 480),
     meta: rs.meta,
+    // Only record the flag when we positively know the page fetch failed; absent
+    // (the common case, incl. enrich/search callers) means full text on file.
+    ...(rs.fullText === false ? { fullText: false } : {}),
   };
 }
 
@@ -137,6 +140,14 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
   out.push("");
+  if (manifest.recallFloor) {
+    out.push(
+      `> ⚠ **Thin dossier** — only ${manifest.recallFloor.count} on-topic source(s) were retrieved ` +
+        `(recall floor ${manifest.recallFloor.floor}). Enrich the thin areas with your own WebSearch + ` +
+        `\`fetch --url\` BEFORE writing, or the report will rest on too little evidence.`,
+    );
+    out.push("");
+  }
   out.push(
     `> Write three tiers from these sources: \`SUMMARY.md\` (TL;DR), \`REPORT.md\` ` +
       `(the full template below), and \`FULL.md\` (exhaustive — use every relevant source). ` +
@@ -172,7 +183,8 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
-    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · extract: \`${s.extract}\``);
+    const quality = s.fullText === false ? " · ⚠ snippet only (page fetch failed)" : "";
+    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · extract: \`${s.extract}\`${quality}`);
     out.push("");
     out.push(s.snippet);
     out.push("");

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CheckResult, Source, VerifyResult } from "./types.js";
+import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
 
 // Tiers + extra docs that may carry citations. REPORT/FULL are hard-checked for
 // per-claim coverage; SUMMARY/glossary are warn-only (a digest needn't repeat a
@@ -300,6 +300,12 @@ function applySemantic(dir: string, result: CheckResult): void {
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
     }
+    if (sem.contradictions?.length) {
+      result.warnings.push(
+        `${sem.contradictions.length} claim(s) have contradicting cited sources: ` +
+          `${sem.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`,
+      );
+    }
   } catch (e) {
     result.warnings.push(`--semantic: VERIFY.json is unreadable (${(e as Error).message}).`);
   }
@@ -311,7 +317,15 @@ function applySemantic(dir: string, result: CheckResult): void {
 // and unknown tokens only warn. With `opts.semantic`, ALSO folds in the
 // VERIFY.json verdicts (fails on a refuted/unsupported claim) — additive: plain
 // `check` (no opts) is byte-for-byte unchanged.
-export function runCheck(dir: string, opts: { semantic?: boolean } = {}): CheckResult {
+function readManifestSafe(dir: string): Manifest | undefined {
+  try {
+    return JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+  } catch {
+    return undefined;
+  }
+}
+
+export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: number } = {}): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -377,6 +391,22 @@ export function runCheck(dir: string, opts: { semantic?: boolean } = {}): CheckR
   }
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
+  }
+
+  // Recall: a thin dossier (flagged by `gather`) warns; `--min-sources N` makes
+  // a hard floor that fails the gate, so a high-stakes run can require coverage.
+  const manifest = readManifestSafe(dir);
+  if (manifest?.recallFloor) {
+    warnings.push(
+      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) — ` +
+        `consider enriching with \`fetch --url\` before relying on it.`,
+    );
+  }
+  if (opts.minSources !== undefined && sources.length < opts.minSources) {
+    errors.push(
+      `Only ${sources.length} source(s) in the dossier (--min-sources ${opts.minSources}). ` +
+        `Enrich with \`fetch --url\` or broaden the gather before relying on this report.`,
+    );
   }
 
   const result: CheckResult = {

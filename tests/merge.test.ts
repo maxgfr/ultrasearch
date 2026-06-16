@@ -133,6 +133,24 @@ describe("runMerge", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("carries the snippet-only (fullText:false) flag through into the master dossier", () => {
+    const root = scratch();
+    const d1 = join(root, "r1");
+    subDossier(d1, "q1", [
+      { url: "https://full.test/p", title: "Full", backend: "duckduckgo", score: 1, snippet: "f", text: longText("full text alpha"), fullText: true },
+      { url: "https://thin.test/p", title: "Thin", backend: "duckduckgo", score: 0.5, snippet: "only a snippet", text: "only a snippet", fullText: false },
+    ]);
+    const m = join(root, "m");
+    runMerge({ runs: [d1], master: m, question: "Q" });
+    const sources = JSON.parse(readFileSync(join(m, "sources.json"), "utf8"));
+    const thin = sources.find((s: any) => s.url === "https://thin.test/p");
+    const full = sources.find((s: any) => s.url === "https://full.test/p");
+    expect(thin.fullText).toBe(false); // flag survives merge
+    expect(full.fullText).toBeUndefined(); // full-text source stays unmarked (byte-identical)
+    expect(readFileSync(join(m, "DOSSIER.md"), "utf8")).toMatch(/snippet only/i);
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("carries mergedFrom + subQuestions in the master manifest", () => {
     const root = scratch();
     const d1 = join(root, "r1");

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { VERSION } from "./types.js";
+import { VERSION, RECALL_FLOORS } from "./types.js";
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
@@ -217,7 +217,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
     const hydrateNotes: string[] = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
-      if (it.text && it.text.trim()) return;
+      if (it.text && it.text.trim()) {
+        it.fullText = true; // a content backend already carried the real text
+        return;
+      }
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
@@ -228,10 +231,15 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (res.note) hydrateNotes.push(res.note);
       if (res.text && res.text.trim()) {
         it.text = res.text;
+        it.fullText = true;
         if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
         if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
       } else {
+        // Page fetch failed — fall back to the search snippet. A snippet-only
+        // source has only a short body, so the BM25 content score already
+        // down-ranks it; the flag makes that visible in the dossier.
         it.text = it.snippet || "";
+        it.fullText = false;
       }
     });
 
@@ -303,12 +311,21 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   for (const res of results) if (res.ms !== undefined) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
 
+  // Thin-dossier signal: the recall floor is the depth's target, clamped to what
+  // the run could keep (--max-sources). A run below it is flagged so the agent
+  // enriches before writing rather than reasoning over too little evidence.
+  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+  const thin = merged.length < floor;
+
   const notes = [
     ...results.flatMap((res) => res.notes),
     ...r.hydrateNotes,
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
     ...(gapNote ? [gapNote] : []),
+    ...(thin
+      ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`]
+      : []),
     ENRICH_NUDGE,
   ];
 
@@ -328,6 +345,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     extras: mode.extras,
     notes,
     timings,
+    ...(thin ? { recallFloor: { count: merged.length, floor } } : {}),
   };
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);

@@ -54,4 +54,20 @@ describe("runPlan", () => {
     const r = runPlan("rate limiting", "topic", ["Token Bucket", "token bucket", "  ", "leaky bucket"]);
     expect(r.subQuestions.map((s) => s.question)).toEqual(["Token Bucket", "leaky bucket"]);
   });
+
+  it("leaves out undefined when no --run-root is given", () => {
+    const r = runPlan("rate limiting", "topic");
+    expect(r.subQuestions.every((s) => s.out === undefined)).toBe(true);
+  });
+
+  it("assigns a deterministic <root>/qN out dir per sub-question with --run-root", () => {
+    const r = runPlan("rate limiting", "topic", undefined, undefined, "/tmp/deep");
+    expect(r.subQuestions.length).toBeGreaterThan(0);
+    for (const s of r.subQuestions) {
+      expect(s.out).toBe(`/tmp/deep/${s.id.toLowerCase()}`);
+    }
+    // stable across runs
+    const again = runPlan("rate limiting", "topic", undefined, undefined, "/tmp/deep");
+    expect(again.subQuestions.map((s) => s.out)).toEqual(r.subQuestions.map((s) => s.out));
+  });
 });

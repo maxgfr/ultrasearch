@@ -92,6 +92,23 @@ describe("renderHtml — deep-research enrichment", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("renders a Contradictions panel when a claim's cited sources disagree", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(
+      join(dir, "REPORT.md"),
+      "# R\n## A\nA grounded claim about token buckets and bursts citing both sources here [S1][S2].",
+    );
+    runVerify(dir);
+    applyBySource(dir, { S1: "supported", S2: "refuted" });
+    const html = renderHtml(dir);
+    expect(html).toContain('id="contradictions"');
+    expect(html).toContain("Contradictions");
+    // the top callout points at the data-driven panel
+    expect(html).toContain('href="#contradictions"');
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("renders the sub-question tree from a merge manifest + provenance", () => {
     const dir = scratch();
     const raws: RawSource[] = [

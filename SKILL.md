@@ -39,19 +39,25 @@ No `npm install`, no API keys. Run `--help` for the full surface. Key commands:
 - `render --run <dir>` — render SUMMARY/REPORT/FULL.md (+ glossary) into a
   self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations,
   and — in deep mode — verdict badges + the sub-question tree).
-- `check --run <dir> [--semantic]` — validate citation grounding. Exit non-zero ⇒
-  ungrounded. `--semantic` also fails on a claim its cited source does not
-  support (folds in `verify`'s verdicts).
+- `check --run <dir> [--semantic] [--min-sources <n>]` — validate citation
+  grounding. Exit non-zero ⇒ ungrounded. `--semantic` also fails on a claim its
+  cited source does not support (folds in `verify`'s verdicts) and reports
+  contradictions; `--min-sources <n>` fails a too-thin dossier.
 - `modes [--json]` — list modes and their backend profiles.
 
 **Deep research tier** (the agentic loop — see `references/deep-research-playbook.md`):
 
-- `plan --q "<question>" [--mode <m>] [--subquestions "a|b|c"]` — decompose the
-  question into sub-questions (JSON) to fan out on.
+- `plan --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>]`
+  — decompose the question into sub-questions (JSON) to fan out on. With
+  `--run-root` each sub-question carries a deterministic `out` dir (`<dir>/q1…`),
+  so you can dispatch one `gather` per sub-question **without parsing stdout**.
 - `merge --runs "<d1,d2,…>" --master <dir>` — union the sub-dossiers into one
   master dossier with **stable `[S#]` ids** (re-fused + de-duplicated).
-- `verify --run <dir>` then `verify --apply <verdicts.json>` — emit a claim↔source
-  worklist, then gate on refuted/unsupported claims (adversarial verification).
+- `verify --run <dir> [--shards <n> --shard <i>]` then `verify --apply <files>` —
+  emit a claim↔source worklist (or just shard `i` of it, one per skeptic
+  subagent), then gate on refuted/unsupported claims and surface **contradictions**
+  (claims whose own cited sources disagree). `--apply` takes one file, a comma
+  list, or a directory (any `*verdict*.json` in it) — so parallel shards reassemble.
 
 ## Workflow
 
@@ -124,19 +130,23 @@ keyless engine. Every step is a plain CLI call, so it works on any harness;
 parallel subagents are an *optimization*, never a requirement. Full playbook:
 `references/deep-research-playbook.md`.
 
-1. **Decompose.** `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m>`
-   prints sub-questions (JSON, each with ready `queries`). Review them; augment or
-   replace with your own via `--subquestions "facet a|facet b|facet c"` when you
-   know the domain better.
+1. **Decompose.** `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
+   prints sub-questions (JSON, each with ready `queries` **and an `out` dir** under
+   `<dir>`). Review them; augment or replace with your own via
+   `--subquestions "facet a|facet b|facet c"` when you know the domain better.
 
 2. **Fan out — one `gather` per sub-question.** If your harness has parallel
-   subagents, dispatch one per sub-question; otherwise loop sequentially (same
-   commands, identical artifacts). Each runs into its OWN dir:
+   subagents, dispatch one per sub-question (the **subagent contract** is in
+   `references/deep-research-playbook.md`); otherwise loop sequentially (same
+   commands, identical artifacts). Use each sub-question's own `out` dir so you
+   know every sub-run path up front:
    ```
    node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<its queries>" \
-     --mode <m> --depth deep --out <runN>
+     --mode <m> --depth deep --out <its out dir>
    ```
-   then enriches thin areas with its own WebSearch + `fetch` (step 4 above).
+   then enriches thin areas with its own WebSearch + `fetch` (step 4 above). A
+   sub-dossier under the recall floor is flagged in its `DOSSIER.md` — enrich it
+   before it feeds the merge.
 
 3. **Merge.** Union the sub-dossiers into one master with stable ids:
    ```
@@ -152,17 +162,21 @@ parallel subagents are an *optimization*, never a requirement. Full playbook:
    writes a claim↔source worklist (`VERIFY.todo.json` + `VERIFY.md`). For each
    pair, open the cited `sources/S#.md` and judge whether it actually SUPPORTS the
    claim — set `verdict` to supported · partial · refuted · unsupported (+ a short
-   note). Use skeptic subagents in parallel if available; else adjudicate inline.
-   Save the filled file as `verdicts.json`.
+   note). Save the filled file as `verdicts.json`. **In parallel:** run
+   `verify --shards <N> --shard <i>` to write disjoint slices
+   (`VERIFY.todo.<i>.json`), give one slice to each skeptic subagent, and collect
+   their `verdicts.<i>.json` back (recipe in the playbook).
 
 6. **Gate.**
    ```
-   node scripts/ultrasearch.mjs verify --apply verdicts.json --run <masterDir>
+   node scripts/ultrasearch.mjs verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>
    node scripts/ultrasearch.mjs check  --semantic --run <masterDir>
    ```
-   Fails on dangling/unsourced (mechanical) AND on any refuted/unsupported claim
-   (semantic). Fix the claim — re-cite, drop it, or `fetch` a better source — and
-   re-verify until it passes.
+   `--apply` takes one file, a directory, or a comma list, so sharded verdicts
+   reassemble. Fails on dangling/unsourced (mechanical) AND on any
+   refuted/unsupported claim (semantic); it also reports **contradictions** —
+   claims whose cited sources disagree. Fix the claim — re-cite, drop it, or
+   `fetch` a better source — and re-verify until it passes.
 
 7. **Loop until dry.** Inspect the master dossier + report for residual gaps,
    contradictions, or new sub-questions. If any surface and you are under the
@@ -170,8 +184,8 @@ parallel subagents are an *optimization*, never a requirement. Full playbook:
    SAME master, and re-verify only the new claims. Stop when nothing new emerges.
 
 8. **Render & present.** `render --run <masterDir>` → `index.html` with verdict
-   badges + the sub-question tree. Present the SUMMARY, the master folder, the
-   per-claim verdict summary, and any contradictions.
+   badges, a contradictions panel, and the sub-question tree. Present the SUMMARY,
+   the master folder, the per-claim verdict summary, and any contradictions.
 
 ## Modes & depth
 

@@ -177,6 +177,25 @@ describe("runCheck", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("warns (does not fail) when the manifest flags a thin dossier", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2, { recallFloor: { count: 2, floor: 6 } });
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true);
+    expect(r.warnings.join(" ").toLowerCase()).toContain("thin dossier");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("--min-sources fails a too-thin dossier and passes at/above the floor", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 3);
+    report(dir, GROUNDED);
+    expect(runCheck(dir, { minSources: 5 }).ok).toBe(false);
+    expect(runCheck(dir, { minSources: 3 }).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("fails clearly when no report tier exists", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);

@@ -45,6 +45,35 @@ describe("buildSource", () => {
   });
 });
 
+describe("buildSource — source-quality flag", () => {
+  it("leaves fullText absent (full text) when the RawSource doesn't mark a failed fetch", () => {
+    const s = buildSource(rawSources()[0]!, "S1", "2026-06-13T10:00:00.000Z", "rate limiting");
+    expect(s.fullText).toBeUndefined();
+  });
+  it("carries fullText:false through from a snippet-only RawSource", () => {
+    const rs: RawSource = { ...rawSources()[0]!, fullText: false };
+    const s = buildSource(rs, "S1", "2026-06-13T10:00:00.000Z", "rate limiting");
+    expect(s.fullText).toBe(false);
+  });
+});
+
+describe("renderDossierMarkdown — snippet-only marker", () => {
+  const dir = join(tmpdir(), "us-dossier-snippet");
+  it("marks a snippet-only source and leaves full-text sources unmarked", () => {
+    rmSync(dir, { recursive: true, force: true });
+    const raws: RawSource[] = [
+      { url: "https://a.test/full", title: "Full", backend: "duckduckgo", score: 2, snippet: "s", text: "real full text here", fullText: true },
+      { url: "https://b.test/thin", title: "Thin", backend: "duckduckgo", score: 1, snippet: "only a snippet", text: "only a snippet", fullText: false },
+    ];
+    writeDossier(dir, raws, manifest(), getMode("topic").template);
+    const dossier = readFileSync(join(dir, "DOSSIER.md"), "utf8");
+    expect(dossier).toMatch(/snippet only/i);
+    // exactly one source marked (the thin one)
+    expect(dossier.match(/snippet only/gi)!.length).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("nextSourceId", () => {
   it("returns S(max+1)", () => {
     const sources = [{ id: "S1" }, { id: "S3" }] as Source[];

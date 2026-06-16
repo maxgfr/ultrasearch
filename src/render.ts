@@ -242,6 +242,9 @@ a.cite.v-supported{color:#1a7f37}
 a.cite.v-partial{color:#9a6700}
 a.cite.v-unsupported{color:#777}
 a.cite.v-refuted{color:#c1121f;font-weight:700}
+.contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
+.contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
+.snippet-only{color:#9a6700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
 
@@ -290,6 +293,9 @@ export function renderHtml(dir: string): string {
       break;
     }
   }
+  // If the report has no authored contradictions section but `verify` found
+  // source-level disagreements, point the callout at the verification panel.
+  if (!contradictionsId && verify?.contradictions?.length) contradictionsId = "contradictions";
 
   const subs = manifest.subQuestions ?? [];
 
@@ -302,6 +308,8 @@ export function renderHtml(dir: string): string {
     }
   }
   if (verify) toc.push(`<div class="tier"><a href="#verification">Verification</a></div>`);
+  if (verify?.contradictions?.length)
+    toc.push(`<a class="h3" href="#contradictions">Contradictions (${verify.contradictions.length})</a>`);
   if (subs.length) toc.push(`<div class="tier"><a href="#subquestions">Sub-questions (${subs.length})</a></div>`);
   toc.push(`<div class="tier"><a href="#sources">Sources (${sources.length})</a></div></nav>`);
 
@@ -361,7 +369,22 @@ function verificationSection(r: VerifyResult): string {
   const table = rows
     ? `<table><thead><tr><th>Claim</th><th>Source</th><th>Verdict</th><th>Statement</th><th>Note</th></tr></thead><tbody>${rows}</tbody></table>`
     : "";
-  return `<section id="verification"><h1>Verification</h1><p>${status} — ${escapeHtml(summary)}</p>${table}</section>`;
+  const srcLinks = (ids: string[]): string =>
+    ids.map((s) => `<a href="#src-${escapeHtml(s)}">[${escapeHtml(s)}]</a>`).join(" ");
+  const contras = r.contradictions ?? [];
+  const contra = contras.length
+    ? `<div class="contradictions" id="contradictions"><h2>Contradictions (${contras.length})</h2>` +
+      `<p>Claims whose cited sources disagree — read both sides before relying on them.</p><ul>` +
+      contras
+        .map(
+          (c) =>
+            `<li><strong>${escapeHtml(c.claimId)}</strong>: supported by ${srcLinks(c.supporting)} · ` +
+            `refuted by ${srcLinks(c.refuting)}${c.note ? ` — ${escapeHtml(c.note)}` : ""}</li>`,
+        )
+        .join("") +
+      `</ul></div>`
+    : "";
+  return `<section id="verification"><h1>Verification</h1><p>${status} — ${escapeHtml(summary)}</p>${table}${contra}</section>`;
 }
 
 // The decomposition tree: each sub-question and the sources its fan-out surfaced
@@ -386,6 +409,7 @@ function sourcesSection(sources: Source[]): string {
         s.backend,
         s.domain,
         `<span class="trust" title="trust score">trust ${s.trust}</span>`,
+        ...(s.fullText === false ? [`<span class="snippet-only" title="page fetch failed — snippet only">⚠ snippet only</span>`] : []),
       ].join(" · ");
       return `<li id="src-${s.id}"><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
     })

@@ -18,23 +18,33 @@ Every step is a plain `node scripts/ultrasearch.mjs …` call. Parallel subagent
 are an **optimization, not a requirement**:
 
 - **Harness with subagents** (e.g. Claude Code): dispatch one subagent per
-  sub-question for the fan-out, and skeptic subagents for verification.
+  sub-question for the fan-out, and skeptic subagents (one per verify shard) for
+  verification. Concrete, copy-pasteable contracts are below
+  ("Fan-out subagent contract", "Parallel verification").
 - **No subagents**: run the same commands in a sequential loop. Identical
   artifacts; only wall-clock differs.
 
 Write the orchestration so it degrades gracefully — never make a step depend on a
-specific runtime.
+specific runtime. The CLI gives you everything the parallel path needs to stay
+deterministic: `plan --run-root` hands you the sub-run dirs up front (no parsing
+stdout), and `verify --shards` + multi-file `verify --apply` split and reassemble
+the verification worklist.
 
 ## The loop
 
-1. **Decompose** — `plan --q "<question>" --mode <m>` → sub-questions (JSON).
-   Facets come from the mode template, distinctive keywords, and any identifiers
-   in the question. Override with `--subquestions "a|b|c"` when you can do better.
-   Bounded by `DEEP_CAPS.maxSubQuestions` (6).
+1. **Decompose** — `plan --q "<question>" --mode <m> --run-root <dir>` →
+   sub-questions (JSON). Facets come from the mode template, distinctive keywords,
+   and any identifiers in the question. Override with `--subquestions "a|b|c"` when
+   you can do better. Bounded by `DEEP_CAPS.maxSubQuestions` (6). With
+   `--run-root` each sub-question also carries a deterministic `out` dir
+   (`<dir>/q1`, `<dir>/q2`, …) — so you can dispatch the fan-out without ever
+   parsing a sub-run's stdout.
 
-2. **Fan out** — one `gather --depth deep --out <runN>` per sub-question, passing
-   that sub-question's `queries`. Enrich each thin area with your own WebSearch +
-   `fetch` (the standard "bridge"). Parallel when possible, sequential otherwise.
+2. **Fan out** — one `gather --depth deep --out <its out dir>` per sub-question,
+   passing that sub-question's `queries`. Enrich each thin area with your own
+   WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
+   floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
+   Parallel when possible (see the contract below), sequential otherwise.
 
 3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir>`. Re-fuses the
    combined pool by identity (DOI/arXiv/URL collapses cross-sub-question
@@ -61,14 +71,22 @@ specific runtime.
    - `refuted` — it contradicts the claim.
 
    Fill each `verdict` (+ a short `note`) and save as `verdicts.json`. Capped at
-   `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first.
+   `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first. To fan the
+   adjudication out, `verify --shards <N> --shard <i>` writes only shard `i`
+   (`VERIFY.todo.<i>.json`) — a disjoint, deterministic slice — one per skeptic
+   subagent ("Parallel verification" below).
 
-6. **Gate** — `verify --apply verdicts.json --run <masterDir>` then
-   `check --semantic --run <masterDir>`. A claim fails if its source **refutes**
-   it, or if every cited source is **unsupported** (nothing backs it). Fix the
-   claim (re-cite, weaken, drop, or `fetch` a better source) and re-verify until
-   the gate passes. `check --semantic` is the unified exit gate: mechanical
-   grounding **and** semantic support.
+6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`
+   then `check --semantic --run <masterDir>`. `--apply` accepts one file, a
+   directory, or a comma list, so sharded verdicts reassemble cleanly (merged by
+   `(claimId, sourceId, file)`, last-wins). A claim fails if its source
+   **refutes** it, or if every cited source is **unsupported** (nothing backs it).
+   The gate also surfaces **contradictions** — claims whose own cited sources
+   disagree (one supports, another refutes) — as a warning + a panel in the HTML,
+   even when the claim still passes overall. Fix the claim (re-cite, weaken, drop,
+   or `fetch` a better source) and re-verify until the gate passes.
+   `check --semantic` is the unified exit gate: mechanical grounding **and**
+   semantic support. Add `--min-sources <n>` to also fail a too-thin master.
 
 7. **Loop until dry** — inspect the master dossier + report for residual gaps,
    contradictions, or new sub-questions a round surfaced. If any appear and you
@@ -77,8 +95,69 @@ specific runtime.
    new claims. Stop when a round surfaces nothing new.
 
 8. **Render & present** — `render --run <masterDir>` → `index.html` with per-claim
-   verdict badges and the sub-question tree. Present the SUMMARY, the master
-   folder, the verdict summary, and any contradictions.
+   verdict badges, a contradictions panel, and the sub-question tree. Present the
+   SUMMARY, the master folder, the verdict summary, and any contradictions.
+
+## Fan-out subagent contract
+
+A subagent runs in its **own context** — it sees none of this conversation. So
+give it a self-contained task. The parent already knows every sub-run dir from
+`plan --run-root`, so it never has to read a subagent's output to find the
+dossier. Dispatch one subagent per sub-question with a prompt shaped like:
+
+> You are gathering web evidence for ONE sub-question of a larger research run.
+> Run, from the repo root:
+> `node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
+> Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
+> missing), enrich with your own WebSearch and, for each good URL,
+> `node scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
+> Do NOT write any report tier. Reply with exactly: the `out` dir, a one-line
+> coverage note, and any NEW sub-questions you discovered (or "none").
+
+The parent collects the `out` dirs (it assigned them), `merge`s them, and writes
+the tiers against the master. New sub-questions a subagent surfaced feed the next
+round (step 7). Sequential fallback: run the same `gather` calls in a loop — the
+artifacts are identical.
+
+## Parallel verification
+
+`verify --shards <N> --shard <i>` writes a disjoint, deterministic slice of the
+worklist to `VERIFY.todo.<i>.json` (round-robin over the canonical trust order,
+so the shards are balanced and cover every pair exactly once). Give one shard to
+each skeptic subagent:
+
+> Adjudicate the claim↔source pairs in `<masterDir>/VERIFY.todo.<i>.json`. For
+> each, open the cited `sources/S#.md` and set `verdict` to supported · partial ·
+> unsupported · refuted (+ a short `note`). Default to the harsher verdict when
+> unsure. Save as `<masterDir>/verdicts.<i>.json` and reply with the path.
+
+Then reassemble and gate in one call:
+`verify --apply <masterDir> --run <masterDir>` (a directory picks up every
+`*verdict*.json` in it), followed by `check --semantic --run <masterDir>`. A
+contradiction that spans two shards (S1 supports in shard 0, S2 refutes in
+shard 1) is detected only after this merge — which is exactly when it runs.
+
+## Signals to act on
+
+The engine surfaces three deterministic signals; react to each:
+
+- **Thin dossier** — a `recallFloor` note + a `DOSSIER.md` banner when too few
+  on-topic sources were kept. Enrich (`fetch --url`) before writing. Enforce it
+  on a high-stakes run with `check --min-sources <n>`.
+- **Snippet-only source** — marked `⚠ snippet only` in `DOSSIER.md`/HTML when the
+  page fetch failed and only the search snippet is on file. Don't lean on it;
+  re-`fetch` it or find a primary source before citing.
+- **Contradiction** — claims whose cited sources disagree, listed by
+  `check --semantic` and panelled in the HTML. Resolve in the report (pick the
+  better-supported side, or document the dispute in "Open questions /
+  contradictions") rather than silently citing one side.
+
+## Mapping to a harness workflow
+
+If your harness has a workflow/orchestration primitive, the shape is a
+`pipeline` over the sub-questions (each item: gather → enrich) feeding a `merge`,
+then a `parallel` fan-out of the verify shards into the reassembling `--apply`.
+The CLI calls are identical; the primitive only schedules them.
 
 ## Budget
 

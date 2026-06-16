@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { ModeName, PlanResult, SubQuestion } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
 import { getMode } from "./modes/registry.js";
@@ -33,11 +34,15 @@ function templateFacets(question: string, template: string): SubQuestion[] {
 // angles, then distinctive-keyword facets as a floor for thin templates. Deduped
 // and capped (DEEP_CAPS.maxSubQuestions, overridable). The agent can bypass the
 // whole generator with its own `override` list (the CLI's --subquestions).
+// When `runRoot` is given, each sub-question also carries a deterministic `out`
+// dir (<runRoot>/q1…/qN) so the orchestrator can dispatch one fan-out gather per
+// sub-question without parsing stdout.
 export function runPlan(
   question: string,
   mode: ModeName,
   override?: string[],
   cap: number = DEEP_CAPS.maxSubQuestions,
+  runRoot?: string,
 ): PlanResult {
   const q = question.trim();
   let subs: SubQuestion[];
@@ -67,6 +72,9 @@ export function runPlan(
     uniq.push(s);
     if (uniq.length >= limit) break;
   }
-  uniq.forEach((s, i) => (s.id = `Q${i + 1}`));
+  uniq.forEach((s, i) => {
+    s.id = `Q${i + 1}`;
+    if (runRoot) s.out = join(runRoot, s.id.toLowerCase());
+  });
   return { question: q, mode, subQuestions: uniq };
 }

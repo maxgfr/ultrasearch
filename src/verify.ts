@@ -32,7 +32,15 @@ function claimStrings(text: string): string[] {
 // relevant passage rather than the whole page. Deterministic; the JUDGEMENT is
 // the agent's. Capped at maxVerify (highest-trust sources first) to bound the
 // loop. Writes VERIFY.todo.json (machine worklist) + VERIFY.md (human checklist).
-export function runVerify(dir: string, opts: { maxVerify?: number } = {}): VerifyWorklist {
+//
+// With { shards, shard } it instead writes only this shard's stripe of the
+// worklist (VERIFY.todo.<shard>.json / VERIFY.<shard>.md), so N skeptic
+// subagents can adjudicate disjoint slices in parallel and `verify --apply`
+// reassembles them. The default (no-shard) path is byte-identical to before.
+export function runVerify(
+  dir: string,
+  opts: { maxVerify?: number; shards?: number; shard?: number } = {},
+): VerifyWorklist {
   const sources: Source[] = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const textCache = new Map<string, string>();
@@ -72,25 +80,30 @@ export function runVerify(dir: string, opts: { maxVerify?: number } = {}): Verif
   }
 
   // Cap deterministically: highest-trust sources first, stable by claim/source id.
+  const cmp = (a: { trust: number; claimId: string; sourceId: string }, b: typeof a): number =>
+    b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
   const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
-  const kept =
-    pairs.length > max
-      ? pairs
-          .slice()
-          .sort(
-            (a, b) =>
-              b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId),
-          )
-          .slice(0, max)
-      : pairs;
-  const worklist: VerifyWorklist = { run: dir, pairs: kept.map(({ trust, ...rest }) => rest) };
+  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
+
+  // Optional sharding for parallel skeptics: impose ONE canonical order on the
+  // kept set (independent of whether the cap branch ran), then keep only this
+  // shard's stripe (i % shards === shard) so N shards partition the worklist with
+  // no overlap or loss. Disabled (default) ⇒ the original document-order worklist.
+  const shards = opts.shards !== undefined ? Math.max(1, Math.floor(opts.shards)) : undefined;
+  const shard =
+    shards !== undefined ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
+  const shaped =
+    shards !== undefined ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
+  const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
 
   const todo = {
     run: dir,
     pairs: worklist.pairs.map((p) => ({ ...p, verdict: null as VerdictKind | null, note: "" })),
   };
-  writeFileSync(join(dir, "VERIFY.todo.json"), JSON.stringify(todo, null, 2));
-  writeFileSync(join(dir, "VERIFY.md"), renderWorklistMd(worklist, pairs.length, kept.length));
+  const todoName = shards !== undefined ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
+  const mdName = shards !== undefined ? `VERIFY.${shard}.md` : "VERIFY.md";
+  writeFileSync(join(dir, todoName), JSON.stringify(todo, null, 2));
+  writeFileSync(join(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
   return worklist;
 }
 
@@ -116,11 +129,9 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
   return out.join("\n");
 }
 
-// Phase B — read an agent-filled verdicts file (a `{ pairs: Verdict[] }` object
-// or a bare `Verdict[]` array), validate it, reduce it to a VerifyResult, and
-// persist the resolved record to VERIFY.json (which `check --semantic` and
-// `render` then read).
-export function applyVerdicts(dir: string, verdictsPath: string): VerifyResult {
+// Parse + validate one agent-filled verdicts file (a `{ pairs: Verdict[] }`
+// object or a bare `Verdict[]` array) into normalized Verdict records.
+function parseVerdictFile(verdictsPath: string): Verdict[] {
   const raw = JSON.parse(readFileSync(verdictsPath, "utf8"));
   const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
   const verdicts: Verdict[] = [];
@@ -138,6 +149,27 @@ export function applyVerdicts(dir: string, verdictsPath: string): VerifyResult {
       note: typeof v.note === "string" ? v.note : "",
     });
   }
+  return verdicts;
+}
+
+// Phase B — read one OR several agent-filled verdicts files (e.g. one per
+// shard), validate them, reduce to a VerifyResult, and persist the resolved
+// record to VERIFY.json (which `check --semantic` and `render` then read). When
+// several files are given they are merged by (claimId, sourceId), last-wins, so
+// disjoint shards reassemble cleanly and a re-run of the same pair is counted
+// once. The key omits `file` deliberately — claimId is globally unique across
+// the hard files, so (claimId, sourceId) already identifies a pair, and a
+// partial agent file that drops `file` still dedups. A single file is
+// byte-identical to the old behaviour.
+export function applyVerdicts(dir: string, verdictsPath: string | string[]): VerifyResult {
+  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
+  const merged = new Map<string, Verdict>();
+  for (const p of paths) {
+    for (const v of parseVerdictFile(p)) {
+      merged.set(`${v.claimId} ${v.sourceId}`, v);
+    }
+  }
+  const verdicts = [...merged.values()];
   const result = reduceVerdicts(verdicts);
   // Persist the gate result + the full adjudicated list (the latter only for
   // `render`'s per-claim verdict table / badges; `check --semantic` ignores it).
@@ -162,6 +194,8 @@ export function reduceVerdicts(verdicts: Verdict[]): VerifyResult {
 
   const failures: VerifyResult["failures"] = [];
   const unadjudicated: string[] = [];
+  const contradictions: NonNullable<VerifyResult["contradictions"]> = [];
+  const uniqSorted = (ids: string[]): string[] => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
   for (const [claimId, group] of byClaim) {
     const adjudicated = group.filter((g) => !!g.verdict);
     if (adjudicated.length < group.length) unadjudicated.push(claimId);
@@ -172,6 +206,24 @@ export function reduceVerdicts(verdicts: Verdict[]): VerifyResult {
     } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
       const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0]!;
       failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
+    }
+
+    // Source-level contradiction: within this ONE claim, some cited source
+    // SUPPORTS it (supported/partial) while another REFUTES it. Detectable with
+    // zero semantics from the verdicts; additive — independent of the pass/fail
+    // gate above (a claim can be "supported overall" yet still surface a
+    // conflict worth showing). `unsupported` (the source simply doesn't address
+    // the claim) is not a disagreement, so it does not count here.
+    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
+    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
+    if (supporting.length && refuting.length) {
+      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
+      contradictions.push({
+        claimId,
+        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
+        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
+        note,
+      });
     }
   }
 
@@ -185,6 +237,7 @@ export function reduceVerdicts(verdicts: Verdict[]): VerifyResult {
     unsupported: counts.unsupported,
     failures,
     unadjudicated,
+    ...(contradictions.length ? { contradictions } : {}),
   };
 }
 

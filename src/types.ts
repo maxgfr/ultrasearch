@@ -69,6 +69,17 @@ export const DEPTH_CAPS: Record<Depth, { maxSources: number; perSource: number; 
   deep: { maxSources: 60, perSource: 10, deepOnly: true },
 };
 
+// Recall floor per depth: below this many on-topic sources a dossier is "thin"
+// — `gather` records it on the manifest + DOSSIER.md so the agent enriches
+// before writing, and `check` warns (or fails with --min-sources). Scaled to the
+// depth's target (and clamped to --max-sources) so a quick survey isn't held to a
+// deep run's bar.
+export const RECALL_FLOORS: Record<Depth, number> = {
+  summary: 3,
+  standard: 6,
+  deep: 12,
+};
+
 // ---------------------------------------------------------------------------
 // Deep-research tier. The agentic orchestration (driven by SKILL.md) that fans
 // out one `gather` per sub-question, merges the dossiers, and adversarially
@@ -100,6 +111,7 @@ export interface SubQuestion {
   facet: SubQuestionFacet;
   queries: string[];
   rationale: string;
+  out?: string; // suggested fan-out dossier dir (<runRoot>/q1…), set when `plan --run-root` is given
 }
 export interface PlanResult {
   question: string;
@@ -148,6 +160,7 @@ export interface RawSource {
   text?: string;
   lang?: string;
   meta?: SourceMeta;
+  fullText?: boolean; // false when only a search snippet was available (page fetch failed)
 }
 
 // A source as persisted in sources.json. `extract` is the relative path to the
@@ -166,6 +179,10 @@ export interface Source {
   extract: string; // relative path, e.g. "sources/S1.md"
   snippet: string;
   meta?: SourceMeta;
+  // false ⇒ the page fetch failed and only the search snippet is on file; the
+  // extract is the snippet, not the real page. Surfaced in DOSSIER.md / HTML so
+  // a reader doesn't cite a source it only saw a snippet of. Absent ⇒ full text.
+  fullText?: boolean;
 }
 
 // What a backend module returns: candidate sources + honest notes (e.g.
@@ -244,6 +261,7 @@ export interface Manifest {
   timings: Record<string, number>; // backend kind -> ms, plus "total"
   mergedFrom?: string[]; // (merge dossiers) the sub-dossier run dirs unioned
   subQuestions?: { id: string; question: string }[]; // (merge dossiers) the decomposition
+  recallFloor?: { count: number; floor: number }; // set when the dossier is thin (count < floor)
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on
@@ -303,5 +321,9 @@ export interface VerifyResult {
   unsupported: number;
   failures: { claimId: string; sourceId: string; verdict: VerdictKind; note: string }[];
   unadjudicated: string[];
+  // Claims whose own cited sources DISAGREE — some support it, another refutes
+  // it. A purely additive, deterministic signal (does NOT change `ok`): surfaced
+  // in the report + `check --semantic` so a reader sees source-level conflicts.
+  contradictions?: { claimId: string; supporting: string[]; refuting: string[]; note: string }[];
   verdicts?: Verdict[]; // the full adjudicated list, persisted for `render` (not needed by the gate)
 }
