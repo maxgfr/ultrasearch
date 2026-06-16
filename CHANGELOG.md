@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.4.0](https://github.com/maxgfr/ultrasearch/compare/v1.3.0...v1.4.0) (2026-06-16)
+
+
+### Bug Fixes
+
+* **backends:** decode HTML entities and strip markup in Wikipedia/Crossref/Europe PMC ([b12e0ff](https://github.com/maxgfr/ultrasearch/commit/b12e0ff29667480d1f2588b2d5e4b2026eba24a1)), closes [#039](https://github.com/maxgfr/ultrasearch/issues/039)
+
+
+### Features
+
+* deep-research subagent orchestration + robustness signals ([479cb96](https://github.com/maxgfr/ultrasearch/commit/479cb969878c21d9a0d44e5bed0f3efbf89a304e))
+
 # [1.3.0](https://github.com/maxgfr/ultrasearch/compare/v1.2.0...v1.3.0) (2026-06-15)
 
 
