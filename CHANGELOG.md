@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.5.0](https://github.com/maxgfr/ultrasearch/compare/v1.4.0...v1.5.0) (2026-06-27)
+
+
+### Features
+
+* language-aware multi-page web search + consolidated markdown report ([882fa30](https://github.com/maxgfr/ultrasearch/commit/882fa300ea2ba05a0093290ae52f406fe602b786))
+
 # [1.4.0](https://github.com/maxgfr/ultrasearch/compare/v1.3.0...v1.4.0) (2026-06-16)
 
 
