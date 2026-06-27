@@ -2,7 +2,9 @@
 
 `render --run <dir>` turns the report tiers into a single, self-contained
 `index.html` — embedded CSS, no external scripts or stylesheets, works offline,
-easy to share or learn from.
+easy to share or learn from. By default it **also** writes a consolidated
+`index.md` next to it (see "Markdown report" below). `--no-html` / `--no-md` skip
+either output.
 
 ## What it renders
 
@@ -41,6 +43,22 @@ separator), horizontal rules, and links. It's a deliberately small CommonMark
 subset implemented with zero dependencies and bundled into `scripts/
 ultrasearch.mjs` — keep report markdown within these constructs so the HTML is
 faithful.
+
+## Markdown report (`index.md`)
+
+Alongside `index.html`, `render` writes `index.md` by default — the markdown
+counterpart of the HTML, so every run yields a portable, plain-text deliverable.
+(It's `index.md`, not `report.md`: on case-insensitive filesystems — macOS APFS,
+Windows — a file named `report.md` would be the same file as the `REPORT.md` tier
+and clobber it.) Contents:
+
+- a title (the question) + a meta line (mode · depth · sources · lang/region · date),
+- each authored tier (Summary / Report / Full / Glossary) in order, separated by rules,
+- the verification summary + per-claim verdict table (deep tier, when present),
+- a Sources appendix (`[S#] title` linked to the URL, with backend · domain · trust).
+
+It is assembled deterministically from the same dossier files, so it diffs cleanly.
+Skip it with `--no-md`; skip the HTML with `--no-html`.
 
 ## Determinism
 

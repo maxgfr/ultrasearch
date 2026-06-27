@@ -39,6 +39,16 @@ var RECALL_FLOORS = {
   standard: 6,
   deep: 12
 };
+var PAGES_PER_DEPTH = {
+  summary: 1,
+  standard: 2,
+  deep: 3
+};
+var WEB_BREADTH_PER_DEPTH = {
+  summary: 1,
+  standard: 2,
+  deep: 5
+};
 var DEEP_CAPS = {
   maxSubQuestions: 6,
   maxRounds: 3,
@@ -853,6 +863,7 @@ function envInt(name, def, min, max) {
 }
 var MAX_ATTEMPTS = envInt("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
 var DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5e3);
+var PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5e3);
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -869,10 +880,12 @@ async function httpGet(url, opts = {}) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
+      const headers = { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" };
+      if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       const res = await fetch(url, {
         signal: ctrl.signal,
         redirect: "follow",
-        headers: { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" }
+        headers
       });
       const buf = Buffer.from(await res.arrayBuffer());
       const max = opts.maxBytes ?? 4 * 1024 * 1024;
@@ -906,14 +919,16 @@ async function httpJson(method, url, body, opts = {}) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
+      const headers = {
+        "content-type": "application/json",
+        accept: opts.accept ?? "application/json",
+        "user-agent": opts.userAgent ?? BROWSER_UA
+      };
+      if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       const res = await fetch(url, {
         method,
         signal: ctrl.signal,
-        headers: {
-          "content-type": "application/json",
-          accept: opts.accept ?? "application/json",
-          "user-agent": opts.userAgent ?? BROWSER_UA
-        },
+        headers,
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
       const text = await res.text();
@@ -1020,9 +1035,12 @@ function extractMainHtml(html) {
 }
 var PDF_URL_RE = /\.pdf($|[?#])/i;
 var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
-async function fetchAndExtract(url) {
+async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = PDF_URL_RE.test(url);
-  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*" });
+  const res = await httpGet(
+    url,
+    wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage }
+  );
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
@@ -1090,6 +1108,51 @@ function capExtract(text, depth) {
   return (lastNl > cap * 0.6 ? slice.slice(0, lastNl) : slice) + "\n\n\u2026 [truncated]";
 }
 
+// src/locale.ts
+var LANG_COUNTRY = {
+  en: "us",
+  pt: "br",
+  ja: "jp",
+  zh: "cn",
+  ko: "kr",
+  sv: "se",
+  da: "dk",
+  cs: "cz",
+  el: "gr",
+  uk: "ua",
+  // Ukrainian language → Ukraine
+  ar: "xa",
+  // DuckDuckGo's "Arabia" region
+  he: "il",
+  hi: "in"
+};
+var REGION_ALIASES = {
+  gb: "uk",
+  en: "us"
+};
+function baseLang(lang) {
+  return (lang || "en").split("-")[0].toLowerCase();
+}
+function resolveRegion(lang, region) {
+  if (region && region.trim()) return region.trim().toLowerCase();
+  const parts = (lang || "en").split("-");
+  if (parts.length > 1 && parts[1]) return parts[1].toLowerCase();
+  const l = baseLang(lang);
+  return LANG_COUNTRY[l] ?? l;
+}
+function ddgRegion(lang, region) {
+  const l = baseLang(lang);
+  let r = resolveRegion(lang, region);
+  r = REGION_ALIASES[r] ?? r;
+  return `${r}-${l}`;
+}
+function acceptLanguageHeader(lang, region) {
+  const l = baseLang(lang);
+  const R = resolveRegion(lang, region).toUpperCase();
+  if (l === "en") return `${l}-${R},${l};q=0.9`;
+  return `${l}-${R},${l};q=0.9,en;q=0.5`;
+}
+
 // src/backends/searxng.ts
 function resolveSearxngBase(ctx) {
   const base = ctx.options.searxng || process.env.ULTRASEARCH_SEARXNG;
@@ -1104,39 +1167,59 @@ var searxngBackend = async (ctx) => {
       notes: ["SearXNG not configured \u2014 set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker-compose up` for a local instance). Skipping."]
     };
   }
-  const url = `${base}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""}${ctx.options.since ? `&time_range=year` : ""}`;
-  const r = await httpGet(url, { accept: "application/json", timeoutMs: 8e3 });
-  if (!r.ok) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
-    return {
-      backend: "searxng",
-      items: [],
-      notes: [`SearXNG ${why} at ${base}. Skipping; consider your own WebSearch.`]
-    };
+  const pages = Math.max(1, ctx.options.pages ?? 1);
+  const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
+  const perPage = ctx.options.perSource * 2;
+  const base0 = `${base}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""}${ctx.options.since ? `&time_range=year` : ""}`;
+  const seen = /* @__PURE__ */ new Set();
+  const found = [];
+  for (let p = 0; p < pages; p++) {
+    const url = base0 + (p > 0 ? `&pageno=${p + 1}` : "");
+    const r = await httpGet(url, { accept: "application/json", acceptLanguage, timeoutMs: 8e3 });
+    if (!r.ok) {
+      if (p === 0) {
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        return {
+          backend: "searxng",
+          items: [],
+          notes: [`SearXNG ${why} at ${base}. Skipping; consider your own WebSearch.`]
+        };
+      }
+      break;
+    }
+    let data;
+    try {
+      data = JSON.parse(r.body);
+    } catch {
+      if (p === 0) {
+        return {
+          backend: "searxng",
+          items: [],
+          notes: [`SearXNG at ${base} did not return JSON (the instance likely disables format=json).`]
+        };
+      }
+      break;
+    }
+    const results = Array.isArray(data?.results) ? data.results : [];
+    const before = found.length;
+    for (const x of results.slice(0, perPage)) {
+      if (!x?.url || typeof x.url !== "string") continue;
+      const key = canonicalizeUrl(x.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push({ url: x.url, title: String(x.title ?? x.url), snippet: String(x.content ?? "").slice(0, 360) });
+    }
+    if (found.length === before) break;
+    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
   }
-  let data;
-  try {
-    data = JSON.parse(r.body);
-  } catch {
-    return {
-      backend: "searxng",
-      items: [],
-      notes: [`SearXNG at ${base} did not return JSON (the instance likely disables format=json).`]
-    };
-  }
-  const results = Array.isArray(data?.results) ? data.results : [];
-  const items = [];
-  results.slice(0, ctx.options.perSource * 2).forEach((x, i) => {
-    if (!x?.url || typeof x.url !== "string") return;
-    items.push({
-      url: x.url,
-      title: String(x.title ?? x.url),
-      backend: "searxng",
-      score: results.length - i,
-      snippet: String(x.content ?? "").slice(0, 360),
-      lang: ctx.options.lang
-    });
-  });
+  const items = found.map((f, i) => ({
+    url: f.url,
+    title: f.title,
+    backend: "searxng",
+    score: found.length - i,
+    snippet: f.snippet,
+    lang: ctx.options.lang
+  }));
   return {
     backend: "searxng",
     items,
@@ -1158,23 +1241,46 @@ function realUrl(href) {
   }
   return href.startsWith("//") ? "https:" + href : href;
 }
-var duckduckgoBackend = async (ctx) => {
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(ctx.question)}`;
-  const r = await httpGet(url, { accept: "text/html", timeoutMs: 12e3 });
-  if (!r.ok || !r.body) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) \u2014 consider your own WebSearch` : `unreachable (status ${r.status})`;
-    return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
-  }
+function parseDdgPage(body, limit) {
   const found = [];
   const blockRe = /<a\b([^>]*\bresult__a\b[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bresult__a\b|$)/gi;
   let m;
-  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
+  while ((m = blockRe.exec(body)) && found.length < limit) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]);
     if (!href0) continue;
     const href = realUrl(href0[1]);
     if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
     const snipM = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i.exec(m[3]);
     found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
+  }
+  return found;
+}
+var duckduckgoBackend = async (ctx) => {
+  const pages = Math.max(1, ctx.options.pages ?? 1);
+  const kl = ddgRegion(ctx.options.lang, ctx.options.region);
+  const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
+  const perPage = ctx.options.perSource * 2;
+  const seen = /* @__PURE__ */ new Set();
+  const found = [];
+  for (let p = 0; p < pages; p++) {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` + (p > 0 ? `&s=${p * 30}` : "");
+    const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12e3 });
+    if (!r.ok || !r.body) {
+      if (p === 0) {
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) \u2014 consider your own WebSearch` : `unreachable (status ${r.status})`;
+        return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
+      }
+      break;
+    }
+    const before = found.length;
+    for (const f of parseDdgPage(r.body, perPage)) {
+      const key = canonicalizeUrl(f.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(f);
+    }
+    if (found.length === before) break;
+    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -1192,23 +1298,46 @@ var duckduckgoBackend = async (ctx) => {
 };
 
 // src/backends/ddglite.ts
-var ddgliteBackend = async (ctx) => {
-  const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(ctx.question)}`;
-  const r = await httpGet(url, { accept: "text/html", timeoutMs: 12e3 });
-  if (!r.ok || !r.body) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
-    return { backend: "ddglite", items: [], notes: [`DuckDuckGo Lite ${why}.`] };
-  }
+function parseLitePage(body, limit) {
   const found = [];
   const blockRe = /<a\b([^>]*\bresult-link\b[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bresult-link\b|$)/gi;
   let m;
-  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
+  while ((m = blockRe.exec(body)) && found.length < limit) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]);
     if (!href0) continue;
     const href = realUrl(href0[1]);
     if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
     const snipM = /class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i.exec(m[3]);
     found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
+  }
+  return found;
+}
+var ddgliteBackend = async (ctx) => {
+  const pages = Math.max(1, ctx.options.pages ?? 1);
+  const kl = ddgRegion(ctx.options.lang, ctx.options.region);
+  const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
+  const perPage = ctx.options.perSource * 2;
+  const seen = /* @__PURE__ */ new Set();
+  const found = [];
+  for (let p = 0; p < pages; p++) {
+    const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` + (p > 0 ? `&s=${p * 30}` : "");
+    const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12e3 });
+    if (!r.ok || !r.body) {
+      if (p === 0) {
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        return { backend: "ddglite", items: [], notes: [`DuckDuckGo Lite ${why}.`] };
+      }
+      break;
+    }
+    const before = found.length;
+    for (const f of parseLitePage(r.body, perPage)) {
+      const key = canonicalizeUrl(f.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(f);
+    }
+    if (found.length === before) break;
+    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -1226,17 +1355,11 @@ var ddgliteBackend = async (ctx) => {
 };
 
 // src/backends/mojeek.ts
-var mojeekBackend = async (ctx) => {
-  const url = `https://www.mojeek.com/search?q=${encodeURIComponent(ctx.question)}`;
-  const r = await httpGet(url, { accept: "text/html", timeoutMs: 12e3 });
-  if (!r.ok || !r.body) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
-    return { backend: "mojeek", items: [], notes: [`Mojeek ${why}.`] };
-  }
+function parseMojeekPage(body, limit) {
   const found = [];
   const blockRe = /<a\b([^>]*\bclass="[^"]*\btitle\b[^"]*"[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bclass="[^"]*\btitle\b|$)/gi;
   let m;
-  while ((m = blockRe.exec(r.body)) && found.length < ctx.options.perSource * 2) {
+  while ((m = blockRe.exec(body)) && found.length < limit) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]);
     if (!href0) continue;
     let href = href0[1];
@@ -1244,6 +1367,34 @@ var mojeekBackend = async (ctx) => {
     if (!/^https?:\/\//.test(href) || /mojeek\.com/.test(href)) continue;
     const snipM = /<p\b[^>]*\bclass="[^"]*\bs\b[^"]*"[^>]*>([\s\S]*?)<\/p>/i.exec(m[3]);
     found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
+  }
+  return found;
+}
+var mojeekBackend = async (ctx) => {
+  const pages = Math.max(1, ctx.options.pages ?? 1);
+  const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
+  const perPage = ctx.options.perSource * 2;
+  const seen = /* @__PURE__ */ new Set();
+  const found = [];
+  for (let p = 0; p < pages; p++) {
+    const url = `https://www.mojeek.com/search?q=${encodeURIComponent(ctx.question)}` + (p > 0 ? `&s=${p * 10 + 1}` : "");
+    const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12e3 });
+    if (!r.ok || !r.body) {
+      if (p === 0) {
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        return { backend: "mojeek", items: [], notes: [`Mojeek ${why}.`] };
+      }
+      break;
+    }
+    const before = found.length;
+    for (const f of parseMojeekPage(r.body, perPage)) {
+      const key = canonicalizeUrl(f.url);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      found.push(f);
+    }
+    if (found.length === before) break;
+    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -1263,7 +1414,8 @@ var mojeekBackend = async (ctx) => {
 // src/backends/marginalia.ts
 var marginaliaBackend = async (ctx) => {
   const url = `https://api.marginalia-search.com/public/search/${encodeURIComponent(ctx.question)}?count=${ctx.options.perSource * 2}`;
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
+  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3, acceptLanguage });
   if (!r.ok) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status || 0})`;
     return { backend: "marginalia", items: [], notes: [`Marginalia ${why}.`] };
@@ -2027,20 +2179,26 @@ function applyWebEngine(kinds, engine) {
   if (kinds.includes(keep)) return kinds.filter((k) => !DISCOVERY.includes(k) || k === keep);
   return [...kinds.filter((k) => !DISCOVERY.includes(k)), keep];
 }
-async function runWebCascade(engines, ctx) {
+async function runWebCascade(engines, ctx, breadth = 1) {
   const out = [];
   const tried = [];
+  let enough = 0;
   for (const engine of engines) {
     const [r] = await runBackends([engine], ctx);
     if (!r) continue;
     out.push(r);
     tried.push(engine);
-    if (r.items.length >= ctx.options.perSource) break;
+    if (r.items.length >= ctx.options.perSource) enough++;
+    if (enough >= breadth) break;
   }
   const producers = out.filter((r) => r.items.length > 0).map((r) => r.backend);
-  if (tried.length > 1 && producers.length) {
+  if (producers.length) {
     const lead = out.find((r) => r.items.length > 0);
-    if (lead) lead.notes = [...lead.notes, `Web cascade tried ${tried.join(" \u2192 ")}; results from ${producers.join(", ")}.`];
+    if (producers.length > 1) {
+      lead.notes = [...lead.notes, `Web cascade fused ${producers.length} engines: ${producers.join(", ")}.`];
+    } else if (tried.length > 1) {
+      lead.notes = [...lead.notes, `Web cascade tried ${tried.join(" \u2192 ")}; results from ${producers.join(", ")}.`];
+    }
   }
   return out;
 }
@@ -2092,6 +2250,10 @@ async function runGather(options) {
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
   const variants = resolveVariants(options);
+  const effPages = Math.max(1, options.pages ?? PAGES_PER_DEPTH[options.depth] ?? 1);
+  options.pages = effPages;
+  const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
+  const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
   const ctx = { question: options.question, mode, options, variants };
   const explicit = !!(options.backends && options.backends.length);
   const webBackends = backends.filter((b) => DISCOVERY.includes(b));
@@ -2101,7 +2263,7 @@ async function runGather(options) {
   } else {
     const rest = backends.filter((b) => !DISCOVERY.includes(b));
     const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
-    const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx)]);
+    const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx, breadth)]);
     results = [...restResults, ...webResults];
   }
   const excluded = (it) => {
@@ -2124,7 +2286,7 @@ async function runGather(options) {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await fetchAndExtract(it.url);
+        res = await fetchAndExtract(it.url, { acceptLanguage });
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
@@ -2182,7 +2344,8 @@ async function runGather(options) {
         return seenTerm.has(k) ? false : (seenTerm.add(k), true);
       }).join(" ");
       const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
-      const gapResults = await runWebCascade(cascade, { ...ctx, question: gapQuery, variants: [gapQuery] });
+      const gapCtx = { ...ctx, question: gapQuery, variants: [gapQuery], options: { ...options, pages: 1 } };
+      const gapResults = await runWebCascade(cascade, gapCtx, 1);
       results = [...results, ...gapResults];
       const gapLists = gapResults.map((rr) => [...rr.items].sort((a, b) => b.score - a.score));
       r = await assemble([...lists, ...gapLists]);
@@ -2191,6 +2354,7 @@ async function runGather(options) {
   }
   const merged = r.merged;
   const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
+  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b)))];
   const timings = {};
   for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
@@ -2211,8 +2375,11 @@ async function runGather(options) {
     mode: options.mode,
     depth: options.depth,
     lang: options.lang,
+    ...options.region ? { region: options.region } : {},
+    pages: effPages,
     backends,
     backendsUsed,
+    ...enginesFused.length ? { enginesFused } : {},
     sourceCount: merged.length,
     maxSources: options.maxSources,
     builtAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -2574,6 +2741,65 @@ function writeHtml(dir, out) {
   const html = renderHtml(dir);
   const path = out ?? join4(dir, "index.html");
   writeFileSync4(path, html);
+  return path;
+}
+function mdLinkText(s) {
+  return s.replace(/[\[\]]/g, "").trim() || "(untitled)";
+}
+function verificationMarkdown(r) {
+  const status = r.ok ? "**grounded**" : `**${r.failures.length} claim(s) failed**`;
+  const counts = `supported ${r.supported} \xB7 partial ${r.partial} \xB7 refuted ${r.refuted} \xB7 unsupported ${r.unsupported}`;
+  const out = [`## Verification`, "", `${status} \u2014 ${counts}`, ""];
+  const verdicts = r.verdicts ?? [];
+  if (verdicts.length) {
+    out.push("| Claim | Source | Verdict | Note |", "|---|---|---|---|");
+    for (const v of verdicts) {
+      out.push(`| ${v.claimId} | [${v.sourceId}] | ${v.verdict ?? "\u2014"} | ${(v.note || "").replace(/\|/g, "\\|")} |`);
+    }
+    out.push("");
+  }
+  const contras = r.contradictions ?? [];
+  if (contras.length) {
+    out.push(`### Contradictions (${contras.length})`, "");
+    for (const c of contras) {
+      out.push(
+        `- **${c.claimId}**: supported by ${c.supporting.map((s) => `[${s}]`).join(" ")} \xB7 refuted by ${c.refuting.map((s) => `[${s}]`).join(" ")}${c.note ? ` \u2014 ${c.note}` : ""}`
+      );
+    }
+    out.push("");
+  }
+  return out.join("\n");
+}
+function buildReportMarkdown(dir) {
+  const { sources, manifest } = readDossier(dir);
+  const present = TIERS.filter((t) => existsSync2(join4(dir, t.file)));
+  const verify = readVerify(dir);
+  const meta = `> ${manifest.mode} \xB7 depth ${manifest.depth} \xB7 ${sources.length} sources${manifest.lang ? ` \xB7 lang ${manifest.lang}` : ""}${manifest.region ? `/${manifest.region}` : ""} \xB7 ${manifest.builtAt} \xB7 generated by ultrasearch`;
+  const parts = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
+  for (const t of present) {
+    const body = readFileSync2(join4(dir, t.file), "utf8").trim();
+    if (!body) continue;
+    parts.push("---", "", `## ${t.label}`, "", body, "");
+  }
+  if (verify) {
+    parts.push("---", "", verificationMarkdown(verify));
+  }
+  parts.push("---", "", `## Sources`, "");
+  if (sources.length) {
+    for (const s of sources) {
+      const flag = s.fullText === false ? " \xB7 \u26A0 snippet only" : "";
+      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}`);
+    }
+  } else {
+    parts.push("_No sources in this dossier yet._");
+  }
+  parts.push("");
+  return parts.join("\n");
+}
+function writeReportMarkdown(dir, out) {
+  const md = buildReportMarkdown(dir);
+  const path = out ?? join4(dir, "index.md");
+  writeFileSync4(path, md);
   return path;
 }
 
@@ -3271,7 +3497,8 @@ Commands:
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
-  render   Render the report tiers in a dossier to a self-contained index.html.
+  render   Render the report tiers in a dossier to a self-contained index.html
+           AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
            --min-sources <n> fails a too-thin dossier).
@@ -3298,10 +3525,13 @@ Options:
                        built-in planner \u2014 use to drive recall with your own phrasings)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
-  --lang <code>        Preferred language                (default: en)
+  --lang <code>        Search language (translate --queries to it)  (default: en)
+  --region <cc>        Region/country for locale-aware search   (default: from lang)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
   --web-engine <e>     auto | searxng | ddg | ddglite | mojeek | marginalia | claude
                        auto = resilient fallback cascade        (default: auto)
+  --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
+  --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch'
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
@@ -3344,9 +3574,12 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "per-source",
   "concurrency",
   "rounds",
+  "pages",
+  "web-breadth",
   "out",
   "run",
   "lang",
+  "region",
   "searxng",
   "web-engine",
   "url",
@@ -3364,7 +3597,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "fresh", "no-html", "no-md", "verbose", "semantic"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -3509,8 +3742,11 @@ function buildGatherOptions(p, opts = {}) {
     maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
+    region: p.values.region,
     searxng: p.values.searxng,
     webEngine,
+    pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : void 0,
+    webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : void 0,
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
@@ -3649,10 +3885,19 @@ async function main() {
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const path = writeHtml(resolve(dir), p.values.out && p.values.run ? resolve(p.values.out) : void 0);
-      process.stderr.write(`ultrasearch: wrote ${path}
+      const rdir = resolve(dir);
+      const written = {};
+      if (!p.bools.has("no-html")) {
+        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve(p.values.out) : void 0);
+        process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
-      if (p.bools.has("json")) process.stdout.write(JSON.stringify({ html: path }, null, 2) + "\n");
+      }
+      if (!p.bools.has("no-md")) {
+        written.md = writeReportMarkdown(rdir);
+        process.stderr.write(`ultrasearch: wrote ${written.md}
+`);
+      }
+      if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");
       return;
     }
     case "verify": {

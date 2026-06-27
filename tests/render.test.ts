@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { renderHtml, mdToHtml } from "../src/render.js";
+import { renderHtml, mdToHtml, buildReportMarkdown, writeReportMarkdown } from "../src/render.js";
 import { writeDossier } from "../src/dossier.js";
 import { runVerify, applyVerdicts } from "../src/verify.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -70,6 +70,47 @@ describe("renderHtml", () => {
     expect(html).toContain('href="#src-S1"');
     expect(html).toContain('id="src-S1"');
     expect(html).toContain("Rate limiting");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("buildReportMarkdown / writeReportMarkdown", () => {
+  it("assembles a title, the tiers, and a Sources appendix into one markdown doc", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(join(dir, "SUMMARY.md"), "TL;DR about rate limiting [S1].");
+    writeFileSync(join(dir, "REPORT.md"), "# Rate limiting\n## How it works\nToken bucket refills [S1].");
+    const md = buildReportMarkdown(dir);
+    expect(md).toMatch(/^# /); // a title heading
+    expect(md).toContain("## Summary");
+    expect(md).toContain("## Report");
+    expect(md).toContain("Token bucket refills [S1].");
+    expect(md).toContain("## Sources");
+    expect(md).toContain("**[S1]**");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes index.md to the dossier directory (not report.md — avoids clobbering REPORT.md)", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    const path = writeReportMarkdown(dir);
+    expect(path).toMatch(/index\.md$/);
+    expect(readFileSync(path, "utf8")).toContain("## Sources");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("includes a verification table when VERIFY.json exists", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(
+      join(dir, "REPORT.md"),
+      "# R\n## A\nA grounded claim about token buckets and request bursts here [S1].",
+    );
+    runVerify(dir);
+    applyBySource(dir, { S1: "supported" });
+    const md = buildReportMarkdown(dir);
+    expect(md).toContain("## Verification");
+    expect(md).toMatch(/\| Claim \| Source \| Verdict \| Note \|/);
     rmSync(dir, { recursive: true, force: true });
   });
 });

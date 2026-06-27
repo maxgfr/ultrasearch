@@ -44,6 +44,27 @@ describe("runGather (offline, fixture backend)", () => {
   });
 });
 
+describe("runGather (locale + pagination manifest fields)", () => {
+  const dir = join(tmpdir(), "us-gather-locale");
+  it("records pages (per depth) and region on the manifest", async () => {
+    rmSync(dir, { recursive: true, force: true });
+    const r = await runGather(opts({ backends: ["fixture"], out: dir, lang: "de", region: "de" }));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+    expect(manifest.pages).toBe(2); // standard depth default
+    expect(manifest.region).toBe("de");
+    expect(manifest.lang).toBe("de");
+    expect(r.manifest.pages).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+  it("omits region when not supplied", async () => {
+    rmSync(dir, { recursive: true, force: true });
+    await runGather(opts({ backends: ["fixture"], out: dir }));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+    expect(manifest.region).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("runGather (thin-dossier recall floor)", () => {
   const dir = join(tmpdir(), "us-gather-thin");
   it("flags a thin dossier on the manifest + DOSSIER.md banner", async () => {

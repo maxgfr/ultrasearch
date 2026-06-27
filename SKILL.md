@@ -21,6 +21,13 @@ dangling or any claim in REPORT/FULL is unsourced and unflagged.
 > background knowledge, FLAG it as unverified — end the sentence with `[M]` or
 > put it in a `> [model-hint]` blockquote. Never disguise memory as a source.
 
+> **Search the audience's language; report in the user's.** If the question
+> targets a non-English market (e.g. a startup idea for Germany), do the search in
+> that language: translate your `--queries` and pass `--lang de` (and `--region`
+> when the country differs from the language). Then **write the report in the
+> language the user is talking to you in** — quote the foreign-language sources and
+> gloss them. Search locale ≠ output language.
+
 ## The script
 
 One committed, dependency-free bundle: `node scripts/ultrasearch.mjs <command>`.
@@ -38,7 +45,10 @@ No `npm install`, no API keys. Run `--help` for the full surface. Key commands:
   bridge between the harness's WebSearch and the dossier.
 - `render --run <dir>` — render SUMMARY/REPORT/FULL.md (+ glossary) into a
   self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations,
-  and — in deep mode — verdict badges + the sub-question tree).
+  and — in deep mode — verdict badges + the sub-question tree) **and**, by
+  default, a consolidated `index.md` (all tiers + sources, a portable markdown
+  deliverable — named `index.md`, not `report.md`, so it can't clash with the
+  `REPORT.md` tier on case-insensitive filesystems). `--no-md` / `--no-html` skip either.
 - `check --run <dir> [--semantic] [--min-sources <n>]` — validate citation
   grounding. Exit non-zero ⇒ ungrounded. `--semantic` also fails on a claim its
   cited source does not support (folds in `verify`'s verdicts) and reports
@@ -68,6 +78,9 @@ not hand control back mid-retrieval.
    use `bug` for an error, `research` for a literature review, `learn` to teach
    it, `startup` for market research) and a `--depth` (`standard` default;
    `deep` for an exhaustive sweep that also runs the mode's deep-only backends).
+   **Decide the search language/region** from the question or target market
+   (German market → `--lang de --region de`); use `--region` separately only when
+   the content language differs from the market.
 
 2. **Gather.** Run:
    ```
@@ -78,7 +91,11 @@ not hand control back mid-retrieval.
    rate-limited or empty, and the engine records that honestly in the notes.
    You can steer recall with `--queries "phrasing one|phrasing two|exact term"`
    (pipe-separated) — your own query variants override the built-in planner and
-   fan out across the multi-query backends.
+   fan out across the multi-query backends. **For a non-English search, translate
+   those `--queries` into the target language yourself** and pass `--lang`/`--region`
+   (the engine never translates) so every web backend searches the right locale.
+   Pull deeper with `--pages <n>` (result pages per engine) and wider with
+   `--web-breadth <n>` (engines fused); both default by depth.
 
 3. **Read the dossier.** Open `DOSSIER.md` in the run folder: it lists every
    source with an id (`[S1]`, `[S2]`, …), a snippet, and the path to its cleaned
@@ -110,15 +127,18 @@ not hand control back mid-retrieval.
 
 6. **Render & check.**
    ```
-   node scripts/ultrasearch.mjs render --run <dir>   # → index.html
+   node scripts/ultrasearch.mjs render --run <dir>   # → index.html + index.md
    node scripts/ultrasearch.mjs check  --run <dir>
    ```
+   `render` always writes both a self-contained `index.html` and a consolidated
+   `index.md` (the markdown deliverable, in the report's language).
    `check` fails on a dangling `[S#]` or an unmarked unsourced claim in
    REPORT/FULL. Fix the citations (or `fetch` more sources) and re-run until it
    passes. SUMMARY is checked leniently (a digest needn't cite every line).
 
-7. **Present.** Give the user the SUMMARY, the path to the run folder and
-   `index.html`, the source count, and any gaps or contradictions you found.
+7. **Present.** Give the user the SUMMARY, the path to the run folder,
+   `index.html` and `index.md`, the source count, and any gaps or contradictions
+   you found.
 
 ## Deep research mode (the agentic tier)
 
@@ -183,8 +203,9 @@ parallel subagents are an *optimization*, never a requirement. Full playbook:
    round budget, fan out the new sub-questions (step 2), `merge` them into the
    SAME master, and re-verify only the new claims. Stop when nothing new emerges.
 
-8. **Render & present.** `render --run <masterDir>` → `index.html` with verdict
-   badges, a contradictions panel, and the sub-question tree. Present the SUMMARY,
+8. **Render & present.** `render --run <masterDir>` → `index.html` (verdict
+   badges, a contradictions panel, the sub-question tree) **and** `index.md`
+   (the consolidated markdown, verification table included). Present the SUMMARY,
    the master folder, the per-claim verdict summary, and any contradictions.
 
 ## Modes & depth
@@ -203,12 +224,16 @@ are always all three. The engine handles recall for you: it expands the question
 into query variants, re-ranks sources by how well their text covers the
 question, dedupes the same work across scholarly backends, and retries once on
 throttling. `--since <date>` restricts date-capable backends; `--web-engine`
-pins the general-web discovery layer (default `auto` runs a keyless fallback
-cascade: SearXNG → DuckDuckGo → DuckDuckGo Lite → Mojeek → Marginalia, stopping
-at the first engine that returns enough — so recall survives one engine blocking).
-`--rounds 2` adds a gap-driven follow-up web search for question terms the first
-pass under-covered; `--concurrency` tunes page-fetch parallelism. PDFs (incl.
-arXiv papers) are read for full text, not just the abstract.
+pins the general-web discovery layer (default `auto` runs a keyless cascade:
+SearXNG → DuckDuckGo → DuckDuckGo Lite → Mojeek → Marginalia). At `summary` depth
+it stops at the first engine that returns enough; at `standard`/`deep` it fuses
+several engines for wider recall, and each engine fetches more result **pages** —
+both scaled by depth and overridable with `--web-breadth <n>` / `--pages <n>`
+(≤5). `--lang <code>` (+ optional `--region <cc>`) makes every web backend search
+in that locale — translate your `--queries` to match; write the report in the
+user's language. `--rounds 2` adds a gap-driven follow-up web search for question
+terms the first pass under-covered; `--concurrency` tunes page-fetch parallelism.
+PDFs (incl. arXiv papers) are read for full text, not just the abstract.
 
 ## References
 

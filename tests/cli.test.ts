@@ -72,6 +72,18 @@ describe("buildGatherOptions", () => {
   it("leaves queries undefined when the flag is absent", () => {
     expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).queries).toBeUndefined();
   });
+  it("parses --pages/--web-breadth/--region and clamps pages/web-breadth to 5", () => {
+    const o = buildGatherOptions(parseArgs(["gather", "--q", "x", "--pages", "9", "--web-breadth", "7", "--region", "de"]));
+    expect(o.pages).toBe(5);
+    expect(o.webBreadth).toBe(5);
+    expect(o.region).toBe("de");
+  });
+  it("leaves pages/webBreadth/region undefined when absent (defaults resolved at gather time)", () => {
+    const o = buildGatherOptions(parseArgs(["gather", "--q", "x"]));
+    expect(o.pages).toBeUndefined();
+    expect(o.webBreadth).toBeUndefined();
+    expect(o.region).toBeUndefined();
+  });
 });
 
 describe("parseShardArgs (verify --shards/--shard validation)", () => {

@@ -80,6 +80,29 @@ export const RECALL_FLOORS: Record<Depth, number> = {
   deep: 12,
 };
 
+// How many result PAGES each web discovery engine fetches per query (default by
+// depth; override with --pages). Page 1 emits the engine's URL unchanged, so a
+// 1-page run is byte-identical to before; deeper depths paginate further to pull
+// more of the long tail. A backend stops early once a page adds no new URLs.
+export const PAGES_PER_DEPTH: Record<Depth, number> = {
+  summary: 1,
+  standard: 2,
+  deep: 3,
+};
+
+// How many web discovery engines the `auto` cascade lets satisfy `perSource`
+// before it stops (default by depth; override with --web-breadth). At breadth 1
+// it short-circuits on the first engine that returns enough (the original, cheap
+// behaviour). At higher breadth it keeps querying further engines and FUSES
+// their results, widening recall across independent indexes. 5 covers all of
+// DISCOVERY. Thin engines (under perSource) are always fused too — recall is
+// never lost — they just don't count toward the breadth target.
+export const WEB_BREADTH_PER_DEPTH: Record<Depth, number> = {
+  summary: 1,
+  standard: 2,
+  deep: 5,
+};
+
 // ---------------------------------------------------------------------------
 // Deep-research tier. The agentic orchestration (driven by SKILL.md) that fans
 // out one `gather` per sub-question, merges the dossiers, and adversarially
@@ -219,8 +242,11 @@ export interface GatherOptions {
   maxSources: number;
   perSource: number;
   lang: string;
+  region?: string; // region/country for locale-aware web search (else derived from lang)
   searxng?: string; // SearXNG base URL (else env / default)
   webEngine: WebEngine;
+  pages?: number; // result pages each web engine fetches per query (else per depth)
+  webBreadth?: number; // engines the auto cascade fuses before stopping (else per depth)
   urls?: string[]; // explicit URLs for the `generic` backend / `search --backend generic`
   since?: string; // recency filter where a backend supports it
   excludeDomains: string[];
@@ -249,8 +275,11 @@ export interface Manifest {
   mode: ModeName;
   depth: Depth;
   lang: string;
+  region?: string; // region/country used for locale-aware web search (when set)
+  pages?: number; // result pages fetched per web engine this run
   backends: BackendKind[]; // requested
   backendsUsed: BackendKind[]; // returned at least one source
+  enginesFused?: BackendKind[]; // web discovery engines whose results were fused this run
   sourceCount: number;
   maxSources: number;
   builtAt: string;

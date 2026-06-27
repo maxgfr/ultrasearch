@@ -27,4 +27,12 @@ describe("marginaliaBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/rate-limited/i);
   });
+
+  it("stays single-page even with --pages, and sends Accept-Language", async () => {
+    const body = JSON.stringify({ results: [{ url: "https://real.test/a", title: "A", description: "a" }] });
+    const spy = installFetchMock(() => ({ body, contentType: "application/json" }));
+    await marginaliaBackend(makeCtx("x", { pages: 3, lang: "de" }));
+    expect(spy.mock.calls).toHaveLength(1); // no offset param → one request
+    expect((spy.mock.calls[0]![1] as RequestInit).headers).toMatchObject({ "accept-language": expect.stringContaining("de") });
+  });
 });

@@ -43,4 +43,26 @@ describe("searxngBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/did not return JSON/i);
   });
+
+  it("paginates via &pageno= and concatenates deduped pages", async () => {
+    const PG2 = JSON.stringify({
+      results: [
+        { url: "https://c.test/3", title: "Third", content: "third" },
+        { url: "https://d.test/4", title: "Fourth", content: "fourth" },
+      ],
+    });
+    const spy = installFetchMock((url) => ({
+      body: url.includes("pageno=2") ? PG2 : SEARX_JSON,
+      contentType: "application/json",
+    }));
+    const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888", pages: 2 }));
+    expect(spy.mock.calls).toHaveLength(2);
+    expect(String(spy.mock.calls[1]![0])).toContain("pageno=2");
+    expect(r.items.map((i) => i.url)).toEqual([
+      "https://a.test/1",
+      "https://b.test/2",
+      "https://c.test/3",
+      "https://d.test/4",
+    ]);
+  });
 });

@@ -1,10 +1,11 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { VERSION, RECALL_FLOORS } from "./types.js";
+import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH } from "./types.js";
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
 import { fetchAndExtract, bestExcerpt } from "./backends/fetch.js";
+import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
 import { toBibtex } from "./bibtex.js";
 import {
@@ -88,22 +89,29 @@ function applyWebEngine(kinds: BackendKind[], engine: GatherOptions["webEngine"]
 // does not collapse when the primary engine (DDG) blocks or changes its markup.
 // Each engine runs through the normal per-variant fan-out; engines past the
 // first that satisfies `perSource` are not queried at all (polite + fast).
-async function runWebCascade(engines: BackendKind[], ctx: RunContext): Promise<BackendResult[]> {
+async function runWebCascade(engines: BackendKind[], ctx: RunContext, breadth = 1): Promise<BackendResult[]> {
   const out: BackendResult[] = [];
   const tried: BackendKind[] = [];
+  let enough = 0; // engines that returned >= perSource results so far
   for (const engine of engines) {
     const [r] = await runBackends([engine], ctx);
     if (!r) continue;
     out.push(r);
     tried.push(engine);
-    if (r.items.length >= ctx.options.perSource) break;
+    if (r.items.length >= ctx.options.perSource) enough++;
+    if (enough >= breadth) break;
   }
-  // When the cascade fell through past an empty/blocked engine to a later one,
-  // record provenance so the agent sees its web results came from a fallback.
+  // Record provenance. At breadth 1 the cascade short-circuits on the first
+  // engine that returns enough (a fallback when earlier ones blocked); at higher
+  // breadth it keeps going and FUSES several independent engines for wider recall.
   const producers = out.filter((r) => r.items.length > 0).map((r) => r.backend);
-  if (tried.length > 1 && producers.length) {
-    const lead = out.find((r) => r.items.length > 0);
-    if (lead) lead.notes = [...lead.notes, `Web cascade tried ${tried.join(" → ")}; results from ${producers.join(", ")}.`];
+  if (producers.length) {
+    const lead = out.find((r) => r.items.length > 0)!;
+    if (producers.length > 1) {
+      lead.notes = [...lead.notes, `Web cascade fused ${producers.length} engines: ${producers.join(", ")}.`];
+    } else if (tried.length > 1) {
+      lead.notes = [...lead.notes, `Web cascade tried ${tried.join(" → ")}; results from ${producers.join(", ")}.`];
+    }
   }
   return out;
 }
@@ -175,6 +183,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
   const variants = resolveVariants(options);
+  // How many result pages each web engine fetches and how many engines the auto
+  // cascade fuses — default by depth, overridable via --pages / --web-breadth.
+  // Set options.pages so the backends (which read ctx.options.pages) see it.
+  const effPages = Math.max(1, options.pages ?? PAGES_PER_DEPTH[options.depth] ?? 1);
+  options.pages = effPages;
+  const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
+  const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
   const ctx: RunContext = { question: options.question, mode, options, variants };
 
   // Run the mode's non-web backends in parallel, and the general-web discovery
@@ -191,7 +206,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // `auto` augments the cascade with the broader fallback engines; a pinned
     // engine cascades over just the discovery engine(s) the profile resolved to.
     const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
-    const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx)]);
+    const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx, breadth)]);
     results = [...restResults, ...webResults];
   }
 
@@ -224,7 +239,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await fetchAndExtract(it.url);
+        res = await fetchAndExtract(it.url, { acceptLanguage });
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -297,7 +312,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         })
         .join(" ");
       const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
-      const gapResults = await runWebCascade(cascade, { ...ctx, question: gapQuery, variants: [gapQuery] });
+      // The gap round is cheap targeted recall insurance: a single page, first
+      // engine that satisfies perSource (breadth 1).
+      const gapCtx = { ...ctx, question: gapQuery, variants: [gapQuery], options: { ...options, pages: 1 } };
+      const gapResults = await runWebCascade(cascade, gapCtx, 1);
       results = [...results, ...gapResults];
       const gapLists = gapResults.map((rr) => [...rr.items].sort((a, b) => b.score - a.score));
       r = await assemble([...lists, ...gapLists]);
@@ -307,6 +325,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   const merged = r.merged;
   const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
+  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b)))];
   const timings: Record<string, number> = {};
   for (const res of results) if (res.ms !== undefined) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
@@ -335,8 +354,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     mode: options.mode,
     depth: options.depth,
     lang: options.lang,
+    ...(options.region ? { region: options.region } : {}),
+    pages: effPages,
     backends,
     backendsUsed,
+    ...(enginesFused.length ? { enginesFused } : {}),
     sourceCount: merged.length,
     maxSources: options.maxSources,
     builtAt: new Date().toISOString(),

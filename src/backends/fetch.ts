@@ -22,6 +22,10 @@ function envInt(name: string, def: number, min: number, max: number): number {
 }
 const MAX_ATTEMPTS = envInt("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
 const DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5000);
+// Polite pause between successive result-page fetches to the same web engine
+// (multi-page pagination). Keyless engines block aggressive scraping, so we
+// fetch pages sequentially with a small gap. Tunable; 0 disables.
+export const PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5000);
 
 export interface HttpResult {
   ok: boolean;
@@ -33,7 +37,7 @@ export interface HttpResult {
   error?: string;
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
@@ -52,17 +56,19 @@ function retryDelayMs(retryAfter: string | null): number {
 // { ok:false }), and retries ONCE on a transient status or network error.
 export async function httpGet(
   url: string,
-  opts: { timeoutMs?: number; accept?: string; maxBytes?: number; userAgent?: string; binary?: boolean } = {},
+  opts: { timeoutMs?: number; accept?: string; acceptLanguage?: string; maxBytes?: number; userAgent?: string; binary?: boolean } = {},
 ): Promise<HttpResult> {
   let last: HttpResult = { ok: false, status: 0, body: "", contentType: "", url };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
     try {
+      const headers: Record<string, string> = { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" };
+      if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       const res = await fetch(url, {
         signal: ctrl.signal,
         redirect: "follow",
-        headers: { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" },
+        headers,
       });
       const buf = Buffer.from(await res.arrayBuffer());
       const max = opts.maxBytes ?? 4 * 1024 * 1024;
@@ -97,21 +103,23 @@ export async function httpJson(
   method: string,
   url: string,
   body?: unknown,
-  opts: { timeoutMs?: number; accept?: string; userAgent?: string } = {},
+  opts: { timeoutMs?: number; accept?: string; acceptLanguage?: string; userAgent?: string } = {},
 ): Promise<{ ok: boolean; status: number; data: any; error?: string }> {
   let last: { ok: boolean; status: number; data: any; error?: string } = { ok: false, status: 0, data: undefined };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 20_000);
     try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        accept: opts.accept ?? "application/json",
+        "user-agent": opts.userAgent ?? BROWSER_UA,
+      };
+      if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       const res = await fetch(url, {
         method,
         signal: ctrl.signal,
-        headers: {
-          "content-type": "application/json",
-          accept: opts.accept ?? "application/json",
-          "user-agent": opts.userAgent ?? BROWSER_UA,
-        },
+        headers,
         body: body === undefined ? undefined : JSON.stringify(body),
       });
       const text = await res.text();
@@ -248,9 +256,13 @@ const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 
 // can't be fetched or a PDF yields no text.
 export async function fetchAndExtract(
   url: string,
+  opts: { acceptLanguage?: string } = {},
 ): Promise<{ text: string; title?: string; note?: string; finalUrl: string }> {
   const wantsPdf = PDF_URL_RE.test(url);
-  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*" });
+  const res = await httpGet(
+    url,
+    wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage },
+  );
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };

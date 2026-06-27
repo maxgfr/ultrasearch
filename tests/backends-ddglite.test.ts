@@ -34,4 +34,21 @@ describe("ddgliteBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/rate-limited/i);
   });
+
+  it("paginates via &s= and concatenates deduped pages", async () => {
+    const PAGE2 = `
+<table>
+<tr><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fthree">Third</a></td></tr>
+<tr><td class="result-snippet">snippet three</td></tr>
+</table>`;
+    const spy = installFetchMock((url) => ({ body: url.includes("s=30") ? PAGE2 : LITE_HTML }));
+    const r = await ddgliteBackend(makeCtx("token bucket", { pages: 2 }));
+    expect(spy.mock.calls).toHaveLength(2);
+    expect(String(spy.mock.calls[1]![0])).toContain("s=30");
+    expect(r.items.map((i) => i.url)).toEqual([
+      "https://real.test/one",
+      "https://real.test/two",
+      "https://real.test/three",
+    ]);
+  });
 });

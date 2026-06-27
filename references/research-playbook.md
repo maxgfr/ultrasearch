@@ -28,6 +28,12 @@ distinctive phrasings, pass them all at once with
 `--queries "natural phrasing|exact error text|author method"` — they override the
 built-in planner and fan out across the multi-query backends in a single run.
 
+**Search in the audience's language.** If the topic targets a non-English market
+(e.g. a startup idea for Germany), translate the phrasings into that language and
+pass `--lang de` (and `--region` when the country differs from the language). This
+points Wikipedia, SearXNG, DuckDuckGo and the page fetches at the right locale.
+Go deeper/wider with `--pages <n>` and `--web-breadth <n>` (both default by depth).
+
 ## 3. Read, then find the gaps
 
 Open `DOSSIER.md`. A **⚠ Thin dossier** banner at the top means too few on-topic
@@ -71,6 +77,10 @@ because it exists.
 Write `SUMMARY.md`, `REPORT.md`, `FULL.md` against the mode template. Cite every
 claim `[S#]`; flag your own knowledge `[M]` / `> [model-hint]`. `FULL.md` should
 use every relevant source and end with "Open questions / contradictions".
+
+**Write in the user's language**, even when the sources are in another — search
+locale and output language are independent. Quote a foreign-language source
+verbatim where the exact wording matters, then gloss it in the user's language.
 
 ## 7. Render, check, present
 

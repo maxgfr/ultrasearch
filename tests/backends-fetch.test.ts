@@ -6,10 +6,28 @@ import {
   bestExcerpt,
   capExtract,
   fetchAndExtract,
+  httpGet,
+  httpJson,
 } from "../src/backends/fetch.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("Accept-Language header", () => {
+  it("httpGet sends accept-language only when opts.acceptLanguage is given", async () => {
+    const spy = installFetchMock(() => ({ body: "ok" }));
+    await httpGet("https://x.test/a", { acceptLanguage: "de-DE,de;q=0.9,en;q=0.5" });
+    await httpGet("https://x.test/b");
+    expect((spy.mock.calls[0]![1] as RequestInit).headers).toMatchObject({ "accept-language": "de-DE,de;q=0.9,en;q=0.5" });
+    expect((spy.mock.calls[1]![1] as RequestInit).headers).not.toHaveProperty("accept-language");
+  });
+
+  it("httpJson sends accept-language when given", async () => {
+    const spy = installFetchMock(() => ({ body: "{}", contentType: "application/json" }));
+    await httpJson("GET", "https://x.test/j", undefined, { acceptLanguage: "fr-FR,fr;q=0.9,en;q=0.5" });
+    expect((spy.mock.calls[0]![1] as RequestInit).headers).toMatchObject({ "accept-language": "fr-FR,fr;q=0.9,en;q=0.5" });
+  });
+});
 
 describe("htmlToText", () => {
   it("strips script/style/nav and keeps heading + prose", () => {

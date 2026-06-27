@@ -52,4 +52,32 @@ describe("duckduckgoBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/unreachable/i);
   });
+
+  const PAGE1 = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fa">A</a><a class="result__snippet">sa</a>
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fb">B</a><a class="result__snippet">sb</a>`;
+  const PAGE2 = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fc">C</a><a class="result__snippet">sc</a>
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fd">D</a><a class="result__snippet">sd</a>`;
+
+  it("paginates via &s= and concatenates deduped results across pages", async () => {
+    const spy = installFetchMock((url) => ({ body: url.includes("s=30") ? PAGE2 : PAGE1 }));
+    const r = await duckduckgoBackend(makeCtx("x", { pages: 2 }));
+    expect(spy.mock.calls).toHaveLength(2);
+    expect(String(spy.mock.calls[1]![0])).toContain("s=30");
+    expect(r.items.map((i) => i.url)).toEqual([
+      "https://real.test/a",
+      "https://real.test/b",
+      "https://real.test/c",
+      "https://real.test/d",
+    ]);
+    expect(r.items[0]!.score).toBeGreaterThan(r.items[3]!.score); // page-1 outranks page-2
+  });
+
+  it("stops early when a page adds no new URLs (engine ignores the offset)", async () => {
+    const spy = installFetchMock(() => ({ body: PAGE1 })); // same page for every offset
+    const r = await duckduckgoBackend(makeCtx("x", { pages: 3 }));
+    expect(spy.mock.calls).toHaveLength(2); // page 0 + 1 probe; page 2 never fetched
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/a", "https://real.test/b"]);
+  });
 });

@@ -45,6 +45,11 @@ the verification worklist.
    WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
    floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
    Parallel when possible (see the contract below), sequential otherwise.
+   **Carry the search locale through every sub-question:** if the run targets a
+   non-English audience, translate each sub-question's `queries` into that language
+   and pass `--lang`/`--region` on every fan-out `gather` (deep depth already
+   paginates + fuses multiple engines). Synthesize the final report in the user's
+   own language regardless of the sources' languages.
 
 3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir>`. Re-fuses the
    combined pool by identity (DOI/arXiv/URL collapses cross-sub-question
@@ -106,7 +111,8 @@ give it a self-contained task. The parent already knows every sub-run dir from
 dossier. Dispatch one subagent per sub-question with a prompt shaped like:
 
 > You are gathering web evidence for ONE sub-question of a larger research run.
-> Run, from the repo root:
+> Run, from the repo root (add `--lang <code> --region <cc>` and translate the
+> `--queries` into that language when the run targets a non-English audience):
 > `node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
 > Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
 > missing), enrich with your own WebSearch and, for each good URL,

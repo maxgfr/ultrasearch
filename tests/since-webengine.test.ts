@@ -5,10 +5,44 @@ import { crossrefBackend } from "../src/backends/crossref.js";
 import { githubBackend } from "../src/backends/github.js";
 import { stackexchangeBackend } from "../src/backends/stackexchange.js";
 import { hackernewsBackend } from "../src/backends/hackernews.js";
+import { duckduckgoBackend } from "../src/backends/duckduckgo.js";
+import { ddgliteBackend } from "../src/backends/ddglite.js";
+import { searxngBackend } from "../src/backends/searxng.js";
+import { wikipediaBackend } from "../src/backends/wikipedia.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("lang/region is wired into the web backends", () => {
+  const headerOf = (call: any[]): Record<string, string> => (call[1] as RequestInit).headers as Record<string, string>;
+
+  it("DuckDuckGo adds kl=de-de + Accept-Language", async () => {
+    const spy = installFetchMock(() => ({ body: "" }));
+    await duckduckgoBackend(makeCtx("startup idee", { lang: "de" }));
+    expect(String(spy.mock.calls[0]![0])).toContain("kl=de-de");
+    expect(headerOf(spy.mock.calls[0]!)["accept-language"]).toContain("de");
+  });
+
+  it("DuckDuckGo Lite adds kl with an explicit region override", async () => {
+    const spy = installFetchMock(() => ({ body: "" }));
+    await ddgliteBackend(makeCtx("startup idea", { lang: "en", region: "de" }));
+    expect(String(spy.mock.calls[0]![0])).toContain("kl=de-en");
+  });
+
+  it("SearXNG adds &language=de", async () => {
+    const spy = installFetchMock(() => ({ body: JSON.stringify({ results: [] }), contentType: "application/json" }));
+    await searxngBackend(makeCtx("startup", { lang: "de", searxng: "http://localhost:8888" }));
+    expect(String(spy.mock.calls[0]![0])).toContain("language=de");
+    expect(headerOf(spy.mock.calls[0]!)["accept-language"]).toContain("de");
+  });
+
+  it("Wikipedia uses the de.wikipedia.org subdomain", async () => {
+    const spy = installFetchMock(() => ({ body: JSON.stringify({ pages: [] }), contentType: "application/json" }));
+    await wikipediaBackend(makeCtx("Startup", { lang: "de" }));
+    expect(String(spy.mock.calls[0]![0])).toContain("https://de.wikipedia.org");
+  });
+});
 
 describe("R6: --web-engine filters the discovery backends", () => {
   const topic = getMode("topic"); // [wikipedia, searxng, duckduckgo]

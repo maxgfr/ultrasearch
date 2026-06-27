@@ -190,6 +190,47 @@ describe("E6: --rounds 2 issues a gap-driven follow-up web search", () => {
   });
 });
 
+describe("E7: web cascade fuses multiple engines at standard/deep, short-circuits at summary", () => {
+  const DDG = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fddg1">D1</a><a class="result__snippet">rate limiting d1</a>
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fddg2">D2</a><a class="result__snippet">rate limiting d2</a>`;
+  const LITE = `
+<table>
+<tr><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Flite1">L1</a></td></tr><tr><td class="result-snippet">rate limiting l1</td></tr>
+<tr><td><a class="result-link" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Flite2">L2</a></td></tr><tr><td class="result-snippet">rate limiting l2</td></tr>
+</table>`;
+  const mock = () =>
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      if (url.includes("html.duckduckgo.com")) return { body: DDG };
+      if (url.includes("lite.duckduckgo.com")) return { body: LITE };
+      if (url.includes("real.test")) return { body: "<p>rate limiting content about token buckets and leaky buckets</p>" };
+      return undefined; // searxng unconfigured (skipped); mojeek/marginalia → 404
+    });
+
+  it("standard depth fuses DuckDuckGo + DDG Lite (breadth 2) and records enginesFused", async () => {
+    mock();
+    const dir = mkdtempSync(join(tmpdir(), "us-fuse-"));
+    const r = await runGather(opts({ depth: "standard", perSource: 2, out: dir }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    const engines = new Set(sources.map((s) => s.backend));
+    expect(engines.size).toBeGreaterThan(1); // sources span more than one engine
+    expect(r.manifest.enginesFused!.length).toBeGreaterThan(1);
+    expect(r.manifest.notes.join(" ")).toMatch(/fused/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("summary depth short-circuits at the first engine (breadth 1) — backward compatible", async () => {
+    mock();
+    const dir = mkdtempSync(join(tmpdir(), "us-summary-"));
+    const r = await runGather(opts({ depth: "summary", perSource: 2, out: dir }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(new Set(sources.map((s) => s.backend))).toEqual(new Set(["duckduckgo"]));
+    expect(r.manifest.enginesFused).toEqual(["duckduckgo"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("E4: web cascade falls through a blocked engine to a working fallback", () => {
   it("uses DuckDuckGo Lite when DuckDuckGo is blocked, and records provenance", async () => {
     const LITE_HTML = `

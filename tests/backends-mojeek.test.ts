@@ -35,4 +35,17 @@ describe("mojeekBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/unreachable/i);
   });
+
+  it("paginates via &s= offset (page 2 starts at s=11)", async () => {
+    const PAGE2 = `<ul><li><a class="title" href="https://real.test/m3">Three</a><p class="s">snippet three</p></li></ul>`;
+    const spy = installFetchMock((url) => ({ body: url.includes("s=11") ? PAGE2 : MOJEEK_HTML }));
+    const r = await mojeekBackend(makeCtx("leaky bucket", { pages: 2 }));
+    expect(spy.mock.calls).toHaveLength(2);
+    expect(String(spy.mock.calls[1]![0])).toContain("s=11");
+    expect(r.items.map((i) => i.url)).toEqual([
+      "https://real.test/m1",
+      "https://real.test/m2",
+      "https://real.test/m3",
+    ]);
+  });
 });

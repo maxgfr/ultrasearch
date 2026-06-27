@@ -6,10 +6,22 @@ URLs is always done by the script.
 
 ## The cascade (`--web-engine auto`, the default)
 
-Engines are tried in order and the cascade **short-circuits as soon as one
-returns enough results** (so the later engines are only queried when an earlier
-one is empty, blocked, or rate-limited). A note records which engines were tried
-and which produced, so you can see when results came from a fallback.
+Engines are tried in order. How many are used depends on **breadth**, scaled by
+`--depth` (override with `--web-breadth <n>`):
+
+- **`summary` → breadth 1:** the cascade **short-circuits** as soon as one engine
+  returns enough results — later engines run only when an earlier one is empty,
+  blocked, or rate-limited (the original, cheapest behaviour).
+- **`standard` → breadth 2, `deep` → breadth 5 (all engines):** the cascade keeps
+  going until that many engines have each returned enough, then **fuses** their
+  results (RRF over identity). Querying several independent indexes widens recall;
+  thin engines are still fused, never dropped.
+
+Each engine also fetches **multiple result pages** per query, scaled by `--depth`
+(`summary` 1 · `standard` 2 · `deep` 3; override with `--pages <n>`, max 5). A
+backend stops paginating early as soon as a page adds no new URLs, so an engine
+that ignores the page offset costs at most one extra request. A note records
+which engines were tried/fused, so you can see where results came from.
 
 1. **SearXNG (local).** If reachable (default `http://localhost:8888`, override
    with `--searxng` or `ULTRASEARCH_SEARXNG`), queried over its JSON API
@@ -43,6 +55,30 @@ and which produced, so you can see when results came from a fallback.
 one (injected even if the mode profile didn't list it); `claude` drops web
 discovery so you drive it via your own WebSearch. (Backends are also selectable
 directly with `--backends`, e.g. `--backends mojeek,marginalia`.)
+
+## Language & region
+
+Search the audience's language, not yours. **You** (the agent) infer the target
+language/region from the question or market and translate the query — the engine
+never calls a translation API. Pass:
+
+- `--lang <code>` — the search language (e.g. `de`). Drives Wikipedia's language
+  subdomain (`de.wikipedia.org`), SearXNG's `&language=`, DuckDuckGo's `kl` region
+  code, and an `Accept-Language` header on **every** request (search + page fetch).
+  Translate `--queries` into this language too — the locale params only help if the
+  query words are in the target language.
+- `--region <cc>` — optional country override when it differs from the language
+  (e.g. English content for a German market: `--lang en --region de`). Defaults to
+  the country implied by `--lang`.
+
+Per-engine support: SearXNG `&language=` ✓ · Wikipedia language subdomain ✓ ·
+DuckDuckGo / DDG Lite `kl=<region>-<lang>` ✓ · Mojeek and Marginalia have no
+reliable URL locale knob, so they rely on the `Accept-Language` header (Marginalia
+is English-centric — treat its hits accordingly). Scholarly APIs (arXiv, Crossref,
+…) are language-agnostic metadata services and are left unchanged.
+
+The dossier is the evidence; **write the report in the user's own language** even
+when the sources are in another — quote the original and gloss it where helpful.
 
 ## Fetching specific pages
 

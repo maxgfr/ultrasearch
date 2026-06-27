@@ -8,7 +8,7 @@ import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
 import { addSource } from "./enrich.js";
-import { writeHtml } from "./render.js";
+import { writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { runPlan } from "./plan.js";
 import { runMerge } from "./merge.js";
@@ -37,7 +37,8 @@ Commands:
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
-  render   Render the report tiers in a dossier to a self-contained index.html.
+  render   Render the report tiers in a dossier to a self-contained index.html
+           AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
            --min-sources <n> fails a too-thin dossier).
@@ -64,10 +65,13 @@ Options:
                        built-in planner — use to drive recall with your own phrasings)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
-  --lang <code>        Preferred language                (default: en)
+  --lang <code>        Search language (translate --queries to it)  (default: en)
+  --region <cc>        Region/country for locale-aware search   (default: from lang)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
   --web-engine <e>     auto | searxng | ddg | ddglite | mojeek | marginalia | claude
                        auto = resilient fallback cascade        (default: auto)
+  --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
+  --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch'
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
@@ -92,10 +96,10 @@ export const COMMANDS = new Set([
 ]);
 const VALUE_FLAGS = new Set([
   "q", "question", "mode", "depth", "backends", "backend", "queries", "max-sources", "per-source",
-  "concurrency", "rounds", "out", "run", "lang", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
+  "concurrency", "rounds", "pages", "web-breadth", "out", "run", "lang", "region", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
   "subquestions", "runs", "master", "apply", "max-subquestions", "max-verify", "run-root", "shards", "shard", "min-sources",
 ]);
-const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "verbose", "semantic"]);
+const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "no-md", "verbose", "semantic"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -264,8 +268,11 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
+    region: p.values.region,
     searxng: p.values.searxng,
     webEngine,
+    pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : undefined,
+    webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : undefined,
     urls: p.values.url ? parseList(p.values.url) : undefined,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
@@ -414,9 +421,19 @@ async function main(): Promise<void> {
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const path = writeHtml(resolve(dir), p.values.out && p.values.run ? resolve(p.values.out) : undefined);
-      process.stderr.write(`ultrasearch: wrote ${path}\n`);
-      if (p.bools.has("json")) process.stdout.write(JSON.stringify({ html: path }, null, 2) + "\n");
+      const rdir = resolve(dir);
+      // By default render writes BOTH a self-contained index.html and a portable
+      // consolidated report.md. --no-html / --no-md opt out of either.
+      const written: { html?: string; md?: string } = {};
+      if (!p.bools.has("no-html")) {
+        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
+        process.stderr.write(`ultrasearch: wrote ${written.html}\n`);
+      }
+      if (!p.bools.has("no-md")) {
+        written.md = writeReportMarkdown(rdir);
+        process.stderr.write(`ultrasearch: wrote ${written.md}\n`);
+      }
+      if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");
       return;
     }
 
