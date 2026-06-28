@@ -3,7 +3,7 @@ name: ultrasearch
 description: "Use when the user wants a thorough, citation-grounded recap of what the WEB says about a topic — not the model's training memory. Fans out keyless web search across many backends (SearXNG, DuckDuckGo, Wikipedia, keyless StackExchange/HN/GitHub APIs, and scholarly arXiv/Crossref/OpenAlex), fetches + de-duplicates pages into an evidence dossier, and has you write a tiered report (SUMMARY/REPORT/FULL) where every claim cites a fetched source [S#] — verified by `ultrasearch check` — plus a self-contained HTML report. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (literature review with BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'deep dive on X', 'debug <error>', 'literature review of X', 'competitors of X'. Opt-in deep tier decomposes the question, merges per-facet dossiers, and adversarially verifies every claim against its source (`verify` + `check --semantic`); triggers 'deep research on X'."
 license: MIT
 metadata:
-  version: 1.5.0
+  version: 1.5.1
 ---
 
 # ultrasearch — recap the web, grounded not guessed

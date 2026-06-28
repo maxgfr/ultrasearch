@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.5.1](https://github.com/maxgfr/ultrasearch/compare/v1.5.0...v1.5.1) (2026-06-28)
+
+
+### Bug Fixes
+
+* **skill:** package under skills/ultrasearch/ so `skills add` installs the whole skill ([8b9fb7a](https://github.com/maxgfr/ultrasearch/commit/8b9fb7a879e471d0ab9ad7f6a7973b87209bceba))
+
 # [1.5.0](https://github.com/maxgfr/ultrasearch/compare/v1.4.0...v1.5.0) (2026-06-27)
 
 
