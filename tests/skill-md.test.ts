@@ -7,7 +7,11 @@ import { VERSION } from "../src/types.js";
 import { COMMANDS } from "../src/cli.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const skill = readFileSync(join(ROOT, "SKILL.md"), "utf8");
+// The skill is packaged under skills/ultrasearch/ (not the repo root) so that
+// `npx skills add` bundles the engine + references with the SKILL.md — a root
+// SKILL.md would be installed alone. See scripts/verify-skill-bundle.mjs.
+const SKILL_DIR = join(ROOT, "skills", "ultrasearch");
+const skill = readFileSync(join(SKILL_DIR, "SKILL.md"), "utf8");
 
 function frontmatter(md: string): any {
   const m = /^---\n([\s\S]*?)\n---/.exec(md);
@@ -48,7 +52,7 @@ describe("SKILL.md", () => {
     const refs = [...skill.matchAll(/references\/([a-z-]+\.md)/g)].map((m) => m[1]!);
     expect(refs.length).toBeGreaterThan(0);
     for (const r of new Set(refs)) {
-      expect(existsSync(join(ROOT, "references", r)), `missing references/${r}`).toBe(true);
+      expect(existsSync(join(SKILL_DIR, "references", r)), `missing references/${r}`).toBe(true);
     }
   });
 });

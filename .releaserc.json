@@ -19,7 +19,7 @@
     [
       "@semantic-release/git",
       {
-        "assets": ["package.json", "src/types.ts", "SKILL.md", "CHANGELOG.md", "scripts/ultrasearch.mjs"],
+        "assets": ["package.json", "src/types.ts", "skills/ultrasearch/SKILL.md", "CHANGELOG.md", "scripts/ultrasearch.mjs", "skills/ultrasearch/scripts/ultrasearch.mjs"],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
     ],

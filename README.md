@@ -80,7 +80,7 @@ of a single pass — **decompose → fan out → merge → adversarially verify 
 loop-until-dry** — grafted onto the same keyless engine. Every step is a plain
 CLI call, so it works on any harness; parallel subagents are an *optimization*,
 never a requirement (full playbook + the copy-pasteable subagent contract:
-[`references/deep-research-playbook.md`](references/deep-research-playbook.md)).
+[`references/deep-research-playbook.md`](skills/ultrasearch/references/deep-research-playbook.md)).
 
 ```bash
 # decompose into sub-questions, each with a deterministic out dir to gather into

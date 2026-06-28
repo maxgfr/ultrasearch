@@ -8,9 +8,8 @@
     "ultrasearch": "scripts/ultrasearch.mjs"
   },
   "files": [
-    "SKILL.md",
+    "skills",
     "scripts",
-    "references",
     "assets",
     "src",
     "docker-compose.yml",
@@ -20,11 +19,12 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && node scripts/copy-bundle.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "check:build": "tsup && git diff --exit-code -- scripts/ultrasearch.mjs",
+    "verify:bundle": "node scripts/verify-skill-bundle.mjs",
+    "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs",
     "demo": "node scripts/ultrasearch.mjs gather --q \"what is rate limiting\" --mode topic --backends fixture --out /tmp/ultrasearch-demo",
     "eval": "node evals/run.mjs --suite offline",
     "eval:network": "node evals/run.mjs --suite network",
