@@ -44,7 +44,10 @@ describe("runCheck", () => {
   it("fails on an unmarked unsourced claim", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, `# X\nThis is a substantive factual claim with no citation whatsoever here [S1].\n\nThis other substantive factual claim has absolutely no source attached to it.`);
+    report(
+      dir,
+      `# X\nThis is a substantive factual claim with no citation whatsoever here [S1].\n\nThis other substantive factual claim has absolutely no source attached to it.`,
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(false);
     expect(r.unmarkedUnsourced.length).toBeGreaterThan(0);
@@ -54,7 +57,10 @@ describe("runCheck", () => {
   it("tolerates a claim flagged with a trailing [M]", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, `# X\nA grounded claim about buckets and windows and tokens here [S1].\n\nMost gateways default to token buckets in my experience across many systems [M].`);
+    report(
+      dir,
+      `# X\nA grounded claim about buckets and windows and tokens here [S1].\n\nMost gateways default to token buckets in my experience across many systems [M].`,
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(true);
     expect(r.modelHints).toBeGreaterThanOrEqual(1);
@@ -64,7 +70,10 @@ describe("runCheck", () => {
   it("tolerates a claim inside a > [model-hint] blockquote", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, `# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n> [model-hint] Token buckets are common in production gateways, though no fetched source here confirms it.`);
+    report(
+      dir,
+      `# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n> [model-hint] Token buckets are common in production gateways, though no fetched source here confirms it.`,
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(true);
     expect(r.modelHints).toBeGreaterThanOrEqual(1);
@@ -126,7 +135,10 @@ describe("runCheck", () => {
   it("C2: a fabricated claim inside a plain (non-hint) blockquote is coverage-checked", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, "# X\nA grounded claim about buckets and windows here [S1].\n\n> A fabricated substantive claim about rate limiting with absolutely no citation here.");
+    report(
+      dir,
+      "# X\nA grounded claim about buckets and windows here [S1].\n\n> A fabricated substantive claim about rate limiting with absolutely no citation here.",
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(false);
     rmSync(dir, { recursive: true, force: true });
@@ -135,7 +147,10 @@ describe("runCheck", () => {
   it("C3: a fabricated claim in a table cell is coverage-checked", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, "# X\nA grounded claim about buckets and windows here [S1].\n\n| Approach | Detail |\n|---|---|\n| Token bucket | refills at a steady rate and allows controlled request bursts |");
+    report(
+      dir,
+      "# X\nA grounded claim about buckets and windows here [S1].\n\n| Approach | Detail |\n|---|---|\n| Token bucket | refills at a steady rate and allows controlled request bursts |",
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(false);
     rmSync(dir, { recursive: true, force: true });
@@ -171,7 +186,10 @@ describe("runCheck", () => {
   it("C2/C3 control: grounded blockquote and table row (with [S#]) pass", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    report(dir, "# X\n> A grounded quoted claim about request windows and buckets here [S1].\n\n| Approach | Detail |\n|---|---|\n| Token bucket | refills at a steady rate and allows controlled bursts [S2] |");
+    report(
+      dir,
+      "# X\n> A grounded quoted claim about request windows and buckets here [S1].\n\n| Approach | Detail |\n|---|---|\n| Token bucket | refills at a steady rate and allows controlled bursts [S2] |",
+    );
     const r = runCheck(dir);
     expect(r.ok).toBe(true);
     rmSync(dir, { recursive: true, force: true });

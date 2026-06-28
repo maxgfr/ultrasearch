@@ -58,11 +58,6 @@ describe("searxngBackend", () => {
     const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888", pages: 2 }));
     expect(spy.mock.calls).toHaveLength(2);
     expect(String(spy.mock.calls[1]![0])).toContain("pageno=2");
-    expect(r.items.map((i) => i.url)).toEqual([
-      "https://a.test/1",
-      "https://b.test/2",
-      "https://c.test/3",
-      "https://d.test/4",
-    ]);
+    expect(r.items.map((i) => i.url)).toEqual(["https://a.test/1", "https://b.test/2", "https://c.test/3", "https://d.test/4"]);
   });
 });

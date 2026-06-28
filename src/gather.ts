@@ -49,8 +49,7 @@ export interface GatherResult {
 }
 
 const ENRICH_NUDGE =
-  "agent: enrich thin areas with your own WebSearch, then ingest each good URL via " +
-  "`ultrasearch fetch --url <u> --out <dir>` before writing the report.";
+  "agent: enrich thin areas with your own WebSearch, then ingest each good URL via " + "`ultrasearch fetch --url <u> --out <dir>` before writing the report.";
 
 // Default dossier directory under the OS temp dir, keyed by mode + question.
 export function defaultRunDir(mode: string, question: string, d?: Date): string {
@@ -343,7 +342,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
     ...(gapNote ? [gapNote] : []),
     ...(thin
-      ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`]
+      ? [
+          `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`,
+        ]
       : []),
     ENRICH_NUDGE,
   ];

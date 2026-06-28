@@ -8,7 +8,14 @@ import type { Manifest, RawSource, Source } from "../src/types.js";
 
 function rawSources(): RawSource[] {
   return [
-    { url: "https://en.wikipedia.org/wiki/Rate_limiting", title: "Rate limiting", backend: "wikipedia", score: 2, snippet: "controls request rate", text: "Rate limiting controls how many requests a client may make." },
+    {
+      url: "https://en.wikipedia.org/wiki/Rate_limiting",
+      title: "Rate limiting",
+      backend: "wikipedia",
+      score: 2,
+      snippet: "controls request rate",
+      text: "Rate limiting controls how many requests a client may make.",
+    },
     { url: "https://nist.gov/x", title: "Gov doc", backend: "duckduckgo", score: 1, snippet: "", text: "An authoritative government explanation of limits." },
   ];
 }

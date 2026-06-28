@@ -8,7 +8,12 @@ import { rankedKeywords, sinceEpochSeconds } from "../util.js";
 // small page and we read quota_remaining/backoff into a note.
 const SITES = ["stackoverflow", "serverfault", "superuser", "askubuntu", "unix.stackexchange"];
 
-async function searchSite(site: string, q: string, perSite: number, fromdate: number | null): Promise<{ items: RawSource[]; backoff?: number; remaining?: number }> {
+async function searchSite(
+  site: string,
+  q: string,
+  perSite: number,
+  fromdate: number | null,
+): Promise<{ items: RawSource[]; backoff?: number; remaining?: number }> {
   const url =
     `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance` +
     `&q=${encodeURIComponent(q)}&site=${encodeURIComponent(site)}&filter=withbody&pagesize=${perSite}` +

@@ -130,6 +130,16 @@ work across scholarly backends by DOI/arXiv id, and retries once on throttling
 Run `node scripts/ultrasearch.mjs --help` for the full surface, and see
 [`DOCUMENTATION.md`](DOCUMENTATION.md) for the architecture.
 
+## Security & trust boundary
+
+ultrasearch is keyless and makes outbound HTTP requests to URLs chosen by the
+agent (search-engine results and pages it elects to fetch), following redirects
+— so a fetch can land on an internal/private address post-redirect. Treat the
+host running it as able to reach the network it sits on. Parsing is size-capped
+(responses are truncated before extraction) to bound memory, and the tool only
+writes inside the `--out` directory. Run it where reaching arbitrary URLs,
+including internal ones, is acceptable.
+
 ## License
 
 MIT © maxgfr

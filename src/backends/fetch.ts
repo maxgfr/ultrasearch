@@ -6,8 +6,7 @@ import { pdfToText } from "./pdf.js";
 // Override with ULTRASEARCH_UA. Polite JSON/XML APIs (arXiv, Crossref) instead
 // pass CONTACT_UA per call so they can attribute / rate-limit us courteously.
 export const BROWSER_UA =
-  process.env.ULTRASEARCH_UA ||
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+  process.env.ULTRASEARCH_UA || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 export const CONTACT_UA = "ultrasearch/1.x (+https://github.com/maxgfr/ultrasearch)";
 
 // Transient statuses worth one retry; a single throttled call would otherwise
@@ -147,8 +146,17 @@ export async function httpJson(
 }
 
 const ENTITIES: Record<string, string> = {
-  "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&apos;": "'",
-  "&nbsp;": " ", "&mdash;": "—", "&ndash;": "–", "&hellip;": "…", "&copy;": "©",
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+  "&apos;": "'",
+  "&nbsp;": " ",
+  "&mdash;": "—",
+  "&ndash;": "–",
+  "&hellip;": "…",
+  "&copy;": "©",
 };
 
 // Decode the common named entities plus decimal/hex numeric references.
@@ -177,7 +185,10 @@ export function decodeEntities(s: string): string {
 // Decode-then-strip handles both `R&amp;D` → `R&D` and `&lt;i&gt;P53&lt;/i&gt;`
 // → `P53` (and literal `<i>P53</i>` → `P53`).
 export function cleanInline(s: string): string {
-  return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  return decodeEntities(String(s))
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Extract readable text from an HTML page. Zero-dep and intentionally simple:
@@ -218,13 +229,17 @@ export function htmlTitle(html: string): string | undefined {
 // containers. (Regex can't track nested tags; the size gate below catches a
 // container truncated at its first nested close tag and falls back.)
 export function extractMainHtml(html: string): string {
-  const visible = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().length;
+  const visible = (h: string) =>
+    h
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim().length;
   const tiers: RegExp[] = [
     /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
     /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
     /<(?:div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>([\s\S]*?)<\/(?:div|section)>/gi,
   ];
-  let candidates: string[] = [];
+  const candidates: string[] = [];
   for (const re of tiers) {
     let m: RegExpExecArray | null;
     while ((m = re.exec(html))) candidates.push(m[1]!);
@@ -259,10 +274,7 @@ export async function fetchAndExtract(
   opts: { acceptLanguage?: string } = {},
 ): Promise<{ text: string; title?: string; note?: string; finalUrl: string }> {
   const wantsPdf = PDF_URL_RE.test(url);
-  const res = await httpGet(
-    url,
-    wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage },
-  );
+  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
@@ -307,11 +319,7 @@ export function nearestHeading(lines: string[], anchor: number): string | undefi
 // document order) under their nearest heading — so the agent reads the most
 // on-point passage rather than a single best line. Falls back to the opening
 // sentences when nothing matches.
-export function focusedSnippet(
-  text: string,
-  question: string,
-  opts: { maxChars?: number; maxSentences?: number } = {},
-): string {
+export function focusedSnippet(text: string, question: string, opts: { maxChars?: number; maxSentences?: number } = {}): string {
   const maxChars = opts.maxChars ?? 360;
   const maxSentences = opts.maxSentences ?? 3;
   const lines = text.split("\n");

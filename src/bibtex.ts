@@ -6,14 +6,18 @@ function clean(s: string): string {
 
 // Stable-ish citation key: firstauthorlastname + year + first title word.
 function bibKey(s: Source, used: Set<string>): string {
-  const last = s.meta?.authors?.[0]?.split(/\s+/).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const last = s.meta?.authors?.[0]
+    ?.split(/\s+/)
+    .pop()
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
   const year = s.meta?.year ? String(s.meta.year) : "";
   const word = s.title
     .split(/\s+/)
     .find((w) => w.replace(/[^a-z0-9]/gi, "").length > 3)
     ?.toLowerCase()
     .replace(/[^a-z0-9]/g, "");
-  let base = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
+  const base = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
   let key = base;
   let n = 2;
   while (used.has(key)) key = `${base}${n++}`;
@@ -24,9 +28,7 @@ function bibKey(s: Source, used: Set<string>): string {
 // Build a BibTeX file from the scholarly sources in a dossier (those carrying
 // DOI / arXiv id / authors / year). Used for research mode's refs.bib.
 export function toBibtex(sources: Source[]): string {
-  const scholarly = sources.filter(
-    (s) => s.meta && (s.meta.doi || s.meta.arxivId || (s.meta.authors && s.meta.authors.length) || s.meta.year),
-  );
+  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || (s.meta.authors && s.meta.authors.length) || s.meta.year));
   if (!scholarly.length) {
     return "% No scholarly sources with citable metadata in this dossier.\n";
   }

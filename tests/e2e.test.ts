@@ -34,7 +34,10 @@ describe("e2e: gather → write tiers → render → check (offline, fixture)", 
       const r = await runGather(opts({ backends: ["fixture"], out: dir }));
       expect(r.sources.length).toBeGreaterThan(0);
       const ids = r.sources.map((s) => s.id);
-      const cite = ids.slice(0, 2).map((id) => `[${id}]`).join("");
+      const cite = ids
+        .slice(0, 2)
+        .map((id) => `[${id}]`)
+        .join("");
 
       writeFileSync(join(dir, "SUMMARY.md"), `# Summary\n\nRate limiting caps the request rate to protect a service [${ids[0]}].\n`);
       writeFileSync(

@@ -24,10 +24,7 @@ describe("duckduckgoBackend", () => {
   it("decodes uddg redirector links, titles and snippets; drops DDG's own domain", async () => {
     installFetchMock(routes([["duckduckgo.com/html", { body: DDG_HTML }]]));
     const r = await duckduckgoBackend(makeCtx("token bucket"));
-    expect(r.items.map((i) => i.url)).toEqual([
-      "https://real.test/page-one",
-      "https://real.test/page-two",
-    ]);
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/page-one", "https://real.test/page-two"]);
     expect(r.items[0]!.title).toBe("First & Best");
     expect(r.items[0]!.snippet).toContain("token bucket");
   });
@@ -65,12 +62,7 @@ describe("duckduckgoBackend", () => {
     const r = await duckduckgoBackend(makeCtx("x", { pages: 2 }));
     expect(spy.mock.calls).toHaveLength(2);
     expect(String(spy.mock.calls[1]![0])).toContain("s=30");
-    expect(r.items.map((i) => i.url)).toEqual([
-      "https://real.test/a",
-      "https://real.test/b",
-      "https://real.test/c",
-      "https://real.test/d",
-    ]);
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/a", "https://real.test/b", "https://real.test/c", "https://real.test/d"]);
     expect(r.items[0]!.score).toBeGreaterThan(r.items[3]!.score); // page-1 outranks page-2
   });
 

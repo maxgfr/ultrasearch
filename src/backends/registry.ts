@@ -46,14 +46,7 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
 // query variants are planned: rate-limited APIs (one shot to respect anon
 // quotas) and query-independent backends (fixture/generic). The rest fan out
 // across the variants and have their per-variant lists fused.
-const SINGLE_QUERY = new Set<BackendKind>([
-  "github",
-  "stackexchange",
-  "semanticscholar",
-  "pubmed",
-  "fixture",
-  "generic",
-]);
+const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
 
 // Merge one backend's per-variant result lists into a single ranked list via
 // RRF over canonical URL, preferring the copy that carries text.
@@ -93,9 +86,7 @@ export async function runBackends(kinds: BackendKind[], ctx: RunContext): Promis
         const res = await handler(ctx);
         return { ...res, ms: Date.now() - t0 };
       }
-      const perVariant = await Promise.all(
-        variants.map((q) => handler({ ...ctx, question: q })),
-      );
+      const perVariant = await Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
       const merged = mergeVariants(
         kind,
         perVariant.map((r) => r.items),

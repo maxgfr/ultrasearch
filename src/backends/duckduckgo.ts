@@ -4,7 +4,9 @@ import { canonicalizeUrl } from "../util.js";
 import { ddgRegion, acceptLanguageHeader } from "../locale.js";
 
 export function stripTags(s: string): string {
-  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+  return decodeEntities(s.replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Decode DDG's redirector link: the real URL rides in the `uddg` query param.
@@ -58,16 +60,11 @@ export const duckduckgoBackend: Backend = async (ctx): Promise<BackendResult> =>
   // new URLs — so an engine that ignores `s` (returns page 1 again) costs at most
   // one extra request instead of looping.
   for (let p = 0; p < pages; p++) {
-    const url =
-      `https://html.duckduckgo.com/html/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` +
-      (p > 0 ? `&s=${p * 30}` : "");
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` + (p > 0 ? `&s=${p * 30}` : "");
     const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12000 });
     if (!r.ok || !r.body) {
       if (p === 0) {
-        const why =
-          r.status === 429 || r.status === 503
-            ? `rate-limited (HTTP ${r.status}) — consider your own WebSearch`
-            : `unreachable (status ${r.status})`;
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) — consider your own WebSearch` : `unreachable (status ${r.status})`;
         return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
       }
       break; // a later page failed — keep what page 1 already returned

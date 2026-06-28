@@ -14,10 +14,22 @@ function scratch(): string {
 
 function baseManifest(over: Partial<Manifest> = {}): Manifest {
   return {
-    version: "1.2.0", question: "rate limiting", mode: "topic", depth: "deep", lang: "en",
-    backends: ["duckduckgo"], backendsUsed: ["duckduckgo"], sourceCount: 0, maxSources: 60,
-    builtAt: "2026-06-14T10:00:00.000Z", slug: "topic-rl", tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
-    extras: [], notes: [], timings: {}, ...over,
+    version: "1.2.0",
+    question: "rate limiting",
+    mode: "topic",
+    depth: "deep",
+    lang: "en",
+    backends: ["duckduckgo"],
+    backendsUsed: ["duckduckgo"],
+    sourceCount: 0,
+    maxSources: 60,
+    builtAt: "2026-06-14T10:00:00.000Z",
+    slug: "topic-rl",
+    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    extras: [],
+    notes: [],
+    timings: {},
+    ...over,
   };
 }
 
@@ -31,10 +43,7 @@ function applyBySource(dir: string, map: Record<string, string>): void {
 
 describe("mdToHtml", () => {
   it("renders headings, lists, tables and links and collects h2 headings", () => {
-    const { html, headings } = mdToHtml(
-      `## Section One\nSome **bold** and \`code\`.\n\n- item one\n- item two\n\n| A | B |\n|---|---|\n| 1 | 2 |\n`,
-      "report",
-    );
+    const { html, headings } = mdToHtml(`## Section One\nSome **bold** and \`code\`.\n\n- item one\n- item two\n\n| A | B |\n|---|---|\n| 1 | 2 |\n`, "report");
     expect(html).toContain('<h2 id="report-section-one">Section One</h2>');
     expect(html).toContain("<strong>bold</strong>");
     expect(html).toContain("<ul><li>item one</li>");
@@ -102,10 +111,7 @@ describe("buildReportMarkdown / writeReportMarkdown", () => {
   it("includes a verification table when VERIFY.json exists", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    writeFileSync(
-      join(dir, "REPORT.md"),
-      "# R\n## A\nA grounded claim about token buckets and request bursts here [S1].",
-    );
+    writeFileSync(join(dir, "REPORT.md"), "# R\n## A\nA grounded claim about token buckets and request bursts here [S1].");
     runVerify(dir);
     applyBySource(dir, { S1: "supported" });
     const md = buildReportMarkdown(dir);
@@ -136,10 +142,7 @@ describe("renderHtml — deep-research enrichment", () => {
   it("renders a Contradictions panel when a claim's cited sources disagree", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    writeFileSync(
-      join(dir, "REPORT.md"),
-      "# R\n## A\nA grounded claim about token buckets and bursts citing both sources here [S1][S2].",
-    );
+    writeFileSync(join(dir, "REPORT.md"), "# R\n## A\nA grounded claim about token buckets and bursts citing both sources here [S1][S2].");
     runVerify(dir);
     applyBySource(dir, { S1: "supported", S2: "refuted" });
     const html = renderHtml(dir);
@@ -153,13 +156,34 @@ describe("renderHtml — deep-research enrichment", () => {
   it("renders the sub-question tree from a merge manifest + provenance", () => {
     const dir = scratch();
     const raws: RawSource[] = [
-      { url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: "alpha", meta: { provenance: [{ subQuestion: "facet alpha", runDir: "r1" }] } },
-      { url: "https://b.test/2", title: "B", backend: "duckduckgo", score: 0.5, snippet: "b", text: "beta", meta: { provenance: [{ subQuestion: "facet beta", runDir: "r2" }] } },
+      {
+        url: "https://a.test/1",
+        title: "A",
+        backend: "duckduckgo",
+        score: 1,
+        snippet: "a",
+        text: "alpha",
+        meta: { provenance: [{ subQuestion: "facet alpha", runDir: "r1" }] },
+      },
+      {
+        url: "https://b.test/2",
+        title: "B",
+        backend: "duckduckgo",
+        score: 0.5,
+        snippet: "b",
+        text: "beta",
+        meta: { provenance: [{ subQuestion: "facet beta", runDir: "r2" }] },
+      },
     ];
     writeDossier(
       dir,
       raws,
-      baseManifest({ subQuestions: [{ id: "Q1", question: "facet alpha" }, { id: "Q2", question: "facet beta" }] }),
+      baseManifest({
+        subQuestions: [
+          { id: "Q1", question: "facet alpha" },
+          { id: "Q2", question: "facet beta" },
+        ],
+      }),
       "## TL;DR\n## Sources",
     );
     writeFileSync(join(dir, "REPORT.md"), "# R\nA grounded claim about the first facet here [S1].");

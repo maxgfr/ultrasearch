@@ -148,8 +148,7 @@ describe("runGather (snippet-only from a failed page fetch — A5 end-to-end)", 
           }),
           contentType: "application/json",
         };
-      if (url.includes("full.test/p"))
-        return { body: "<title>Full</title><h1>Full</h1><p>the full fetched body text about raft and paxos consensus</p>" };
+      if (url.includes("full.test/p")) return { body: "<title>Full</title><h1>Full</h1><p>the full fetched body text about raft and paxos consensus</p>" };
       return undefined; // thin.test/p → 404 → snippet-only
     });
     const r = await runGather(opts({ backends: ["searxng"], searxng: "http://localhost:8888", out: dir }));

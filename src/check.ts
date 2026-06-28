@@ -109,7 +109,13 @@ function isTableRow(line: string): boolean {
   return /\|/.test(line.trim()) && !isTableSeparator(line);
 }
 function tableCells(line: string): string {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim())
+    .join(" ");
 }
 function isListItem(line: string): boolean {
   return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
@@ -139,7 +145,7 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[]):
       i++;
       continue;
     }
-    let line = stripInlineCode(lines[i]!);
+    const line = stripInlineCode(lines[i]!);
     const t = line.trim();
     if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
       flush();
@@ -242,7 +248,8 @@ function analyzeFile(file: string, text: string): FileAnalysis {
       const tok = m[1]!.trim();
       if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
       else if (tok === "M") mMarkers++;
-      else if (/^model-hint$/i.test(tok)) continue; // the hint-region label, not a citation
+      else if (/^model-hint$/i.test(tok))
+        continue; // the hint-region label, not a citation
       else unknownTokens.push(tok);
     }
   }
@@ -283,9 +290,7 @@ function analyzeFile(file: string, text: string): FileAnalysis {
 function applySemantic(dir: string, result: CheckResult): void {
   const p = join(dir, "VERIFY.json");
   if (!existsSync(p)) {
-    result.warnings.push(
-      "--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.",
-    );
+    result.warnings.push("--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
     return;
   }
   try {
@@ -293,9 +298,7 @@ function applySemantic(dir: string, result: CheckResult): void {
     result.semantic = sem;
     if (!sem.ok) {
       result.ok = false;
-      result.errors.push(
-        `Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`,
-      );
+      result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
     }
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
@@ -382,8 +385,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: n
   }
   if (unmarkedUnsourced.length) {
     errors.push(
-      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT/FULL with no [S#] and no model-hint flag. ` +
-        `Cite a source or flag as [M] / > [model-hint].`,
+      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT/FULL with no [S#] and no model-hint flag. ` + `Cite a source or flag as [M] / > [model-hint].`,
     );
   }
   if (unknown.size) {
@@ -444,15 +446,11 @@ export function formatCheckReport(r: CheckResult, dir: string): string {
   const lines: string[] = [];
   lines.push(`ultrasearch check: ${dir}`);
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
-  lines.push(
-    `  citations: ${r.sourceCitations} · model-hints: ${r.modelHints} · dangling: ${r.dangling.length} · unsourced: ${r.unmarkedUnsourced.length}`,
-  );
+  lines.push(`  citations: ${r.sourceCitations} · model-hints: ${r.modelHints} · dangling: ${r.dangling.length} · unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  ✗ [${u.file}] unsourced: "${u.text}…"`);
   if (r.semantic) {
     const s = r.semantic;
-    lines.push(
-      `  semantic: supported ${s.supported} · partial ${s.partial} · refuted ${s.refuted} · unsupported ${s.unsupported}`,
-    );
+    lines.push(`  semantic: supported ${s.supported} · partial ${s.partial} · refuted ${s.refuted} · unsupported ${s.unsupported}`);
     for (const f of s.failures.slice(0, 8)) lines.push(`  ✗ semantic ${f.claimId} (${f.sourceId}): ${f.verdict}`);
   }
   for (const e of r.errors) lines.push(`  ✗ ${e}`);

@@ -43,17 +43,13 @@ describe("canonicalizeUrl", () => {
     expect(a).toBe("https://example.com/Page?q=1");
   });
   it("preserves case-sensitive paths (distinct GitHub repos are not collapsed)", () => {
-    expect(canonicalizeUrl("https://github.com/Microsoft/TypeScript")).not.toBe(
-      canonicalizeUrl("https://github.com/microsoft/typescript"),
-    );
+    expect(canonicalizeUrl("https://github.com/Microsoft/TypeScript")).not.toBe(canonicalizeUrl("https://github.com/microsoft/typescript"));
   });
   it("re-encodes a query value so an encoded '&' stays part of the value", () => {
     expect(canonicalizeUrl("https://x.com/a?q=a%26b")).toBe("https://x.com/a?q=a%26b");
   });
   it("treats www/non-www and trailing slash as the same resource", () => {
-    expect(canonicalizeUrl("https://en.wikipedia.org/wiki/Rate_limiting/")).toBe(
-      canonicalizeUrl("https://en.wikipedia.org/wiki/Rate_limiting"),
-    );
+    expect(canonicalizeUrl("https://en.wikipedia.org/wiki/Rate_limiting/")).toBe(canonicalizeUrl("https://en.wikipedia.org/wiki/Rate_limiting"));
   });
   it("sorts query params for a stable key", () => {
     expect(canonicalizeUrl("https://x.com/a?b=2&a=1")).toBe(canonicalizeUrl("https://x.com/a?a=1&b=2"));

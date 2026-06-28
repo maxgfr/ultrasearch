@@ -16,11 +16,7 @@ export interface EnrichResult {
 // WebSearch hits. Fetches + cleans the page, allocates the next S# id, appends
 // to sources.json, writes sources/S#.md, and refreshes manifest + DOSSIER.md.
 // If the URL is already in the dossier it returns the existing id (no dup).
-export async function addSource(
-  dir: string,
-  url: string,
-  opts: { question?: string; title?: string; backend?: BackendKind } = {},
-): Promise<EnrichResult> {
+export async function addSource(dir: string, url: string, opts: { question?: string; title?: string; backend?: BackendKind } = {}): Promise<EnrichResult> {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
 
@@ -53,10 +49,7 @@ export async function addSource(
   const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
   writeFileSync(join(dir, "sources.json"), JSON.stringify(nextSources, null, 2));
   writeFileSync(join(dir, "manifest.json"), JSON.stringify(nextManifest, null, 2));
-  writeFileSync(
-    join(dir, "DOSSIER.md"),
-    renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template),
-  );
+  writeFileSync(join(dir, "DOSSIER.md"), renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template));
 
   return { id, added: true };
 }

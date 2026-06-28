@@ -7,8 +7,7 @@ import { httpJson, decodeEntities, cleanInline } from "./fetch.js";
 export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url =
-    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}` +
-    `&format=json&resultType=core&pageSize=${n}`;
+    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}` + `&format=json&resultType=core&pageSize=${n}`;
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
   const results: any[] = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {

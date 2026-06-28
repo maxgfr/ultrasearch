@@ -45,10 +45,6 @@ describe("ddgliteBackend", () => {
     const r = await ddgliteBackend(makeCtx("token bucket", { pages: 2 }));
     expect(spy.mock.calls).toHaveLength(2);
     expect(String(spy.mock.calls[1]![0])).toContain("s=30");
-    expect(r.items.map((i) => i.url)).toEqual([
-      "https://real.test/one",
-      "https://real.test/two",
-      "https://real.test/three",
-    ]);
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/one", "https://real.test/two", "https://real.test/three"]);
   });
 });

@@ -85,7 +85,10 @@ describe("runVerify (worklist)", () => {
   it("caps the worklist at maxVerify", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 3);
-    report(dir, "# X\n## A\nClaim one about the subject matter at hand here [S1].\n## B\nClaim two about the subject matter at hand here [S2].\n## C\nClaim three about the subject matter at hand here [S3].");
+    report(
+      dir,
+      "# X\n## A\nClaim one about the subject matter at hand here [S1].\n## B\nClaim two about the subject matter at hand here [S2].\n## C\nClaim three about the subject matter at hand here [S3].",
+    );
     const r = runVerify(dir, { maxVerify: 2 });
     expect(r.pairs.length).toBe(2);
     rmSync(dir, { recursive: true, force: true });
@@ -216,10 +219,7 @@ describe("verify sharding + multi-file apply", () => {
     runVerify(dir, { shards: N, shard: 0 });
     runVerify(dir, { shards: N, shard: 1 });
     // same map applied to whichever source landed in each shard
-    const files = [
-      writeShardVerdicts(dir, 0, { S1: "supported", S2: "refuted" }),
-      writeShardVerdicts(dir, 1, { S1: "supported", S2: "refuted" }),
-    ];
+    const files = [writeShardVerdicts(dir, 0, { S1: "supported", S2: "refuted" }), writeShardVerdicts(dir, 1, { S1: "supported", S2: "refuted" })];
     const r = applyVerdicts(dir, files);
     expect(r.contradictions?.length).toBe(1);
     expect(r.contradictions![0]!.claimId).toBe("C1");

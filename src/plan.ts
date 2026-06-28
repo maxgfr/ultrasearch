@@ -37,13 +37,7 @@ function templateFacets(question: string, template: string): SubQuestion[] {
 // When `runRoot` is given, each sub-question also carries a deterministic `out`
 // dir (<runRoot>/q1…/qN) so the orchestrator can dispatch one fan-out gather per
 // sub-question without parsing stdout.
-export function runPlan(
-  question: string,
-  mode: ModeName,
-  override?: string[],
-  cap: number = DEEP_CAPS.maxSubQuestions,
-  runRoot?: string,
-): PlanResult {
+export function runPlan(question: string, mode: ModeName, override?: string[], cap: number = DEEP_CAPS.maxSubQuestions, runRoot?: string): PlanResult {
   const q = question.trim();
   let subs: SubQuestion[];
   if (override && override.length) {

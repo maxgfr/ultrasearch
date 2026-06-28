@@ -10,14 +10,11 @@ import { acceptLanguageHeader } from "../locale.js";
 // the public API exposes no reliable page offset, so it stays single-page; we
 // still send Accept-Language so a localized result is preferred where available.
 export const marginaliaBackend: Backend = async (ctx): Promise<BackendResult> => {
-  const url = `https://api.marginalia-search.com/public/search/${encodeURIComponent(ctx.question)}?count=${
-    ctx.options.perSource * 2
-  }`;
+  const url = `https://api.marginalia-search.com/public/search/${encodeURIComponent(ctx.question)}?count=${ctx.options.perSource * 2}`;
   const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000, acceptLanguage });
   if (!r.ok) {
-    const why =
-      r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status || 0})`;
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status || 0})`;
     return { backend: "marginalia", items: [], notes: [`Marginalia ${why}.`] };
   }
   const results: any[] = Array.isArray(r.data?.results) ? r.data.results : [];

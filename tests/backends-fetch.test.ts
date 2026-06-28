@@ -1,14 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  htmlToText,
-  decodeEntities,
-  htmlTitle,
-  bestExcerpt,
-  capExtract,
-  fetchAndExtract,
-  httpGet,
-  httpJson,
-} from "../src/backends/fetch.js";
+import { htmlToText, decodeEntities, htmlTitle, bestExcerpt, capExtract, fetchAndExtract, httpGet, httpJson } from "../src/backends/fetch.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -61,12 +52,7 @@ describe("htmlTitle", () => {
 
 describe("bestExcerpt", () => {
   it("returns the window most relevant to the question", () => {
-    const text = [
-      "Intro line about nothing.",
-      "## Token bucket",
-      "A token bucket refills tokens at a steady rate.",
-      "Unrelated trailing line.",
-    ].join("\n");
+    const text = ["Intro line about nothing.", "## Token bucket", "A token bucket refills tokens at a steady rate.", "Unrelated trailing line."].join("\n");
     const ex = bestExcerpt(text, "how does a token bucket refill");
     expect(ex.toLowerCase()).toContain("token bucket");
   });

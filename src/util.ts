@@ -8,12 +8,14 @@ export function escapeRegExp(s: string): string {
 // Turn an arbitrary identifier into a filesystem-safe slug, e.g.
 // "How does HTTP rate limiting work?" -> "how-does-http-rate-limiting-work".
 export function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/^https?:\/\//, "")
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80) || "run";
+  return (
+    input
+      .toLowerCase()
+      .replace(/^https?:\/\//, "")
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 80) || "run"
+  );
 }
 
 // Two-digit zero pad for the readable run id.
@@ -23,10 +25,7 @@ function pad(n: number): string {
 
 // Readable run id used for the default output folder: run-YYYYMMDD-HHMMSS.
 export function runId(d: Date = new Date()): string {
-  return (
-    `run-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  );
+  return `run-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` + `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,9 +54,7 @@ export function canonicalizeUrl(raw: string): string {
       if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
     }
     keep.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const search = keep.length
-      ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&")
-      : "";
+    const search = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
     return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
   } catch {
     return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
@@ -67,7 +64,10 @@ export function canonicalizeUrl(raw: string): string {
 // Normalize a DOI to a bare lowercase identifier (strip any doi.org prefix) so
 // the same work cited as a DOI URL and a bare DOI dedupes to one key.
 export function normalizeDoi(doi: string): string {
-  return doi.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
+  return doi
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
 }
 
 // Bare hostname of a URL (no leading www), or "" when unparseable.
@@ -145,17 +145,158 @@ export function dedupeByUrl(items: RawSource[]): { items: RawSource[]; dropped: 
 // ---------------------------------------------------------------------------
 
 const STOPWORDS = new Set([
-  "the","a","an","is","are","was","were","be","been","being","do","does","did","how","what",
-  "why","when","where","which","who","whom","this","that","these","those","of","in","on","to",
-  "for","with","and","or","but","if","then","else","than","as","at","by","from","into","about",
-  "it","its","i","you","we","they","he","she","there","here","can","could","should","would",
-  "will","shall","may","might","must","have","has","had","not","no","yes","so","such","only",
-  "any","some","all","get","set","use","used","using","work","works","working","handle","handled",
-  "happen","happens","default","value","values","please","explain","tell","me","my","our",
-  "le","la","les","de","des","du","un","une","est","sont","que","qui","quoi","quel","quelle",
-  "quels","quelles","pour","dans","avec","entre","sur","par","pas","plus","et","ou","où","ce",
-  "cette","ces","se","sa","son","ses","leur","leurs","comment","pourquoi","quand","fait","faire",
-  "peut","doit","être","avoir","il","elle","nous","vous","ils","elles","au","aux","si","ne",
+  "the",
+  "a",
+  "an",
+  "is",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "do",
+  "does",
+  "did",
+  "how",
+  "what",
+  "why",
+  "when",
+  "where",
+  "which",
+  "who",
+  "whom",
+  "this",
+  "that",
+  "these",
+  "those",
+  "of",
+  "in",
+  "on",
+  "to",
+  "for",
+  "with",
+  "and",
+  "or",
+  "but",
+  "if",
+  "then",
+  "else",
+  "than",
+  "as",
+  "at",
+  "by",
+  "from",
+  "into",
+  "about",
+  "it",
+  "its",
+  "i",
+  "you",
+  "we",
+  "they",
+  "he",
+  "she",
+  "there",
+  "here",
+  "can",
+  "could",
+  "should",
+  "would",
+  "will",
+  "shall",
+  "may",
+  "might",
+  "must",
+  "have",
+  "has",
+  "had",
+  "not",
+  "no",
+  "yes",
+  "so",
+  "such",
+  "only",
+  "any",
+  "some",
+  "all",
+  "get",
+  "set",
+  "use",
+  "used",
+  "using",
+  "work",
+  "works",
+  "working",
+  "handle",
+  "handled",
+  "happen",
+  "happens",
+  "default",
+  "value",
+  "values",
+  "please",
+  "explain",
+  "tell",
+  "me",
+  "my",
+  "our",
+  "le",
+  "la",
+  "les",
+  "de",
+  "des",
+  "du",
+  "un",
+  "une",
+  "est",
+  "sont",
+  "que",
+  "qui",
+  "quoi",
+  "quel",
+  "quelle",
+  "quels",
+  "quelles",
+  "pour",
+  "dans",
+  "avec",
+  "entre",
+  "sur",
+  "par",
+  "pas",
+  "plus",
+  "et",
+  "ou",
+  "où",
+  "ce",
+  "cette",
+  "ces",
+  "se",
+  "sa",
+  "son",
+  "ses",
+  "leur",
+  "leurs",
+  "comment",
+  "pourquoi",
+  "quand",
+  "fait",
+  "faire",
+  "peut",
+  "doit",
+  "être",
+  "avoir",
+  "il",
+  "elle",
+  "nous",
+  "vous",
+  "ils",
+  "elles",
+  "au",
+  "aux",
+  "si",
+  "ne",
 ]);
 
 export function keywords(question: string): string[] {
@@ -283,9 +424,7 @@ export function expandTokens(tokens: string[], max = 8): ExpandedKeyword[] {
     for (const sub of subtokens(raw)) variants.push({ text: sub, kind: "subtoken" });
     byCanonical.set(canonical, { canonical, original: raw, variants });
   }
-  const all = [...byCanonical.values()].flatMap((ek, kwIdx) =>
-    ek.variants.map((v) => ({ ek, v, kwIdx })),
-  );
+  const all = [...byCanonical.values()].flatMap((ek, kwIdx) => ek.variants.map((v) => ({ ek, v, kwIdx })));
   all.sort((a, b) => VARIANT_PRIORITY[a.v.kind] - VARIANT_PRIORITY[b.v.kind] || a.kwIdx - b.kwIdx);
   const seen = new Set<string>();
   const kept = new Set<KeywordVariant>();
@@ -623,10 +762,7 @@ function betterSource(a: RawSource, b: RawSource): boolean {
 // Collapse near-duplicate sources by SimHash over their extracted text, keeping
 // the best-scored copy. Short texts are skipped (too little signal to trust).
 // Expects items pre-sorted best-first; preserves their order. Deterministic.
-export function dedupeNearDuplicates(
-  items: RawSource[],
-  opts: { maxBits?: number; minChars?: number } = {},
-): { items: RawSource[]; dropped: number } {
+export function dedupeNearDuplicates(items: RawSource[], opts: { maxBits?: number; minChars?: number } = {}): { items: RawSource[]; dropped: number } {
   const maxBits = opts.maxBits ?? 3;
   const minChars = opts.minChars ?? 500;
   const kept: { it: RawSource; hash: bigint | null }[] = [];
@@ -665,11 +801,7 @@ export function sinceDate(since?: string): string | null {
 
 // Bounded-concurrency async map (dependency-free) — keeps the hydrate step
 // polite (a handful of in-flight fetches) instead of firing dozens at once.
-export async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {

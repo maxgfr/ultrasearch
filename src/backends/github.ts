@@ -6,8 +6,7 @@ import { rankedKeywords, sinceDate } from "../util.js";
 // page). Good for "is this a known bug?" — returns each issue's title + body.
 export const githubBackend: Backend = async (ctx): Promise<BackendResult> => {
   const since = sinceDate(ctx.options.since);
-  const q =
-    (rankedKeywords(ctx.question).slice(0, 6).join(" ") || ctx.question) + (since ? ` created:>=${since}` : "");
+  const q = (rankedKeywords(ctx.question).slice(0, 6).join(" ") || ctx.question) + (since ? ` created:>=${since}` : "");
   const n = Math.max(3, Math.min(10, ctx.options.perSource));
   const url = `https://api.github.com/search/issues?q=${encodeURIComponent(q)}&per_page=${n}`;
   const r = await httpJson("GET", url, undefined, { timeoutMs: 10000, accept: "application/vnd.github+json" });

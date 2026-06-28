@@ -39,13 +39,11 @@ export const mojeekBackend: Backend = async (ctx): Promise<BackendResult> => {
   // page 2 starts at s=11. Accumulate + dedupe across pages; stop when a page
   // adds no new URLs.
   for (let p = 0; p < pages; p++) {
-    const url =
-      `https://www.mojeek.com/search?q=${encodeURIComponent(ctx.question)}` + (p > 0 ? `&s=${p * 10 + 1}` : "");
+    const url = `https://www.mojeek.com/search?q=${encodeURIComponent(ctx.question)}` + (p > 0 ? `&s=${p * 10 + 1}` : "");
     const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12000 });
     if (!r.ok || !r.body) {
       if (p === 0) {
-        const why =
-          r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
         return { backend: "mojeek", items: [], notes: [`Mojeek ${why}.`] };
       }
       break;

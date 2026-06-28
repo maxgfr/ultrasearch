@@ -16,8 +16,7 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url =
-    `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` +
-    (since ? `&filter=from_publication_date:${since}` : "");
+    `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` + (since ? `&filter=from_publication_date:${since}` : "");
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
   const results: any[] = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
@@ -26,9 +25,7 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     const title = String(w.title ?? w.display_name ?? "Untitled");
     const abstract = fromInverted(w.abstract_inverted_index);
-    const authors = Array.isArray(w.authorships)
-      ? w.authorships.map((a: any) => a?.author?.display_name).filter(Boolean)
-      : [];
+    const authors = Array.isArray(w.authorships) ? w.authorships.map((a: any) => a?.author?.display_name).filter(Boolean) : [];
     const year = (w.publication_year as number) || undefined;
     const venue = w.primary_location?.source?.display_name as string | undefined;
     const doi = typeof w.doi === "string" ? w.doi.replace(/^https?:\/\/doi\.org\//, "") : undefined;

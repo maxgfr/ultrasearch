@@ -75,11 +75,7 @@ export function readSourceText(dir: string, s: Source): string {
   const p = join(dir, s.extract);
   if (!existsSync(p)) return s.snippet ?? "";
   const lines = readFileSync(p, "utf8").split("\n");
-  const hasHeader =
-    lines.length >= 3 &&
-    lines[0]!.startsWith("# ") &&
-    lines[1]!.startsWith("- url:") &&
-    lines[2]!.startsWith("- backend:");
+  const hasHeader = lines.length >= 3 && lines[0]!.startsWith("# ") && lines[1]!.startsWith("- url:") && lines[2]!.startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
@@ -101,12 +97,7 @@ export interface WriteDossierResult {
 // sources/S#.md (cleaned extracts), manifest.json, and DOSSIER.md (the
 // model-facing brief). The tiered reports (SUMMARY/REPORT/FULL.md) are written
 // by the model afterward, then `render` + `check` run.
-export function writeDossier(
-  dir: string,
-  rawSources: RawSource[],
-  manifest: Manifest,
-  template: string,
-): WriteDossierResult {
+export function writeDossier(dir: string, rawSources: RawSource[], manifest: Manifest, template: string): WriteDossierResult {
   mkdirSync(join(dir, "sources"), { recursive: true });
 
   const sources: Source[] = rawSources.map((rs, i) => {

@@ -500,9 +500,7 @@ function expandTokens(tokens, max = 8) {
     for (const sub of subtokens(raw)) variants.push({ text: sub, kind: "subtoken" });
     byCanonical.set(canonical, { canonical, original: raw, variants });
   }
-  const all = [...byCanonical.values()].flatMap(
-    (ek, kwIdx) => ek.variants.map((v) => ({ ek, v, kwIdx }))
-  );
+  const all = [...byCanonical.values()].flatMap((ek, kwIdx) => ek.variants.map((v) => ({ ek, v, kwIdx })));
   all.sort((a, b) => VARIANT_PRIORITY[a.v.kind] - VARIANT_PRIORITY[b.v.kind] || a.kwIdx - b.kwIdx);
   const seen = /* @__PURE__ */ new Set();
   const kept = /* @__PURE__ */ new Set();
@@ -1013,7 +1011,7 @@ function extractMainHtml(html) {
     /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
     /<(?:div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>([\s\S]*?)<\/(?:div|section)>/gi
   ];
-  let candidates = [];
+  const candidates = [];
   for (const re of tiers) {
     let m;
     while (m = re.exec(html)) candidates.push(m[1]);
@@ -1037,10 +1035,7 @@ var PDF_URL_RE = /\.pdf($|[?#])/i;
 var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
 async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = PDF_URL_RE.test(url);
-  const res = await httpGet(
-    url,
-    wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage }
-  );
+  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
@@ -1914,14 +1909,7 @@ var HANDLERS = {
   europepmc: europepmcBackend,
   pubmed: pubmedBackend
 };
-var SINGLE_QUERY = /* @__PURE__ */ new Set([
-  "github",
-  "stackexchange",
-  "semanticscholar",
-  "pubmed",
-  "fixture",
-  "generic"
-]);
+var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
 function mergeVariants(backend, lists, notes) {
   const ranked = lists.map((l) => [...l].sort((a, b) => b.score - a.score));
   const fused = rrf(ranked, (it) => canonicalizeUrl(it.url));
@@ -1953,9 +1941,7 @@ async function runBackends(kinds, ctx) {
         const res = await handler(ctx);
         return { ...res, ms: Date.now() - t0 };
       }
-      const perVariant = await Promise.all(
-        variants.map((q) => handler({ ...ctx, question: q }))
-      );
+      const perVariant = await Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
       const merged = mergeVariants(
         kind,
         perVariant.map((r) => r.items),
@@ -2116,7 +2102,7 @@ function bibKey(s, used) {
   const last = s.meta?.authors?.[0]?.split(/\s+/).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
   const year = s.meta?.year ? String(s.meta.year) : "";
   const word = s.title.split(/\s+/).find((w) => w.replace(/[^a-z0-9]/gi, "").length > 3)?.toLowerCase().replace(/[^a-z0-9]/g, "");
-  let base = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
+  const base = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
   let key = base;
   let n = 2;
   while (used.has(key)) key = `${base}${n++}`;
@@ -2124,9 +2110,7 @@ function bibKey(s, used) {
   return key;
 }
 function toBibtex(sources) {
-  const scholarly = sources.filter(
-    (s) => s.meta && (s.meta.doi || s.meta.arxivId || s.meta.authors && s.meta.authors.length || s.meta.year)
-  );
+  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || s.meta.authors && s.meta.authors.length || s.meta.year));
   if (!scholarly.length) {
     return "% No scholarly sources with citable metadata in this dossier.\n";
   }
@@ -2366,7 +2350,9 @@ async function runGather(options) {
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
     ...gapNote ? [gapNote] : [],
-    ...thin ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`] : [],
+    ...thin ? [
+      `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`
+    ] : [],
     ENRICH_NUDGE
   ];
   const manifest = {
@@ -2430,10 +2416,7 @@ async function addSource(dir, url, opts = {}) {
   const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
   writeFileSync3(join3(dir, "sources.json"), JSON.stringify(nextSources, null, 2));
   writeFileSync3(join3(dir, "manifest.json"), JSON.stringify(nextManifest, null, 2));
-  writeFileSync3(
-    join3(dir, "DOSSIER.md"),
-    renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template)
-  );
+  writeFileSync3(join3(dir, "DOSSIER.md"), renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template));
   return { id, added: true };
 }
 
@@ -2474,7 +2457,7 @@ function mdToHtml(md, idPrefix, opts = {}) {
   const inline = (text) => renderInline(text, opts.verdicts);
   let i = 0;
   const headingId = (text) => {
-    let base = `${idPrefix}-${slugify(text)}`;
+    const base = `${idPrefix}-${slugify(text)}`;
     let id = base;
     let n = 2;
     while (usedIds.has(id)) id = `${base}-${n++}`;
@@ -2540,7 +2523,9 @@ function mdToHtml(md, idPrefix, opts = {}) {
         i++;
       }
       const thead = `<thead><tr>${header.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
-      const tbody = rows.map((r) => `<tr>${splitRow(r).map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`).join("");
+      const tbody = rows.map(
+        (r) => `<tr>${splitRow(r).map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`
+      ).join("");
       out.push(`<table>${thead}<tbody>${tbody}</tbody></table>`);
       continue;
     }
@@ -2665,8 +2650,7 @@ function renderHtml(dir) {
     }
   }
   if (verify) toc.push(`<div class="tier"><a href="#verification">Verification</a></div>`);
-  if (verify?.contradictions?.length)
-    toc.push(`<a class="h3" href="#contradictions">Contradictions (${verify.contradictions.length})</a>`);
+  if (verify?.contradictions?.length) toc.push(`<a class="h3" href="#contradictions">Contradictions (${verify.contradictions.length})</a>`);
   if (subs.length) toc.push(`<div class="tier"><a href="#subquestions">Sub-questions (${subs.length})</a></div>`);
   toc.push(`<div class="tier"><a href="#sources">Sources (${sources.length})</a></div></nav>`);
   const main2 = ["<main>"];
@@ -2744,7 +2728,7 @@ function writeHtml(dir, out) {
   return path;
 }
 function mdLinkText(s) {
-  return s.replace(/[\[\]]/g, "").trim() || "(untitled)";
+  return s.replace(/[[\]]/g, "").trim() || "(untitled)";
 }
 function verificationMarkdown(r) {
   const status = r.ok ? "**grounded**" : `**${r.failures.length} claim(s) failed**`;
@@ -2896,7 +2880,7 @@ function extractUnits(lines, code, hint) {
       i++;
       continue;
     }
-    let line = stripInlineCode(lines[i]);
+    const line = stripInlineCode(lines[i]);
     const t = line.trim();
     if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
       flush();
@@ -2976,7 +2960,8 @@ function analyzeFile(file, text) {
       const tok = m[1].trim();
       if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
       else if (tok === "M") mMarkers++;
-      else if (/^model-hint$/i.test(tok)) continue;
+      else if (/^model-hint$/i.test(tok))
+        continue;
       else unknownTokens.push(tok);
     }
   }
@@ -3007,9 +2992,7 @@ function analyzeFile(file, text) {
 function applySemantic(dir, result) {
   const p = join5(dir, "VERIFY.json");
   if (!existsSync3(p)) {
-    result.warnings.push(
-      "--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped."
-    );
+    result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
     return;
   }
   try {
@@ -3017,9 +3000,7 @@ function applySemantic(dir, result) {
     result.semantic = sem;
     if (!sem.ok) {
       result.ok = false;
-      result.errors.push(
-        `Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`
-      );
+      result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
     }
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
@@ -3143,15 +3124,11 @@ function formatCheckReport(r, dir) {
   const lines = [];
   lines.push(`ultrasearch check: ${dir}`);
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
-  lines.push(
-    `  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`
-  );
+  lines.push(`  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  \u2717 [${u.file}] unsourced: "${u.text}\u2026"`);
   if (r.semantic) {
     const s = r.semantic;
-    lines.push(
-      `  semantic: supported ${s.supported} \xB7 partial ${s.partial} \xB7 refuted ${s.refuted} \xB7 unsupported ${s.unsupported}`
-    );
+    lines.push(`  semantic: supported ${s.supported} \xB7 partial ${s.partial} \xB7 refuted ${s.refuted} \xB7 unsupported ${s.unsupported}`);
     for (const f of s.failures.slice(0, 8)) lines.push(`  \u2717 semantic ${f.claimId} (${f.sourceId}): ${f.verdict}`);
   }
   for (const e of r.errors) lines.push(`  \u2717 ${e}`);
@@ -3550,18 +3527,7 @@ Grounding:
     ultrasearch render --run <dir>   # \u2192 index.html
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
 `;
-var COMMANDS = /* @__PURE__ */ new Set([
-  "gather",
-  "search",
-  "fetch",
-  "add-source",
-  "render",
-  "check",
-  "modes",
-  "plan",
-  "merge",
-  "verify"
-]);
+var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
   "question",
@@ -3724,15 +3690,7 @@ function buildGatherOptions(p, opts = {}) {
   const mode = oneOf("mode", p.values.mode ?? "topic", ALL_MODES);
   const depth = oneOf("depth", p.values.depth ?? "standard", ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf("web-engine", p.values["web-engine"] ?? "auto", [
-    "auto",
-    "searxng",
-    "ddg",
-    "ddglite",
-    "mojeek",
-    "marginalia",
-    "claude"
-  ]);
+  const webEngine = oneOf("web-engine", p.values["web-engine"] ?? "auto", ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"]);
   return {
     question,
     mode,

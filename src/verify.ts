@@ -37,10 +37,7 @@ function claimStrings(text: string): string[] {
 // worklist (VERIFY.todo.<shard>.json / VERIFY.<shard>.md), so N skeptic
 // subagents can adjudicate disjoint slices in parallel and `verify --apply`
 // reassembles them. The default (no-shard) path is byte-identical to before.
-export function runVerify(
-  dir: string,
-  opts: { maxVerify?: number; shards?: number; shard?: number } = {},
-): VerifyWorklist {
+export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
   const sources: Source[] = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const textCache = new Map<string, string>();
@@ -90,10 +87,14 @@ export function runVerify(
   // shard's stripe (i % shards === shard) so N shards partition the worklist with
   // no overlap or loss. Disabled (default) ⇒ the original document-order worklist.
   const shards = opts.shards !== undefined ? Math.max(1, Math.floor(opts.shards)) : undefined;
-  const shard =
-    shards !== undefined ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
+  const shard = shards !== undefined ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
   const shaped =
-    shards !== undefined ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
+    shards !== undefined
+      ? kept
+          .slice()
+          .sort(cmp)
+          .filter((_, i) => i % shards === shard)
+      : kept;
   const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
 
   const todo = {

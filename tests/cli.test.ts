@@ -43,9 +43,7 @@ describe("parseArgs", () => {
   });
 
   it("accepts the deep-tier value flags (--run-root, --shards, --shard, --min-sources)", () => {
-    const p = parseArgs([
-      "verify", "--run", "/d", "--shards", "3", "--shard", "0",
-    ]);
+    const p = parseArgs(["verify", "--run", "/d", "--shards", "3", "--shard", "0"]);
     expect(p.values.shards).toBe("3");
     expect(p.values.shard).toBe("0");
     const q = parseArgs(["plan", "--q", "x", "--run-root", "/tmp/deep"]);

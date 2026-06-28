@@ -42,10 +42,6 @@ describe("mojeekBackend", () => {
     const r = await mojeekBackend(makeCtx("leaky bucket", { pages: 2 }));
     expect(spy.mock.calls).toHaveLength(2);
     expect(String(spy.mock.calls[1]![0])).toContain("s=11");
-    expect(r.items.map((i) => i.url)).toEqual([
-      "https://real.test/m1",
-      "https://real.test/m2",
-      "https://real.test/m3",
-    ]);
+    expect(r.items.map((i) => i.url)).toEqual(["https://real.test/m1", "https://real.test/m2", "https://real.test/m3"]);
   });
 });

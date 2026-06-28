@@ -77,9 +77,7 @@ export function runMerge(options: MergeOptions): MergeResult {
   const deduped = dedupeNearDuplicates(fused);
   const merged = deduped.items;
   for (const it of merged) {
-    const prov = (provByKey.get(identityKey(it)) ?? [])
-      .slice()
-      .sort((a, b) => a.runDir.localeCompare(b.runDir) || a.subQuestion.localeCompare(b.subQuestion));
+    const prov = (provByKey.get(identityKey(it)) ?? []).slice().sort((a, b) => a.runDir.localeCompare(b.runDir) || a.subQuestion.localeCompare(b.subQuestion));
     it.meta = { ...it.meta, provenance: prov };
   }
 
@@ -87,7 +85,11 @@ export function runMerge(options: MergeOptions): MergeResult {
   const modeName: ModeName = options.mode ?? dossiers[0]!.manifest.mode;
   const mode = getMode(modeName);
   // Pin the timestamp to the latest input dossier so the merge is byte-reproducible.
-  const builtAt = dossiers.map((d) => d.manifest.builtAt).sort().at(-1) ?? dossiers[0]!.manifest.builtAt;
+  const builtAt =
+    dossiers
+      .map((d) => d.manifest.builtAt)
+      .sort()
+      .at(-1) ?? dossiers[0]!.manifest.builtAt;
   const subQuestions = dossiers.map((d, i) => ({ id: `Q${i + 1}`, question: d.manifest.question }));
 
   const manifest: Manifest = {
@@ -105,8 +107,7 @@ export function runMerge(options: MergeOptions): MergeResult {
     tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
     extras: mode.extras,
     notes: [
-      `Merged ${dossiers.length} sub-dossier(s) → ${merged.length} source(s) ` +
-        `(${deduped.dropped} near-duplicate(s) collapsed).`,
+      `Merged ${dossiers.length} sub-dossier(s) → ${merged.length} source(s) ` + `(${deduped.dropped} near-duplicate(s) collapsed).`,
       "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic.",
     ],
     timings: {},

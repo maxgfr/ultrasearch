@@ -27,8 +27,7 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
     // highlight tags. Strip tags, then decode entities so titles/snippets/text
     // are clean prose (they surface verbatim in DOSSIER.md and the HTML report).
     const extract: string = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
-    const pageUrl: string =
-      dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
+    const pageUrl: string = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
     if (!text) continue;

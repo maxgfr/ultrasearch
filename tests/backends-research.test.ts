@@ -91,7 +91,17 @@ describe("research backends", () => {
     // no abstract → snippet falls back to "title — venue year", so the venue
     // entity (the field that leaked live) must be decoded too.
     const body = JSON.stringify({
-      message: { items: [{ title: ["Knowledge Production and R&amp;D in <i>vivo</i>"], DOI: "10.1/x", URL: "https://doi.org/10.1/x", "container-title": ["R&amp;D Decisions"], issued: { "date-parts": [[2002]] } }] },
+      message: {
+        items: [
+          {
+            title: ["Knowledge Production and R&amp;D in <i>vivo</i>"],
+            DOI: "10.1/x",
+            URL: "https://doi.org/10.1/x",
+            "container-title": ["R&amp;D Decisions"],
+            issued: { "date-parts": [[2002]] },
+          },
+        ],
+      },
     });
     installFetchMock(routes([["api.crossref.org", { body, contentType: "application/json" }]]));
     const r = await crossrefBackend(makeCtx("r&d"));
@@ -142,11 +152,15 @@ describe("research backends", () => {
   it("europepmc decodes escaped JATS markup in titles + abstracts (real-API regression)", async () => {
     const EPMC = JSON.stringify({
       resultList: {
-        result: [{
-          title: "Reactivation of &lt;i&gt;P53&lt;/i&gt; pathways.",
-          abstractText: "Effects on &lt;sup&gt;13&lt;/sup&gt;C uptake &amp; growth.",
-          pubYear: "2021", source: "MED", id: "1",
-        }],
+        result: [
+          {
+            title: "Reactivation of &lt;i&gt;P53&lt;/i&gt; pathways.",
+            abstractText: "Effects on &lt;sup&gt;13&lt;/sup&gt;C uptake &amp; growth.",
+            pubYear: "2021",
+            source: "MED",
+            id: "1",
+          },
+        ],
       },
     });
     installFetchMock(routes([["ebi.ac.uk/europepmc", { body: EPMC, contentType: "application/json" }]]));
@@ -161,7 +175,13 @@ describe("research backends", () => {
     const ESUMMARY = JSON.stringify({
       result: {
         uids: ["111", "222"],
-        "111": { title: "Trial of drug A.", pubdate: "2020 Jan", source: "NEJM", authors: [{ name: "Doe J" }], articleids: [{ idtype: "doi", value: "10.1056/pm.a" }] },
+        "111": {
+          title: "Trial of drug A.",
+          pubdate: "2020 Jan",
+          source: "NEJM",
+          authors: [{ name: "Doe J" }],
+          articleids: [{ idtype: "doi", value: "10.1056/pm.a" }],
+        },
         "222": { title: "Trial of drug B.", pubdate: "2019", source: "Lancet", authors: [], articleids: [] },
       },
     });

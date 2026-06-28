@@ -7,9 +7,7 @@ import { sinceDate } from "../util.js";
 export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
-  const url =
-    `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` +
-    (since ? `&filter=from-pub-date:${since}` : "");
+  const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` + (since ? `&filter=from-pub-date:${since}` : "");
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000, userAgent: CONTACT_UA });
   const items0: any[] = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
@@ -19,9 +17,7 @@ export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
     // Crossref titles carry HTML entities (R&amp;D) and JATS tags (<i>, <sub>).
     const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
     const abstract = w.abstract ? htmlToText(String(w.abstract)) : "";
-    const authors = Array.isArray(w.author)
-      ? w.author.map((a: any) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean)
-      : [];
+    const authors = Array.isArray(w.author) ? w.author.map((a: any) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean) : [];
     const year = w.issued?.["date-parts"]?.[0]?.[0] as number | undefined;
     const venue = cleanInline(Array.isArray(w["container-title"]) ? String(w["container-title"][0] ?? "") : "") || undefined;
     return {

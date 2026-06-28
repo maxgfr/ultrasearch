@@ -38,14 +38,11 @@ export const ddgliteBackend: Backend = async (ctx): Promise<BackendResult> => {
   // Paginate via the `s` start offset; accumulate + dedupe across pages and stop
   // as soon as a page adds no new URLs (see the DuckDuckGo backend for the rationale).
   for (let p = 0; p < pages; p++) {
-    const url =
-      `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` +
-      (p > 0 ? `&s=${p * 30}` : "");
+    const url = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(ctx.question)}&kl=${encodeURIComponent(kl)}` + (p > 0 ? `&s=${p * 30}` : "");
     const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12000 });
     if (!r.ok || !r.body) {
       if (p === 0) {
-        const why =
-          r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
         return { backend: "ddglite", items: [], notes: [`DuckDuckGo Lite ${why}.`] };
       }
       break;

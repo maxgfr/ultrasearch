@@ -40,8 +40,7 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
     const r = await httpGet(url, { accept: "application/json", acceptLanguage, timeoutMs: 8000 });
     if (!r.ok) {
       if (p === 0) {
-        const why =
-          r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status})`;
         return {
           backend: "searxng",
           items: [],

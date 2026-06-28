@@ -91,13 +91,41 @@ Grounding:
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
 `;
 
-export const COMMANDS = new Set([
-  "gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify",
-]);
+export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
 const VALUE_FLAGS = new Set([
-  "q", "question", "mode", "depth", "backends", "backend", "queries", "max-sources", "per-source",
-  "concurrency", "rounds", "pages", "web-breadth", "out", "run", "lang", "region", "searxng", "web-engine", "url", "since", "exclude-domains", "title",
-  "subquestions", "runs", "master", "apply", "max-subquestions", "max-verify", "run-root", "shards", "shard", "min-sources",
+  "q",
+  "question",
+  "mode",
+  "depth",
+  "backends",
+  "backend",
+  "queries",
+  "max-sources",
+  "per-source",
+  "concurrency",
+  "rounds",
+  "pages",
+  "web-breadth",
+  "out",
+  "run",
+  "lang",
+  "region",
+  "searxng",
+  "web-engine",
+  "url",
+  "since",
+  "exclude-domains",
+  "title",
+  "subquestions",
+  "runs",
+  "master",
+  "apply",
+  "max-subquestions",
+  "max-verify",
+  "run-root",
+  "shards",
+  "shard",
+  "min-sources",
 ]);
 const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "no-md", "verbose", "semantic"]);
 
@@ -184,7 +212,10 @@ export function parseArgs(argv: string[]): Parsed {
 }
 
 function parseList(s: string): string[] {
-  return s.split(",").map((x) => x.trim()).filter(Boolean);
+  return s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
 }
 
 // Resolve the `--apply` spec into a list of verdict files: a comma-separated
@@ -256,15 +287,18 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
   const mode = oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
   const depth = oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", [
-    "auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude",
-  ]);
+  const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"]);
   return {
     question,
     mode,
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : undefined,
-    queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : undefined,
+    queries: p.values.queries
+      ? p.values.queries
+          .split("|")
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : undefined,
     maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
@@ -352,17 +386,16 @@ async function main(): Promise<void> {
     case "plan": {
       const options = buildGatherOptions(p);
       const override = p.values.subquestions
-        ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean)
+        ? p.values.subquestions
+            .split("|")
+            .map((s) => s.trim())
+            .filter(Boolean)
         : undefined;
-      const cap = p.values["max-subquestions"]
-        ? num("max-subquestions", p.values["max-subquestions"], 6)
-        : undefined;
+      const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : undefined;
       const runRoot = p.values["run-root"] ? resolve(p.values["run-root"]) : undefined;
       const result = runPlan(options.question, options.mode, override, cap, runRoot);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
-      const rootHint = runRoot
-        ? ` — each carries an \`out\` dir under ${runRoot} to gather into`
-        : "";
+      const rootHint = runRoot ? ` — each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(
         `ultrasearch: ${result.subQuestions.length} sub-question(s) for "${options.question}" ` +
           `(mode ${options.mode}) — fan out a gather per sub-question, then \`merge\`${rootHint}.\n`,
@@ -448,9 +481,7 @@ async function main(): Promise<void> {
         if (!result.ok) process.exit(1);
         return;
       }
-      const maxVerify = p.values["max-verify"]
-        ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify)
-        : undefined;
+      const maxVerify = p.values["max-verify"] ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : undefined;
       // Optional sharding for parallel skeptics: --shards N --shard I (0-based).
       const sh = parseShardArgs(p.values.shards, p.values.shard);
       if (!sh.ok) fail(sh.error);
@@ -478,9 +509,7 @@ async function main(): Promise<void> {
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const minSources = p.values["min-sources"]
-        ? num("min-sources", p.values["min-sources"], 1)
-        : undefined;
+      const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : undefined;
       const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");

@@ -20,7 +20,10 @@ describe("BM25F", () => {
   it("ranks a title match above a body-only mention above an off-topic page", () => {
     const docs = [
       doc("title", { title: "token bucket rate limiting", body: "an introduction to networking concepts and queues" }),
-      doc("body", { title: "networking concepts", body: "this page mentions rate limiting once among many other topics like caching and queues and latency budgets" }),
+      doc("body", {
+        title: "networking concepts",
+        body: "this page mentions rate limiting once among many other topics like caching and queues and latency budgets",
+      }),
       doc("none", { title: "gardening", body: "tomatoes and weather and soil moisture" }),
     ];
     const idx = buildBm25Index("token bucket rate limiting", docs);

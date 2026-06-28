@@ -43,10 +43,7 @@ describe("toBibtex", () => {
 
   it("disambiguates duplicate keys", () => {
     const meta = { authors: ["Jane Doe"], year: 2020 };
-    const bib = toBibtex([
-      s({ id: "S1", title: "Networks", meta }),
-      s({ id: "S2", title: "Networks", meta }),
-    ]);
+    const bib = toBibtex([s({ id: "S1", title: "Networks", meta }), s({ id: "S2", title: "Networks", meta })]);
     expect(bib).toMatch(/@article\{doe2020networks,/);
     expect(bib).toMatch(/@article\{doe2020networks2,/);
   });

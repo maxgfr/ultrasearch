@@ -14,9 +14,17 @@ function raw(over: Partial<RawSource>): RawSource {
 }
 function opts(over: Partial<GatherOptions>): GatherOptions {
   return {
-    question: "what is rate limiting", mode: "topic", depth: "standard",
-    maxSources: 25, perSource: 6, lang: "en", webEngine: "auto",
-    excludeDomains: [], json: false, fresh: false, ...over,
+    question: "what is rate limiting",
+    mode: "topic",
+    depth: "standard",
+    maxSources: 25,
+    perSource: 6,
+    lang: "en",
+    webEngine: "auto",
+    excludeDomains: [],
+    json: false,
+    fresh: false,
+    ...over,
   };
 }
 
@@ -29,7 +37,7 @@ describe("planVariants", () => {
     expect(std[1]).not.toContain("how"); // keyword variant drops stopwords
   });
   it("adds an identifier variant at deep when identifiers are present", () => {
-    const deep = planVariants('error 429 in retryBackoff v1.2.3', "deep");
+    const deep = planVariants("error 429 in retryBackoff v1.2.3", "deep");
     expect(deep.length).toBeGreaterThanOrEqual(2);
     expect(deep.join(" ")).toMatch(/429/);
   });
@@ -73,7 +81,10 @@ describe("contentCoverage", () => {
 describe("E1: multi-query fan-out (runGather)", () => {
   it("issues each planned variant to a multi-query backend", async () => {
     const SEARCH = JSON.stringify({ pages: [{ key: "Rate_limiting", title: "Rate limiting", excerpt: "x" }] });
-    const SUMMARY = JSON.stringify({ extract: "Rate limiting controls request rate.", content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Rate_limiting" } } });
+    const SUMMARY = JSON.stringify({
+      extract: "Rate limiting controls request rate.",
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Rate_limiting" } },
+    });
     const spy = installFetchMock((url) => {
       if (url.includes("/search/page")) return { body: SEARCH, contentType: "application/json" };
       if (url.includes("/summary/")) return { body: SUMMARY, contentType: "application/json" };
@@ -109,8 +120,7 @@ describe("E3: BM25 re-rank resists keyword stuffing", () => {
     const stuff = "rate ".repeat(50);
     installFetchMock((url) => {
       if (url.includes("page-stuff")) return { body: `<p>${stuff}</p>` };
-      if (url.includes("page-cover"))
-        return { body: "<p>the token bucket and leaky bucket algorithms control the request rate for limiting traffic</p>" };
+      if (url.includes("page-cover")) return { body: "<p>the token bucket and leaky bucket algorithms control the request rate for limiting traffic</p>" };
       return undefined;
     });
     const dir = mkdtempSync(join(tmpdir(), "us-bm25-"));
@@ -168,8 +178,7 @@ describe("E6: --rounds 2 issues a gap-driven follow-up web search", () => {
         if (url.includes("real.test")) return { body: "<p>token bucket token bucket token bucket</p>" }; // misses sliding/window/rate/counter
         return undefined;
       });
-    const ddgCalls = (spy: any) =>
-      spy.mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => u.includes("html.duckduckgo.com")).length;
+    const ddgCalls = (spy: any) => spy.mock.calls.map((c: any[]) => String(c[0])).filter((u: string) => u.includes("html.duckduckgo.com")).length;
     const q = "token bucket sliding window rate counter";
 
     const d1 = mkdtempSync(join(tmpdir(), "us-r1-"));

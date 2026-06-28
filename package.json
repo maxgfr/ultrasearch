@@ -23,6 +23,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "lint": "biome ci .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "verify:bundle": "node scripts/verify-skill-bundle.mjs",
     "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs",
     "demo": "node scripts/ultrasearch.mjs gather --q \"what is rate limiting\" --mode topic --backends fixture --out /tmp/ultrasearch-demo",
@@ -47,6 +50,7 @@
     "url": "https://github.com/maxgfr/ultrasearch"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.16",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^6.0.3",
     "@semantic-release/git": "^10.0.1",
