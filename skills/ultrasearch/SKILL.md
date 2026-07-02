@@ -30,22 +30,24 @@ dangling or any claim in REPORT/FULL is unsourced and unflagged.
 
 ## The script
 
-One committed, dependency-free bundle: `node scripts/ultrasearch.mjs <command>`.
+One committed, dependency-free bundle: `node <skill-dir>/scripts/ultrasearch.mjs <command>`.
 No `npm install`, no API keys. Run `--help` for the full surface.
 
-> **The path is relative to this skill's directory** (the folder holding this
-> SKILL.md), not your cwd — an installed skill lives away from the user's
-> project (e.g. `~/.claude/skills/ultrasearch/`). Resolve the skill directory
-> once and use the absolute `…/scripts/ultrasearch.mjs` in every command — and
-> in every subagent prompt.
+> **`<skill-dir>` = this skill's directory** (the folder holding this SKILL.md),
+> resolved once to an ABSOLUTE path. An installed skill lives away from the
+> user's project (e.g. `~/.claude/skills/ultrasearch/`), so a cwd-relative
+> `scripts/ultrasearch.mjs` will NOT resolve — substitute `<skill-dir>` in every
+> command below, and in every subagent prompt.
 
 Key commands:
 
 - `gather --q "<topic>" [--mode <m>] [--depth <d>] [--out <dir>]`
   Fan out the mode's keyless backends, fetch + clean + de-dupe, and write an
   **evidence dossier** (`sources.json`, `sources/S#.md`, `DOSSIER.md`,
-  `manifest.json`) to a run folder. Modes: `topic` (default) · `bug` ·
-  `research` · `learn` · `startup`. Depths: `summary` · `standard` · `deep`.
+  `manifest.json`) to a run folder (default `/tmp/ultrasearch/<slug>/<id>`,
+  safely outside the user's project — or pick one with `--out`). Modes:
+  `topic` (default) · `bug` · `research` · `learn` · `startup`. Depths:
+  `summary` · `standard` · `deep`.
 - `search --backend <kind> --q "<query>"` — drill ONE backend, print results
   (writes nothing). Use to probe a thin area.
 - `fetch --url <u> --out <dir>` (alias `add-source`) — ingest a URL **you** found
@@ -91,7 +93,7 @@ not hand control back mid-retrieval.
 
 2. **Gather.** Run:
    ```
-   node scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d>
+   node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d>
    ```
    It prints the dossier path. If a local SearXNG instance is up, pass
    `--searxng <url>`. The keyless backends are best-effort — some may be
@@ -113,7 +115,7 @@ not hand control back mid-retrieval.
    primary sources, the angles the dossier is thin on, and anything the user
    specifically asked about. For each good URL, ingest it:
    ```
-   node scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
+   node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
    ```
    It fetches, cleans, assigns the next `S#`, and returns the id so you can cite
    it. Repeat until coverage is solid (more for `deep`). See
@@ -133,8 +135,8 @@ not hand control back mid-retrieval.
 
 6. **Render & check.**
    ```
-   node scripts/ultrasearch.mjs render --run <dir>   # → index.html + index.md
-   node scripts/ultrasearch.mjs check  --run <dir>
+   node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>   # → index.html + index.md
+   node <skill-dir>/scripts/ultrasearch.mjs check  --run <dir>
    ```
    `render` always writes both a self-contained `index.html` and a consolidated
    `index.md` (the markdown deliverable, in the report's language).
@@ -156,7 +158,7 @@ plain CLI call; parallel subagents are an *optimization*, never a requirement.
 Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 `references/deep-research-playbook.md`.
 
-1. **Decompose** — `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
+1. **Decompose** — `node <skill-dir>/scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
    → sub-questions (JSON), each with ready `queries` and an `out` dir. Review;
    override with `--subquestions "a|b|c"` when you know the domain better.
 2. **Fan out** — per sub-question (subagents or a sequential loop):
@@ -169,8 +171,8 @@ Full playbook (subagent contracts, sharding recipe, signals, budget caps):
    workflow — every claim `[S#]`, your own knowledge `[M]`.
 5. **Verify (adversarial)** — `verify --run <masterDir>` → for each pair in
    `VERIFY.todo.json`, judge whether the cited `sources/S#.md` actually SUPPORTS
-   the claim (supported · partial · refuted · unsupported; harsher verdict when
-   unsure) → save as `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`,
+   the claim (supported · partial · unsupported · refuted, in ascending
+   harshness; default to the harsher verdict when unsure) → save as `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`,
    one skeptic subagent per slice.
 6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`,
    then `check --semantic --run <masterDir>`. **This is the exit gate — never
@@ -203,8 +205,8 @@ default `auto` = keyless cascade) and locale mechanics:
 
 ## Common mistakes
 
-- Running `scripts/ultrasearch.mjs` relative to your cwd — it lives in the skill
-  folder; use the absolute path (also inside every subagent prompt).
+- Running `scripts/ultrasearch.mjs` relative to your cwd — substitute the
+  absolute `<skill-dir>/` prefix everywhere (also inside every subagent prompt).
 - Answering from memory — an unbacked claim is `[M]` or `> [model-hint]`, never
   a bare sentence and never a disguised citation.
 - Citing a sub-run `S#` after a merge — only MASTER ids resolve.

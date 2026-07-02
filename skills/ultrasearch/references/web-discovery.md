@@ -42,7 +42,7 @@ which engines were tried/fused, so you can see where results came from.
    own **WebSearch** tool to find the authoritative URLs they miss, then ingest
    each one:
    ```
-   node scripts/ultrasearch.mjs fetch --url "<url>" --out <dossier-dir>
+   node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dossier-dir>
    ```
    This is not a fallback of last resort — it's the recommended way to reach
    primary sources and exactly the pages the user cares about. Ingested sources
@@ -84,7 +84,7 @@ when the sources are in another — quote the original and gloss it where helpfu
 
 You can always ground an exact page without discovery:
 ```
-node scripts/ultrasearch.mjs fetch --url "https://docs.example.com/page" --out <dir>
+node <skill-dir>/scripts/ultrasearch.mjs fetch --url "https://docs.example.com/page" --out <dir>
 ```
 The page is fetched, stripped to readable text, excerpted around the question's
 keywords, assigned the next `S#`, and added to the dossier to cite.

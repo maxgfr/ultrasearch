@@ -2,7 +2,7 @@
 
 Each mode maps to a backend-priority profile and a set of extra outputs. At
 `--depth deep` the mode's *deep-only* backends are added too. Override the whole
-set with `--backends a,b,c`. List them live with `node scripts/ultrasearch.mjs
+set with `--backends a,b,c`. List them live with `node <skill-dir>/scripts/ultrasearch.mjs
 modes`.
 
 | Mode | Backends (standard) | + deep-only | Extras |

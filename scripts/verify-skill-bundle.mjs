@@ -109,9 +109,11 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     ];
 
     // A. docs ⊆ CLI: a documented flag that the engine rejects is a doc bug.
+    // Lookbehind (not a prefix whitelist) so bold/parenthesised/em-dashed flags
+    // are still seen; it only skips `--` glued to a word tail (foo--bar, ---).
     let unknown = 0;
     for (const [file, text] of docs) {
-      for (const m of text.matchAll(/(?:^|[\s`("'\[])--([a-z][a-z0-9-]*)/gm)) {
+      for (const m of text.matchAll(/(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g)) {
         if (!universe.has(m[1])) {
           bad(`${file} documents unknown flag --${m[1]} (add it to ALLOWED_FOREIGN_FLAGS only if it belongs to another tool)`);
           unknown++;
@@ -121,19 +123,27 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     if (!unknown) ok(`every --flag documented across ${docs.length} skill file(s) exists in the CLI`);
 
     // B. CLI ⊆ --help: SKILL.md tells agents --help is the full surface.
-    // The lookahead stops --run matching only inside --run-root.
+    // The lookahead stops --run matching only inside --run-root. Unit-level
+    // twin: "HELP covers the whole flag surface" in tests/cli.test.ts — keep
+    // the regexes in sync (this one re-checks the shipped artifact).
     const missing = [...cliFlags].filter((f) => !new RegExp(`--${f}(?![a-z0-9-])`).test(cli.HELP));
     missing.length === 0 ? ok("--help covers the whole flag surface") : bad(`--help omits: ${missing.map((f) => `--${f}`).join(", ")}`);
 
     // C. Any pipe-separated --web-engine value list in the docs matches the
     // engine's exact set (assertions A/B only police flag NAMES, not values).
+    // The list must directly follow the flag (only non-letters in between), so
+    // markdown-table pipes elsewhere on a line can't false-positive; backticks
+    // are stripped first so `a`|`b` formatting can't false-negative; and at
+    // least one enumeration must be found, so reformatting the canonical list
+    // (references/web-discovery.md) can't silently disable this assertion.
     const want = [...cli.ALL_WEB_ENGINES].sort().join(", ");
+    let enumsChecked = 0;
     for (const [file, text] of docs) {
       for (const line of text.split("\n")) {
-        if (!line.includes("--web-engine")) continue;
-        const list = line.match(/((?:[a-z]{2,}\s*\|\s*){2,}[a-z]{2,})/);
-        if (!list) continue;
-        const got = list[1]
+        const m = line.replace(/`/g, "").match(/--web-engine[^a-z|]*((?:[a-z][a-z0-9-]*\s*\|\s*)+[a-z][a-z0-9-]*)/);
+        if (!m) continue;
+        enumsChecked++;
+        const got = m[1]
           .split("|")
           .map((s) => s.trim())
           .sort()
@@ -143,6 +153,7 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
           : bad(`${file} lists --web-engine values [${got}] but the engine supports [${want}]`);
       }
     }
+    if (enumsChecked === 0) bad("no --web-engine value enumeration found in the skill docs — references/web-discovery.md should carry the canonical list (was it reformatted past assertion C's matcher?)");
   }
 }
 

@@ -24,8 +24,9 @@ gating). No LLM calls and no API keys are added.
 
 ## Portability contract
 
-Every step is a plain `node scripts/ultrasearch.mjs …` call. Parallel subagents
-are an **optimization, not a requirement**:
+Every step is a plain `node <skill-dir>/scripts/ultrasearch.mjs …` call
+(`<skill-dir>` = this skill's absolute directory, per SKILL.md). Parallel
+subagents are an **optimization, not a requirement**:
 
 - **Harness with subagents** (e.g. Claude Code): dispatch one subagent per
   sub-question for the fan-out, and skeptic subagents (one per verify shard) for
@@ -58,7 +59,7 @@ the verification worklist.
    **Carry the locale through every fan-out** (`--lang`/`--region`, translated
    `queries`); report in the user's language — SKILL.md's locale rule.
 
-3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir>`. Re-fuses the
+3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir> --q "<original question>" --mode <m>`. Re-fuses the
    combined pool by identity (DOI/arXiv/URL collapses cross-sub-question
    duplicates), drops near-duplicate content, records which sub-question(s)
    surfaced each source (provenance), and re-assigns **stable `S#` ids by fused
@@ -103,9 +104,11 @@ the verification worklist.
 7. **Loop until dry** — inspect the master dossier + report for residual gaps,
    contradictions, or new sub-questions a round surfaced. If any appear and you
    are under the round budget (`DEEP_CAPS.maxRounds`, 3), fan out the new
-   sub-questions, `merge` them into the **same** master, and re-verify only the
-   new claims (`verify` regenerates the whole worklist — adjudicate only the
-   pairs still lacking a verdict; `--apply` merges last-wins). Stop when a round
+   sub-questions, `merge` them into the **same** master, and re-verify: `verify`
+   regenerates the worklist afresh (prior verdicts are NOT carried over), so
+   adjudicate the new pairs into a fresh `verdicts.<round>.json` and re-apply
+   with the DIRECTORY form (`verify --apply <masterDir> --run <masterDir>`),
+   which reassembles every round's verdict files in one call. Stop when a round
    surfaces nothing new.
 
 8. **Render & present** — `render --run <masterDir>` → `index.html` (per-claim
@@ -122,15 +125,15 @@ parent MUST substitute the **absolute path** to this skill's
 `--run-root` so every `out` dir is absolute too). The parent already knows every
 sub-run dir from `plan --run-root`, so it never has to read a subagent's output
 to find the dossier. Dispatch one subagent per sub-question with a prompt shaped
-like (`<ABS-SKILL-DIR>` = this skill's directory, resolved by the parent):
+like (`<skill-dir>` = this skill's absolute directory, resolved by the parent):
 
 > You are gathering web evidence for ONE sub-question of a larger research run.
 > Run (add `--lang <code> --region <cc>` and translate the `--queries` into that
 > language when the run targets a non-English audience):
-> `node <ABS-SKILL-DIR>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
+> `node <skill-dir>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
 > Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
 > missing), enrich with your own WebSearch and, for each good URL,
-> `node <ABS-SKILL-DIR>/scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
+> `node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
 > Do NOT write any report tier. Reply with exactly: the `out` dir, a one-line
 > coverage note, and any NEW sub-questions you discovered (or "none").
 

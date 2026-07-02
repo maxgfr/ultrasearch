@@ -58,7 +58,7 @@ is fragile. **Use your own WebSearch tool** for:
 
 Ingest each good URL so you can cite it:
 ```
-node scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>   # prints the new S#
+node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>   # prints the new S#
 ```
 Re-run for each URL. Aim for solid coverage of every section of the template —
 more sources for `--depth deep`.

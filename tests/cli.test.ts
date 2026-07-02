@@ -64,7 +64,8 @@ describe("parseArgs", () => {
 
 // SKILL.md tells agents "run --help for the full surface" — keep that promise:
 // every accepted flag must appear in HELP. The lookahead stops --run matching
-// only inside --run-root (and --shard inside --shards).
+// only inside --run-root (and --shard inside --shards). Artifact-layer twin:
+// assertion B in scripts/verify-skill-bundle.mjs — keep the regexes in sync.
 describe("HELP covers the whole flag surface", () => {
   it("mentions every value and boolean flag", () => {
     for (const flag of [...VALUE_FLAGS, ...BOOL_FLAGS]) {
