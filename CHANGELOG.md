@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.5.3](https://github.com/maxgfr/ultrasearch/compare/v1.5.2...v1.5.3) (2026-07-02)
+
+
+### Bug Fixes
+
+* **cli:** complete --help, remove dead --fresh/--verbose, single-source web-engine values ([bda0979](https://github.com/maxgfr/ultrasearch/commit/bda0979216db79996bec20c1801d3e6c876727aa))
+* **skill:** de-duplicate SKILL.md, anchor paths for installed skills, tighten description; gate doc↔CLI flag drift ([eb24b30](https://github.com/maxgfr/ultrasearch/commit/eb24b30da5d1a42e00109fadcf8156276903903d)), closes [Walkthrou#probe](https://github.com/Walkthrou/issues/probe)
+* **skill:** harden drift gate & make every snippet installed-skill-safe (review findings) ([f8568a0](https://github.com/maxgfr/ultrasearch/commit/f8568a001428afc29842da103112b96c7231b8e0))
+
 ## [1.5.2](https://github.com/maxgfr/ultrasearch/compare/v1.5.1...v1.5.2) (2026-06-28)
 
 
