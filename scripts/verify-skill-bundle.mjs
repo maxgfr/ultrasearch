@@ -12,7 +12,7 @@
 // Run by CI and by `pnpm run verify:bundle`. Pure Node, no deps, no network.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Claude Code matches skill descriptions at <=1024 chars; 1000 leaves a safety
 // margin so a future edit can't silently cross the cap.
@@ -73,6 +73,78 @@ else if (!existsSync(pkgEngine)) bad(`missing skills/${name}/${engine} — run \
 else readFileSync(rootEngine).equals(readFileSync(pkgEngine))
   ? ok(`embedded engine skills/${name}/${engine} is byte-identical to ${engine}`)
   : bad(`skills/${name}/${engine} differs from ${engine} — run \`node scripts/copy-bundle.mjs\` and commit`);
+
+// 5. Docs ↔ CLI drift gate: every `--flag` the skill package documents must
+// exist in the CLI, every CLI flag must be visible in `--help` (SKILL.md
+// promises "run --help for the full surface"), and any `--web-engine` value
+// enumeration in the docs must match the engine's list exactly. The bundle
+// exports its flag tables for this; importing it is side-effect-free (the
+// bundle's isInvokedDirectly() guards main()). A STALE bundle is caught
+// upstream by check:build's git diff; a bundler that stops re-exporting is
+// caught by the presence assert below; a doc legitimately quoting ANOTHER
+// tool's flag goes in ALLOWED_FOREIGN_FLAGS.
+if (existsSync(pkgEngine) && existsSync(skillMd)) {
+  let cli = null;
+  try {
+    cli = await import(pathToFileURL(pkgEngine).href);
+  } catch (e) {
+    bad(`cannot import skills/${name}/${engine} for the drift gate: ${e.message}`);
+  }
+  if (cli && !(cli.VALUE_FLAGS && cli.BOOL_FLAGS && cli.HELP && cli.ALL_WEB_ENGINES)) {
+    bad("the bundle no longer exports VALUE_FLAGS/BOOL_FLAGS/HELP/ALL_WEB_ENGINES — the drift gate needs them");
+    cli = null;
+  }
+  if (cli) {
+    const ALLOWED_FOREIGN_FLAGS = new Set([]); // flags belonging to other tools that the docs quote
+    const cliFlags = new Set([...cli.VALUE_FLAGS, ...cli.BOOL_FLAGS]);
+    const universe = new Set([...cliFlags, "help", "version", "h", "v", ...ALLOWED_FOREIGN_FLAGS]);
+    const refs = join(skillDir, "references");
+    const docs = [
+      ["SKILL.md", readFileSync(skillMd, "utf8")],
+      ...(existsSync(refs)
+        ? readdirSync(refs)
+            .filter((f) => f.endsWith(".md"))
+            .map((f) => [`references/${f}`, readFileSync(join(refs, f), "utf8")])
+        : []),
+    ];
+
+    // A. docs ⊆ CLI: a documented flag that the engine rejects is a doc bug.
+    let unknown = 0;
+    for (const [file, text] of docs) {
+      for (const m of text.matchAll(/(?:^|[\s`("'\[])--([a-z][a-z0-9-]*)/gm)) {
+        if (!universe.has(m[1])) {
+          bad(`${file} documents unknown flag --${m[1]} (add it to ALLOWED_FOREIGN_FLAGS only if it belongs to another tool)`);
+          unknown++;
+        }
+      }
+    }
+    if (!unknown) ok(`every --flag documented across ${docs.length} skill file(s) exists in the CLI`);
+
+    // B. CLI ⊆ --help: SKILL.md tells agents --help is the full surface.
+    // The lookahead stops --run matching only inside --run-root.
+    const missing = [...cliFlags].filter((f) => !new RegExp(`--${f}(?![a-z0-9-])`).test(cli.HELP));
+    missing.length === 0 ? ok("--help covers the whole flag surface") : bad(`--help omits: ${missing.map((f) => `--${f}`).join(", ")}`);
+
+    // C. Any pipe-separated --web-engine value list in the docs matches the
+    // engine's exact set (assertions A/B only police flag NAMES, not values).
+    const want = [...cli.ALL_WEB_ENGINES].sort().join(", ");
+    for (const [file, text] of docs) {
+      for (const line of text.split("\n")) {
+        if (!line.includes("--web-engine")) continue;
+        const list = line.match(/((?:[a-z]{2,}\s*\|\s*){2,}[a-z]{2,})/);
+        if (!list) continue;
+        const got = list[1]
+          .split("|")
+          .map((s) => s.trim())
+          .sort()
+          .join(", ");
+        got === want
+          ? ok(`${file} --web-engine value list matches the engine`)
+          : bad(`${file} lists --web-engine values [${got}] but the engine supports [${want}]`);
+      }
+    }
+  }
+}
 
 if (errors.length) {
   console.error(`\nverify-skill-bundle: ${errors.length} problem(s) — the published skill would not install correctly.`);

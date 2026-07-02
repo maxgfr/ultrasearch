@@ -36,7 +36,7 @@ template, so the decomposition is mode-aware. See
   Scholar/Europe PMC collapses to one source by DOI/arXiv id.
 - **`--since`** filters date-capable backends (Crossref, OpenAlex, GitHub,
   Stack Exchange, Hacker News); **`--web-engine`** pins or drops the general-web
-  discovery backends (`searxng` | `ddg` | `claude` | `auto`).
+  discovery layer — value list + cascade in `references/web-discovery.md`.
 
 ## Extras
 

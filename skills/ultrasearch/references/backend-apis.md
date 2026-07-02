@@ -1,8 +1,8 @@
 # Backend APIs — keyless endpoints & rate limits
 
-Every backend is keyless and free. All requests go through one HTTP layer
-(`src/backends/fetch.ts`) with a timeout, a UA string, and a body cap; a backend
-never throws — failures become honest notes in the dossier.
+Every backend is keyless and free. All requests go through one HTTP layer with
+a timeout, a UA string, and a body cap; a backend never throws — failures become
+honest notes in the dossier.
 
 | Backend | Endpoint | Notes / limits |
 |---------|----------|----------------|

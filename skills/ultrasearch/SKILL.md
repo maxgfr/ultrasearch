@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Fans out keyless web + scholarly-API search, fetches + dedupes pages into a dossier, and you write a tiered report (SUMMARY/REPORT/FULL) where every claim cites a fetched source [S#] — verified by `ultrasearch check` — plus an HTML report. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier decomposes the question, merges dossiers, and adversarially verifies each claim vs its source (`verify` + `check --semantic`); triggers 'deep research on X', 'exhaustively research/verify X'."
+description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT/FULL + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
 license: MIT
 metadata:
   version: 1.5.2
@@ -31,7 +31,15 @@ dangling or any claim in REPORT/FULL is unsourced and unflagged.
 ## The script
 
 One committed, dependency-free bundle: `node scripts/ultrasearch.mjs <command>`.
-No `npm install`, no API keys. Run `--help` for the full surface. Key commands:
+No `npm install`, no API keys. Run `--help` for the full surface.
+
+> **The path is relative to this skill's directory** (the folder holding this
+> SKILL.md), not your cwd — an installed skill lives away from the user's
+> project (e.g. `~/.claude/skills/ultrasearch/`). Resolve the skill directory
+> once and use the absolute `…/scripts/ultrasearch.mjs` in every command — and
+> in every subagent prompt.
+
+Key commands:
 
 - `gather --q "<topic>" [--mode <m>] [--depth <d>] [--out <dir>]`
   Fan out the mode's keyless backends, fetch + clean + de-dupe, and write an
@@ -46,9 +54,9 @@ No `npm install`, no API keys. Run `--help` for the full surface. Key commands:
 - `render --run <dir>` — render SUMMARY/REPORT/FULL.md (+ glossary) into a
   self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations,
   and — in deep mode — verdict badges + the sub-question tree) **and**, by
-  default, a consolidated `index.md` (all tiers + sources, a portable markdown
-  deliverable — named `index.md`, not `report.md`, so it can't clash with the
-  `REPORT.md` tier on case-insensitive filesystems). `--no-md` / `--no-html` skip either.
+  default, a consolidated `index.md` (all tiers + sources, the portable markdown
+  deliverable — naming rationale in `references/html-rendering.md`).
+  `--no-md` / `--no-html` skip either.
 - `check --run <dir> [--semantic] [--min-sources <n>]` — validate citation
   grounding. Exit non-zero ⇒ ungrounded. `--semantic` also fails on a claim its
   cited source does not support (folds in `verify`'s verdicts) and reports
@@ -78,9 +86,8 @@ not hand control back mid-retrieval.
    use `bug` for an error, `research` for a literature review, `learn` to teach
    it, `startup` for market research) and a `--depth` (`standard` default;
    `deep` for an exhaustive sweep that also runs the mode's deep-only backends).
-   **Decide the search language/region** from the question or target market
-   (German market → `--lang de --region de`); use `--region` separately only when
-   the content language differs from the market.
+   **Decide the search language/region** (`--lang`/`--region`) — the locale rule
+   above.
 
 2. **Gather.** Run:
    ```
@@ -91,11 +98,10 @@ not hand control back mid-retrieval.
    rate-limited or empty, and the engine records that honestly in the notes.
    You can steer recall with `--queries "phrasing one|phrasing two|exact term"`
    (pipe-separated) — your own query variants override the built-in planner and
-   fan out across the multi-query backends. **For a non-English search, translate
-   those `--queries` into the target language yourself** and pass `--lang`/`--region`
-   (the engine never translates) so every web backend searches the right locale.
-   Pull deeper with `--pages <n>` (result pages per engine) and wider with
-   `--web-breadth <n>` (engines fused); both default by depth.
+   fan out across the multi-query backends (translate them yourself for a
+   non-English search; the engine never translates). Pull deeper with
+   `--pages <n>` (result pages per engine) and wider with `--web-breadth <n>`
+   (engines fused); both default by depth.
 
 3. **Read the dossier.** Open `DOSSIER.md` in the run folder: it lists every
    source with an id (`[S1]`, `[S2]`, …), a snippet, and the path to its cleaned
@@ -144,69 +150,37 @@ not hand control back mid-retrieval.
 
 When the user wants an exhaustive, *verified* deep-dive — they say "deep
 research", "exhaustively research/verify X", or it is a high-stakes briefing —
-run the multi-agent loop instead of the single pass. It grafts **decompose →
-parallel fan-out → adversarial verification → loop-until-dry** onto the same
-keyless engine. Every step is a plain CLI call, so it works on any harness;
-parallel subagents are an *optimization*, never a requirement. Full playbook:
+run the multi-agent loop instead of the single pass. Deep is a **tier**, not a
+mode: it composes with any `--mode` (still picked in step 1). Every step is a
+plain CLI call; parallel subagents are an *optimization*, never a requirement.
+Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 `references/deep-research-playbook.md`.
 
-1. **Decompose.** `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
-   prints sub-questions (JSON, each with ready `queries` **and an `out` dir** under
-   `<dir>`). Review them; augment or replace with your own via
-   `--subquestions "facet a|facet b|facet c"` when you know the domain better.
-
-2. **Fan out — one `gather` per sub-question.** If your harness has parallel
-   subagents, dispatch one per sub-question (the **subagent contract** is in
-   `references/deep-research-playbook.md`); otherwise loop sequentially (same
-   commands, identical artifacts). Use each sub-question's own `out` dir so you
-   know every sub-run path up front:
-   ```
-   node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<its queries>" \
-     --mode <m> --depth deep --out <its out dir>
-   ```
-   then enriches thin areas with its own WebSearch + `fetch` (step 4 above). A
-   sub-dossier under the recall floor is flagged in its `DOSSIER.md` — enrich it
-   before it feeds the merge.
-
-3. **Merge.** Union the sub-dossiers into one master with stable ids:
-   ```
-   node scripts/ultrasearch.mjs merge --runs "<run1,run2,…>" --master <masterDir> \
-     --q "<original question>" --mode <m>
-   ```
+1. **Decompose** — `node scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
+   → sub-questions (JSON), each with ready `queries` and an `out` dir. Review;
+   override with `--subquestions "a|b|c"` when you know the domain better.
+2. **Fan out** — per sub-question (subagents or a sequential loop):
+   `gather --q "<sub-question>" --queries "<its queries>" --mode <m> --depth deep --out <its out dir>`,
+   then enrich thin sub-dossiers (your WebSearch + `fetch`, step 4 above)
+   before they feed the merge.
+3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir> --q "<original question>" --mode <m>`.
    From here, **cite only the MASTER `[S#]` ids** — sub-run ids all restart at S1.
-
-4. **Write the tiers** against the master dossier (SUMMARY/REPORT/FULL), exactly
-   as in the standard workflow — every claim `[S#]`, your own knowledge `[M]`.
-
-5. **Verify (adversarial).** `node scripts/ultrasearch.mjs verify --run <masterDir>`
-   writes a claim↔source worklist (`VERIFY.todo.json` + `VERIFY.md`). For each
-   pair, open the cited `sources/S#.md` and judge whether it actually SUPPORTS the
-   claim — set `verdict` to supported · partial · refuted · unsupported (+ a short
-   note). Save the filled file as `verdicts.json`. **In parallel:** run
-   `verify --shards <N> --shard <i>` to write disjoint slices
-   (`VERIFY.todo.<i>.json`), give one slice to each skeptic subagent, and collect
-   their `verdicts.<i>.json` back (recipe in the playbook).
-
-6. **Gate.**
-   ```
-   node scripts/ultrasearch.mjs verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>
-   node scripts/ultrasearch.mjs check  --semantic --run <masterDir>
-   ```
-   `--apply` takes one file, a directory, or a comma list, so sharded verdicts
-   reassemble. Fails on dangling/unsourced (mechanical) AND on any
-   refuted/unsupported claim (semantic); it also reports **contradictions** —
-   claims whose cited sources disagree. Fix the claim — re-cite, drop it, or
-   `fetch` a better source — and re-verify until it passes.
-
-7. **Loop until dry.** Inspect the master dossier + report for residual gaps,
-   contradictions, or new sub-questions. If any surface and you are under the
-   round budget, fan out the new sub-questions (step 2), `merge` them into the
-   SAME master, and re-verify only the new claims. Stop when nothing new emerges.
-
-8. **Render & present.** `render --run <masterDir>` → `index.html` (verdict
-   badges, a contradictions panel, the sub-question tree) **and** `index.md`
-   (the consolidated markdown, verification table included). Present the SUMMARY,
-   the master folder, the per-claim verdict summary, and any contradictions.
+4. **Write the tiers** against the master dossier, exactly as in the standard
+   workflow — every claim `[S#]`, your own knowledge `[M]`.
+5. **Verify (adversarial)** — `verify --run <masterDir>` → for each pair in
+   `VERIFY.todo.json`, judge whether the cited `sources/S#.md` actually SUPPORTS
+   the claim (supported · partial · refuted · unsupported; harsher verdict when
+   unsure) → save as `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`,
+   one skeptic subagent per slice.
+6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`,
+   then `check --semantic --run <masterDir>`. **This is the exit gate — never
+   present before it passes.** Fix refuted/unsupported claims (re-cite, drop, or
+   `fetch` a better source) and re-verify; contradictions are reported too.
+7. **Loop until dry** — residual gaps or new sub-questions → fan out again (step
+   2), `merge` into the SAME master, re-verify. Stop when nothing new emerges.
+8. **Render & present** — `render --run <masterDir>` → `index.html` + `index.md`
+   (verdict badges, contradictions panel, sub-question tree); present as in step
+   7 of the standard workflow, plus the verdict summary and contradictions.
 
 ## Modes & depth
 
@@ -220,20 +194,25 @@ parallel subagents are an *optimization*, never a requirement. Full playbook:
 - `startup` — general web + community → market sizing, competitors, pricing, GTM.
 
 `--depth deep` keeps more sources and runs each mode's deep-only backends; tiers
-are always all three. The engine handles recall for you: it expands the question
-into query variants, re-ranks sources by how well their text covers the
-question, dedupes the same work across scholarly backends, and retries once on
-throttling. `--since <date>` restricts date-capable backends; `--web-engine`
-pins the general-web discovery layer (default `auto` runs a keyless cascade:
-SearXNG → DuckDuckGo → DuckDuckGo Lite → Mojeek → Marginalia). At `summary` depth
-it stops at the first engine that returns enough; at `standard`/`deep` it fuses
-several engines for wider recall, and each engine fetches more result **pages** —
-both scaled by depth and overridable with `--web-breadth <n>` / `--pages <n>`
-(≤5). `--lang <code>` (+ optional `--region <cc>`) makes every web backend search
-in that locale — translate your `--queries` to match; write the report in the
-user's language. `--rounds 2` adds a gap-driven follow-up web search for question
-terms the first pass under-covered; `--concurrency` tunes page-fetch parallelism.
-PDFs (incl. arXiv papers) are read for full text, not just the abstract.
+are always all three. Recall is engine-handled — query variants, content
+re-ranking, cross-backend dedup, retry on throttling, full-text PDFs (incl.
+arXiv). Steer it with `--queries`, `--pages`, `--web-breadth`, `--since <date>`,
+`--rounds 2` (gap-driven follow-up search). Web-engine selection (`--web-engine`,
+default `auto` = keyless cascade) and locale mechanics:
+`references/web-discovery.md`.
+
+## Common mistakes
+
+- Running `scripts/ultrasearch.mjs` relative to your cwd — it lives in the skill
+  folder; use the absolute path (also inside every subagent prompt).
+- Answering from memory — an unbacked claim is `[M]` or `> [model-hint]`, never
+  a bare sentence and never a disguised citation.
+- Citing a sub-run `S#` after a merge — only MASTER ids resolve.
+- Presenting before `check` (deep tier: `check --semantic`) passes.
+- Leaning on a `⚠ snippet only` source — re-`fetch` it or find a primary source.
+- Reporting in the search language — the report is in the user's language.
+- Skipping the mode extras — `research` must reference `refs.bib`; `learn` must
+  also write `glossary.md`.
 
 ## References
 

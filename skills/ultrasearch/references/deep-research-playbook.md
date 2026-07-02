@@ -12,6 +12,16 @@ judgement (decomposition, enrichment, report writing, verdicts, completeness);
 the CLI supplies determinism (fan-out retrieval, fusion, merge, claim extraction,
 gating). No LLM calls and no API keys are added.
 
+## Contents
+
+- Portability contract — CLI-only steps; subagents are optional
+- The loop — decompose → fan out → merge → write → verify → gate → loop → render
+- Fan-out subagent contract — the copy-paste dispatch prompt
+- Parallel verification — sharded skeptics + reassembly
+- Signals to act on — thin dossier · snippet-only · contradiction
+- Mapping to a harness workflow
+- Budget — the `DEEP_CAPS` bounds
+
 ## Portability contract
 
 Every step is a plain `node scripts/ultrasearch.mjs …` call. Parallel subagents
@@ -45,11 +55,8 @@ the verification worklist.
    WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
    floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
    Parallel when possible (see the contract below), sequential otherwise.
-   **Carry the search locale through every sub-question:** if the run targets a
-   non-English audience, translate each sub-question's `queries` into that language
-   and pass `--lang`/`--region` on every fan-out `gather` (deep depth already
-   paginates + fuses multiple engines). Synthesize the final report in the user's
-   own language regardless of the sources' languages.
+   **Carry the locale through every fan-out** (`--lang`/`--region`, translated
+   `queries`); report in the user's language — SKILL.md's locale rule.
 
 3. **Merge** — `merge --runs "<run1,run2,…>" --master <masterDir>`. Re-fuses the
    combined pool by identity (DOI/arXiv/URL collapses cross-sub-question
@@ -97,26 +104,33 @@ the verification worklist.
    contradictions, or new sub-questions a round surfaced. If any appear and you
    are under the round budget (`DEEP_CAPS.maxRounds`, 3), fan out the new
    sub-questions, `merge` them into the **same** master, and re-verify only the
-   new claims. Stop when a round surfaces nothing new.
+   new claims (`verify` regenerates the whole worklist — adjudicate only the
+   pairs still lacking a verdict; `--apply` merges last-wins). Stop when a round
+   surfaces nothing new.
 
-8. **Render & present** — `render --run <masterDir>` → `index.html` with per-claim
-   verdict badges, a contradictions panel, and the sub-question tree. Present the
-   SUMMARY, the master folder, the verdict summary, and any contradictions.
+8. **Render & present** — `render --run <masterDir>` → `index.html` (per-claim
+   verdict badges, a contradictions panel, the sub-question tree) + the
+   consolidated `index.md`. Present the SUMMARY, the master folder, the verdict
+   summary, and any contradictions.
 
 ## Fan-out subagent contract
 
-A subagent runs in its **own context** — it sees none of this conversation. So
-give it a self-contained task. The parent already knows every sub-run dir from
-`plan --run-root`, so it never has to read a subagent's output to find the
-dossier. Dispatch one subagent per sub-question with a prompt shaped like:
+A subagent runs in its **own context** — it sees none of this conversation, has
+its own cwd, and no notion of a "repo root" or of where this skill lives. The
+parent MUST substitute the **absolute path** to this skill's
+`scripts/ultrasearch.mjs` into the prompt (and hand `plan` an absolute
+`--run-root` so every `out` dir is absolute too). The parent already knows every
+sub-run dir from `plan --run-root`, so it never has to read a subagent's output
+to find the dossier. Dispatch one subagent per sub-question with a prompt shaped
+like (`<ABS-SKILL-DIR>` = this skill's directory, resolved by the parent):
 
 > You are gathering web evidence for ONE sub-question of a larger research run.
-> Run, from the repo root (add `--lang <code> --region <cc>` and translate the
-> `--queries` into that language when the run targets a non-English audience):
-> `node scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
+> Run (add `--lang <code> --region <cc>` and translate the `--queries` into that
+> language when the run targets a non-English audience):
+> `node <ABS-SKILL-DIR>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
 > Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
 > missing), enrich with your own WebSearch and, for each good URL,
-> `node scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
+> `node <ABS-SKILL-DIR>/scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
 > Do NOT write any report tier. Reply with exactly: the `out` dir, a one-line
 > coverage note, and any NEW sub-questions you discovered (or "none").
 
