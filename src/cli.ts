@@ -1,7 +1,11 @@
 import { resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { realpathSync, existsSync, statSync, readdirSync } from "node:fs";
-import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
+import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
+
+// Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
+// bundle and cross-checks the documented flag surface against these tables.
+export { ALL_WEB_ENGINES };
 import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
 import { runGather } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
@@ -14,7 +18,7 @@ import { runPlan } from "./plan.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 
-const HELP = `ultrasearch v${VERSION}
+export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
 fetch + dedupe sources into a dossier, and write a citation-checked, tiered
 report (with self-contained HTML). The web-facing sibling of ultradoc.
@@ -22,13 +26,13 @@ report (with self-contained HTML). The web-facing sibling of ultradoc.
 Usage:
   ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
   ultrasearch search --backend <kind> --q "<query>" [options]
-  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"]
-  ultrasearch render --run <dossier-dir>
+  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
+  ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
   ultrasearch modes  [--json]
-  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>]
+  ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
-  ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>]
+  ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -68,31 +72,45 @@ Options:
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
-  --web-engine <e>     auto | searxng | ddg | ddglite | mojeek | marginalia | claude
+  --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch'
+  --title <s>          For 'fetch': override the ingested page's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
-  --run <dir>          For render/check: the dossier dir to operate on
+  --run <dir>          For render/check/verify: the dossier dir to operate on
+  --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
+  --semantic           For 'check': also gate on the verify verdicts
+  --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
   -v, --version        Show version
 
+Deep-tier options (plan / merge / verify):
+  --subquestions <a|b|c>    plan: override the sub-questions (pipe-separated)
+  --max-subquestions <n>    plan: cap the decomposition       (default: ${DEEP_CAPS.maxSubQuestions})
+  --run-root <dir>          plan: give each sub-question an out dir under <dir>
+  --runs <d1,d2,…>          merge: the sub-dossiers to union
+  --master <dir>            merge: the master dossier dir     (default: derived)
+  --apply <spec>            verify: verdict file, comma list, or directory
+  --shards <n> --shard <i>  verify: write only shard i of the worklist (0-based)
+  --max-verify <n>          verify: cap claim↔source pairs    (default: ${DEEP_CAPS.maxVerify})
+
 Grounding:
   'gather' writes the dossier; you write SUMMARY/REPORT/FULL.md citing sources
   like [S1], flagging your own knowledge as [M] or '> [model-hint]'. Then:
-    ultrasearch render --run <dir>   # → index.html
+    ultrasearch render --run <dir>   # → index.html + index.md
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
 `;
 
 export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
-const VALUE_FLAGS = new Set([
+export const VALUE_FLAGS = new Set([
   "q",
   "question",
   "mode",
@@ -127,7 +145,7 @@ const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
 ]);
-const BOOL_FLAGS = new Set(["json", "fresh", "no-html", "no-md", "verbose", "semantic"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -287,7 +305,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
   const mode = oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
   const depth = oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"]);
+  const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
   return {
     question,
     mode,
@@ -314,7 +332,6 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
-    fresh: p.bools.has("fresh"),
   };
 }
 
@@ -456,7 +473,7 @@ async function main(): Promise<void> {
       if (!dir) fail("missing --run <dossier-dir>");
       const rdir = resolve(dir);
       // By default render writes BOTH a self-contained index.html and a portable
-      // consolidated report.md. --no-html / --no-md opt out of either.
+      // consolidated index.md. --no-html / --no-md opt out of either.
       const written: { html?: string; md?: string } = {};
       if (!p.bools.has("no-html")) {
         written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve(p.values.out) : undefined);

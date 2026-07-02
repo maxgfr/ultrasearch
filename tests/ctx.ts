@@ -21,7 +21,6 @@ export function makeCtx(question: string, options: Partial<GatherOptions> = {}):
     webEngine: "auto",
     excludeDomains: [],
     json: false,
-    fresh: false,
     ...options,
   };
   return { question, mode: DUMMY_MODE, options: opts, variants: [question] };

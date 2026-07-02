@@ -153,7 +153,9 @@ export interface Provenance {
 // fallback cascade (searxng → duckduckgo → ddglite → mojeek → marginalia),
 // short-circuiting once one yields enough results; the named engines pin to that
 // one; "claude" drops web discovery so the agent drives it via its own WebSearch.
-export type WebEngine = "auto" | "searxng" | "ddg" | "ddglite" | "mojeek" | "marginalia" | "claude";
+// Single source of truth: the CLI validator and --help both derive from this list.
+export const ALL_WEB_ENGINES = ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"] as const;
+export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 
 // Optional, backend-specific metadata carried on a source.
 export interface SourceMeta {
@@ -254,7 +256,6 @@ export interface GatherOptions {
   rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
   out?: string;
   json: boolean;
-  fresh: boolean;
 }
 
 // Context handed to every backend for a run. `question` is the active query (a

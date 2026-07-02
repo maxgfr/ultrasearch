@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths } from "../src/cli.js";
+import { parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can
 // assert on it without killing the test runner, and silence the writes.
@@ -59,6 +59,17 @@ describe("parseArgs", () => {
   it("exits 0 on --help and --version", () => {
     expect(() => parseArgs(["--help"])).toThrow(/exit:0/);
     expect(() => parseArgs(["-v"])).toThrow(/exit:0/);
+  });
+});
+
+// SKILL.md tells agents "run --help for the full surface" — keep that promise:
+// every accepted flag must appear in HELP. The lookahead stops --run matching
+// only inside --run-root (and --shard inside --shards).
+describe("HELP covers the whole flag surface", () => {
+  it("mentions every value and boolean flag", () => {
+    for (const flag of [...VALUE_FLAGS, ...BOOL_FLAGS]) {
+      expect(HELP, `--${flag} missing from --help`).toMatch(new RegExp(`--${flag}(?![a-z0-9-])`));
+    }
   });
 });
 

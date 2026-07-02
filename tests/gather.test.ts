@@ -19,7 +19,6 @@ function opts(over: Partial<GatherOptions>): GatherOptions {
     webEngine: "auto",
     excludeDomains: [],
     json: false,
-    fresh: false,
     ...over,
   };
 }
