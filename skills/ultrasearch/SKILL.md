@@ -3,7 +3,7 @@ name: ultrasearch
 description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
 license: MIT
 metadata:
-  version: 1.5.3
+  version: 1.6.0
 ---
 
 # ultrasearch — recap the web, grounded not guessed

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.6.0](https://github.com/maxgfr/ultrasearch/compare/v1.5.3...v1.6.0) (2026-07-04)
+
+
+### Features
+
+* **report:** merge REPORT and FULL tiers into one complete report ([083d3de](https://github.com/maxgfr/ultrasearch/commit/083d3de1c2a1a7fb62d69ff23f9b9f0a7045d8d3))
+
 ## [1.5.3](https://github.com/maxgfr/ultrasearch/compare/v1.5.2...v1.5.3) (2026-07-02)
 
 
