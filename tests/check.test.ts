@@ -219,7 +219,7 @@ describe("runCheck", () => {
     writeFixtureDossier(dir, 2);
     const r = runCheck(dir);
     expect(r.ok).toBe(false);
-    expect(r.errors.join(" ")).toMatch(/No REPORT.md or FULL.md/i);
+    expect(r.errors.join(" ")).toMatch(/No REPORT.md/i);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -2051,7 +2051,7 @@ function renderDossierMarkdown(sources, manifest, template) {
     out.push("");
   }
   out.push(
-    `> Write three tiers from these sources: \`SUMMARY.md\` (TL;DR), \`REPORT.md\` (the full template below), and \`FULL.md\` (exhaustive \u2014 use every relevant source). Then run \`render\` and \`check\`. Do not answer from memory.`
+    `> Write two tiers from these sources: \`SUMMARY.md\` (TL;DR) and \`REPORT.md\` (the full template below, filled exhaustively \u2014 use every relevant source and end with an "Open questions / contradictions" section). Then run \`render\` and \`check\`. Do not answer from memory.`
   );
   out.push("");
   out.push(`## Grounding rules`);
@@ -2371,7 +2371,7 @@ async function runGather(options) {
     maxSources: options.maxSources,
     builtAt: (/* @__PURE__ */ new Date()).toISOString(),
     slug: `${options.mode}-${slugify(options.question)}`,
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes,
     timings,
@@ -2428,7 +2428,6 @@ var VERDICT_SEVERITY = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 var TIERS = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
   { id: "report", label: "Report", file: "REPORT.md" },
-  { id: "full", label: "Full", file: "FULL.md" },
   { id: "glossary", label: "Glossary", file: "glossary.md" }
 ];
 function escapeHtml(s) {
@@ -2791,7 +2790,7 @@ function writeReportMarkdown(dir, out) {
 // src/check.ts
 import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
 import { join as join5 } from "path";
-var HARD_FILES = ["REPORT.md", "FULL.md"];
+var HARD_FILES = ["REPORT.md"];
 var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
 var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
 var SOURCE_RE = /^S\d+$/;
@@ -3038,7 +3037,7 @@ function runCheck(dir, opts = {}) {
   const ids = new Set(sources.map((s) => s.id));
   const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync3(join5(dir, f)));
   if (!present.some((f) => HARD_FILES.includes(f))) {
-    return blank(false, [`No REPORT.md or FULL.md in ${dir} \u2014 write the report tiers, then re-run check.`]);
+    return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
   const analyses = present.map((f) => analyzeFile(f, readFileSync3(join5(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
@@ -3072,7 +3071,7 @@ function runCheck(dir, opts = {}) {
   }
   if (unmarkedUnsourced.length) {
     errors.push(
-      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT/FULL with no [S#] and no model-hint flag. Cite a source or flag as [M] / > [model-hint].`
+      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT with no [S#] and no model-hint flag. Cite a source or flag as [M] / > [model-hint].`
     );
   }
   if (unknown.size) {
@@ -3251,7 +3250,7 @@ function runMerge(options) {
     maxSources: merged.length,
     builtAt,
     slug: `${modeName}-${slugify(question)}`,
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes: [
       `Merged ${dossiers.length} sub-dossier(s) \u2192 ${merged.length} source(s) (${deduped.dropped} near-duplicate(s) collapsed).`,
@@ -3272,7 +3271,7 @@ function runMerge(options) {
 // src/verify.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
 import { join as join8 } from "path";
-var HARD_FILES2 = ["REPORT.md", "FULL.md"];
+var HARD_FILES2 = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function claimStrings(text) {
   const out = [];
@@ -3471,13 +3470,13 @@ Usage:
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
-           You then write SUMMARY/REPORT/FULL.md, run render, then check.
+           You then write SUMMARY/REPORT.md, run render, then check.
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
-  check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
+  check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
            --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
@@ -3537,7 +3536,7 @@ Deep-tier options (plan / merge / verify):
   --max-verify <n>          verify: cap claim\u2194source pairs    (default: ${DEEP_CAPS.maxVerify})
 
 Grounding:
-  'gather' writes the dossier; you write SUMMARY/REPORT/FULL.md citing sources
+  'gather' writes the dossier; you write SUMMARY/REPORT.md citing sources
   like [S1], flagging your own knowledge as [M] or '> [model-hint]'. Then:
     ultrasearch render --run <dir>   # \u2192 index.html + index.md
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
@@ -3745,7 +3744,7 @@ async function main() {
         `  mode:     ${options.mode} \xB7 depth: ${options.depth}`,
         `  backends: ${used}`,
         `  dossier:  ${r.dir}`,
-        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md (cite [S#]), then:`,
+        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
         `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`
       ];
       process.stderr.write(lines.join("\n") + "\n");
@@ -3822,7 +3821,7 @@ async function main() {
       const lines = [
         `ultrasearch: merged ${runs.length} sub-dossier(s) \u2192 ${result.sources.length} source(s)`,
         `  master:   ${result.dir}`,
-        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md citing the MASTER [S#] ids, then:`,
+        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
         `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`
       ];
       process.stderr.write(lines.join("\n") + "\n");

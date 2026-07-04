@@ -1,6 +1,6 @@
 # Citation format
 
-Every factual claim in `REPORT.md` and `FULL.md` must be followed by a citation
+Every factual claim in `REPORT.md` must be followed by a citation
 that resolves to a source in the run's `sources.json`. `ultrasearch check` parses
 these and fails the report if any citation is dangling, if a claim is unsourced
 and unflagged, or if there are no citations at all. This is the mechanical guard
@@ -41,7 +41,7 @@ can tell them apart from sourced claims.
 
 - A report with **no** source citations fails.
 - Any `[S#]` that does not resolve to `sources.json` fails (a fabricated `[S99]`).
-- An **unmarked, unsourced** prose claim in REPORT/FULL fails — add a `[S#]` or
+- An **unmarked, unsourced** prose claim in REPORT fails — add a `[S#]` or
   flag it `[M]` / `> [model-hint]`.
 - Markdown links `[text](url)` are **not** citations and are ignored.
 - `SUMMARY.md` and `glossary.md` are checked leniently (warn, not fail) on

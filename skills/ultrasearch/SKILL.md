@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT/FULL + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
+description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
 license: MIT
 metadata:
   version: 1.5.3
@@ -14,7 +14,7 @@ reasoning over them**, not from training memory. The deterministic engine
 and de-duplicating **with code**; your job is to read the retrieved sources and
 write a precise, **cited**, tiered report. Every factual claim must point to a
 fetched source. This is enforced: `ultrasearch check` fails if any citation is
-dangling or any claim in REPORT/FULL is unsourced and unflagged.
+dangling or any claim in REPORT is unsourced and unflagged.
 
 > **The core rule:** do not answer from your own knowledge of the topic. Answer
 > **only** from the sources `ultrasearch` retrieves. If you must add your own
@@ -53,7 +53,7 @@ Key commands:
 - `fetch --url <u> --out <dir>` (alias `add-source`) — ingest a URL **you** found
   with your own WebSearch into the dossier; prints the new `S#`. This is the
   bridge between the harness's WebSearch and the dossier.
-- `render --run <dir>` — render SUMMARY/REPORT/FULL.md (+ glossary) into a
+- `render --run <dir>` — render SUMMARY/REPORT.md (+ glossary) into a
   self-contained `index.html` (embedded CSS, TOC, clickable `[S#]` citations,
   and — in deep mode — verdict badges + the sub-question tree) **and**, by
   default, a consolidated `index.md` (all tiers + sources, the portable markdown
@@ -121,12 +121,11 @@ not hand control back mid-retrieval.
    it. Repeat until coverage is solid (more for `deep`). See
    `references/research-playbook.md`.
 
-5. **Write the three tiers.** In the run folder, write:
+5. **Write the two tiers.** In the run folder, write:
    - `SUMMARY.md` — the TL;DR (top of the mode template, a few sentences each).
    - `REPORT.md` — the full mode template (headings shown in `DOSSIER.md` and
-     `references/report-templates.md`).
-   - `FULL.md` — exhaustive: use every relevant source; add an "Open questions /
-     contradictions" section.
+     `references/report-templates.md`), filled **exhaustively**: use every
+     relevant source and add a closing "Open questions / contradictions" section.
    **Cite every factual claim** with `[S#]` (e.g. `Token buckets allow bursts up
    to the bucket size [S2].`). Flag any of your own background knowledge with
    `[M]` or a `> [model-hint]` blockquote — see `references/citation-format.md`.
@@ -141,7 +140,7 @@ not hand control back mid-retrieval.
    `render` always writes both a self-contained `index.html` and a consolidated
    `index.md` (the markdown deliverable, in the report's language).
    `check` fails on a dangling `[S#]` or an unmarked unsourced claim in
-   REPORT/FULL. Fix the citations (or `fetch` more sources) and re-run until it
+   REPORT. Fix the citations (or `fetch` more sources) and re-run until it
    passes. SUMMARY is checked leniently (a digest needn't cite every line).
 
 7. **Present.** Give the user the SUMMARY, the path to the run folder,
@@ -195,8 +194,8 @@ Full playbook (subagent contracts, sharding recipe, signals, budget caps):
   exercises; the richest HTML.
 - `startup` — general web + community → market sizing, competitors, pricing, GTM.
 
-`--depth deep` keeps more sources and runs each mode's deep-only backends; tiers
-are always all three. Recall is engine-handled — query variants, content
+`--depth deep` keeps more sources and runs each mode's deep-only backends; both
+tiers are always written. Recall is engine-handled — query variants, content
 re-ranking, cross-backend dedup, retry on throttling, full-text PDFs (incl.
 arXiv). Steer it with `--queries`, `--pages`, `--web-breadth`, `--since <date>`,
 `--rounds 2` (gap-driven follow-up search). Web-engine selection (`--web-engine`,

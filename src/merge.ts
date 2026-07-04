@@ -104,7 +104,7 @@ export function runMerge(options: MergeOptions): MergeResult {
     maxSources: merged.length,
     builtAt,
     slug: `${modeName}-${slugify(question)}`,
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes: [
       `Merged ${dossiers.length} sub-dossier(s) → ${merged.length} source(s) ` + `(${deduped.dropped} near-duplicate(s) collapsed).`,

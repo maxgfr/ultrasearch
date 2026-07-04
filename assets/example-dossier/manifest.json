@@ -16,8 +16,7 @@
   "slug": "topic-what-is-rate-limiting",
   "tiers": [
     "SUMMARY.md",
-    "REPORT.md",
-    "FULL.md"
+    "REPORT.md"
   ],
   "extras": [],
   "notes": [

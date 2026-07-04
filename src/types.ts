@@ -56,8 +56,8 @@ export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "lear
 
 // How far a run fans out. `summary` is a quick survey, `deep` runs every
 // backend (including deep-only ones) and keeps the most sources. Tiers
-// (SUMMARY/REPORT/FULL) are always all three regardless of depth — depth caps
-// how much retrieval feeds the deepest tier.
+// (SUMMARY/REPORT) are always written regardless of depth — depth caps
+// how much retrieval feeds the report.
 export type Depth = "summary" | "standard" | "deep";
 export const ALL_DEPTHS: readonly Depth[] = ["summary", "standard", "deep"];
 
@@ -285,7 +285,7 @@ export interface Manifest {
   maxSources: number;
   builtAt: string;
   slug: string;
-  tiers: string[]; // ["SUMMARY.md","REPORT.md","FULL.md"]
+  tiers: string[]; // ["SUMMARY.md","REPORT.md"]
   extras: ModeExtra[];
   notes: string[];
   timings: Record<string, number>; // backend kind -> ms, plus "total"
@@ -325,7 +325,7 @@ export type VerdictKind = "supported" | "partial" | "refuted" | "unsupported";
 // of that source's extract, for an agent to adjudicate.
 export interface ClaimEvidencePair {
   claimId: string; // "C1", "C2", …
-  file: string; // "REPORT.md" | "FULL.md"
+  file: string; // "REPORT.md"
   sourceId: string; // the cited [S#]
   claim: string; // the claim-unit text (capped)
   extractPath: string; // relative path, e.g. "sources/S2.md"

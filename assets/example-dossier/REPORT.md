@@ -14,5 +14,8 @@ Over HTTP, an exceeded limit returns status 429 Too Many Requests, usually with 
 
 > [model-hint] In practice the token bucket is the most common choice in production API gateways, though the sources in this dossier do not rank the algorithms by adoption.
 
+## Open questions / contradictions
+> [model-hint] This dossier does not cover distributed rate limiting (coordinating limits across many servers) or concrete per-vendor limits. Enrich with primary sources before relying on those.
+
 ## Sources
 See the appendix.

@@ -11,7 +11,6 @@ const VERDICT_SEVERITY: Record<VerdictKind, number> = { supported: 0, partial: 1
 const TIERS: { id: string; label: string; file: string }[] = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
   { id: "report", label: "Report", file: "REPORT.md" },
-  { id: "full", label: "Full", file: "FULL.md" },
   { id: "glossary", label: "Glossary", file: "glossary.md" },
 ];
 
@@ -451,7 +450,7 @@ function verificationMarkdown(r: VerifyResult): string {
 }
 
 // Assemble a single self-contained markdown report from a dossier: a title +
-// run metadata, every authored tier (SUMMARY/REPORT/FULL/glossary) in order, the
+// run metadata, every authored tier (SUMMARY/REPORT/glossary) in order, the
 // semantic-verification summary when present, and a Sources appendix — the
 // markdown counterpart of index.html, so each run yields a portable .md too.
 // Written as `index.md` (NOT report.md): case-insensitive filesystems (macOS

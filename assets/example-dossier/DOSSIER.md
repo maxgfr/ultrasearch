@@ -4,7 +4,7 @@
 **Mode:** topic · **depth:** standard · **lang:** en · **sources:** 3 · **built:** 2026-06-13T10:41:19.578Z
 **Backends used:** fixture
 
-> Write three tiers from these sources: `SUMMARY.md` (TL;DR), `REPORT.md` (the full template below), and `FULL.md` (exhaustive — use every relevant source). Then run `render` and `check`. Do not answer from memory.
+> Write two tiers from these sources: `SUMMARY.md` (TL;DR) and `REPORT.md` (the full template below, filled exhaustively — use every relevant source and end with an "Open questions / contradictions" section). Then run `render` and `check`. Do not answer from memory.
 
 ## Grounding rules
 

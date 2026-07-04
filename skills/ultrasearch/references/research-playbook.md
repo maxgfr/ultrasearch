@@ -70,10 +70,10 @@ bears on the question only if its text **describes the same thing the question i
 about** — not just shares a word. Ignore the rest; never cite a source just
 because it exists.
 
-## 6. Write the three tiers
+## 6. Write the two tiers
 
-Write `SUMMARY.md`, `REPORT.md`, `FULL.md` against the mode template. Cite every
-claim `[S#]`; flag your own knowledge `[M]` / `> [model-hint]`. `FULL.md` should
+Write `SUMMARY.md` and `REPORT.md` against the mode template. Cite every
+claim `[S#]`; flag your own knowledge `[M]` / `> [model-hint]`. `REPORT.md` should
 use every relevant source and end with "Open questions / contradictions".
 
 **Write in the user's language** (quote a foreign-language source verbatim where

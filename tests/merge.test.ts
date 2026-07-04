@@ -25,7 +25,7 @@ function subDossier(dir: string, question: string, raws: RawSource[]): void {
     maxSources: 60,
     builtAt: "2026-06-14T10:00:00.000Z",
     slug: "sub",
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: [],
     notes: [],
     timings: {},

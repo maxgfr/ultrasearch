@@ -41,11 +41,7 @@ describe("e2e: gather → write tiers → render → check (offline, fixture)", 
       writeFileSync(join(dir, "SUMMARY.md"), `# Summary\n\nRate limiting caps the request rate to protect a service [${ids[0]}].\n`);
       writeFileSync(
         join(dir, "REPORT.md"),
-        `# Report\n\n## Overview\n\nRate limiting controls the rate of requests sent to a service to prevent overload ${cite}.\n\n## Sources\n`,
-      );
-      writeFileSync(
-        join(dir, "FULL.md"),
-        `# Full\n\n## Overview\n\nRate limiting caps how many requests a client may send in a window, protecting the service ${cite}.\n\n## Sources\n`,
+        `# Report\n\n## Overview\n\nRate limiting controls the rate of requests sent to a service to prevent overload ${cite}.\n\n## Open questions / contradictions\n\n> [model-hint] Distributed rate limiting is out of scope here.\n\n## Sources\n`,
       );
 
       const html = writeHtml(dir);

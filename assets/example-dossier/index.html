@@ -34,8 +34,22 @@ table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.92rem}
 th,td{border:1px solid var(--line);padding:6px 10px;text-align:left}
 th{background:#f4f4f6}
 .sources li{margin-bottom:10px}
-.sources .s-meta{color:var(--muted);font-size:.82rem}
+.sources .s-meta,.subq .s-meta{color:var(--muted);font-size:.82rem}
+.subq li{margin-bottom:10px}
 .trust{display:inline-block;font-size:.72rem;padding:0 6px;border-radius:4px;background:#eef3fa;color:var(--accent)}
+.callout{background:#fff8e6;border-left:4px solid var(--hint)}
+.vbadge{display:inline-block;font-size:.72rem;font-weight:600;padding:0 6px;border-radius:4px;text-transform:uppercase;letter-spacing:.02em}
+.v-supported{background:#e6f4ea;color:#1a7f37}
+.v-partial{background:#fff4d6;color:#9a6700}
+.v-unsupported{background:#f0f0f2;color:#555}
+.v-refuted{background:#fbe9e7;color:#c1121f}
+a.cite.v-supported{color:#1a7f37}
+a.cite.v-partial{color:#9a6700}
+a.cite.v-unsupported{color:#777}
+a.cite.v-refuted{color:#c1121f;font-weight:700}
+.contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
+.contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
+.snippet-only{color:#9a6700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 </style>
 </head>
@@ -51,15 +65,11 @@ th{background:#f4f4f6}
 <a class="h3" href="#report-what-it-is">What it is</a>
 <a class="h3" href="#report-how-it-works-key-concepts">How it works / key concepts</a>
 <a class="h3" href="#report-current-state-today">Current state (today)</a>
+<a class="h3" href="#report-open-questions-contradictions">Open questions / contradictions</a>
 <a class="h3" href="#report-sources">Sources</a>
-<div class="tier"><a href="#tier-full">Full</a></div>
-<a class="h3" href="#full-overview">Overview</a>
-<a class="h3" href="#full-algorithms">Algorithms</a>
-<a class="h3" href="#full-signalling-over-http">Signalling over HTTP</a>
-<a class="h3" href="#full-open-questions-contradictions">Open questions / contradictions</a>
-<a class="h3" href="#full-sources">Sources</a>
 <div class="tier"><a href="#sources">Sources (3)</a></div></nav>
 <main>
+<section class="callout"><strong>⚠ Open questions / contradictions</strong> — this report flags unresolved or conflicting findings. <a href="#report-open-questions-contradictions">Jump to the section ↓</a></section>
 <section id="tier-summary"><h1>Summary</h1><h1 id="summary-rate-limiting">Rate limiting</h1>
 <h2 id="summary-tl-dr">TL;DR</h2>
 <p>Rate limiting caps how many requests a client may make to a service in a window of time, protecting the backend from overload and abuse <a class="cite" href="#src-S1" title="source S1">[S1]</a>. Common algorithms are the token bucket, leaky bucket, and fixed/sliding windows <a class="cite" href="#src-S2" title="source S2">[S2]</a>, and an over-limit request is signalled with HTTP 429 plus a <code>Retry-After</code> header <a class="cite" href="#src-S3" title="source S3">[S3]</a>.</p></section>
@@ -73,18 +83,9 @@ th{background:#f4f4f6}
 <h2 id="report-current-state-today">Current state (today)</h2>
 <p>Over HTTP, an exceeded limit returns status 429 Too Many Requests, usually with a <code>Retry-After</code> header telling the client how long to wait; well-behaved clients then back off exponentially <a class="cite" href="#src-S3" title="source S3">[S3]</a>.</p>
 <blockquote class="model-hint"><span class="mhint-badge">model hint · unverified</span> In practice the token bucket is the most common choice in production API gateways, though the sources in this dossier do not rank the algorithms by adoption.</blockquote>
-<h2 id="report-sources">Sources</h2>
-<p>See the appendix.</p></section>
-<section id="tier-full"><h1>Full</h1><h1 id="full-rate-limiting-full">Rate limiting — full</h1>
-<h2 id="full-overview">Overview</h2>
-<p>Rate limiting controls how many requests a client may make to a service in a given window of time, protecting a backend from overload, abuse, and runaway costs, and keeping one noisy client from degrading service for everyone else <a class="cite" href="#src-S1" title="source S1">[S1]</a>. Without a limit, a single client can exhaust capacity, so limits are stated as requests per second, minute, or hour <a class="cite" href="#src-S1" title="source S1">[S1]</a>.</p>
-<h2 id="full-algorithms">Algorithms</h2>
-<p>The token bucket refills tokens at a steady rate and spends one per request, allowing bursts up to the bucket size <a class="cite" href="#src-S2" title="source S2">[S2]</a>. The leaky bucket drains queued requests at a constant rate to smooth bursts <a class="cite" href="#src-S2" title="source S2">[S2]</a>. Fixed-window counting is the simplest scheme, and sliding windows reduce the boundary spike between windows <a class="cite" href="#src-S2" title="source S2">[S2]</a>.</p>
-<h2 id="full-signalling-over-http">Signalling over HTTP</h2>
-<p>When a client exceeds the limit the server responds with HTTP 429 Too Many Requests, and a <code>Retry-After</code> header tells the client how long to wait before retrying; well-behaved clients back off exponentially after a 429 <a class="cite" href="#src-S3" title="source S3">[S3]</a>.</p>
-<h2 id="full-open-questions-contradictions">Open questions / contradictions</h2>
+<h2 id="report-open-questions-contradictions">Open questions / contradictions</h2>
 <blockquote class="model-hint"><span class="mhint-badge">model hint · unverified</span> This dossier does not cover distributed rate limiting (coordinating limits across many servers) or concrete per-vendor limits. Enrich with primary sources before relying on those.</blockquote>
-<h2 id="full-sources">Sources</h2>
+<h2 id="report-sources">Sources</h2>
 <p>See the appendix.</p></section>
 <section id="sources"><h1>Sources</h1><ol class="sources"><li id="src-S1"><strong>[S1]</strong> <a href="https://fixture.test/rate-limiting-overview" rel="noopener" target="_blank">Rate limiting — overview</a><br><span class="s-meta">fixture · fixture.test · <span class="trust" title="trust score">trust 0.5</span></span></li>
 <li id="src-S2"><strong>[S2]</strong> <a href="https://fixture.test/rate-limiting-algorithms" rel="noopener" target="_blank">Rate limiting algorithms</a><br><span class="s-meta">fixture · fixture.test · <span class="trust" title="trust score">trust 0.5</span></span></li>

@@ -22,7 +22,7 @@ dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
   │  (research mode also writes refs.bib)
   ▼
 the AGENT reads DOSSIER.md, enriches via its own WebSearch (`fetch --url`),
-then writes SUMMARY.md / REPORT.md / FULL.md  (+ glossary.md for learn)
+then writes SUMMARY.md / REPORT.md  (+ glossary.md for learn)
   │  render                                   │  check
   ▼                                           ▼
 index.html (self-contained)        grounding verdict (exit≠0 if ungrounded)
@@ -77,7 +77,7 @@ and **contradictions**. See `references/deep-research-playbook.md`.
   and the DOSSIER.md renderer; the `CITATION_RULES` block.
 - `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.
 - `check.ts` — the citation grammar + grounding algorithm (with model-hint
-  tolerance and per-claim coverage on REPORT/FULL); exports the claim parser
+  tolerance and per-claim coverage on REPORT); exports the claim parser
   (`unitsOfFile` / `unitSourceTokens`) for `verify`, and the `--semantic` fold.
 - `plan.ts` — deterministic sub-question decomposition (`runPlan`) for the deep tier.
 - `merge.ts` — `runMerge`: union sub-dossiers into one master with stable `S#`
@@ -106,6 +106,6 @@ and **contradictions**. See `references/deep-research-playbook.md`.
 
 `sources.json` is the source of truth `check` validates against. The agent cites
 `[S#]`; any `[S#]` that doesn't resolve, or any unmarked unsourced prose claim in
-REPORT/FULL, fails the run. Background knowledge is allowed only when flagged
+REPORT, fails the run. Background knowledge is allowed only when flagged
 (`[M]` or `> [model-hint]`), which `check` tolerates and the HTML renders as a
 distinct "unverified" callout.

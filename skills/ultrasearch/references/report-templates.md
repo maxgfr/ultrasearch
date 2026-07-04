@@ -1,9 +1,9 @@
 # Report templates (per mode)
 
-Each mode has a section skeleton. The **same** skeleton scales across the three
+Each mode has a section skeleton. The **same** skeleton scales across the two
 tiers: `SUMMARY.md` = the top-level headings with one or two sentences each;
-`REPORT.md` = the full skeleton, filled; `FULL.md` = the skeleton plus every
-relevant source's detail and a closing "Open questions / contradictions".
+`REPORT.md` = the full skeleton, filled **exhaustively** — every relevant
+source's detail, plus a closing "Open questions / contradictions" section.
 The exact skeleton for the active mode is echoed in the run's `DOSSIER.md`.
 
 ## topic

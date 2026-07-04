@@ -9,9 +9,9 @@ either output.
 ## What it renders
 
 - **Header** — the question, plus a meta line (mode · depth · source count · date).
-- **TOC sidebar** — the tiers (Summary / Report / Full / Glossary) and each
+- **TOC sidebar** — the tiers (Summary / Report / Glossary) and each
   tier's `##` headings, as anchor links.
-- **One section per tier** — `SUMMARY.md`, `REPORT.md`, `FULL.md`, and
+- **One section per tier** — `SUMMARY.md`, `REPORT.md`, and
   `glossary.md` if present, rendered from markdown.
 - **Sources appendix** — built from `sources.json`: each source as
   `[S#] title` (linked to the original URL) with backend · domain · trust.
@@ -53,7 +53,7 @@ Windows — a file named `report.md` would be the same file as the `REPORT.md` t
 and clobber it.) Contents:
 
 - a title (the question) + a meta line (mode · depth · sources · lang/region · date),
-- each authored tier (Summary / Report / Full / Glossary) in order, separated by rules,
+- each authored tier (Summary / Report / Glossary) in order, separated by rules,
 - the verification summary + per-claim verdict table (deep tier, when present),
 - a Sources appendix (`[S#] title` linked to the URL, with backend · domain · trust).
 

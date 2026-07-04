@@ -95,7 +95,7 @@ export interface WriteDossierResult {
 
 // Persist a run's dossier: sources.json (what `check` validates against),
 // sources/S#.md (cleaned extracts), manifest.json, and DOSSIER.md (the
-// model-facing brief). The tiered reports (SUMMARY/REPORT/FULL.md) are written
+// model-facing brief). The tiered reports (SUMMARY/REPORT.md) are written
 // by the model afterward, then `render` + `check` run.
 export function writeDossier(dir: string, rawSources: RawSource[], manifest: Manifest, template: string): WriteDossierResult {
   mkdirSync(join(dir, "sources"), { recursive: true });
@@ -140,8 +140,9 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     out.push("");
   }
   out.push(
-    `> Write three tiers from these sources: \`SUMMARY.md\` (TL;DR), \`REPORT.md\` ` +
-      `(the full template below), and \`FULL.md\` (exhaustive — use every relevant source). ` +
+    `> Write two tiers from these sources: \`SUMMARY.md\` (TL;DR) and \`REPORT.md\` ` +
+      `(the full template below, filled exhaustively — use every relevant source and end ` +
+      `with an "Open questions / contradictions" section). ` +
       `Then run \`render\` and \`check\`. Do not answer from memory.`,
   );
   out.push("");

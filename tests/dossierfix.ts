@@ -38,7 +38,7 @@ export function writeFixtureDossier(dir: string, n: number, over: Partial<Manife
     maxSources: 25,
     builtAt: "2026-06-13T10:00:00.000Z",
     slug: "topic-rl",
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: [],
     notes: [],
     timings: { total: 1 },

@@ -364,7 +364,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     maxSources: options.maxSources,
     builtAt: new Date().toISOString(),
     slug: `${options.mode}-${slugify(options.question)}`,
-    tiers: ["SUMMARY.md", "REPORT.md", "FULL.md"],
+    tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes,
     timings,

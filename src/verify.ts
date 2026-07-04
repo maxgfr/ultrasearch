@@ -6,7 +6,7 @@ import { unitsOfFile, unitSourceTokens } from "./check.js";
 import { readSourceText } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 
-const HARD_FILES = ["REPORT.md", "FULL.md"];
+const HARD_FILES = ["REPORT.md"];
 const VALID_VERDICTS: VerdictKind[] = ["supported", "partial", "refuted", "unsupported"];
 
 export interface VerifyWorklist {
@@ -27,7 +27,7 @@ function claimStrings(text: string): string[] {
 }
 
 // Phase A — build the claim↔source verification worklist. For every claim in
-// REPORT/FULL that cites a real [S#], emit one pair per cited source with a
+// REPORT that cites a real [S#], emit one pair per cited source with a
 // claim-focused digest of that source's extract, so a skeptic agent reads the
 // relevant passage rather than the whole page. Deterministic; the JUDGEMENT is
 // the agent's. Capped at maxVerify (highest-trust sources first) to bound the

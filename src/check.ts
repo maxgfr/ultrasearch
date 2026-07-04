@@ -2,10 +2,10 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
 
-// Tiers + extra docs that may carry citations. REPORT/FULL are hard-checked for
+// Tiers + extra docs that may carry citations. REPORT is hard-checked for
 // per-claim coverage; SUMMARY/glossary are warn-only (a digest needn't repeat a
 // source on every line), but a dangling [S#] in ANY file fails.
-const HARD_FILES = ["REPORT.md", "FULL.md"];
+const HARD_FILES = ["REPORT.md"];
 const SOFT_FILES = ["SUMMARY.md", "glossary.md"];
 
 // A bracketed token is a citation candidate when it is NOT a markdown link
@@ -315,7 +315,7 @@ function applySemantic(dir: string, result: CheckResult): void {
 }
 
 // Validate that the report tiers are grounded in the dossier's sources. Fails
-// on a dangling [S#], on an unmarked unsourced claim in REPORT/FULL, or when no
+// on a dangling [S#], on an unmarked unsourced claim in REPORT, or when no
 // source is cited at all. Flagged model-hints are tolerated; uncited sources
 // and unknown tokens only warn. With `opts.semantic`, ALSO folds in the
 // VERIFY.json verdicts (fails on a refuted/unsupported claim) — additive: plain
@@ -346,7 +346,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: n
 
   const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync(join(dir, f)));
   if (!present.some((f) => HARD_FILES.includes(f))) {
-    return blank(false, [`No REPORT.md or FULL.md in ${dir} — write the report tiers, then re-run check.`]);
+    return blank(false, [`No REPORT.md in ${dir} — write the report tier, then re-run check.`]);
   }
 
   const analyses = present.map((f) => analyzeFile(f, readFileSync(join(dir, f), "utf8")));
@@ -385,7 +385,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: n
   }
   if (unmarkedUnsourced.length) {
     errors.push(
-      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT/FULL with no [S#] and no model-hint flag. ` + `Cite a source or flag as [M] / > [model-hint].`,
+      `${unmarkedUnsourced.length} unsourced claim(s) in REPORT with no [S#] and no model-hint flag. ` + `Cite a source or flag as [M] / > [model-hint].`,
     );
   }
   if (unknown.size) {

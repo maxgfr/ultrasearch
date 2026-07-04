@@ -69,7 +69,7 @@ the verification worklist.
    > ids collide and are meaningless after merge. Write the report against the
    > master `DOSSIER.md` only.
 
-4. **Write** the tiers (SUMMARY/REPORT/FULL) against the master dossier — same
+4. **Write** the tiers (SUMMARY/REPORT) against the master dossier — same
    grounding contract as always (`[S#]` per claim, `[M]` for your own knowledge).
 
 5. **Verify** — `verify --run <masterDir>` extracts every `(claim, [S#])` pair

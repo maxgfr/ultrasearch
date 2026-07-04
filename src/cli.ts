@@ -37,13 +37,13 @@ Usage:
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
-           You then write SUMMARY/REPORT/FULL.md, run render, then check.
+           You then write SUMMARY/REPORT.md, run render, then check.
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
            new source id (S#). This is the bridge for your own WebSearch hits.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
-  check    Validate citation grounding of SUMMARY/REPORT/FULL.md (--semantic
+  check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
            --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
@@ -103,7 +103,7 @@ Deep-tier options (plan / merge / verify):
   --max-verify <n>          verify: cap claim↔source pairs    (default: ${DEEP_CAPS.maxVerify})
 
 Grounding:
-  'gather' writes the dossier; you write SUMMARY/REPORT/FULL.md citing sources
+  'gather' writes the dossier; you write SUMMARY/REPORT.md citing sources
   like [S1], flagging your own knowledge as [M] or '> [model-hint]'. Then:
     ultrasearch render --run <dir>   # → index.html + index.md
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
@@ -352,7 +352,7 @@ async function main(): Promise<void> {
         `  mode:     ${options.mode} · depth: ${options.depth}`,
         `  backends: ${used}`,
         `  dossier:  ${r.dir}`,
-        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md (cite [S#]), then:`,
+        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
         `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
       ];
       process.stderr.write(lines.join("\n") + "\n");
@@ -438,7 +438,7 @@ async function main(): Promise<void> {
       const lines = [
         `ultrasearch: merged ${runs.length} sub-dossier(s) → ${result.sources.length} source(s)`,
         `  master:   ${result.dir}`,
-        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT/FULL.md citing the MASTER [S#] ids, then:`,
+        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
         `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`,
       ];
       process.stderr.write(lines.join("\n") + "\n");

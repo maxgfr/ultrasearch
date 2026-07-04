@@ -37,9 +37,8 @@ A run writes an output folder:
   sources.json    the dossier: S1…Sn with url, title, backend, trust, extract path
   sources/S#.md   cleaned, readable text of each fetched source
   DOSSIER.md      model-facing digest + the template + citation rules
-  SUMMARY.md      TL;DR tier            ┐
-  REPORT.md       standard tier         ├ written by the agent, cited [S#]
-  FULL.md         exhaustive tier       ┘
+  SUMMARY.md      TL;DR tier            ┐ written by the agent, cited [S#]
+  REPORT.md       complete report tier  ┘
   glossary.md     (learn mode)   refs.bib (research mode)
   index.html      self-contained HTML report (embedded CSS + TOC), easy to read
 ```
@@ -66,7 +65,7 @@ node scripts/ultrasearch.mjs gather --q "how does HTTP rate limiting work" \
 # 2. The agent reads DOSSIER.md, enriches thin areas with its own WebSearch:
 node scripts/ultrasearch.mjs fetch --url "https://…" --out /tmp/rl    # → prints new S#
 
-# 3. The agent writes SUMMARY.md / REPORT.md / FULL.md, citing every claim [S#]
+# 3. The agent writes SUMMARY.md / REPORT.md, citing every claim [S#]
 
 # 4. Render + verify grounding
 node scripts/ultrasearch.mjs render --run /tmp/rl     # → index.html
