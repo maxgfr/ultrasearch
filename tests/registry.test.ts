@@ -73,3 +73,11 @@ describe("runBackends variant fan-out politeness", () => {
     expect(peak["html.duckduckgo.com"]).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("runBackends — unknown backend", () => {
+  it("returns an empty result + a note for a kind with no handler (e.g. the 'claude' provenance label)", async () => {
+    const [res] = await runBackends(["claude"], makeCtx("q"));
+    expect(res!.items).toHaveLength(0);
+    expect(res!.notes.join(" ")).toMatch(/no handler for backend "claude"/i);
+  });
+});
