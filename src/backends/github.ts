@@ -17,13 +17,15 @@ export const githubBackend: Backend = async (ctx): Promise<BackendResult> => {
   const items: RawSource[] = r.data.items.slice(0, n).map((it: any, i: number): RawSource => {
     const body = htmlToText(String(it.body ?? ""));
     const repo = String(it.repository_url ?? "").replace("https://api.github.com/repos/", "");
+    const issueTitle = String(it.title ?? "Untitled");
     return {
-      url: String(it.html_url),
-      title: `${it.pull_request ? "PR" : "Issue"}: ${it.title}${repo ? ` (${repo})` : ""}`,
+      // Guard a missing html_url so it never renders as the string "undefined".
+      url: it.html_url ? String(it.html_url) : "",
+      title: `${it.pull_request ? "PR" : "Issue"}: ${issueTitle}${repo ? ` (${repo})` : ""}`,
       backend: "github",
       score: n - i,
-      snippet: (body || String(it.title)).slice(0, 360),
-      text: `${it.title}\nstate: ${it.state} · comments: ${it.comments}\n\n${body}`,
+      snippet: (body || issueTitle).slice(0, 360),
+      text: `${issueTitle}\nstate: ${it.state} · comments: ${it.comments}\n\n${body}`,
       meta: {},
     };
   });

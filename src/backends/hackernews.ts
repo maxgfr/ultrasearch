@@ -16,15 +16,16 @@ export const hackernewsBackend: Backend = async (ctx): Promise<BackendResult> =>
   }
   const items: RawSource[] = r.data.hits.slice(0, n).map((h: any, i: number): RawSource => {
     const title = String(h.title ?? h.story_title ?? "HN story");
-    const discussion = `https://news.ycombinator.com/item?id=${h.objectID}`;
+    // Guard a missing objectID so the discussion link never becomes "…id=undefined".
+    const discussion = h.objectID ? `https://news.ycombinator.com/item?id=${h.objectID}` : undefined;
     const storyText = h.story_text ? htmlToText(String(h.story_text)) : "";
     return {
-      url: h.url ? String(h.url) : discussion,
+      url: h.url ? String(h.url) : (discussion ?? "https://news.ycombinator.com/"),
       title,
       backend: "hackernews",
       score: n - i,
       snippet: (storyText || title).slice(0, 360),
-      text: `${title}\n\n${storyText}\nHN discussion: ${discussion}`,
+      text: `${title}\n\n${storyText}${discussion ? `\nHN discussion: ${discussion}` : ""}`,
       meta: { points: Number(h.points ?? 0) },
     };
   });

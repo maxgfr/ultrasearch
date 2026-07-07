@@ -340,8 +340,12 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
   };
 }
 
-async function main(): Promise<void> {
-  const p = parseArgs(process.argv.slice(2));
+// Exported (with an argv default) so tests can drive the whole dispatch surface
+// in-process — vitest's V8 coverage only instruments src/** in-process, so a
+// spawned bundle would exercise this code without ever counting toward it. The
+// isInvokedDirectly() gate below still controls auto-run from the CLI.
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  const p = parseArgs(argv);
 
   switch (p.command) {
     case "gather": {

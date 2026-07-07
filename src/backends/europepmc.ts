@@ -22,7 +22,9 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
     const year = w.pubYear ? Number(w.pubYear) : undefined;
     const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || undefined;
     const doi = w.doi as string | undefined;
-    const link = doi ? `https://doi.org/${doi}` : `https://europepmc.org/article/${w.source}/${w.id}`;
+    // Only build the article URL when both source and id are present, else the
+    // link degrades to ".../undefined/undefined".
+    const link = doi ? `https://doi.org/${doi}` : w.source && w.id ? `https://europepmc.org/article/${w.source}/${w.id}` : "";
     return {
       url: link,
       title,

@@ -20,7 +20,9 @@ export const semanticscholarBackend: Backend = async (ctx): Promise<BackendResul
     const doi = p.externalIds?.DOI as string | undefined;
     const arxivId = p.externalIds?.ArXiv as string | undefined;
     return {
-      url: String(p.url ?? (doi ? `https://doi.org/${doi}` : "")),
+      // `||` guards both a missing and an empty-string url; fall back to the DOI,
+      // then the arXiv abstract, before giving up on a link.
+      url: String(p.url || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : "")),
       title,
       backend: "semanticscholar",
       score: n - i,

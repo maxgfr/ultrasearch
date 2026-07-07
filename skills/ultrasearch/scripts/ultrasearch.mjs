@@ -775,7 +775,7 @@ async function mapLimit(items, limit, fn) {
 // src/backends/pdf.ts
 import { inflateSync, inflateRawSync } from "zlib";
 function decodePdfString(tok) {
-  if (!tok || tok[0] !== "(") return "";
+  if (tok?.[0] !== "(") return "";
   const inner = tok.slice(1, -1);
   const simple = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
   return inner.replace(/\\([nrtbf()\\])/g, (_m, c) => simple[c] ?? c).replace(/\\([0-7]{1,3})/g, (_m, o) => String.fromCharCode(parseInt(o, 8) & 255));
@@ -1065,9 +1065,9 @@ async function rescueViaWayback(url, opts = {}) {
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
   const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: CONTACT_UA });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
-  if (!snap || snap.available !== true || typeof snap.url !== "string") return void 0;
+  if (snap?.available !== true || typeof snap.url !== "string") return void 0;
   const got = await fetchAndExtract(snap.url, opts);
-  if (!got.text || !got.text.trim() || looksLikeJunkExtraction(got.text)) return void 0;
+  if (!got.text?.trim() || looksLikeJunkExtraction(got.text)) return void 0;
   return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
 }
 var JUNK_PATTERNS = [
@@ -1165,7 +1165,7 @@ function baseLang(lang) {
   return (lang || "en").split("-")[0].toLowerCase();
 }
 function resolveRegion(lang, region) {
-  if (region && region.trim()) return region.trim().toLowerCase();
+  if (region?.trim()) return region.trim().toLowerCase();
   const parts = (lang || "en").split("-");
   if (parts.length > 1 && parts[1]) return parts[1].toLowerCase();
   const l = baseLang(lang);
@@ -1648,18 +1648,18 @@ var hackernewsBackend = async (ctx) => {
   }
   const items = r.data.hits.slice(0, n).map((h, i) => {
     const title = String(h.title ?? h.story_title ?? "HN story");
-    const discussion = `https://news.ycombinator.com/item?id=${h.objectID}`;
+    const discussion = h.objectID ? `https://news.ycombinator.com/item?id=${h.objectID}` : void 0;
     const storyText = h.story_text ? htmlToText(String(h.story_text)) : "";
     return {
-      url: h.url ? String(h.url) : discussion,
+      url: h.url ? String(h.url) : discussion ?? "https://news.ycombinator.com/",
       title,
       backend: "hackernews",
       score: n - i,
       snippet: (storyText || title).slice(0, 360),
       text: `${title}
 
-${storyText}
-HN discussion: ${discussion}`,
+${storyText}${discussion ? `
+HN discussion: ${discussion}` : ""}`,
       meta: { points: Number(h.points ?? 0) }
     };
   });
@@ -1684,13 +1684,15 @@ var githubBackend = async (ctx) => {
   const items = r.data.items.slice(0, n).map((it, i) => {
     const body = htmlToText(String(it.body ?? ""));
     const repo = String(it.repository_url ?? "").replace("https://api.github.com/repos/", "");
+    const issueTitle = String(it.title ?? "Untitled");
     return {
-      url: String(it.html_url),
-      title: `${it.pull_request ? "PR" : "Issue"}: ${it.title}${repo ? ` (${repo})` : ""}`,
+      // Guard a missing html_url so it never renders as the string "undefined".
+      url: it.html_url ? String(it.html_url) : "",
+      title: `${it.pull_request ? "PR" : "Issue"}: ${issueTitle}${repo ? ` (${repo})` : ""}`,
       backend: "github",
       score: n - i,
-      snippet: (body || String(it.title)).slice(0, 360),
-      text: `${it.title}
+      snippet: (body || issueTitle).slice(0, 360),
+      text: `${issueTitle}
 state: ${it.state} \xB7 comments: ${it.comments}
 
 ${body}`,
@@ -1760,8 +1762,8 @@ var crossrefBackend = async (ctx) => {
   const items = items0.slice(0, n).map((w, i) => {
     const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
     const abstract = w.abstract ? htmlToText(String(w.abstract)) : "";
-    const authors = Array.isArray(w.author) ? w.author.map((a) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean) : [];
-    const year = w.issued?.["date-parts"]?.[0]?.[0];
+    const authors = Array.isArray(w.author) ? w.author.map((a) => [a.given, a.family].filter(Boolean).join(" ") || String(a.name ?? "")).filter(Boolean) : [];
+    const year = w.issued?.["date-parts"]?.[0]?.[0] ?? void 0;
     const venue = cleanInline(Array.isArray(w["container-title"]) ? String(w["container-title"][0] ?? "") : "") || void 0;
     return {
       url: String(w.URL ?? (w.DOI ? `https://doi.org/${w.DOI}` : "")),
@@ -1805,7 +1807,7 @@ var openalexBackend = async (ctx) => {
     const year = w.publication_year || void 0;
     const venue = w.primary_location?.source?.display_name;
     const doi = typeof w.doi === "string" ? w.doi.replace(/^https?:\/\/doi\.org\//, "") : void 0;
-    const url2 = w.primary_location?.landing_page_url ?? (doi ? `https://doi.org/${doi}` : w.id);
+    const url2 = w.primary_location?.landing_page_url || (doi ? `https://doi.org/${doi}` : w.id);
     return {
       url: String(url2),
       title,
@@ -1839,7 +1841,9 @@ var semanticscholarBackend = async (ctx) => {
     const doi = p.externalIds?.DOI;
     const arxivId = p.externalIds?.ArXiv;
     return {
-      url: String(p.url ?? (doi ? `https://doi.org/${doi}` : "")),
+      // `||` guards both a missing and an empty-string url; fall back to the DOI,
+      // then the arXiv abstract, before giving up on a link.
+      url: String(p.url || (doi ? `https://doi.org/${doi}` : arxivId ? `https://arxiv.org/abs/${arxivId}` : "")),
       title,
       backend: "semanticscholar",
       score: n - i,
@@ -1870,7 +1874,7 @@ var europepmcBackend = async (ctx) => {
     const year = w.pubYear ? Number(w.pubYear) : void 0;
     const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || void 0;
     const doi = w.doi;
-    const link = doi ? `https://doi.org/${doi}` : `https://europepmc.org/article/${w.source}/${w.id}`;
+    const link = doi ? `https://doi.org/${doi}` : w.source && w.id ? `https://europepmc.org/article/${w.source}/${w.id}` : "";
     return {
       url: link,
       title,
@@ -1934,7 +1938,8 @@ var dblpBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `https://dblp.org/search/publ/api?q=${encodeURIComponent(ctx.question)}&format=json&h=${n}`;
   const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
-  const hits = r.ok && Array.isArray(r.data?.result?.hits?.hit) ? r.data.result.hits.hit : [];
+  const hitRaw = r.data?.result?.hits?.hit;
+  const hits = r.ok ? Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : [] : [];
   if (!r.ok || !hits.length) {
     return { backend: "dblp", items: [], notes: [`dblp search failed or empty (status ${r.status}).`] };
   }
@@ -2073,7 +2078,7 @@ function readCache(url, now) {
   try {
     const entry = JSON.parse(readFileSync(p, "utf8"));
     if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
-    if (!entry.text || !entry.text.trim()) return void 0;
+    if (!entry.text?.trim()) return void 0;
     return entry;
   } catch {
     return void 0;
@@ -2092,7 +2097,7 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   const hit = readCache(url, now);
   if (hit) return hit;
   const res = await fetchAndExtract(url, opts);
-  if (res.text && res.text.trim()) writeCache(url, res, now);
+  if (res.text?.trim()) writeCache(url, res, now);
   return res;
 }
 
@@ -2264,7 +2269,7 @@ function bibKey(s, used) {
   return key;
 }
 function toBibtex(sources) {
-  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || s.meta.authors && s.meta.authors.length || s.meta.year));
+  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || s.meta.authors?.length || s.meta.year));
   if (!scholarly.length) {
     return "% No scholarly sources with citable metadata in this dossier.\n";
   }
@@ -2343,7 +2348,7 @@ async function runWebCascade(engines, ctx, breadth = 1) {
   return out;
 }
 function resolveBackends(options, mode) {
-  if (options.backends && options.backends.length) return [...new Set(options.backends)];
+  if (options.backends?.length) return [...new Set(options.backends)];
   const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
   return [...new Set(applyWebEngine(base, options.webEngine))];
 }
@@ -2369,7 +2374,7 @@ function fuse(lists) {
   return merged;
 }
 function resolveVariants(options) {
-  if (options.queries && options.queries.length) {
+  if (options.queries?.length) {
     const cap = options.depth === "summary" ? 2 : options.depth === "standard" ? 4 : 6;
     const seen = /* @__PURE__ */ new Set();
     const out = [];
@@ -2395,7 +2400,7 @@ async function runGather(options) {
   const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
   const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
   const ctx = { question: options.question, mode, options, variants };
-  const explicit = !!(options.backends && options.backends.length);
+  const explicit = !!options.backends?.length;
   const webBackends = backends.filter((b) => DISCOVERY.includes(b));
   let results;
   if (explicit || webBackends.length === 0) {
@@ -2421,7 +2426,7 @@ async function runGather(options) {
     const pool = merged2.slice(0, Math.min(merged2.length, options.maxSources + overshoot));
     const hydrateNotes = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
-      if (it.text && it.text.trim()) {
+      if (it.text?.trim()) {
         it.fullText = true;
         return;
       }
@@ -2433,7 +2438,7 @@ async function runGather(options) {
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
-      let text = res.text && res.text.trim() ? res.text : "";
+      let text = res.text?.trim() ? res.text : "";
       let junk = text ? looksLikeJunkExtraction(text) : void 0;
       let title = res.title;
       if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
@@ -2443,7 +2448,7 @@ async function runGather(options) {
           alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
           hydrateCache.set(altKey, alt);
         }
-        if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
+        if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
           text = alt.text;
           junk = void 0;
           title = title || alt.title;
@@ -2472,7 +2477,7 @@ async function runGather(options) {
         it.fullText = false;
       }
     });
-    let withContent = pool.filter((it) => it.text && it.text.trim() || it.snippet.trim());
+    let withContent = pool.filter((it) => it.text?.trim() || it.snippet.trim());
     if (options.excludeDomains.length) withContent = withContent.filter(excluded);
     const docs = withContent.map((it) => ({
       id: it.url,
@@ -2512,7 +2517,9 @@ async function runGather(options) {
       const seenTerm = /* @__PURE__ */ new Set();
       const gapQuery = [...rankedKeywords(options.question).slice(0, 2), ...gaps].filter((t) => {
         const k = t.toLowerCase();
-        return seenTerm.has(k) ? false : (seenTerm.add(k), true);
+        if (seenTerm.has(k)) return false;
+        seenTerm.add(k);
+        return true;
       }).join(" ");
       const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
       const gapCtx = { ...ctx, question: gapQuery, variants: [gapQuery], options: { ...options, pages: 1 } };
@@ -2585,7 +2592,7 @@ async function addSource(dir, url, opts = {}) {
   const fetched = await cachedFetchAndExtract(url, {}, !!opts.cache);
   let { text, title } = fetched;
   let waybackSnapshot;
-  if ((!text || !text.trim()) && DEAD_LINK_STATUS.has(fetched.status)) {
+  if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
     const wb = await rescueViaWayback(url);
     if (wb) {
       text = wb.text;
@@ -2593,7 +2600,7 @@ async function addSource(dir, url, opts = {}) {
       waybackSnapshot = wb.timestamp;
     }
   }
-  if (!text || !text.trim()) {
+  if (!text?.trim()) {
     return { id: "", added: false, note: fetched.note ?? `no readable content at ${url}` };
   }
   const id = nextSourceId(sources);
@@ -3363,7 +3370,7 @@ function templateFacets(question, template) {
 function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runRoot) {
   const q = question.trim();
   let subs;
-  if (override && override.length) {
+  if (override?.length) {
     subs = override.map((s) => mk(s.trim(), "agent", "agent-supplied"));
   } else {
     subs = [];
@@ -3939,8 +3946,8 @@ function buildGatherOptions(p, opts = {}) {
     json: p.bools.has("json")
   };
 }
-async function main() {
-  const p = parseArgs(process.argv.slice(2));
+async function main(argv = process.argv.slice(2)) {
+  const p = parseArgs(argv);
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
@@ -4153,6 +4160,7 @@ export {
   HELP,
   VALUE_FLAGS,
   buildGatherOptions,
+  main,
   parseArgs,
   parseShardArgs,
   resolveApplyPaths

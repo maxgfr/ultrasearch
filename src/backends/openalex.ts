@@ -29,7 +29,9 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
     const year = (w.publication_year as number) || undefined;
     const venue = w.primary_location?.source?.display_name as string | undefined;
     const doi = typeof w.doi === "string" ? w.doi.replace(/^https?:\/\/doi\.org\//, "") : undefined;
-    const url2 = w.primary_location?.landing_page_url ?? (doi ? `https://doi.org/${doi}` : w.id);
+    // `||` (not `??`): OpenAlex sometimes returns landing_page_url:"" — an empty
+    // string must fall through to the DOI / work id, not become the source URL.
+    const url2 = w.primary_location?.landing_page_url || (doi ? `https://doi.org/${doi}` : w.id);
     return {
       url: String(url2),
       title,

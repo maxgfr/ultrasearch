@@ -17,8 +17,15 @@ export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
     // Crossref titles carry HTML entities (R&amp;D) and JATS tags (<i>, <sub>).
     const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
     const abstract = w.abstract ? htmlToText(String(w.abstract)) : "";
-    const authors = Array.isArray(w.author) ? w.author.map((a: any) => [a.given, a.family].filter(Boolean).join(" ")).filter(Boolean) : [];
-    const year = w.issued?.["date-parts"]?.[0]?.[0] as number | undefined;
+    // Author entries are usually {given, family} but can be organizations
+    // ({name: "World Health Organization"}) — fall back to `name` so consortium
+    // works keep their byline instead of losing the author entirely.
+    const authors = Array.isArray(w.author)
+      ? w.author.map((a: any) => [a.given, a.family].filter(Boolean).join(" ") || String(a.name ?? "")).filter(Boolean)
+      : [];
+    // date-parts can be [[null]] (date pending) → normalize null to undefined so
+    // meta.year matches every other backend (undefined, never null).
+    const year = (w.issued?.["date-parts"]?.[0]?.[0] as number | null | undefined) ?? undefined;
     const venue = cleanInline(Array.isArray(w["container-title"]) ? String(w["container-title"][0] ?? "") : "") || undefined;
     return {
       url: String(w.URL ?? (w.DOI ? `https://doi.org/${w.DOI}` : "")),

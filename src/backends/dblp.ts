@@ -17,7 +17,12 @@ export const dblpBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `https://dblp.org/search/publ/api?q=${encodeURIComponent(ctx.question)}&format=json&h=${n}`;
   const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
-  const hits: any[] = r.ok && Array.isArray(r.data?.result?.hits?.hit) ? r.data.result.hits.hit : [];
+  // dblp is XML→JSON: `result.hits.hit` is an array for multiple matches but a
+  // single object when exactly one publication matches — same object-or-array
+  // quirk `authorNames` handles for `authors.author`. Normalizing here stops a
+  // legitimate single result being discarded and mislabeled as an API failure.
+  const hitRaw = r.data?.result?.hits?.hit;
+  const hits: any[] = r.ok ? (Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : []) : [];
   if (!r.ok || !hits.length) {
     return { backend: "dblp", items: [], notes: [`dblp search failed or empty (status ${r.status}).`] };
   }
