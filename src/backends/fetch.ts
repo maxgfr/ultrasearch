@@ -162,6 +162,92 @@ const ENTITIES: Record<string, string> = {
   "&ndash;": "–",
   "&hellip;": "…",
   "&copy;": "©",
+  // Typographic punctuation CMSes emit as named refs (WordPress "smart" text) —
+  // otherwise a curly quote/apostrophe leaks into the report prose verbatim.
+  "&lsquo;": "‘",
+  "&rsquo;": "’",
+  "&sbquo;": "‚",
+  "&ldquo;": "“",
+  "&rdquo;": "”",
+  "&bdquo;": "„",
+  "&bull;": "•",
+  "&middot;": "·",
+  "&laquo;": "«",
+  "&raquo;": "»",
+  "&deg;": "°",
+  "&plusmn;": "±",
+  "&times;": "×",
+  "&divide;": "÷",
+  "&frac12;": "½",
+  "&frac14;": "¼",
+  "&frac34;": "¾",
+  "&sup2;": "²",
+  "&sup3;": "³",
+  "&micro;": "µ",
+  "&trade;": "™",
+  "&reg;": "®",
+  "&sect;": "§",
+  "&para;": "¶",
+  "&dagger;": "†",
+  "&Dagger;": "‡",
+  "&prime;": "′",
+  "&Prime;": "″",
+  "&iexcl;": "¡",
+  "&iquest;": "¿",
+  "&cent;": "¢",
+  "&pound;": "£",
+  "&curren;": "¤",
+  "&yen;": "¥",
+  "&euro;": "€",
+  // Latin-1 accented letters — pervasive in non-English titles/snippets.
+  "&agrave;": "à",
+  "&aacute;": "á",
+  "&acirc;": "â",
+  "&atilde;": "ã",
+  "&auml;": "ä",
+  "&aring;": "å",
+  "&aelig;": "æ",
+  "&ccedil;": "ç",
+  "&egrave;": "è",
+  "&eacute;": "é",
+  "&ecirc;": "ê",
+  "&euml;": "ë",
+  "&igrave;": "ì",
+  "&iacute;": "í",
+  "&icirc;": "î",
+  "&iuml;": "ï",
+  "&ntilde;": "ñ",
+  "&ograve;": "ò",
+  "&oacute;": "ó",
+  "&ocirc;": "ô",
+  "&otilde;": "õ",
+  "&ouml;": "ö",
+  "&oslash;": "ø",
+  "&ugrave;": "ù",
+  "&uacute;": "ú",
+  "&ucirc;": "û",
+  "&uuml;": "ü",
+  "&yacute;": "ý",
+  "&yuml;": "ÿ",
+  "&szlig;": "ß",
+  "&Agrave;": "À",
+  "&Aacute;": "Á",
+  "&Acirc;": "Â",
+  "&Auml;": "Ä",
+  "&Aring;": "Å",
+  "&AElig;": "Æ",
+  "&Ccedil;": "Ç",
+  "&Egrave;": "È",
+  "&Eacute;": "É",
+  "&Ecirc;": "Ê",
+  "&Euml;": "Ë",
+  "&Iacute;": "Í",
+  "&Ntilde;": "Ñ",
+  "&Oacute;": "Ó",
+  "&Ouml;": "Ö",
+  "&Oslash;": "Ø",
+  "&Uacute;": "Ú",
+  "&Uuml;": "Ü",
 };
 
 // Decode the common named entities plus decimal/hex numeric references.
@@ -233,22 +319,53 @@ export function htmlTitle(html: string): string | undefined {
 // strongest matching tier wins: <main>/<article> first, then common content
 // containers. (Regex can't track nested tags; the size gate below catches a
 // container truncated at its first nested close tag and falls back.)
+// Given the index just past a `<tag …>` opening, return the inner HTML up to
+// that tag's MATCHING close, counting nested same-name opens so a nested block
+// doesn't close the container early. Returns null when the tag never closes.
+// Regex alone can't balance nested tags — this is why the previous lazy
+// `([\s\S]*?)</tag>` truncated a content div at its first nested `</div>`.
+function sliceToMatchingClose(html: string, start: number, tag: string): string | null {
+  const re = new RegExp(`<${tag}\\b|</${tag}\\s*>`, "gi");
+  re.lastIndex = start;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    if (m[0]![1] === "/") {
+      if (--depth === 0) return html.slice(start, m.index);
+    } else {
+      depth++;
+    }
+  }
+  return null;
+}
+
 export function extractMainHtml(html: string): string {
   const visible = (h: string) =>
     h
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim().length;
+  // Opening-tag matchers, strongest tier first. Each captured group 1 is the
+  // container tag name; the body is recovered by balanced scan (not a lazy
+  // regex) so a nested block never truncates the extraction.
   const tiers: RegExp[] = [
-    /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
-    /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
-    /<(?:div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>([\s\S]*?)<\/(?:div|section)>/gi,
+    /<(main)\b[^>]*>/gi,
+    /<(article)\b[^>]*>/gi,
+    /<(div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>/gi,
   ];
-  const candidates: string[] = [];
+  let candidates: string[] = [];
   for (const re of tiers) {
+    const found: string[] = [];
+    re.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = re.exec(html))) candidates.push(m[1]!);
-    if (candidates.length) break; // use the strongest tier that matched
+    while ((m = re.exec(html))) {
+      const inner = sliceToMatchingClose(html, re.lastIndex, m[1]!.toLowerCase());
+      if (inner !== null) found.push(inner);
+    }
+    if (found.length) {
+      candidates = found; // use the strongest tier that matched
+      break;
+    }
   }
   if (!candidates.length) return html;
   let best = candidates[0]!;

@@ -9,6 +9,15 @@ function authorNames(authors: any): string[] {
   return list.map((x: any) => cleanInline(String(x?.text ?? x ?? ""))).filter(Boolean);
 }
 
+// dblp's XML→JSON renders a repeated element (multiple `ee`/`doi`) as an array
+// and a single one as a scalar — the same quirk `authorNames` handles. Take the
+// first string so a multi-`ee` record keeps its direct link and a multi-`doi`
+// record yields a valid single DOI (not a comma-joined, unresolvable one).
+function firstStr(v: any): string | undefined {
+  if (Array.isArray(v)) return v.find((x): x is string => typeof x === "string" && x.length > 0);
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
 // dblp via its keyless publication search API. Computer-science bibliography —
 // metadata only (no abstract), so the gatherer hydrates the `ee`/DOI landing
 // page. DOI/arXiv metadata lets identityKey dedupe dblp records against Crossref
@@ -32,11 +41,11 @@ export const dblpBackend: Backend = async (ctx): Promise<BackendResult> => {
     const authors = authorNames(info.authors);
     const year = Number(info.year) || undefined;
     const venue = cleanInline(String(info.venue ?? "")) || undefined;
-    const doi = info.doi ? String(info.doi) : undefined;
+    const doi = firstStr(info.doi);
     // Prefer the electronic edition (publisher page), else the DOI, else the
     // dblp record page — a resolvable target the gatherer can hydrate.
-    const ee = typeof info.ee === "string" ? info.ee : undefined;
-    const recUrl = typeof info.url === "string" ? info.url : "";
+    const ee = firstStr(info.ee);
+    const recUrl = firstStr(info.url) ?? "";
     const url2 = ee || (doi ? `https://doi.org/${doi}` : recUrl);
     const meta: RawSource["meta"] = { doi, authors, year, venue };
     const desc = [venue, year].filter(Boolean).join(" · ");

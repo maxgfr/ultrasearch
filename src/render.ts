@@ -24,9 +24,19 @@ function escapeHtml(s: string): string {
 // (tinted by its semantic-verification verdict when one is known); `[M]`
 // becomes an "unverified" badge.
 function renderInline(escaped: string, verdicts?: Map<string, VerdictKind>): string {
+  // Code spans and links are stashed as opaque \uE000N\uE000 tokens BEFORE any
+  // other rule runs, then restored last. Without this the sequential replaces
+  // corrupt each other: a `[S#]` inside a code span got linkified (contradicting
+  // check, which treats code spans as literal), and an emphasis rule (`_…_`)
+  // rewrote a URL like /path/_internal_docs inside an already-emitted href.
+  const stash: string[] = [];
+  const keep = (out: string): string => {
+    stash.push(out);
+    return `\uE000${stash.length - 1}\uE000`;
+  };
   let s = escaped;
-  s = s.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
-  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}" rel="noopener" target="_blank">${t}</a>`);
+  s = s.replace(/`([^`]+)`/g, (_m, c) => keep(`<code>${c}</code>`));
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => keep(`<a href="${u}" rel="noopener" target="_blank">${t}</a>`));
   s = s.replace(/\[(S\d+)\]/g, (_m, id) => {
     const v = verdicts?.get(id);
     const cls = v ? `cite v-${v}` : "cite";
@@ -37,6 +47,7 @@ function renderInline(escaped: string, verdicts?: Map<string, VerdictKind>): str
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   s = s.replace(/(^|[^\w])_([^_\n]+)_/g, "$1<em>$2</em>");
+  s = s.replace(/\uE000(\d+)\uE000/g, (_m, n) => stash[Number(n)] ?? "");
   return s;
 }
 

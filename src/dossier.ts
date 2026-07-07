@@ -205,6 +205,12 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
 // Read back a persisted dossier (for check / render / enrich).
 export function readDossier(dir: string): { sources: Source[]; manifest: Manifest } {
   const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
+  // Valid JSON that isn't an array (a `{}`/`null`/scalar) would crash every
+  // caller's `sources.map` with a raw TypeError — surface a clean named error
+  // instead (main().catch prints it), keeping the never-crash-on-malformed rule.
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`);
+  }
   const manifest = readJson<Manifest>(join(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }

@@ -69,7 +69,9 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
       const key = canonicalizeUrl(x.url);
       if (seen.has(key)) continue;
       seen.add(key);
-      found.push({ url: x.url, title: String(x.title ?? x.url), snippet: String(x.content ?? "").slice(0, 360) });
+      // `||` (not `??`): some SearXNG engines return an empty title — degrade to
+      // the URL like the HTML backends, never emit a blank title.
+      found.push({ url: x.url, title: String(x.title || x.url), snippet: String(x.content ?? "").slice(0, 360) });
     }
     if (found.length === before) break;
     if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);

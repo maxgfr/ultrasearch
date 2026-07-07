@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson } from "./fetch.js";
+import { httpJson, cleanInline } from "./fetch.js";
 import { sinceDate } from "../util.js";
 
 // Reconstruct an abstract from OpenAlex's inverted index {word: [positions]}.
@@ -23,7 +23,7 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
     return { backend: "openalex", items: [], notes: [`OpenAlex search failed or empty (status ${r.status}).`] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
-    const title = String(w.title ?? w.display_name ?? "Untitled");
+    const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";
     const abstract = fromInverted(w.abstract_inverted_index);
     const authors = Array.isArray(w.authorships) ? w.authorships.map((a: any) => a?.author?.display_name).filter(Boolean) : [];
     const year = (w.publication_year as number) || undefined;

@@ -39,6 +39,9 @@ function claimStrings(text: string): string[] {
 // reassembles them. The default (no-shard) path is byte-identical to before.
 export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
   const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`);
+  }
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const textCache = new Map<string, string>();
   const textOf = (s: Source): string => {

@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson } from "./fetch.js";
+import { httpJson, cleanInline } from "./fetch.js";
 
 // PubMed via the keyless NCBI E-utilities: esearch → idlist, then esummary →
 // metadata (two-call pattern, like wikipedia). esummary has no abstract, so we
@@ -26,7 +26,9 @@ export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
 
   const items: RawSource[] = ids.slice(0, n).map((uid, i): RawSource => {
     const d = result[uid] ?? {};
-    const title = String(d.title ?? "Untitled").replace(/\.$/, "");
+    // Decode entities + strip inline markup like the sibling scholarly backends:
+    // PubMed italicises species/gene names (<i>…</i>) and escapes & in titles.
+    const title = cleanInline(String(d.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
     const articleIds: any[] = Array.isArray(d.articleids) ? d.articleids : [];
     const doi = articleIds.find((a) => a?.idtype === "doi")?.value as string | undefined;
     const year = d.pubdate ? Number(String(d.pubdate).slice(0, 4)) || undefined : undefined;

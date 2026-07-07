@@ -23,7 +23,7 @@ export const marginaliaBackend: Backend = async (ctx): Promise<BackendResult> =>
     if (!x?.url || typeof x.url !== "string") return;
     items.push({
       url: x.url,
-      title: String(x.title ?? x.url),
+      title: String(x.title || x.url), // `||`: an empty title degrades to the URL, never blank
       backend: "marginalia",
       score: results.length - i,
       snippet: String(x.description ?? "").slice(0, 360),

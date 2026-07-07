@@ -967,7 +967,93 @@ var ENTITIES = {
   "&mdash;": "\u2014",
   "&ndash;": "\u2013",
   "&hellip;": "\u2026",
-  "&copy;": "\xA9"
+  "&copy;": "\xA9",
+  // Typographic punctuation CMSes emit as named refs (WordPress "smart" text) —
+  // otherwise a curly quote/apostrophe leaks into the report prose verbatim.
+  "&lsquo;": "\u2018",
+  "&rsquo;": "\u2019",
+  "&sbquo;": "\u201A",
+  "&ldquo;": "\u201C",
+  "&rdquo;": "\u201D",
+  "&bdquo;": "\u201E",
+  "&bull;": "\u2022",
+  "&middot;": "\xB7",
+  "&laquo;": "\xAB",
+  "&raquo;": "\xBB",
+  "&deg;": "\xB0",
+  "&plusmn;": "\xB1",
+  "&times;": "\xD7",
+  "&divide;": "\xF7",
+  "&frac12;": "\xBD",
+  "&frac14;": "\xBC",
+  "&frac34;": "\xBE",
+  "&sup2;": "\xB2",
+  "&sup3;": "\xB3",
+  "&micro;": "\xB5",
+  "&trade;": "\u2122",
+  "&reg;": "\xAE",
+  "&sect;": "\xA7",
+  "&para;": "\xB6",
+  "&dagger;": "\u2020",
+  "&Dagger;": "\u2021",
+  "&prime;": "\u2032",
+  "&Prime;": "\u2033",
+  "&iexcl;": "\xA1",
+  "&iquest;": "\xBF",
+  "&cent;": "\xA2",
+  "&pound;": "\xA3",
+  "&curren;": "\xA4",
+  "&yen;": "\xA5",
+  "&euro;": "\u20AC",
+  // Latin-1 accented letters — pervasive in non-English titles/snippets.
+  "&agrave;": "\xE0",
+  "&aacute;": "\xE1",
+  "&acirc;": "\xE2",
+  "&atilde;": "\xE3",
+  "&auml;": "\xE4",
+  "&aring;": "\xE5",
+  "&aelig;": "\xE6",
+  "&ccedil;": "\xE7",
+  "&egrave;": "\xE8",
+  "&eacute;": "\xE9",
+  "&ecirc;": "\xEA",
+  "&euml;": "\xEB",
+  "&igrave;": "\xEC",
+  "&iacute;": "\xED",
+  "&icirc;": "\xEE",
+  "&iuml;": "\xEF",
+  "&ntilde;": "\xF1",
+  "&ograve;": "\xF2",
+  "&oacute;": "\xF3",
+  "&ocirc;": "\xF4",
+  "&otilde;": "\xF5",
+  "&ouml;": "\xF6",
+  "&oslash;": "\xF8",
+  "&ugrave;": "\xF9",
+  "&uacute;": "\xFA",
+  "&ucirc;": "\xFB",
+  "&uuml;": "\xFC",
+  "&yacute;": "\xFD",
+  "&yuml;": "\xFF",
+  "&szlig;": "\xDF",
+  "&Agrave;": "\xC0",
+  "&Aacute;": "\xC1",
+  "&Acirc;": "\xC2",
+  "&Auml;": "\xC4",
+  "&Aring;": "\xC5",
+  "&AElig;": "\xC6",
+  "&Ccedil;": "\xC7",
+  "&Egrave;": "\xC8",
+  "&Eacute;": "\xC9",
+  "&Ecirc;": "\xCA",
+  "&Euml;": "\xCB",
+  "&Iacute;": "\xCD",
+  "&Ntilde;": "\xD1",
+  "&Oacute;": "\xD3",
+  "&Ouml;": "\xD6",
+  "&Oslash;": "\xD8",
+  "&Uacute;": "\xDA",
+  "&Uuml;": "\xDC"
 };
 function decodeEntities(s) {
   let out = s.replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => {
@@ -1008,18 +1094,40 @@ function htmlTitle(html) {
   const t = decodeEntities(m[1].replace(/\s+/g, " ").trim());
   return t || void 0;
 }
+function sliceToMatchingClose(html, start, tag2) {
+  const re = new RegExp(`<${tag2}\\b|</${tag2}\\s*>`, "gi");
+  re.lastIndex = start;
+  let depth = 1;
+  let m;
+  while (m = re.exec(html)) {
+    if (m[0][1] === "/") {
+      if (--depth === 0) return html.slice(start, m.index);
+    } else {
+      depth++;
+    }
+  }
+  return null;
+}
 function extractMainHtml(html) {
   const visible = (h) => h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().length;
   const tiers = [
-    /<main\b[^>]*>([\s\S]*?)<\/main>/gi,
-    /<article\b[^>]*>([\s\S]*?)<\/article>/gi,
-    /<(?:div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>([\s\S]*?)<\/(?:div|section)>/gi
+    /<(main)\b[^>]*>/gi,
+    /<(article)\b[^>]*>/gi,
+    /<(div|section)\b[^>]*\b(?:id|class)="[^"]*\b(?:content|article|post|entry|story|markdown-body|main|prose)\b[^"]*"[^>]*>/gi
   ];
-  const candidates = [];
+  let candidates = [];
   for (const re of tiers) {
+    const found = [];
+    re.lastIndex = 0;
     let m;
-    while (m = re.exec(html)) candidates.push(m[1]);
-    if (candidates.length) break;
+    while (m = re.exec(html)) {
+      const inner = sliceToMatchingClose(html, re.lastIndex, m[1].toLowerCase());
+      if (inner !== null) found.push(inner);
+    }
+    if (found.length) {
+      candidates = found;
+      break;
+    }
   }
   if (!candidates.length) return html;
   let best = candidates[0];
@@ -1238,7 +1346,7 @@ var searxngBackend = async (ctx) => {
       const key = canonicalizeUrl(x.url);
       if (seen.has(key)) continue;
       seen.add(key);
-      found.push({ url: x.url, title: String(x.title ?? x.url), snippet: String(x.content ?? "").slice(0, 360) });
+      found.push({ url: x.url, title: String(x.title || x.url), snippet: String(x.content ?? "").slice(0, 360) });
     }
     if (found.length === before) break;
     if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
@@ -1457,7 +1565,8 @@ var marginaliaBackend = async (ctx) => {
     if (!x?.url || typeof x.url !== "string") return;
     items.push({
       url: x.url,
-      title: String(x.title ?? x.url),
+      title: String(x.title || x.url),
+      // `||`: an empty title degrades to the URL, never blank
       backend: "marginalia",
       score: results.length - i,
       snippet: String(x.description ?? "").slice(0, 360),
@@ -1801,7 +1910,7 @@ var openalexBackend = async (ctx) => {
     return { backend: "openalex", items: [], notes: [`OpenAlex search failed or empty (status ${r.status}).`] };
   }
   const items = results.slice(0, n).map((w, i) => {
-    const title = String(w.title ?? w.display_name ?? "Untitled");
+    const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";
     const abstract = fromInverted(w.abstract_inverted_index);
     const authors = Array.isArray(w.authorships) ? w.authorships.map((a) => a?.author?.display_name).filter(Boolean) : [];
     const year = w.publication_year || void 0;
@@ -1834,7 +1943,7 @@ var semanticscholarBackend = async (ctx) => {
     return { backend: "semanticscholar", items: [], notes: [`Semantic Scholar search failed or empty (status ${r.status}).`] };
   }
   const items = data.slice(0, n).map((p, i) => {
-    const title = String(p.title ?? "Untitled");
+    const title = cleanInline(String(p.title ?? "Untitled")) || "Untitled";
     const abstract = String(p.abstract ?? "");
     const authors = Array.isArray(p.authors) ? p.authors.map((a) => a?.name).filter(Boolean) : [];
     const year = p.year || void 0;
@@ -1909,7 +2018,7 @@ var pubmedBackend = async (ctx) => {
   }
   const items = ids.slice(0, n).map((uid, i) => {
     const d = result[uid] ?? {};
-    const title = String(d.title ?? "Untitled").replace(/\.$/, "");
+    const title = cleanInline(String(d.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
     const articleIds = Array.isArray(d.articleids) ? d.articleids : [];
     const doi = articleIds.find((a) => a?.idtype === "doi")?.value;
     const year = d.pubdate ? Number(String(d.pubdate).slice(0, 4)) || void 0 : void 0;
@@ -1934,6 +2043,10 @@ function authorNames(authors) {
   const list = Array.isArray(a) ? a : a ? [a] : [];
   return list.map((x) => cleanInline(String(x?.text ?? x ?? ""))).filter(Boolean);
 }
+function firstStr(v) {
+  if (Array.isArray(v)) return v.find((x) => typeof x === "string" && x.length > 0);
+  return typeof v === "string" && v.length > 0 ? v : void 0;
+}
 var dblpBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `https://dblp.org/search/publ/api?q=${encodeURIComponent(ctx.question)}&format=json&h=${n}`;
@@ -1949,9 +2062,9 @@ var dblpBackend = async (ctx) => {
     const authors = authorNames(info.authors);
     const year = Number(info.year) || void 0;
     const venue = cleanInline(String(info.venue ?? "")) || void 0;
-    const doi = info.doi ? String(info.doi) : void 0;
-    const ee = typeof info.ee === "string" ? info.ee : void 0;
-    const recUrl = typeof info.url === "string" ? info.url : "";
+    const doi = firstStr(info.doi);
+    const ee = firstStr(info.ee);
+    const recUrl = firstStr(info.url) ?? "";
     const url2 = ee || (doi ? `https://doi.org/${doi}` : recUrl);
     const meta = { doi, authors, year, venue };
     const desc = [venue, year].filter(Boolean).join(" \xB7 ");
@@ -2249,6 +2362,9 @@ function renderDossierMarkdown(sources, manifest, template) {
 }
 function readDossier(dir) {
   const sources = readJson(join2(dir, "sources.json"), "sources.json");
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
+  }
   const manifest = readJson(join2(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
@@ -2638,9 +2754,14 @@ function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function renderInline(escaped, verdicts) {
+  const stash = [];
+  const keep = (out) => {
+    stash.push(out);
+    return `\uE000${stash.length - 1}\uE000`;
+  };
   let s = escaped;
-  s = s.replace(/`([^`]+)`/g, (_m, c) => `<code>${c}</code>`);
-  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => `<a href="${u}" rel="noopener" target="_blank">${t}</a>`);
+  s = s.replace(/`([^`]+)`/g, (_m, c) => keep(`<code>${c}</code>`));
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_m, t, u) => keep(`<a href="${u}" rel="noopener" target="_blank">${t}</a>`));
   s = s.replace(/\[(S\d+)\]/g, (_m, id) => {
     const v = verdicts?.get(id);
     const cls = v ? `cite v-${v}` : "cite";
@@ -2651,6 +2772,7 @@ function renderInline(escaped, verdicts) {
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
   s = s.replace(/(^|[^\w])_([^_\n]+)_/g, "$1<em>$2</em>");
+  s = s.replace(/\uE000(\d+)\uE000/g, (_m, n) => stash[Number(n)] ?? "");
   return s;
 }
 function mdToHtml(md, idPrefix, opts = {}) {
@@ -3098,9 +3220,16 @@ function extractUnits(lines, code, hint) {
       continue;
     }
     if (/^\s*>/.test(line)) {
-      const dequoted = line.replace(/^\s*>\s?/, "").trim();
-      if (dequoted) prose.push(dequoted);
-      i++;
+      flush();
+      const quoted = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const ql = stripInlineCode(lines[i]);
+        if (!/^\s*>/.test(ql)) break;
+        const dq = ql.replace(/^\s*>\s?/, "").trim();
+        if (dq) quoted.push(dq);
+        i++;
+      }
+      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
       continue;
     }
     if (isListItem(line)) {
@@ -3246,6 +3375,9 @@ function runCheck(dir, opts = {}) {
     sources = JSON.parse(readFileSync4(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
+  }
+  if (!Array.isArray(sources)) {
+    return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
   const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync4(join6(dir, f)));
@@ -3496,6 +3628,9 @@ function claimStrings(text) {
 }
 function runVerify(dir, opts = {}) {
   const sources = readJson(join9(dir, "sources.json"), "sources.json");
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
+  }
   const byId = new Map(sources.map((s) => [s.id, s]));
   const textCache = /* @__PURE__ */ new Map();
   const textOf = (s) => {

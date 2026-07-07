@@ -159,10 +159,21 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[]):
       continue;
     }
     if (/^\s*>/.test(line)) {
-      // Plain (non-hint) blockquote → treat the quoted text as prose.
-      const dequoted = line.replace(/^\s*>\s?/, "").trim();
-      if (dequoted) prose.push(dequoted);
-      i++;
+      // A (non-hint) blockquote is its own block. FLUSH the pending prose first,
+      // otherwise the quoted text is folded into the preceding sourced line and
+      // a fabricated blockquote inherits its `[S#]` — silently passing check.
+      // Fold consecutive quote lines into a single unit so a claim spanning two
+      // `>` lines still counts the citation on either line.
+      flush();
+      const quoted: string[] = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const ql = stripInlineCode(lines[i]!);
+        if (!/^\s*>/.test(ql)) break;
+        const dq = ql.replace(/^\s*>\s?/, "").trim();
+        if (dq) quoted.push(dq);
+        i++;
+      }
+      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
       continue;
     }
     if (isListItem(line)) {
@@ -354,6 +365,11 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
     sources = JSON.parse(readFileSync(sourcesPath, "utf8")) as Source[];
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${(e as Error).message}`]);
+  }
+  // Valid JSON is not enough — a `{}`/`null`/scalar sources.json parses fine but
+  // isn't the Source[] the rest of check assumes; guard before `.map` throws.
+  if (!Array.isArray(sources)) {
+    return blank(false, [`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
 
