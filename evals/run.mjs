@@ -73,12 +73,60 @@ function offline() {
     chk.status === 0 ? pass("[example] check passes (grounded)") : fail(`[example] check failed: ${chk.stdout?.trim()?.split("\n").slice(-2).join(" ")}`);
   }
 
+  // Semantic gate RED/GREEN: prove the deep-tier verification actually catches a
+  // wrong claim end-to-end through the shipped bundle (not just via unit tests).
+  semanticGateProbe();
+
   console.log("");
   if (failures) {
     console.error(`offline evals: ${failures} failure(s)`);
     process.exit(1);
   }
   console.log("offline evals: all green");
+}
+
+// Build a verdicts.json from a written VERIFY.todo.json, mapping every pair to
+// the same verdict. Returns the file path.
+function writeVerdicts(dir, verdict) {
+  const todo = JSON.parse(readFileSync(join(dir, "VERIFY.todo.json"), "utf8"));
+  const pairs = todo.pairs.map((p) => ({ ...p, verdict, note: "eval probe" }));
+  const f = join(dir, "verdicts.json");
+  writeFileSync(f, JSON.stringify({ pairs }));
+  return f;
+}
+
+// RED/GREEN probe of the deep-tier semantic gate, end-to-end through the bundle:
+// a refuted claim must FAIL `verify --apply` and `check --semantic`; a supported
+// claim must PASS both; and `--require-verify` must fail without a VERIFY.json.
+function semanticGateProbe() {
+  const dir = mkdtempSync(join(tmpdir(), "us-eval-sem-"));
+  try {
+    const g = run(["gather", "--q", "rate limiting", "--mode", "topic", "--backends", "fixture", "--out", dir]);
+    if (g.status !== 0) return fail(`[semantic-gate] gather failed: ${g.stderr?.trim()?.split("\n").pop()}`);
+    writeFileSync(join(dir, "REPORT.md"), "# R\n## Claim\nThe fetched source states a specific verifiable fact about the subject here [S1].\n");
+
+    // require-verify must fire when nothing has been adjudicated yet.
+    const rv = run(["check", "--semantic", "--require-verify", "--run", dir]);
+    if (rv.status === 0) return fail("[semantic-gate] --require-verify passed with no VERIFY.json");
+
+    // Build the worklist, then the RED case: the cited source refutes the claim.
+    if (run(["verify", "--run", dir]).status !== 0) return fail("[semantic-gate] verify (worklist) failed");
+    const redApply = run(["verify", "--apply", writeVerdicts(dir, "refuted"), "--run", dir]);
+    const redCheck = run(["check", "--semantic", "--run", dir]);
+    if (redApply.status === 0 || redCheck.status === 0) return fail("[semantic-gate] RED: a refuted claim slipped through the gate");
+
+    // GREEN: the cited source supports the claim → both must pass.
+    run(["verify", "--run", dir]);
+    const greenApply = run(["verify", "--apply", writeVerdicts(dir, "supported"), "--run", dir]);
+    const greenCheck = run(["check", "--semantic", "--require-verify", "--run", dir]);
+    if (greenApply.status !== 0 || greenCheck.status !== 0) return fail("[semantic-gate] GREEN: a supported+adjudicated claim was rejected");
+
+    pass("[semantic-gate] RED refuted→fail, GREEN supported→pass, require-verify enforced");
+  } catch (e) {
+    fail(`[semantic-gate] ${e.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // A raw HTML entity must never survive into a title/snippet — backends decode
