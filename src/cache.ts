@@ -49,7 +49,7 @@ function readCache(url: string, now: number): Extract | undefined {
   try {
     const entry = JSON.parse(readFileSync(p, "utf8")) as CacheEntry;
     if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return undefined;
-    if (!entry.text || !entry.text.trim()) return undefined; // only successes are cached; ignore anything else
+    if (!entry.text?.trim()) return undefined; // only successes are cached; ignore anything else
     return entry;
   } catch {
     return undefined; // corrupt entry — ignore, it will be overwritten on the next success
@@ -75,6 +75,6 @@ export async function cachedFetchAndExtract(url: string, opts: { acceptLanguage?
   const hit = readCache(url, now);
   if (hit) return hit;
   const res = await fetchAndExtract(url, opts);
-  if (res.text && res.text.trim()) writeCache(url, res, now); // cache successes only
+  if (res.text?.trim()) writeCache(url, res, now); // cache successes only
   return res;
 }

@@ -131,7 +131,7 @@ export async function runWebCascade(engines: BackendKind[], ctx: RunContext, bre
 // profile (plus its deep-only backends at --depth deep), then the --web-engine
 // discovery filter.
 export function resolveBackends(options: GatherOptions, mode: ModeProfile): BackendKind[] {
-  if (options.backends && options.backends.length) return [...new Set(options.backends)];
+  if (options.backends?.length) return [...new Set(options.backends)];
   const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
   return [...new Set(applyWebEngine(base, options.webEngine))];
 }
@@ -169,7 +169,7 @@ export function fuse(lists: RawSource[][]): RawSource[] {
 // fall back to the deterministic planner. Single-query backends always use the
 // original question (see registry), so this only widens the multi-query fan-out.
 export function resolveVariants(options: GatherOptions): string[] {
-  if (options.queries && options.queries.length) {
+  if (options.queries?.length) {
     // Agent-supplied variants earn a HIGHER cap (2/4/6 by depth) than the
     // deterministic planner's (1/2/3, see planVariants in util.ts): the agent
     // knows the domain, so its phrasings are worth more fan-out budget. The
@@ -212,7 +212,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // engines as a resilient fallback cascade. An explicit --backends override or
   // a profile with no web engine just runs everything as-is (the user asked for
   // exactly those backends).
-  const explicit = !!(options.backends && options.backends.length);
+  const explicit = !!options.backends?.length;
   const webBackends = backends.filter((b) => DISCOVERY.includes(b));
   let results: BackendResult[];
   if (explicit || webBackends.length === 0) {
@@ -252,7 +252,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
     const hydrateNotes: string[] = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
-      if (it.text && it.text.trim()) {
+      if (it.text?.trim()) {
         it.fullText = true; // a content backend already carried the real text
         return;
       }
@@ -265,7 +265,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
       if (res.note) hydrateNotes.push(res.note);
 
-      let text = res.text && res.text.trim() ? res.text : "";
+      let text = res.text?.trim() ? res.text : "";
       let junk = text ? looksLikeJunkExtraction(text) : undefined;
       let title = res.title;
 
@@ -280,7 +280,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
           hydrateCache.set(altKey, alt);
         }
-        if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
+        if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
           text = alt.text;
           junk = undefined;
           title = title || alt.title;
@@ -319,7 +319,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       }
     });
 
-    let withContent = pool.filter((it) => (it.text && it.text.trim()) || it.snippet.trim());
+    let withContent = pool.filter((it) => it.text?.trim() || it.snippet.trim());
     // Re-apply --exclude-domains AFTER hydration: a followed redirect can land a
     // kept source on an excluded host the pre-fetch URL didn't reveal.
     if (options.excludeDomains.length) withContent = withContent.filter(excluded);
@@ -369,7 +369,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const gapQuery = [...rankedKeywords(options.question).slice(0, 2), ...gaps]
         .filter((t) => {
           const k = t.toLowerCase();
-          return seenTerm.has(k) ? false : (seenTerm.add(k), true);
+          if (seenTerm.has(k)) return false;
+          seenTerm.add(k);
+          return true;
         })
         .join(" ");
       const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));

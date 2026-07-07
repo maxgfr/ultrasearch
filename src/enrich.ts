@@ -37,7 +37,7 @@ export async function addSource(
   // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
-  if ((!text || !text.trim()) && DEAD_LINK_STATUS.has(fetched.status)) {
+  if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
     const wb = await rescueViaWayback(url);
     if (wb) {
       text = wb.text;
@@ -45,7 +45,7 @@ export async function addSource(
       waybackSnapshot = wb.timestamp;
     }
   }
-  if (!text || !text.trim()) {
+  if (!text?.trim()) {
     return { id: "", added: false, note: fetched.note ?? `no readable content at ${url}` };
   }
 

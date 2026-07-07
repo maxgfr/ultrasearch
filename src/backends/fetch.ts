@@ -319,9 +319,9 @@ export async function rescueViaWayback(
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
   const r = await httpJson("GET", api, undefined, { timeoutMs: 10000, userAgent: CONTACT_UA });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : undefined;
-  if (!snap || snap.available !== true || typeof snap.url !== "string") return undefined;
+  if (snap?.available !== true || typeof snap.url !== "string") return undefined;
   const got = await fetchAndExtract(snap.url, opts);
-  if (!got.text || !got.text.trim() || looksLikeJunkExtraction(got.text)) return undefined;
+  if (!got.text?.trim() || looksLikeJunkExtraction(got.text)) return undefined;
   return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
 }
 

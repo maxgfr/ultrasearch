@@ -10,7 +10,7 @@ import { inflateSync, inflateRawSync } from "node:zlib";
 // Decode a PDF literal string token "( … )": resolve backslash escapes and
 // octal character codes; drop the surrounding parens.
 function decodePdfString(tok: string): string {
-  if (!tok || tok[0] !== "(") return "";
+  if (tok?.[0] !== "(") return "";
   const inner = tok.slice(1, -1);
   const simple: Record<string, string> = { n: "\n", r: "\r", t: "\t", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
   return inner.replace(/\\([nrtbf()\\])/g, (_m, c) => simple[c] ?? c).replace(/\\([0-7]{1,3})/g, (_m, o) => String.fromCharCode(parseInt(o, 8) & 0xff));

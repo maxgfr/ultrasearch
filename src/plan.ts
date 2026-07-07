@@ -40,7 +40,7 @@ function templateFacets(question: string, template: string): SubQuestion[] {
 export function runPlan(question: string, mode: ModeName, override?: string[], cap: number = DEEP_CAPS.maxSubQuestions, runRoot?: string): PlanResult {
   const q = question.trim();
   let subs: SubQuestion[];
-  if (override && override.length) {
+  if (override?.length) {
     subs = override.map((s) => mk(s.trim(), "agent", "agent-supplied"));
   } else {
     subs = [];

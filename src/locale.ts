@@ -42,7 +42,7 @@ export function baseLang(lang: string | undefined): string {
 // else a region subtag carried on the lang ("de-AT" → "at"), else the language's
 // default country, else the language code itself.
 export function resolveRegion(lang: string | undefined, region?: string): string {
-  if (region && region.trim()) return region.trim().toLowerCase();
+  if (region?.trim()) return region.trim().toLowerCase();
   const parts = (lang || "en").split("-");
   if (parts.length > 1 && parts[1]) return parts[1]!.toLowerCase();
   const l = baseLang(lang);

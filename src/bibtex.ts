@@ -28,7 +28,7 @@ function bibKey(s: Source, used: Set<string>): string {
 // Build a BibTeX file from the scholarly sources in a dossier (those carrying
 // DOI / arXiv id / authors / year). Used for research mode's refs.bib.
 export function toBibtex(sources: Source[]): string {
-  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || (s.meta.authors && s.meta.authors.length) || s.meta.year));
+  const scholarly = sources.filter((s) => s.meta && (s.meta.doi || s.meta.arxivId || s.meta.authors?.length || s.meta.year));
   if (!scholarly.length) {
     return "% No scholarly sources with citable metadata in this dossier.\n";
   }
