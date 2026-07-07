@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.7.0](https://github.com/maxgfr/ultrasearch/compare/v1.6.0...v1.7.0) (2026-07-07)
+
+
+### Features
+
+* **engine:** P0 robustness & performance hardening ([2aaaf5b](https://github.com/maxgfr/ultrasearch/commit/2aaaf5b71ca62400ff3bc9ca66d7ba96971e2a24))
+* **engine:** P1 power — dblp backend, Wayback rescue, opt-in fetch cache ([d9c12bc](https://github.com/maxgfr/ultrasearch/commit/d9c12bcb84481ac7c7d1608ee52169704ec29a11))
+
 # [1.6.0](https://github.com/maxgfr/ultrasearch/compare/v1.5.3...v1.6.0) (2026-07-04)
 
 
