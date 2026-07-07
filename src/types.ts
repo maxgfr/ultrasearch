@@ -24,6 +24,7 @@ export type BackendKind =
   | "semanticscholar"
   | "europepmc"
   | "pubmed"
+  | "dblp"
   | "generic"
   | "fixture"
   | "claude";
@@ -44,6 +45,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "semanticscholar",
   "europepmc",
   "pubmed",
+  "dblp",
   "generic",
   "fixture",
   "claude",
@@ -168,6 +170,9 @@ export interface SourceMeta {
   answerScore?: number; // stackoverflow accepted/top answer score
   points?: number; // hacker news
   heading?: string; // nearest heading for a web excerpt
+  htmlUrl?: string; // arxiv: the /html/<id> full-text URL
+  absUrl?: string; // arxiv: the /abs/<id> abstract page (hydration fallback)
+  waybackSnapshot?: string; // timestamp of the Wayback snapshot a dead link was recovered from
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   [k: string]: unknown;
 }
@@ -254,6 +259,7 @@ export interface GatherOptions {
   excludeDomains: string[];
   concurrency?: number; // in-flight page hydration fetches (default 6)
   rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
+  cache?: boolean; // --cache: reuse an on-disk fetch cache across runs (deep fan-out)
   out?: string;
   json: boolean;
 }

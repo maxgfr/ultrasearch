@@ -1,5 +1,6 @@
 import type { Backend, BackendKind, BackendResult, RawSource, RunContext } from "../types.js";
 import { rrf, canonicalizeUrl } from "../util.js";
+import { sleep, POLITE_DELAY_MS } from "./fetch.js";
 import { searxngBackend } from "./searxng.js";
 import { duckduckgoBackend } from "./duckduckgo.js";
 import { ddgliteBackend } from "./ddglite.js";
@@ -17,6 +18,7 @@ import { openalexBackend } from "./openalex.js";
 import { semanticscholarBackend } from "./semanticscholar.js";
 import { europepmcBackend } from "./europepmc.js";
 import { pubmedBackend } from "./pubmed.js";
+import { dblpBackend } from "./dblp.js";
 
 // Registry of retrieval backends. Each is independent, returns candidate
 // sources + honest notes, and never throws (the runner wraps failures into
@@ -40,6 +42,7 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
+  dblp: dblpBackend,
 };
 
 // Backends that should be queried only ONCE per run regardless of how many
@@ -47,6 +50,27 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
 // quotas) and query-independent backends (fixture/generic). The rest fan out
 // across the variants and have their per-variant lists fused.
 const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
+
+// Backends that DO fan out across query variants but whose polite public APIs
+// dislike a burst of concurrent requests (Crossref/OpenAlex/arXiv/Europe PMC
+// throttle by IP). For these, run the per-variant calls SEQUENTIALLY with a
+// small gap instead of Promise.all-ing them, so we never open N connections to
+// the same rate-limited host at once. They still run concurrently with OTHER
+// backends — only the intra-backend variant fan-out serializes.
+const POLITE_SEQUENTIAL = new Set<BackendKind>(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
+
+// Fan a backend across query variants, either concurrently (default) or
+// sequentially with a polite delay (rate-limited scholarly APIs). Returns the
+// per-variant result list; the caller fuses them via mergeVariants.
+async function fanOutVariants(handler: Backend, ctx: RunContext, variants: string[], polite: boolean): Promise<BackendResult[]> {
+  if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+  const out: BackendResult[] = [];
+  for (let i = 0; i < variants.length; i++) {
+    if (i > 0 && POLITE_DELAY_MS) await sleep(POLITE_DELAY_MS);
+    out.push(await handler({ ...ctx, question: variants[i]! }));
+  }
+  return out;
+}
 
 // Merge one backend's per-variant result lists into a single ranked list via
 // RRF over canonical URL, preferring the copy that carries text.
@@ -86,7 +110,7 @@ export async function runBackends(kinds: BackendKind[], ctx: RunContext): Promis
         const res = await handler(ctx);
         return { ...res, ms: Date.now() - t0 };
       }
-      const perVariant = await Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+      const perVariant = await fanOutVariants(handler, ctx, variants, POLITE_SEQUENTIAL.has(kind));
       const merged = mergeVariants(
         kind,
         perVariant.map((r) => r.items),

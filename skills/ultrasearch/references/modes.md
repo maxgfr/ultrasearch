@@ -9,14 +9,15 @@ modes`.
 |------|--------------------|-------------|--------|
 | `topic` | wikipedia, searxng, duckduckgo | — | — |
 | `bug` | stackexchange, github, duckduckgo, hackernews | searxng | — |
-| `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, duckduckgo, wikipedia | `bibtex` (refs.bib) |
+| `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, duckduckgo, wikipedia | `bibtex` (refs.bib) |
 | `learn` | wikipedia, duckduckgo, searxng | — | `glossary`, `exercises` |
 | `startup` | duckduckgo, searxng, hackernews | wikipedia | — |
 
 `stackexchange` fans out across Stack Overflow + Server Fault + Super User +
-Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers and
-`pubmed` (deep) adds MeSH-indexed/clinical records — so research mode is no
-longer physics/CS-only.
+Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers,
+`pubmed` (deep) adds MeSH-indexed/clinical records, and `dblp` (deep) adds the
+computer-science bibliography — so research mode spans physics/CS, biomed and
+clinical literature.
 
 All five modes compose with the **deep research tier** (`plan` / `merge` /
 `verify`): `plan` derives its sub-question facets from the mode's report

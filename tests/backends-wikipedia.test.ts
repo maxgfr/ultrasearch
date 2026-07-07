@@ -66,4 +66,47 @@ describe("wikipediaBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.notes.join(" ")).toMatch(/search failed/i);
   });
+
+  it("fetches the page summaries concurrently but bounded, preserving rank order", async () => {
+    const N = 6;
+    const search = JSON.stringify({
+      pages: Array.from({ length: N }, (_, i) => ({ key: `P${i}`, title: `Page ${i}`, excerpt: `excerpt ${i}` })),
+    });
+    let inFlight = 0;
+    let peak = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: any) => {
+        const url = typeof input === "string" ? input : String(input?.url ?? input);
+        const json = (body: string) =>
+          ({
+            ok: true,
+            status: 200,
+            url,
+            headers: { get: (k: string) => (k.toLowerCase() === "content-type" ? "application/json" : null) },
+            async arrayBuffer() {
+              return new TextEncoder().encode(body).buffer;
+            },
+            async text() {
+              return body;
+            },
+          }) as unknown as Response;
+        if (url.includes("/search/page")) return json(search);
+        // summary calls: track overlap
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((r) => setTimeout(r, 8));
+        inFlight--;
+        const key = decodeURIComponent(url.split("/summary/")[1] ?? "");
+        return json(JSON.stringify({ extract: `Extract for ${key}.`, content_urls: { desktop: { page: `https://en.wikipedia.org/wiki/${key}` } } }));
+      }),
+    );
+    const r = await wikipediaBackend(makeCtx("anything"));
+    expect(r.items).toHaveLength(6);
+    expect(peak).toBeGreaterThanOrEqual(2); // genuinely overlapping (was serial before)
+    expect(peak).toBeLessThanOrEqual(4); // bounded by mapLimit(…, 4)
+    // rank order + score preserved (top.length - i, in search order)
+    expect(r.items.map((i) => i.title)).toEqual(["Page 0", "Page 1", "Page 2", "Page 3", "Page 4", "Page 5"]);
+    expect(r.items.map((i) => i.score)).toEqual([6, 5, 4, 3, 2, 1]);
+  });
 });

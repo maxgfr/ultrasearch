@@ -3,7 +3,8 @@ import { join } from "node:path";
 import type { BackendKind, RawSource } from "./types.js";
 import { readDossier, buildSource, renderSourceExtract, renderDossierMarkdown, nextSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
-import { fetchAndExtract, bestExcerpt } from "./backends/fetch.js";
+import { bestExcerpt, rescueViaWayback, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { cachedFetchAndExtract } from "./cache.js";
 import { canonicalizeUrl } from "./util.js";
 
 export interface EnrichResult {
@@ -16,7 +17,11 @@ export interface EnrichResult {
 // WebSearch hits. Fetches + cleans the page, allocates the next S# id, appends
 // to sources.json, writes sources/S#.md, and refreshes manifest + DOSSIER.md.
 // If the URL is already in the dossier it returns the existing id (no dup).
-export async function addSource(dir: string, url: string, opts: { question?: string; title?: string; backend?: BackendKind } = {}): Promise<EnrichResult> {
+export async function addSource(
+  dir: string,
+  url: string,
+  opts: { question?: string; title?: string; backend?: BackendKind; cache?: boolean } = {},
+): Promise<EnrichResult> {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
 
@@ -26,9 +31,22 @@ export async function addSource(dir: string, url: string, opts: { question?: str
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
 
-  const { text, title, note } = await fetchAndExtract(url);
+  const fetched = await cachedFetchAndExtract(url, {}, !!opts.cache);
+  let { text, title } = fetched;
+  let waybackSnapshot: string | undefined;
+  // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
+  // before giving up, so an agent's own WebSearch hit that has since rotted still
+  // makes it into the dossier. The ORIGINAL url is kept as the source url.
+  if ((!text || !text.trim()) && DEAD_LINK_STATUS.has(fetched.status)) {
+    const wb = await rescueViaWayback(url);
+    if (wb) {
+      text = wb.text;
+      title = title || wb.title;
+      waybackSnapshot = wb.timestamp;
+    }
+  }
   if (!text || !text.trim()) {
-    return { id: "", added: false, note: note ?? `no readable content at ${url}` };
+    return { id: "", added: false, note: fetched.note ?? `no readable content at ${url}` };
   }
 
   const id = nextSourceId(sources); // shares the S<n> scheme the grounding contract depends on
@@ -40,6 +58,7 @@ export async function addSource(dir: string, url: string, opts: { question?: str
     score: 0,
     snippet: bestExcerpt(text, question),
     text,
+    ...(waybackSnapshot ? { meta: { waybackSnapshot } } : {}),
   };
   const s = buildSource(raw, id, new Date().toISOString(), question);
   writeFileSync(join(dir, s.extract), renderSourceExtract(s, text, manifest.depth));

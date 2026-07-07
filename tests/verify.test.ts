@@ -316,3 +316,51 @@ describe("check --semantic composition", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("check --require-verify (deep exit gate)", () => {
+  it("RED: fails when there is no VERIFY.json to gate on", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    const r = runCheck(dir, { semantic: true, requireVerify: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/require-verify/);
+    // plain check (mechanical) is still green — the gate is additive
+    expect(runCheck(dir).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("RED: fails when VERIFY.json has 0 adjudicated claims", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    runVerify(dir);
+    // apply an empty verdict set → VERIFY.json exists but adjudicated === 0
+    const empty = join(dir, "verdicts.empty.json");
+    writeFileSync(empty, JSON.stringify({ pairs: [] }));
+    applyVerdicts(dir, empty);
+    const r = runCheck(dir, { semantic: true, requireVerify: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/0 adjudicated/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("GREEN: passes when every claim is adjudicated and supported", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    runVerify(dir);
+    applyVerdicts(dir, writeVerdicts(dir, { S1: "supported", S2: "supported" }));
+    const r = runCheck(dir, { semantic: true, requireVerify: true });
+    expect(r.ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("without the flag, a missing VERIFY.json only warns (back-compat)", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    expect(runCheck(dir, { semantic: true }).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

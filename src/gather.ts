@@ -4,7 +4,8 @@ import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH } from "
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
-import { fetchAndExtract, bestExcerpt } from "./backends/fetch.js";
+import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { cachedFetchAndExtract } from "./cache.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
 import { toBibtex } from "./bibtex.js";
@@ -84,22 +85,33 @@ function applyWebEngine(kinds: BackendKind[], engine: GatherOptions["webEngine"]
 }
 
 // Run the general-web discovery engines as a fallback cascade in preference
-// order, short-circuiting as soon as one yields enough results — so web recall
-// does not collapse when the primary engine (DDG) blocks or changes its markup.
-// Each engine runs through the normal per-variant fan-out; engines past the
-// first that satisfies `perSource` are not queried at all (polite + fast).
-async function runWebCascade(engines: BackendKind[], ctx: RunContext, breadth = 1): Promise<BackendResult[]> {
+// order, short-circuiting as soon as `breadth` of them yield enough results — so
+// web recall does not collapse when the primary engine (DDG) blocks or changes
+// its markup. Walk the engines in WAVES: each wave launches only as many engines
+// as are still needed to reach `breadth` satisfied ones, run CONCURRENTLY, then
+// re-check. At breadth 1 every wave is a single engine, i.e. the exact sequential
+// short-circuit (one at a time, stop as soon as one satisfies `perSource`). At
+// deep breadth (== all discovery engines) the first wave launches them all in
+// parallel — the big win over the old serial loop, and the slowest part of a
+// deep run. The SET of engines queried is identical to the sequential cascade
+// for deterministic responses (a wave ends exactly at the engine that reaches
+// `breadth`), so the fused result is byte-for-byte unchanged.
+export async function runWebCascade(engines: BackendKind[], ctx: RunContext, breadth = 1): Promise<BackendResult[]> {
   const out: BackendResult[] = [];
-  const tried: BackendKind[] = [];
   let enough = 0; // engines that returned >= perSource results so far
-  for (const engine of engines) {
-    const [r] = await runBackends([engine], ctx);
-    if (!r) continue;
-    out.push(r);
-    tried.push(engine);
-    if (r.items.length >= ctx.options.perSource) enough++;
-    if (enough >= breadth) break;
+  let i = 0;
+  while (i < engines.length && enough < breadth) {
+    const waveSize = Math.min(breadth - enough, engines.length - i);
+    const wave = engines.slice(i, i + waveSize);
+    i += waveSize;
+    // runBackends preserves `wave` order (Promise.all), so `out` stays in
+    // preference order across waves — provenance notes remain deterministic.
+    for (const r of await runBackends(wave, ctx)) {
+      out.push(r);
+      if (r.items.length >= ctx.options.perSource) enough++;
+    }
   }
+  const tried = out.map((r) => r.backend);
   // Record provenance. At breadth 1 the cascade short-circuits on the first
   // engine that returns enough (a fallback when earlier ones blocked); at higher
   // breadth it keeps going and FUSES several independent engines for wider recall.
@@ -158,6 +170,11 @@ export function fuse(lists: RawSource[][]): RawSource[] {
 // original question (see registry), so this only widens the multi-query fan-out.
 export function resolveVariants(options: GatherOptions): string[] {
   if (options.queries && options.queries.length) {
+    // Agent-supplied variants earn a HIGHER cap (2/4/6 by depth) than the
+    // deterministic planner's (1/2/3, see planVariants in util.ts): the agent
+    // knows the domain, so its phrasings are worth more fan-out budget. The
+    // divergence is intentional — keep the two in sync only in spirit, and see
+    // tests/gather.test.ts which pins both so a change here is a conscious one.
     const cap = options.depth === "summary" ? 2 : options.depth === "standard" ? 4 : 6;
     const seen = new Set<string>();
     const out: string[] = [];
@@ -215,7 +232,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
   // re-fetches a page round 1 already hydrated.
-  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string }>();
+  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string; status: number }>();
+  // Wayback dead-link rescues are capped per run so a page full of dead links
+  // can't fan out into dozens of archive.org round-trips.
+  let waybackUsed = 0;
+  const WAYBACK_CAP = 5;
 
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
@@ -238,20 +259,61 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await fetchAndExtract(it.url, { acceptLanguage });
+        res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
       if (res.note) hydrateNotes.push(res.note);
-      if (res.text && res.text.trim()) {
-        it.text = res.text;
+
+      let text = res.text && res.text.trim() ? res.text : "";
+      let junk = text ? looksLikeJunkExtraction(text) : undefined;
+      let title = res.title;
+
+      // The page gave us nothing usable (failed, empty, or a consent/anti-bot
+      // wall). Try a backend-provided fallback URL — e.g. arXiv points `url` at
+      // /html/<id>, which 404s for many papers, but carries meta.absUrl (the
+      // abstract page) — before giving up on full text.
+      if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
+        const altKey = canonicalizeUrl(it.meta.absUrl);
+        let alt = hydrateCache.get(altKey);
+        if (!alt) {
+          alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          hydrateCache.set(altKey, alt);
+        }
+        if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
+          text = alt.text;
+          junk = undefined;
+          title = title || alt.title;
+          hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${it.meta.absUrl} instead.`);
+        }
+      }
+
+      // Dead-link rescue: the origin is gone/blocked (404/410/451/403) and we
+      // got nothing — try the Wayback Machine's closest snapshot before dropping
+      // to the snippet. Capped per run; the ORIGINAL url stays the source url.
+      if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+        waybackUsed++; // reserve the slot synchronously (before any await) so the cap holds under concurrency
+        const wb = await rescueViaWayback(it.url, { acceptLanguage });
+        if (wb) {
+          text = wb.text;
+          junk = undefined;
+          title = title || wb.title;
+          it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
+          hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+        }
+      }
+
+      if (text && !junk) {
+        it.text = text;
         it.fullText = true;
-        if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
-        if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
+        if (!it.snippet) it.snippet = bestExcerpt(text, options.question);
+        if ((!it.title || it.title === it.url) && title) it.title = title;
       } else {
-        // Page fetch failed — fall back to the search snippet. A snippet-only
-        // source has only a short body, so the BM25 content score already
-        // down-ranks it; the flag makes that visible in the dossier.
+        // Page fetch failed, empty, or looked like a consent/anti-bot wall — fall
+        // back to the search snippet so boilerplate can't masquerade as real
+        // content. A snippet-only source has only a short body, so the BM25
+        // content score already down-ranks it; the flag makes it visible.
+        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} — kept as snippet only.`);
         it.text = it.snippet || "";
         it.fullText = false;
       }

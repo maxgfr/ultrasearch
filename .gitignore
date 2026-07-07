@@ -9,3 +9,5 @@ coverage/
 .ultrasearch/
 **/.ultrasearch/
 evals/last-run.json
+eval-network-report.md
+eval-network-summary.json

@@ -37,12 +37,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Gate — typecheck / lint / test / reproducible bundle
+      - name: Gate — typecheck / lint / test / reproducible bundle / offline evals
         run: |
           pnpm run typecheck
           pnpm run lint
           pnpm test
           pnpm run check:build
+          pnpm run eval
 
       - name: Release (semantic-release)
         env:

@@ -5,8 +5,9 @@
 `ultrasearch` is a [skills.sh](https://skills.sh) agent skill. Give it a
 topic or question and it fans out **keyless web search across many backends**,
 fetches and de-duplicates the pages into an **evidence dossier**, then has the
-agent write a **citation-checked research report** in three sizes (TL;DR /
-standard / exhaustive) plus a **self-contained HTML** you can open and read.
+agent write a **citation-checked research report** in two tiers (a TL;DR
+`SUMMARY` and a complete `REPORT`) plus a **self-contained HTML** (and portable
+markdown) you can open and read.
 
 It's the web-facing sibling of [`ultradoc`](https://github.com/maxgfr/ultradoc):
 same machine (one committed, zero-dependency Node bundle; deterministic
@@ -16,6 +17,9 @@ open web instead of a git repo.
 ```bash
 npx skills add maxgfr/ultrasearch
 ```
+
+> Already installed? Re-run `npx skills add maxgfr/ultrasearch` to pull the
+> latest engine + skill description.
 
 ## Why
 
@@ -41,7 +45,11 @@ A run writes an output folder:
   REPORT.md       complete report tier  ┘
   glossary.md     (learn mode)   refs.bib (research mode)
   index.html      self-contained HTML report (embedded CSS + TOC), easy to read
+  index.md        consolidated markdown report (all tiers + sources), portable
 ```
+
+> `render` writes **both** `index.html` and `index.md` by default (`--no-html` /
+> `--no-md` skip either).
 
 ## Five modes
 
@@ -51,11 +59,15 @@ Each mode is a **report template** + a **backend-priority profile**:
 |------|-----|--------|
 | `topic` *(default)* | a general briefing on any subject | Wikipedia + general web |
 | `bug` | debugging an error / symptom | Stack Overflow, GitHub issues, Hacker News, changelogs |
-| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed (+ `refs.bib`) |
+| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed, dblp (+ `refs.bib`) |
 | `learn` | learning a topic from scratch | general web + docs → glossary, lesson, exercises, rich HTML |
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
 
 ## How it's used (the agent's loop)
+
+> Paths below are relative to a repo checkout. An **installed** skill runs from
+> its own folder, so the agent substitutes an absolute `<skill-dir>/` prefix
+> (`~/.claude/skills/ultrasearch/…`) — see `SKILL.md`.
 
 ```bash
 # 1. Retrieve — fan out keyless backends, write the dossier
@@ -89,7 +101,7 @@ node scripts/ultrasearch.mjs merge  --runs "/tmp/deep/q1,/tmp/deep/q2" --master 
 # write the tiers against the master, then verify every claim against its source:
 node scripts/ultrasearch.mjs verify --run /tmp/deep/master [--shards N --shard I]  # one skeptic per shard
 node scripts/ultrasearch.mjs verify --apply <verdicts|dir> --run /tmp/deep/master
-node scripts/ultrasearch.mjs check  --semantic --run /tmp/deep/master   # fails on refuted/unsupported claims
+node scripts/ultrasearch.mjs check  --semantic --require-verify --run /tmp/deep/master   # exit gate: fails on refuted/unsupported/unverified
 ```
 
 `check --semantic` also surfaces **contradictions** — claims whose cited sources
@@ -107,12 +119,15 @@ survives one engine blocking — then the agent's own **WebSearch** (URLs fed ba
 via `fetch --url`). Mode-specific backends add
 Wikipedia, the keyless StackExchange (multi-site) / Hacker News / GitHub APIs,
 and the scholarly APIs (arXiv / Crossref / OpenAlex / Semantic Scholar /
-Europe PMC / PubMed) — all keyless.
+Europe PMC / PubMed / dblp) — all keyless.
 
 Each run plans **query variants** and fans backends out across them, re-ranks
 sources by how well their fetched text covers the question, dedupes the same
 work across scholarly backends by DOI/arXiv id, and retries once on throttling
-— so you get broad, relevant, de-duplicated coverage.
+— so you get broad, relevant, de-duplicated coverage. A dead link (404/410/…) is
+rescued from the **Wayback Machine** before it's dropped, and `--cache` reuses an
+on-disk fetch cache across runs (the deep tier's per-sub-question fan-out reuses
+the same pages instead of re-fetching them).
 
 ## Commands
 
@@ -137,7 +152,9 @@ agent (search-engine results and pages it elects to fetch), following redirects
 host running it as able to reach the network it sits on. Parsing is size-capped
 (responses are truncated before extraction) to bound memory, and the tool only
 writes inside the `--out` directory. Run it where reaching arbitrary URLs,
-including internal ones, is acceptable.
+including internal ones, is acceptable. Fetched page text is **untrusted input**:
+the agent is instructed to quote and cite it, never to obey instructions embedded
+inside a page (prompt injection).
 
 ## License
 

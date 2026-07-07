@@ -21,6 +21,7 @@ honest notes in the dossier.
 | `semanticscholar` | `GET https://api.semanticscholar.org/graph/v1/paper/search` | Unauthenticated; can rate-limit. Carries DOI + arXiv id in `externalIds`. |
 | `europepmc` | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core` | Biomedical/life-sciences. `resultType=core` returns the abstract inline (content backend). Carries DOI + journal + year. |
 | `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract. |
+| `dblp` | `GET https://dblp.org/search/publ/api?q=…&format=json` | Computer-science bibliography (research deep). Metadata-only → the gatherer hydrates the `ee`/DOI landing page; DOI/author metadata dedupes it against Crossref/OpenAlex and feeds `refs.bib`. |
 
 ## Content extraction
 
@@ -34,12 +35,23 @@ honest notes in the dossier.
   operators). Scanned/image-only or encrypted PDFs may yield little — that's
   reported as a note. This lets `research` papers (and any PDF you `fetch`) be
   read beyond their abstract.
+- A short extraction dominated by **consent / anti-bot / "enable JavaScript"**
+  boilerplate is rejected (it can't masquerade as full text): the source keeps
+  only its search snippet and is marked `⚠ snippet only`.
+- A **dead link** (404/410/451/403) is retried against the **Wayback Machine**'s
+  closest snapshot before it's dropped; the recovered text is used, the original
+  URL is kept, and a note records the snapshot (disable with
+  `ULTRASEARCH_NO_WAYBACK`; capped per run).
 
 ## Rate-limit etiquette
 
 - `--per-source` caps results per backend; `--depth` scales it.
 - Rate-limited backends (GitHub, StackExchange, Semantic Scholar, PubMed) are
   queried with a **single** query variant per run (no variant fan-out).
+- The polite scholarly APIs that DO fan out across variants (arXiv, Crossref,
+  OpenAlex, Europe PMC, dblp) run their per-variant calls **sequentially** with a
+  small gap (`ULTRASEARCH_POLITE_DELAY_MS`, default 400ms) rather than all at
+  once, so a multi-query run never opens N connections to the same host.
 - Every request retries **once** on a transient status (429/503) — honoring
   `Retry-After` (clamped to 5s) — so one throttled call doesn't zero a backend.
   Tunable via `ULTRASEARCH_MAX_ATTEMPTS` / `ULTRASEARCH_RETRY_MS`.

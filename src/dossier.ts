@@ -17,6 +17,24 @@ export const CITATION_RULES = [
   "`[S#]` that does not resolve to a real source.",
 ].join("\n");
 
+// Read + JSON.parse a file, rethrowing a message that names WHAT was being read
+// and WHERE. A corrupt sources.json / manifest / verdicts file then surfaces as a
+// clean `ultrasearch: <what> is unreadable …` (via main().catch) instead of a raw
+// SyntaxError stack. Shared by every reader that parses a dossier artifact.
+export function readJson<T>(path: string, what: string): T {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    throw new Error(`${what} could not be read (${path}): ${(e as Error).message}`);
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (e) {
+    throw new Error(`${what} is not valid JSON (${path}): ${(e as Error).message}`);
+  }
+}
+
 // Parse the numeric suffix of an "S<n>" id.
 function idNum(id: string): number {
   const m = /^S(\d+)$/.exec(id);
@@ -186,7 +204,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
 
 // Read back a persisted dossier (for check / render / enrich).
 export function readDossier(dir: string): { sources: Source[]; manifest: Manifest } {
-  const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
-  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+  const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
+  const manifest = readJson<Manifest>(join(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }

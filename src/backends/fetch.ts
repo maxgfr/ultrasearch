@@ -25,6 +25,11 @@ const DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5000);
 // (multi-page pagination). Keyless engines block aggressive scraping, so we
 // fetch pages sequentially with a small gap. Tunable; 0 disables.
 export const PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5000);
+// Polite pause between a rate-limited scholarly API's per-VARIANT calls
+// (Crossref/OpenAlex/arXiv/Europe PMC), which the registry serializes rather
+// than firing concurrently to avoid tripping their anon quotas. Tunable; 0
+// disables (tests set it to 0 to stay fast).
+export const POLITE_DELAY_MS = envInt("ULTRASEARCH_POLITE_DELAY_MS", 400, 0, 5000);
 
 export interface HttpResult {
   ok: boolean;
@@ -272,12 +277,12 @@ const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 
 export async function fetchAndExtract(
   url: string,
   opts: { acceptLanguage?: string } = {},
-): Promise<{ text: string; title?: string; note?: string; finalUrl: string }> {
+): Promise<{ text: string; title?: string; note?: string; finalUrl: string; status: number }> {
   const wantsPdf = PDF_URL_RE.test(url);
   const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
-    return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
+    return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
   }
   if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
     // A content-type-only PDF (no .pdf in the URL) was fetched as text — refetch
@@ -287,13 +292,63 @@ export async function fetchAndExtract(
     return {
       text,
       finalUrl: res.url,
+      status: res.status,
       note: text ? undefined : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`,
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
-  return { text, title, finalUrl: res.url };
+  return { text, title, finalUrl: res.url, status: res.status };
+}
+
+// Statuses where the origin is gone/blocked and a live re-fetch will never
+// work, so an archived copy is worth trying (410 Gone, 451 legal, 403 blocked).
+export const DEAD_LINK_STATUS = new Set([404, 410, 451, 403]);
+
+// Best-effort dead-link rescue via the Wayback Machine's keyless availability
+// API: ask for the closest snapshot of `url`, and if one exists, fetch + extract
+// it. Returns the recovered text + the snapshot's timestamp/url, or undefined
+// when there is no usable snapshot. The ORIGINAL url stays the source's url;
+// callers record the snapshot in meta + a note. Disable with ULTRASEARCH_NO_WAYBACK.
+export async function rescueViaWayback(
+  url: string,
+  opts: { acceptLanguage?: string } = {},
+): Promise<{ text: string; title?: string; snapshotUrl: string; timestamp: string } | undefined> {
+  if (process.env.ULTRASEARCH_NO_WAYBACK) return undefined;
+  const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+  const r = await httpJson("GET", api, undefined, { timeoutMs: 10000, userAgent: CONTACT_UA });
+  const snap = r.ok ? r.data?.archived_snapshots?.closest : undefined;
+  if (!snap || snap.available !== true || typeof snap.url !== "string") return undefined;
+  const got = await fetchAndExtract(snap.url, opts);
+  if (!got.text || !got.text.trim() || looksLikeJunkExtraction(got.text)) return undefined;
+  return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
+}
+
+// Consent walls, "enable JavaScript" shells and anti-bot interstitials extract
+// to a short block of boilerplate that would otherwise pass as a source's full
+// text. Flag such an extraction (returning a short reason) so the gatherer keeps
+// only the search snippet instead. BOTH conditions are required — a genuine
+// article ABOUT cookies or CAPTCHAs is long, so the length gate never trips it.
+const JUNK_PATTERNS: [RegExp, string][] = [
+  [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall"],
+  [/\bwe use cookies\b/i, "cookie/consent wall"],
+  [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?enable javascript\b/i, "JavaScript-required shell"],
+  [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell"],
+  [/\bverify (you are|you're|you are a)\b|\bare you a human\b|\bhuman verification\b/i, "anti-bot interstitial"],
+  [/\baccess denied\b|\battention required\b.*cloudflare|\bunusual traffic\b|\bare you a robot\b/i, "anti-bot interstitial"],
+  [/\benable cookies\b|\bchecking your browser\b/i, "anti-bot interstitial"],
+  // FR / DE (the locale layer targets non-EN markets)
+  [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)"],
+  [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)"],
+];
+export function looksLikeJunkExtraction(text: string): string | undefined {
+  const t = text.trim();
+  if (t.length >= 2000) return undefined; // a real article is long — never flag it
+  const head = t.slice(0, 800);
+  for (const [re, reason] of JUNK_PATTERNS) if (re.test(head)) return reason;
+  return undefined;
 }
 
 // The markdown heading a line sits under, ignoring fenced code blocks.

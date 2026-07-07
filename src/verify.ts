@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
 import { unitsOfFile, unitSourceTokens } from "./check.js";
-import { readSourceText } from "./dossier.js";
+import { readJson, readSourceText } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 
 const HARD_FILES = ["REPORT.md"];
@@ -38,7 +38,7 @@ function claimStrings(text: string): string[] {
 // subagents can adjudicate disjoint slices in parallel and `verify --apply`
 // reassembles them. The default (no-shard) path is byte-identical to before.
 export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
-  const sources: Source[] = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
+  const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const textCache = new Map<string, string>();
   const textOf = (s: Source): string => {
@@ -133,7 +133,7 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
 // Parse + validate one agent-filled verdicts file (a `{ pairs: Verdict[] }`
 // object or a bare `Verdict[]` array) into normalized Verdict records.
 function parseVerdictFile(verdictsPath: string): Verdict[] {
-  const raw = JSON.parse(readFileSync(verdictsPath, "utf8"));
+  const raw = readJson<any>(verdictsPath, `verdicts file`);
   const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
   const verdicts: Verdict[] = [];
   for (const v of list) {

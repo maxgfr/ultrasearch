@@ -3,7 +3,7 @@
 // src/cli.ts
 import { resolve } from "path";
 import { pathToFileURL, fileURLToPath } from "url";
-import { realpathSync, existsSync as existsSync5, statSync, readdirSync } from "fs";
+import { realpathSync, existsSync as existsSync6, statSync, readdirSync } from "fs";
 
 // src/types.ts
 var VERSION = "1.6.0";
@@ -23,6 +23,7 @@ var ALL_BACKENDS = [
   "semanticscholar",
   "europepmc",
   "pubmed",
+  "dblp",
   "generic",
   "fixture",
   "claude"
@@ -58,8 +59,8 @@ var DEEP_CAPS = {
 var ALL_WEB_ENGINES = ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
 
 // src/gather.ts
-import { join as join2 } from "path";
-import { tmpdir } from "os";
+import { join as join3 } from "path";
+import { tmpdir as tmpdir2 } from "os";
 
 // src/modes/topic.ts
 var topicMode = {
@@ -105,9 +106,9 @@ var bugMode = {
 // src/modes/research.ts
 var researchMode = {
   name: "research",
-  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar) + refs.bib.",
+  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp at deep) + refs.bib.",
   backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
-  deepOnly: ["pubmed", "duckduckgo", "wikipedia"],
+  deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
   template: [
     "## Abstract / TL;DR",
@@ -230,6 +231,7 @@ var BACKEND_TRUST = {
   semanticscholar: 0.9,
   europepmc: 0.9,
   pubmed: 0.9,
+  dblp: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -863,6 +865,7 @@ function envInt(name, def, min, max) {
 var MAX_ATTEMPTS = envInt("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
 var DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5e3);
 var PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5e3);
+var POLITE_DELAY_MS = envInt("ULTRASEARCH_POLITE_DELAY_MS", 400, 0, 5e3);
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1039,7 +1042,7 @@ async function fetchAndExtract(url, opts = {}) {
   const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
-    return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
+    return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
   }
   if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
     const bytes = res.bytes ?? (await httpGet(url, PDF_FETCH_OPTS)).bytes;
@@ -1047,13 +1050,45 @@ async function fetchAndExtract(url, opts = {}) {
     return {
       text: text2,
       finalUrl: res.url,
+      status: res.status,
       note: text2 ? void 0 : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
-  return { text, title, finalUrl: res.url };
+  return { text, title, finalUrl: res.url, status: res.status };
+}
+var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
+async function rescueViaWayback(url, opts = {}) {
+  if (process.env.ULTRASEARCH_NO_WAYBACK) return void 0;
+  const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: CONTACT_UA });
+  const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
+  if (!snap || snap.available !== true || typeof snap.url !== "string") return void 0;
+  const got = await fetchAndExtract(snap.url, opts);
+  if (!got.text || !got.text.trim() || looksLikeJunkExtraction(got.text)) return void 0;
+  return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
+}
+var JUNK_PATTERNS = [
+  [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall"],
+  [/\bwe use cookies\b/i, "cookie/consent wall"],
+  [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?enable javascript\b/i, "JavaScript-required shell"],
+  [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell"],
+  [/\bverify (you are|you're|you are a)\b|\bare you a human\b|\bhuman verification\b/i, "anti-bot interstitial"],
+  [/\baccess denied\b|\battention required\b.*cloudflare|\bunusual traffic\b|\bare you a robot\b/i, "anti-bot interstitial"],
+  [/\benable cookies\b|\bchecking your browser\b/i, "anti-bot interstitial"],
+  // FR / DE (the locale layer targets non-EN markets)
+  [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)"],
+  [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)"]
+];
+function looksLikeJunkExtraction(text) {
+  const t = text.trim();
+  if (t.length >= 2e3) return void 0;
+  const head = t.slice(0, 800);
+  for (const [re, reason] of JUNK_PATTERNS) if (re.test(head)) return reason;
+  return void 0;
 }
 function nearestHeading(lines, anchor) {
   let heading;
@@ -1447,19 +1482,17 @@ var wikipediaBackend = async (ctx) => {
     return { backend: "wikipedia", items: [], notes: [`Wikipedia search failed (status ${sr.status}).`] };
   }
   const pages = sr.data.pages;
-  const items = [];
   const top = pages.slice(0, Math.min(limit, 6));
-  for (let i = 0; i < top.length; i++) {
-    const p = top[i];
-    if (!p?.key) continue;
+  const built = await mapLimit(top, 4, async (p, i) => {
+    if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
     const extract = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
-    if (!text) continue;
-    items.push({
+    if (!text) return null;
+    return {
       url: pageUrl,
       title: decodeEntities(String(p.title ?? p.key)),
       backend: "wikipedia",
@@ -1467,8 +1500,9 @@ var wikipediaBackend = async (ctx) => {
       snippet: (descExcerpt || extract).slice(0, 360),
       text,
       lang
-    });
-  }
+    };
+  });
+  const items = built.filter((x) => x !== null);
   return {
     backend: "wikipedia",
     items,
@@ -1890,6 +1924,52 @@ var pubmedBackend = async (ctx) => {
   return { backend: "pubmed", items, notes: [`PubMed returned ${items.length} record(s).`] };
 };
 
+// src/backends/dblp.ts
+function authorNames(authors) {
+  const a = authors?.author;
+  const list = Array.isArray(a) ? a : a ? [a] : [];
+  return list.map((x) => cleanInline(String(x?.text ?? x ?? ""))).filter(Boolean);
+}
+var dblpBackend = async (ctx) => {
+  const n = Math.max(3, Math.min(15, ctx.options.perSource));
+  const url = `https://dblp.org/search/publ/api?q=${encodeURIComponent(ctx.question)}&format=json&h=${n}`;
+  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const hits = r.ok && Array.isArray(r.data?.result?.hits?.hit) ? r.data.result.hits.hit : [];
+  if (!r.ok || !hits.length) {
+    return { backend: "dblp", items: [], notes: [`dblp search failed or empty (status ${r.status}).`] };
+  }
+  const items = hits.slice(0, n).map((h, i) => {
+    const info = h.info ?? {};
+    const title = cleanInline(String(info.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
+    const authors = authorNames(info.authors);
+    const year = Number(info.year) || void 0;
+    const venue = cleanInline(String(info.venue ?? "")) || void 0;
+    const doi = info.doi ? String(info.doi) : void 0;
+    const ee = typeof info.ee === "string" ? info.ee : void 0;
+    const recUrl = typeof info.url === "string" ? info.url : "";
+    const url2 = ee || (doi ? `https://doi.org/${doi}` : recUrl);
+    const meta = { doi, authors, year, venue };
+    const desc = [venue, year].filter(Boolean).join(" \xB7 ");
+    return {
+      url: url2,
+      title,
+      backend: "dblp",
+      score: n - i,
+      snippet: `${title}${desc ? " \u2014 " + desc : ""}${authors.length ? " \xB7 " + authors.slice(0, 4).join(", ") : ""}`.slice(0, 360),
+      text: `${title}
+
+${authors.join(", ")}
+${desc}`,
+      meta
+    };
+  });
+  return {
+    backend: "dblp",
+    items,
+    notes: [`dblp returned ${items.length} publication(s).`]
+  };
+};
+
 // src/backends/registry.ts
 var HANDLERS = {
   searxng: searxngBackend,
@@ -1908,9 +1988,20 @@ var HANDLERS = {
   openalex: openalexBackend,
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
-  pubmed: pubmedBackend
+  pubmed: pubmedBackend,
+  dblp: dblpBackend
 };
 var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
+var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
+async function fanOutVariants(handler, ctx, variants, polite) {
+  if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+  const out = [];
+  for (let i = 0; i < variants.length; i++) {
+    if (i > 0 && POLITE_DELAY_MS) await sleep(POLITE_DELAY_MS);
+    out.push(await handler({ ...ctx, question: variants[i] }));
+  }
+  return out;
+}
 function mergeVariants(backend, lists, notes) {
   const ranked = lists.map((l) => [...l].sort((a, b) => b.score - a.score));
   const fused = rrf(ranked, (it) => canonicalizeUrl(it.url));
@@ -1942,7 +2033,7 @@ async function runBackends(kinds, ctx) {
         const res = await handler(ctx);
         return { ...res, ms: Date.now() - t0 };
       }
-      const perVariant = await Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+      const perVariant = await fanOutVariants(handler, ctx, variants, POLITE_SEQUENTIAL.has(kind));
       const merged = mergeVariants(
         kind,
         perVariant.map((r) => r.items),
@@ -1956,9 +2047,58 @@ async function runBackends(kinds, ctx) {
   return Promise.all(tasks);
 }
 
-// src/dossier.ts
+// src/cache.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
+function envInt2(name, def) {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : def;
+}
+var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
+function cacheDir() {
+  return process.env.ULTRASEARCH_CACHE_DIR || join(tmpdir(), "ultrasearch", "cache");
+}
+function cachePath(url) {
+  const canon = canonicalizeUrl(url);
+  const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
+  return join(cacheDir(), `${domain}-${fnv1a64(canon).toString(16)}.json`);
+}
+function ttlMs() {
+  return envInt2("ULTRASEARCH_CACHE_TTL_MS", DEFAULT_TTL_MS);
+}
+function readCache(url, now) {
+  const p = cachePath(url);
+  if (!existsSync(p)) return void 0;
+  try {
+    const entry = JSON.parse(readFileSync(p, "utf8"));
+    if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
+    if (!entry.text || !entry.text.trim()) return void 0;
+    return entry;
+  } catch {
+    return void 0;
+  }
+}
+function writeCache(url, res, now) {
+  try {
+    mkdirSync(cacheDir(), { recursive: true });
+    const entry = { ...res, cachedAt: now };
+    writeFileSync(cachePath(url), JSON.stringify(entry));
+  } catch {
+  }
+}
+async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
+  if (!enabled) return fetchAndExtract(url, opts);
+  const hit = readCache(url, now);
+  if (hit) return hit;
+  const res = await fetchAndExtract(url, opts);
+  if (res.text && res.text.trim()) writeCache(url, res, now);
+  return res;
+}
+
+// src/dossier.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
+import { join as join2 } from "path";
 var CITATION_RULES = [
   "**Cite every factual claim** with the id of the source it rests on, e.g. `[S1]`",
   "(multiple sources: `[S1][S4]`). The ids are listed below and in `sources.json`.",
@@ -1969,6 +2109,19 @@ var CITATION_RULES = [
   "tolerates flagged hints but FAILS on any *unmarked* unsourced claim, and on any",
   "`[S#]` that does not resolve to a real source."
 ].join("\n");
+function readJson(path, what) {
+  let raw;
+  try {
+    raw = readFileSync2(path, "utf8");
+  } catch (e) {
+    throw new Error(`${what} could not be read (${path}): ${e.message}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${what} is not valid JSON (${path}): ${e.message}`);
+  }
+}
 function idNum(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
@@ -2010,28 +2163,28 @@ function renderSourceExtract(s, text, depth) {
   return head + capExtract(text, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join(dir, s.extract);
-  if (!existsSync(p)) return s.snippet ?? "";
-  const lines = readFileSync(p, "utf8").split("\n");
+  const p = join2(dir, s.extract);
+  if (!existsSync2(p)) return s.snippet ?? "";
+  const lines = readFileSync2(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  mkdirSync(join(dir, "sources"), { recursive: true });
+  mkdirSync2(join2(dir, "sources"), { recursive: true });
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeFileSync(join(dir, s.extract), renderSourceExtract(s, rs.text ?? rs.snippet ?? "", manifest.depth));
+    writeFileSync2(join2(dir, s.extract), renderSourceExtract(s, rs.text ?? rs.snippet ?? "", manifest.depth));
     return s;
   });
   const m = { ...manifest, sourceCount: sources.length };
-  const sourcesJson = join(dir, "sources.json");
-  const dossierMd = join(dir, "DOSSIER.md");
-  const manifestJson = join(dir, "manifest.json");
-  writeFileSync(sourcesJson, JSON.stringify(sources, null, 2));
-  writeFileSync(manifestJson, JSON.stringify(m, null, 2));
-  writeFileSync(dossierMd, renderDossierMarkdown(sources, m, template));
+  const sourcesJson = join2(dir, "sources.json");
+  const dossierMd = join2(dir, "DOSSIER.md");
+  const manifestJson = join2(dir, "manifest.json");
+  writeFileSync2(sourcesJson, JSON.stringify(sources, null, 2));
+  writeFileSync2(manifestJson, JSON.stringify(m, null, 2));
+  writeFileSync2(dossierMd, renderDossierMarkdown(sources, m, template));
   return { dir, sources, paths: { dir, sourcesJson, dossierMd, manifestJson } };
 }
 function renderDossierMarkdown(sources, manifest, template) {
@@ -2090,8 +2243,8 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
-  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  const sources = readJson(join2(dir, "sources.json"), "sources.json");
+  const manifest = readJson(join2(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -2139,7 +2292,7 @@ function toBibtex(sources) {
 }
 
 // src/gather.ts
-import { writeFileSync as writeFileSync2 } from "fs";
+import { writeFileSync as writeFileSync3 } from "fs";
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
 function headingLines(text) {
@@ -2147,7 +2300,7 @@ function headingLines(text) {
 }
 var ENRICH_NUDGE = "agent: enrich thin areas with your own WebSearch, then ingest each good URL via `ultrasearch fetch --url <u> --out <dir>` before writing the report.";
 function defaultRunDir(mode, question, d) {
-  return join2(tmpdir(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
+  return join3(tmpdir2(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -2166,16 +2319,18 @@ function applyWebEngine(kinds, engine) {
 }
 async function runWebCascade(engines, ctx, breadth = 1) {
   const out = [];
-  const tried = [];
   let enough = 0;
-  for (const engine of engines) {
-    const [r] = await runBackends([engine], ctx);
-    if (!r) continue;
-    out.push(r);
-    tried.push(engine);
-    if (r.items.length >= ctx.options.perSource) enough++;
-    if (enough >= breadth) break;
+  let i = 0;
+  while (i < engines.length && enough < breadth) {
+    const waveSize = Math.min(breadth - enough, engines.length - i);
+    const wave = engines.slice(i, i + waveSize);
+    i += waveSize;
+    for (const r of await runBackends(wave, ctx)) {
+      out.push(r);
+      if (r.items.length >= ctx.options.perSource) enough++;
+    }
   }
+  const tried = out.map((r) => r.backend);
   const producers = out.filter((r) => r.items.length > 0).map((r) => r.backend);
   if (producers.length) {
     const lead = out.find((r) => r.items.length > 0);
@@ -2256,6 +2411,8 @@ async function runGather(options) {
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   const hydrateCache = /* @__PURE__ */ new Map();
+  let waybackUsed = 0;
+  const WAYBACK_CAP = 5;
   async function assemble(rawLists) {
     let merged2 = fuse(rawLists);
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
@@ -2271,17 +2428,46 @@ async function runGather(options) {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await fetchAndExtract(it.url, { acceptLanguage });
+        res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
-      if (res.text && res.text.trim()) {
-        it.text = res.text;
+      let text = res.text && res.text.trim() ? res.text : "";
+      let junk = text ? looksLikeJunkExtraction(text) : void 0;
+      let title = res.title;
+      if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
+        const altKey = canonicalizeUrl(it.meta.absUrl);
+        let alt = hydrateCache.get(altKey);
+        if (!alt) {
+          alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          hydrateCache.set(altKey, alt);
+        }
+        if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
+          text = alt.text;
+          junk = void 0;
+          title = title || alt.title;
+          hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${it.meta.absUrl} instead.`);
+        }
+      }
+      if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+        waybackUsed++;
+        const wb = await rescueViaWayback(it.url, { acceptLanguage });
+        if (wb) {
+          text = wb.text;
+          junk = void 0;
+          title = title || wb.title;
+          it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
+          hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+        }
+      }
+      if (text && !junk) {
+        it.text = text;
         it.fullText = true;
-        if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
-        if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
+        if (!it.snippet) it.snippet = bestExcerpt(text, options.question);
+        if ((!it.title || it.title === it.url) && title) it.title = title;
       } else {
+        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} \u2014 kept as snippet only.`);
         it.text = it.snippet || "";
         it.fullText = false;
       }
@@ -2380,14 +2566,14 @@ async function runGather(options) {
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync2(join2(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync3(join3(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
 // src/enrich.ts
-import { writeFileSync as writeFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { writeFileSync as writeFileSync4 } from "fs";
+import { join as join4 } from "path";
 async function addSource(dir, url, opts = {}) {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
@@ -2396,9 +2582,19 @@ async function addSource(dir, url, opts = {}) {
   if (existing) {
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
-  const { text, title, note } = await fetchAndExtract(url);
+  const fetched = await cachedFetchAndExtract(url, {}, !!opts.cache);
+  let { text, title } = fetched;
+  let waybackSnapshot;
+  if ((!text || !text.trim()) && DEAD_LINK_STATUS.has(fetched.status)) {
+    const wb = await rescueViaWayback(url);
+    if (wb) {
+      text = wb.text;
+      title = title || wb.title;
+      waybackSnapshot = wb.timestamp;
+    }
+  }
   if (!text || !text.trim()) {
-    return { id: "", added: false, note: note ?? `no readable content at ${url}` };
+    return { id: "", added: false, note: fetched.note ?? `no readable content at ${url}` };
   }
   const id = nextSourceId(sources);
   const backend = opts.backend ?? "claude";
@@ -2408,22 +2604,23 @@ async function addSource(dir, url, opts = {}) {
     backend,
     score: 0,
     snippet: bestExcerpt(text, question),
-    text
+    text,
+    ...waybackSnapshot ? { meta: { waybackSnapshot } } : {}
   };
   const s = buildSource(raw, id, (/* @__PURE__ */ new Date()).toISOString(), question);
-  writeFileSync3(join3(dir, s.extract), renderSourceExtract(s, text, manifest.depth));
+  writeFileSync4(join4(dir, s.extract), renderSourceExtract(s, text, manifest.depth));
   const nextSources = [...sources, s];
   const backendsUsed = [.../* @__PURE__ */ new Set([...manifest.backendsUsed, backend])];
   const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
-  writeFileSync3(join3(dir, "sources.json"), JSON.stringify(nextSources, null, 2));
-  writeFileSync3(join3(dir, "manifest.json"), JSON.stringify(nextManifest, null, 2));
-  writeFileSync3(join3(dir, "DOSSIER.md"), renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template));
+  writeFileSync4(join4(dir, "sources.json"), JSON.stringify(nextSources, null, 2));
+  writeFileSync4(join4(dir, "manifest.json"), JSON.stringify(nextManifest, null, 2));
+  writeFileSync4(join4(dir, "DOSSIER.md"), renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template));
   return { id, added: true };
 }
 
 // src/render.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync4 } from "fs";
-import { join as join4 } from "path";
+import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync5 } from "fs";
+import { join as join5 } from "path";
 var VERDICT_SEVERITY = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 var TIERS = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
@@ -2605,10 +2802,10 @@ a.cite.v-refuted{color:#c1121f;font-weight:700}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
 function readVerify(dir) {
-  const p = join4(dir, "VERIFY.json");
-  if (!existsSync2(p)) return void 0;
+  const p = join5(dir, "VERIFY.json");
+  if (!existsSync3(p)) return void 0;
   try {
-    return JSON.parse(readFileSync2(p, "utf8"));
+    return JSON.parse(readFileSync3(p, "utf8"));
   } catch {
     return void 0;
   }
@@ -2624,11 +2821,11 @@ function worstBySource(verify) {
 }
 function renderHtml(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync2(join4(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync3(join5(dir, t.file)));
   const verify = readVerify(dir);
   const verdicts = worstBySource(verify);
   const rendered = present.map((t) => {
-    const md = readFileSync2(join4(dir, t.file), "utf8");
+    const md = readFileSync3(join5(dir, t.file), "utf8");
     const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
@@ -2723,8 +2920,8 @@ function sourcesSection(sources) {
 }
 function writeHtml(dir, out) {
   const html = renderHtml(dir);
-  const path = out ?? join4(dir, "index.html");
-  writeFileSync4(path, html);
+  const path = out ?? join5(dir, "index.html");
+  writeFileSync5(path, html);
   return path;
 }
 function mdLinkText(s) {
@@ -2756,12 +2953,12 @@ function verificationMarkdown(r) {
 }
 function buildReportMarkdown(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync2(join4(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync3(join5(dir, t.file)));
   const verify = readVerify(dir);
   const meta = `> ${manifest.mode} \xB7 depth ${manifest.depth} \xB7 ${sources.length} sources${manifest.lang ? ` \xB7 lang ${manifest.lang}` : ""}${manifest.region ? `/${manifest.region}` : ""} \xB7 ${manifest.builtAt} \xB7 generated by ultrasearch`;
   const parts = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
   for (const t of present) {
-    const body = readFileSync2(join4(dir, t.file), "utf8").trim();
+    const body = readFileSync3(join5(dir, t.file), "utf8").trim();
     if (!body) continue;
     parts.push("---", "", `## ${t.label}`, "", body, "");
   }
@@ -2782,14 +2979,14 @@ function buildReportMarkdown(dir) {
 }
 function writeReportMarkdown(dir, out) {
   const md = buildReportMarkdown(dir);
-  const path = out ?? join4(dir, "index.md");
-  writeFileSync4(path, md);
+  const path = out ?? join5(dir, "index.md");
+  writeFileSync5(path, md);
   return path;
 }
 
 // src/check.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
-import { join as join5 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { join as join6 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
 var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
@@ -2989,18 +3186,27 @@ function analyzeFile(file, text) {
   }
   return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
-function applySemantic(dir, result) {
-  const p = join5(dir, "VERIFY.json");
-  if (!existsSync3(p)) {
-    result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+function applySemantic(dir, result, requireVerify) {
+  const p = join6(dir, "VERIFY.json");
+  if (!existsSync4(p)) {
+    if (requireVerify) {
+      result.ok = false;
+      result.errors.push("--require-verify: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
+    } else {
+      result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+    }
     return;
   }
   try {
-    const sem = JSON.parse(readFileSync3(p, "utf8"));
+    const sem = JSON.parse(readFileSync4(p, "utf8"));
     result.semantic = sem;
     if (!sem.ok) {
       result.ok = false;
       result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+    }
+    if (requireVerify && !sem.adjudicated) {
+      result.ok = false;
+      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and `verify --apply` before the gate.");
     }
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
@@ -3016,7 +3222,7 @@ function applySemantic(dir, result) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync3(join5(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync4(join6(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -3024,22 +3230,22 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join5(dir, "sources.json");
-  if (!existsSync3(sourcesPath)) {
+  const sourcesPath = join6(dir, "sources.json");
+  if (!existsSync4(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync3(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync4(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync3(join5(dir, f)));
+  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync4(join6(dir, f)));
   if (!present.some((f) => HARD_FILES.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync3(join5(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync4(join6(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -3103,7 +3309,7 @@ function runCheck(dir, opts = {}) {
     errors,
     warnings
   };
-  if (opts.semantic) applySemantic(dir, result);
+  if (opts.semantic || opts.requireVerify) applySemantic(dir, result, opts.requireVerify === true);
   return result;
 }
 function blank(ok, errors) {
@@ -3138,7 +3344,7 @@ function formatCheckReport(r, dir) {
 }
 
 // src/plan.ts
-import { join as join6 } from "path";
+import { join as join7 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function mk(question, facet, rationale) {
   return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
@@ -3182,14 +3388,14 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join6(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join7(runRoot, s.id.toLowerCase());
   });
   return { question: q, mode, subQuestions: uniq };
 }
 
 // src/merge.ts
-import { writeFileSync as writeFileSync5 } from "fs";
-import { join as join7 } from "path";
+import { writeFileSync as writeFileSync6 } from "fs";
+import { join as join8 } from "path";
 function toRawSource(s, text) {
   return {
     url: s.url,
@@ -3263,14 +3469,14 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync5(join7(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync6(join8(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
 // src/verify.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
-import { join as join8 } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync7 } from "fs";
+import { join as join9 } from "path";
 var HARD_FILES2 = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function claimStrings(text) {
@@ -3282,7 +3488,7 @@ function claimStrings(text) {
   return out;
 }
 function runVerify(dir, opts = {}) {
-  const sources = JSON.parse(readFileSync4(join8(dir, "sources.json"), "utf8"));
+  const sources = readJson(join9(dir, "sources.json"), "sources.json");
   const byId = new Map(sources.map((s) => [s.id, s]));
   const textCache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -3296,9 +3502,9 @@ function runVerify(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES2) {
-    const p = join8(dir, file);
-    if (!existsSync4(p)) continue;
-    const text = readFileSync4(p, "utf8");
+    const p = join9(dir, file);
+    if (!existsSync5(p)) continue;
+    const text = readFileSync5(p, "utf8");
     for (const claim of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
@@ -3331,8 +3537,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeFileSync6(join8(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync6(join8(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
+  writeFileSync7(join9(dir, todoName), JSON.stringify(todo, null, 2));
+  writeFileSync7(join9(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -3355,7 +3561,7 @@ _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources.
   return out.join("\n");
 }
 function parseVerdictFile(verdictsPath) {
-  const raw = JSON.parse(readFileSync4(verdictsPath, "utf8"));
+  const raw = readJson(verdictsPath, `verdicts file`);
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
   const verdicts = [];
   for (const v of list) {
@@ -3384,7 +3590,7 @@ function applyVerdicts(dir, verdictsPath) {
   }
   const verdicts = [...merged.values()];
   const result = reduceVerdicts(verdicts);
-  writeFileSync6(join8(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeFileSync7(join9(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -3461,7 +3667,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
   ultrasearch modes  [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
@@ -3478,7 +3684,8 @@ Commands:
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
-           --min-sources <n> fails a too-thin dossier).
+           --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
+           the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
 
 Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
@@ -3499,7 +3706,7 @@ Options:
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
-                       built-in planner \u2014 use to drive recall with your own phrasings)
+                       built-in planner; kept in dedup order, capped 2/4/6 by depth)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
@@ -3516,10 +3723,13 @@ Options:
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
+  --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
+                       big win is the deep tier's per-sub-question fan-out
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify: the dossier dir to operate on
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
+  --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -3577,7 +3787,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -3654,7 +3864,7 @@ function parseList(s) {
 function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve(x));
   const abs = resolve(spec);
-  if (existsSync5(abs) && statSync(abs).isDirectory()) {
+  if (existsSync6(abs) && statSync(abs).isDirectory()) {
     const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
@@ -3724,6 +3934,7 @@ function buildGatherOptions(p, opts = {}) {
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
+    cache: p.bools.has("cache"),
     out: p.values.out ? resolve(p.values.out) : void 0,
     json: p.bools.has("json")
   };
@@ -3806,7 +4017,7 @@ async function main() {
     case "merge": {
       const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync5(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync6(d)) fail(`run dir not found: ${d}`);
       const mode = p.values.mode ? oneOf("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
@@ -3835,7 +4046,8 @@ async function main() {
       if (!url) fail("missing --url <u>");
       const r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
-        title: p.values.title
+        title: p.values.title,
+        cache: p.bools.has("cache")
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
@@ -3910,7 +4122,7 @@ async function main() {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

@@ -32,6 +32,13 @@ describe("SKILL.md", () => {
     expect(String(fm.metadata.version)).toBe(VERSION);
   });
 
+  it("keeps package.json version in lockstep with src/types VERSION", () => {
+    // sync-version.mjs rewrites all three at release; only SKILL↔VERSION was
+    // asserted before, so a partial sync could ship a mismatched package.json.
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    expect(pkg.version).toBe(VERSION);
+  });
+
   it("has a trigger-rich description", () => {
     expect(fm.description.length).toBeGreaterThan(200);
     expect(fm.description.toLowerCase()).toContain("check");

@@ -1,4 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
+import { mapLimit } from "../util.js";
 import { httpJson, decodeEntities } from "./fetch.js";
 
 // Wikipedia via the keyless REST API: search for pages, then pull each top
@@ -14,12 +15,12 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
   }
 
   const pages: any[] = sr.data.pages;
-  const items: RawSource[] = [];
-  // Fetch summaries for the top pages (cap to keep it polite).
+  // Fetch summaries for the top pages (cap to keep it polite), CONCURRENTLY
+  // (bounded) — this was the backend's latency floor. mapLimit preserves index
+  // order, so the search-rank score (top.length - i) and item order are unchanged.
   const top = pages.slice(0, Math.min(limit, 6));
-  for (let i = 0; i < top.length; i++) {
-    const p = top[i]!;
-    if (!p?.key) continue;
+  const built = await mapLimit(top, 4, async (p: any, i): Promise<RawSource | null> => {
+    if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, undefined, { timeoutMs: 10000 });
     // The REST API returns HTML entities (&amp; &quot; &#039;) in extracts and
@@ -30,8 +31,8 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
     const pageUrl: string = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
-    if (!text) continue;
-    items.push({
+    if (!text) return null;
+    return {
       url: pageUrl,
       title: decodeEntities(String(p.title ?? p.key)),
       backend: "wikipedia",
@@ -39,8 +40,9 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
       snippet: (descExcerpt || extract).slice(0, 360),
       text,
       lang,
-    });
-  }
+    };
+  });
+  const items: RawSource[] = built.filter((x): x is RawSource => x !== null);
 
   return {
     backend: "wikipedia",

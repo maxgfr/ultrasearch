@@ -1,7 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { deflateSync } from "node:zlib";
-import { extractMainHtml } from "../src/backends/fetch.js";
+import { extractMainHtml, looksLikeJunkExtraction } from "../src/backends/fetch.js";
 import { pdfToText } from "../src/backends/pdf.js";
+
+describe("looksLikeJunkExtraction (consent / anti-bot detection)", () => {
+  it("flags a short cookie-consent wall", () => {
+    expect(looksLikeJunkExtraction("We use cookies to improve your experience. Accept all cookies to continue.")).toMatch(/cookie|consent/i);
+  });
+  it("flags a JavaScript-required shell", () => {
+    expect(looksLikeJunkExtraction("Please enable JavaScript to view this site.")).toBeTruthy();
+  });
+  it("flags a Cloudflare anti-bot interstitial", () => {
+    expect(looksLikeJunkExtraction("Attention Required! Cloudflare. Checking your browser before accessing.")).toBeTruthy();
+  });
+  it("flags FR/DE consent walls", () => {
+    expect(looksLikeJunkExtraction("Nous utilisons des cookies pour améliorer votre expérience.")).toBeTruthy();
+    expect(looksLikeJunkExtraction("Wir verwenden Cookies, um Ihre Erfahrung zu verbessern.")).toBeTruthy();
+  });
+  it("does NOT flag a long article that merely discusses cookies", () => {
+    const article = "This article explains how HTTP cookies work. We use cookies as an example throughout. " + "A cookie is a small piece of data. ".repeat(80);
+    expect(article.length).toBeGreaterThan(2000);
+    expect(looksLikeJunkExtraction(article)).toBeUndefined();
+  });
+  it("does NOT flag ordinary short prose with no consent phrasing", () => {
+    expect(looksLikeJunkExtraction("Rate limiting caps how many requests a client may make per unit time.")).toBeUndefined();
+  });
+});
 
 describe("extractMainHtml (readability-lite)", () => {
   it("keeps the <article> and drops surrounding nav/footer chrome", () => {
