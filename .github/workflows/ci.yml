@@ -40,6 +40,11 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Coverage ratchet — one Node version is enough (the suite is deterministic).
+      - name: Coverage thresholds
+        if: matrix.node-version == 24
+        run: pnpm run test:coverage
+
       - name: Smoke-run the committed bundle (offline, fixture backend)
         run: pnpm run demo # node scripts/ultrasearch.mjs gather --backends fixture ...
 

@@ -13,6 +13,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { docFlagRegex, helpCoversFlag, webEngineEnum } from "./drift-rules.mjs";
 
 // Claude Code matches skill descriptions at <=1024 chars; 1000 leaves a safety
 // margin so a future edit can't silently cross the cap.
@@ -109,11 +110,12 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     ];
 
     // A. docs ⊆ CLI: a documented flag that the engine rejects is a doc bug.
-    // Lookbehind (not a prefix whitelist) so bold/parenthesised/em-dashed flags
-    // are still seen; it only skips `--` glued to a word tail (foo--bar, ---).
+    // The matcher (drift-rules.docFlagRegex) uses a lookbehind so bold/
+    // parenthesised/em-dashed flags are still seen; it only skips `--` glued to
+    // a word tail (foo--bar, ---).
     let unknown = 0;
     for (const [file, text] of docs) {
-      for (const m of text.matchAll(/(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g)) {
+      for (const m of text.matchAll(docFlagRegex())) {
         if (!universe.has(m[1])) {
           bad(`${file} documents unknown flag --${m[1]} (add it to ALLOWED_FOREIGN_FLAGS only if it belongs to another tool)`);
           unknown++;
@@ -122,11 +124,10 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     }
     if (!unknown) ok(`every --flag documented across ${docs.length} skill file(s) exists in the CLI`);
 
-    // B. CLI ⊆ --help: SKILL.md tells agents --help is the full surface.
-    // The lookahead stops --run matching only inside --run-root. Unit-level
-    // twin: "HELP covers the whole flag surface" in tests/cli.test.ts — keep
-    // the regexes in sync (this one re-checks the shipped artifact).
-    const missing = [...cliFlags].filter((f) => !new RegExp(`--${f}(?![a-z0-9-])`).test(cli.HELP));
+    // B. CLI ⊆ --help: SKILL.md tells agents --help is the full surface. Uses the
+    // shared drift-rules.helpCoversFlag matcher; the source-layer twin ("HELP
+    // covers the whole flag surface" in tests/cli.test.ts) uses the SAME helper.
+    const missing = [...cliFlags].filter((f) => !helpCoversFlag(cli.HELP, f));
     missing.length === 0 ? ok("--help covers the whole flag surface") : bad(`--help omits: ${missing.map((f) => `--${f}`).join(", ")}`);
 
     // C. Any pipe-separated --web-engine value list in the docs matches the
@@ -140,14 +141,10 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     let enumsChecked = 0;
     for (const [file, text] of docs) {
       for (const line of text.split("\n")) {
-        const m = line.replace(/`/g, "").match(/--web-engine[^a-z|]*((?:[a-z][a-z0-9-]*\s*\|\s*)+[a-z][a-z0-9-]*)/);
-        if (!m) continue;
+        const engines = webEngineEnum(line);
+        if (!engines) continue;
         enumsChecked++;
-        const got = m[1]
-          .split("|")
-          .map((s) => s.trim())
-          .sort()
-          .join(", ");
+        const got = engines.slice().sort().join(", ");
         got === want
           ? ok(`${file} --web-engine value list matches the engine`)
           : bad(`${file} lists --web-engine values [${got}] but the engine supports [${want}]`);

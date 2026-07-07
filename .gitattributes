@@ -1,0 +1,4 @@
+# Saved API/HTML fixtures are captured real responses replayed by the parser-drift
+# canaries. Keep them byte-stable across checkouts — no line-ending normalization,
+# so a CRLF a provider actually sent stays a CRLF.
+tests/fixtures/** -text

@@ -6,9 +6,6 @@ import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
 import { dblpBackend } from "../src/backends/dblp.js";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -244,18 +241,6 @@ describe("research backends", () => {
     // single-author object normalized to a one-element list; falls back to the record URL
     expect(r.items[1]!.meta?.authors).toEqual(["Solo Researcher"]);
     expect(r.items[1]!.url).toBe("https://dblp.org/rec/x");
-  });
-
-  it("dblp still parses the saved real-API fixture (canary)", async () => {
-    const here = dirname(fileURLToPath(import.meta.url));
-    const body = readFileSync(join(here, "fixtures", "api", "dblp.json"), "utf8");
-    installFetchMock(routes([["dblp.org/search/publ", { body, contentType: "application/json" }]]));
-    const r = await dblpBackend(makeCtx("transformer"));
-    expect(r.items.length).toBeGreaterThanOrEqual(2);
-    for (const it of r.items) {
-      expect(it.url).toMatch(/^https?:\/\//);
-      expect(it.title.length).toBeGreaterThan(0);
-      expect(Array.isArray(it.meta?.authors)).toBe(true);
-    }
+    // (the saved real-API fixture canary for dblp lives in parser-drift-api.test.ts)
   });
 });

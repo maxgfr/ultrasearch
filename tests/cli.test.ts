@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
+import { helpCoversFlag } from "../scripts/drift-rules.mjs";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can
 // assert on it without killing the test runner, and silence the writes.
@@ -63,13 +64,14 @@ describe("parseArgs", () => {
 });
 
 // SKILL.md tells agents "run --help for the full surface" — keep that promise:
-// every accepted flag must appear in HELP. The lookahead stops --run matching
-// only inside --run-root (and --shard inside --shards). Artifact-layer twin:
-// assertion B in scripts/verify-skill-bundle.mjs — keep the regexes in sync.
+// every accepted flag must appear in HELP. This is the SOURCE-layer twin of
+// assertion B in scripts/verify-skill-bundle.mjs (which checks the built
+// bundle); both call the SAME helpCoversFlag matcher from scripts/drift-rules,
+// so the two gates can no longer drift apart.
 describe("HELP covers the whole flag surface", () => {
   it("mentions every value and boolean flag", () => {
     for (const flag of [...VALUE_FLAGS, ...BOOL_FLAGS]) {
-      expect(HELP, `--${flag} missing from --help`).toMatch(new RegExp(`--${flag}(?![a-z0-9-])`));
+      expect(helpCoversFlag(HELP, flag), `--${flag} missing from --help`).toBe(true);
     }
   });
 });
