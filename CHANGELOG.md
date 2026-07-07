@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.7.1](https://github.com/maxgfr/ultrasearch/compare/v1.7.0...v1.7.1) (2026-07-07)
+
+
+### Bug Fixes
+
+* **backends:** stop silent data-loss + guard missing-field edge cases ([bd82528](https://github.com/maxgfr/ultrasearch/commit/bd82528f975dd868719cf72683fa4948a2f66177))
+
 # [1.7.0](https://github.com/maxgfr/ultrasearch/compare/v1.6.0...v1.7.0) (2026-07-07)
 
 
