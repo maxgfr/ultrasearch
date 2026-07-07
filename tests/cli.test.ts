@@ -96,6 +96,68 @@ describe("buildGatherOptions", () => {
     expect(o.webBreadth).toBeUndefined();
     expect(o.region).toBeUndefined();
   });
+
+  it("resolves and de-duplicates --backends, preserving first-seen order", () => {
+    const o = buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", "github, arxiv , github"]));
+    expect(o.backends).toEqual(["github", "arxiv"]);
+  });
+
+  it("rejects an unknown backend, and a list that resolves to nothing", () => {
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", "bogus"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", " , "]))).toThrow(/exit:1/);
+  });
+
+  it("rejects an invalid --mode / --depth / --web-engine via oneOf", () => {
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--mode", "nope"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--depth", "nope"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--web-engine", "nope"]))).toThrow(/exit:1/);
+  });
+
+  it("rejects non-positive / non-numeric numeric flags", () => {
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--max-sources", "-1"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--per-source", "0"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--concurrency", "abc"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--rounds", "nan"]))).toThrow(/exit:1/);
+  });
+
+  it("requires --q by default but allows an empty question when requireQuestion:false (search)", () => {
+    expect(() => buildGatherOptions(parseArgs(["gather"]))).toThrow(/exit:1/);
+    const o = buildGatherOptions(parseArgs(["search", "--backend", "fixture"]), { requireQuestion: false });
+    expect(o.question).toBe("");
+  });
+
+  it("threads the optional flags through into GatherOptions", () => {
+    const o = buildGatherOptions(
+      parseArgs([
+        "gather",
+        "--q",
+        "x",
+        "--concurrency",
+        "4",
+        "--rounds",
+        "2",
+        "--cache",
+        "--since",
+        "2020-01-01",
+        "--exclude-domains",
+        "a.com, b.com",
+        "--url",
+        "https://u1,https://u2",
+        "--searxng",
+        "http://sx",
+        "--out",
+        "/tmp/us-out",
+      ]),
+    );
+    expect(o.concurrency).toBe(4);
+    expect(o.rounds).toBe(2);
+    expect(o.cache).toBe(true);
+    expect(o.since).toBe("2020-01-01");
+    expect(o.excludeDomains).toEqual(["a.com", "b.com"]);
+    expect(o.urls).toEqual(["https://u1", "https://u2"]);
+    expect(o.searxng).toBe("http://sx");
+    expect(o.out).toBe("/tmp/us-out");
+  });
 });
 
 describe("parseShardArgs (verify --shards/--shard validation)", () => {

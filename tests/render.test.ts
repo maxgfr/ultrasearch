@@ -62,6 +62,26 @@ describe("mdToHtml", () => {
     expect(html).toContain('class="model-hint"');
     expect(html).toContain("model hint");
   });
+
+  it("renders a fenced code block verbatim (no inline formatting inside)", () => {
+    const { html } = mdToHtml("```\nconst x = **not bold**;\n```", "report");
+    expect(html).toContain("<pre><code>");
+    expect(html).toContain("const x = **not bold**;"); // asterisks stay literal
+    expect(html).not.toContain("<strong>");
+  });
+
+  it("renders a horizontal rule, an ordered list, and underscore emphasis", () => {
+    const { html } = mdToHtml("intro\n\n---\n\n1. first\n2. second\n\nan _emphasized_ word", "report");
+    expect(html).toContain("<hr>");
+    expect(html).toContain("<ol><li>first</li><li>second</li></ol>");
+    expect(html).toContain("<em>emphasized</em>");
+  });
+
+  it("renders a plain (non-hint) blockquote without the callout class", () => {
+    const { html } = mdToHtml("> just a normal quotation here", "report");
+    expect(html).toContain("<blockquote>just a normal quotation here</blockquote>");
+    expect(html).not.toContain("model-hint");
+  });
 });
 
 describe("renderHtml", () => {
@@ -117,6 +137,32 @@ describe("buildReportMarkdown / writeReportMarkdown", () => {
     const md = buildReportMarkdown(dir);
     expect(md).toContain("## Verification");
     expect(md).toMatch(/\| Claim \| Source \| Verdict \| Note \|/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips an empty tier file and shows lang/region in the meta line", () => {
+    const dir = scratch();
+    writeDossier(
+      dir,
+      [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: "alpha body" }],
+      baseManifest({ region: "us", sourceCount: 1 }),
+      "## T",
+    );
+    writeFileSync(join(dir, "SUMMARY.md"), "   \n"); // whitespace-only → skipped
+    writeFileSync(join(dir, "REPORT.md"), "# R\nA claim [S1].");
+    const md = buildReportMarkdown(dir);
+    expect(md).not.toContain("## Summary"); // empty tier dropped
+    expect(md).toContain("## Report");
+    expect(md).toContain("lang en/us");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("shows a placeholder when the dossier has no sources", () => {
+    const dir = scratch();
+    writeDossier(dir, [], baseManifest({ sourceCount: 0 }), "## T");
+    writeFileSync(join(dir, "REPORT.md"), "# R\nNothing grounded yet.");
+    const md = buildReportMarkdown(dir);
+    expect(md).toContain("_No sources in this dossier yet._");
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -191,6 +237,36 @@ describe("renderHtml — deep-research enrichment", () => {
     expect(html).toContain('id="subquestions"');
     expect(html).toContain("facet alpha");
     expect(html).toContain("facet beta");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("marks a sub-question that surfaced no sources with a (no sources) placeholder", () => {
+    const dir = scratch();
+    const raws: RawSource[] = [
+      {
+        url: "https://a.test/1",
+        title: "A",
+        backend: "duckduckgo",
+        score: 1,
+        snippet: "a",
+        text: "alpha",
+        meta: { provenance: [{ subQuestion: "facet alpha", runDir: "r1" }] },
+      },
+    ];
+    writeDossier(
+      dir,
+      raws,
+      baseManifest({
+        subQuestions: [
+          { id: "Q1", question: "facet alpha" },
+          { id: "Q2", question: "facet with nothing" }, // no source cites this facet
+        ],
+      }),
+      "## TL;DR\n## Sources",
+    );
+    writeFileSync(join(dir, "REPORT.md"), "# R\nA grounded claim about the first facet here [S1].");
+    const html = renderHtml(dir);
+    expect(html).toContain("(no sources)");
     rmSync(dir, { recursive: true, force: true });
   });
 

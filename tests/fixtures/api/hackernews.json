@@ -1,0 +1,25 @@
+{
+  "hits": [
+    {
+      "objectID": "12345678",
+      "title": "Rate limiting strategies and techniques",
+      "url": "https://stripe.com/blog/rate-limiters",
+      "points": 412,
+      "num_comments": 118,
+      "author": "someuser",
+      "created_at_i": 1519776000
+    },
+    {
+      "objectID": "23456789",
+      "title": "Ask HN: How do you implement a token bucket?",
+      "url": null,
+      "story_text": "I&#x27;m building an API gateway and want to add per-client limits.",
+      "points": 96,
+      "num_comments": 54,
+      "author": "another",
+      "created_at_i": 1546300800
+    }
+  ],
+  "nbHits": 2,
+  "page": 0
+}

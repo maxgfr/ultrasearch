@@ -107,7 +107,7 @@ describe("E2: content-aware re-rank promotes the on-topic page over backend rank
     });
     const dir = mkdtempSync(join(tmpdir(), "us-rerank-"));
     // generic preserves --url order, so page-a starts ranked above page-b.
-    const r = await runGather(opts({ backends: ["generic"], urls: ["https://t.test/page-a", "https://t.test/page-b"], out: dir }));
+    await runGather(opts({ backends: ["generic"], urls: ["https://t.test/page-a", "https://t.test/page-b"], out: dir }));
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources[0]!.url).toContain("page-b"); // content relevance wins
     rmSync(dir, { recursive: true, force: true });

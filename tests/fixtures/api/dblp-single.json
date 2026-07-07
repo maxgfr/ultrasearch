@@ -1,0 +1,26 @@
+{
+  "result": {
+    "query": "very specific single-hit query",
+    "status": { "@code": "200", "text": "OK" },
+    "hits": {
+      "@total": "1",
+      "@computed": "1",
+      "@sent": "1",
+      "@first": "0",
+      "hit": {
+        "@score": "1",
+        "@id": "1",
+        "info": {
+          "authors": { "author": { "@pid": "10/1", "text": "Solo Researcher" } },
+          "title": "A Single Matching Publication.",
+          "venue": "J. Obscure Results",
+          "year": "2021",
+          "type": "Journal Articles",
+          "doi": "10.1000/single.hit",
+          "ee": "https://doi.org/10.1000/single.hit",
+          "url": "https://dblp.org/rec/journals/jor/Solo2021"
+        }
+      }
+    }
+  }
+}

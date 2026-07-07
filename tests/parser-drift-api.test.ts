@@ -9,15 +9,20 @@ import { stackexchangeBackend } from "../src/backends/stackexchange.js";
 import { githubBackend } from "../src/backends/github.js";
 import { wikipediaBackend } from "../src/backends/wikipedia.js";
 import { dblpBackend } from "../src/backends/dblp.js";
+import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
+import { europepmcBackend } from "../src/backends/europepmc.js";
+import { pubmedBackend } from "../src/backends/pubmed.js";
+import { hackernewsBackend } from "../src/backends/hackernews.js";
 import type { Backend, RawSource } from "../src/types.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
-// API canary tests: each scholarly/community backend is replayed against a SAVED
-// REAL response captured from its live API. When a provider changes its JSON/XML
-// schema and a parser stops matching, these go red — the fast, deterministic
-// signal the (weekly, report-only) network eval can't give. Refresh the fixture
-// + parser together when a provider genuinely changes shape. Companion to
+// API canary tests: each scholarly/community backend is replayed against a saved
+// response shaped exactly like its live API (captured from, or authored to, the
+// provider's documented JSON/XML schema). When a provider changes its schema and
+// a parser stops matching, these go red — the fast, deterministic signal the
+// (weekly, report-only) network eval can't give. Refresh the fixture + parser
+// together when a provider genuinely changes shape. Companion to
 // tests/parser-drift.test.ts (which covers the HTML web-search backends).
 const here = dirname(fileURLToPath(import.meta.url));
 const apiFixture = (name: string) => readFileSync(join(here, "fixtures", "api", name), "utf8");
@@ -55,6 +60,21 @@ const CANARIES: Canary[] = [
     min: 1,
   },
   { name: "dblp", backend: dblpBackend, fixtures: [["dblp.org/search/publ", "dblp.json"]], min: 2 },
+  // A one-result dblp response returns `hits.hit` as an OBJECT, not an array —
+  // the shape that used to be silently dropped (see dblp.ts). Guard it too.
+  { name: "dblp (single hit)", backend: dblpBackend, fixtures: [["dblp.org/search/publ", "dblp-single.json"]], min: 1 },
+  { name: "semanticscholar", backend: semanticscholarBackend, fixtures: [["api.semanticscholar.org", "semanticscholar.json"]], min: 2 },
+  { name: "europepmc", backend: europepmcBackend, fixtures: [["ebi.ac.uk/europepmc", "europepmc.json"]], min: 2 },
+  { name: "hackernews", backend: hackernewsBackend, fixtures: [["hn.algolia.com", "hackernews.json"]], min: 2 },
+  {
+    name: "pubmed",
+    backend: pubmedBackend,
+    fixtures: [
+      ["esearch.fcgi", "pubmed-esearch.json"],
+      ["esummary.fcgi", "pubmed-esummary.json"],
+    ],
+    min: 2,
+  },
 ];
 
 describe("API parser drift canaries (saved real responses)", () => {

@@ -12,7 +12,7 @@ function scratch(): string {
 }
 
 // A real sub-dossier (proper 3-line extract headers) for one sub-question.
-function subDossier(dir: string, question: string, raws: RawSource[]): void {
+function subDossier(dir: string, question: string, raws: RawSource[], builtAt = "2026-06-14T10:00:00.000Z"): void {
   const manifest: Manifest = {
     version: "1.2.0",
     question,
@@ -23,7 +23,7 @@ function subDossier(dir: string, question: string, raws: RawSource[]): void {
     backendsUsed: ["duckduckgo"],
     sourceCount: raws.length,
     maxSources: 60,
-    builtAt: "2026-06-14T10:00:00.000Z",
+    builtAt,
     slug: "sub",
     tiers: ["SUMMARY.md", "REPORT.md"],
     extras: [],
@@ -192,6 +192,63 @@ describe("runMerge", () => {
     const manifest = JSON.parse(readFileSync(join(m, "manifest.json"), "utf8"));
     expect(manifest.mergedFrom).toEqual([d1, d2]);
     expect(manifest.subQuestions.map((s: any) => s.question)).toEqual(["alpha facet", "beta facet"]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("writes refs.bib and honors the --mode override for a research-mode merge", () => {
+    const root = scratch();
+    const d1 = join(root, "r1");
+    subDossier(d1, "q1", [
+      {
+        url: "https://arxiv.org/abs/2201.00001",
+        title: "A Paper",
+        backend: "arxiv",
+        score: 1,
+        snippet: "p",
+        text: longText("paper body content"),
+        meta: { doi: "10.1/bib", authors: ["Jane Doe"], year: 2022 },
+      },
+    ]);
+    const m = join(root, "m");
+    const r = runMerge({ runs: [d1], master: m, question: "Q", mode: "research" });
+    expect(r.manifest.mode).toBe("research"); // override wins over the sub-dossier's "topic"
+    const bib = readFileSync(join(m, "refs.bib"), "utf8"); // research extras include bibtex
+    expect(bib).toMatch(/@\w+\{/);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("falls back to the first sub-dossier's question when --q is omitted", () => {
+    const root = scratch();
+    const d1 = join(root, "r1");
+    subDossier(d1, "the umbrella question", [
+      { url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") },
+    ]);
+    const m = join(root, "m");
+    const r = runMerge({ runs: [d1], master: m });
+    expect(r.manifest.question).toBe("the umbrella question");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("pins the master builtAt to the latest input dossier for reproducibility", () => {
+    const root = scratch();
+    const d1 = join(root, "r1");
+    const d2 = join(root, "r2");
+    subDossier(
+      d1,
+      "early",
+      [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") }],
+      "2026-01-01T00:00:00.000Z",
+    );
+    subDossier(
+      d2,
+      "late",
+      [{ url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "b", text: longText("b content") }],
+      "2026-09-09T00:00:00.000Z",
+    );
+    const m = join(root, "m");
+    runMerge({ runs: [d1, d2], master: m, question: "Q" });
+    const manifest = JSON.parse(readFileSync(join(m, "manifest.json"), "utf8"));
+    expect(manifest.builtAt).toBe("2026-09-09T00:00:00.000Z");
     rmSync(root, { recursive: true, force: true });
   });
 });

@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runVerify, applyVerdicts } from "../src/verify.js";
+import { runVerify, applyVerdicts, reduceVerdicts } from "../src/verify.js";
 import { runCheck } from "../src/check.js";
 import { writeFixtureDossier } from "./dossierfix.js";
+import type { Verdict } from "../src/types.js";
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), "us-verify-"));
@@ -361,6 +362,75 @@ describe("check --require-verify (deep exit gate)", () => {
     writeFixtureDossier(dir, 2);
     report(dir, GROUNDED);
     expect(runCheck(dir, { semantic: true }).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// A helper to fabricate a verdict with only the fields under test set.
+function vd(over: Partial<Verdict>): Verdict {
+  return { claimId: "C1", file: "REPORT.md", sourceId: "S1", claim: "", extractPath: "", extractDigest: "", verdict: "supported", note: "", ...over };
+}
+
+describe("reduceVerdicts — gate folding", () => {
+  it("fails a claim whose every adjudicated source is unsupported (picks the unsupported representative)", () => {
+    const r = reduceVerdicts([vd({ claimId: "C1", sourceId: "S1", verdict: "unsupported", note: "off-topic" })]);
+    expect(r.ok).toBe(false);
+    expect(r.failures[0]).toMatchObject({ claimId: "C1", verdict: "unsupported", note: "off-topic" });
+  });
+
+  it("passes when at least one source supports the claim, even if another is unsupported", () => {
+    const r = reduceVerdicts([vd({ claimId: "C1", sourceId: "S1", verdict: "supported" }), vd({ claimId: "C1", sourceId: "S2", verdict: "unsupported" })]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("reports a partially-adjudicated claim as unadjudicated (a warning, not a failure)", () => {
+    const r = reduceVerdicts([vd({ claimId: "C1", sourceId: "S1", verdict: "supported" }), vd({ claimId: "C1", sourceId: "S2", verdict: undefined as any })]);
+    expect(r.ok).toBe(true);
+    expect(r.unadjudicated).toContain("C1");
+  });
+});
+
+describe("applyVerdicts / parseVerdictFile — robustness", () => {
+  it("accepts a bare Verdict[] array (not wrapped in {pairs})", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    const f = join(dir, "bare.json");
+    writeFileSync(f, JSON.stringify([{ claimId: "C1", sourceId: "S1", verdict: "supported" }]));
+    const r = applyVerdicts(dir, f);
+    expect(r.pairs).toBe(1);
+    expect(r.supported).toBe(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("skips entries missing claimId/sourceId and coerces an invalid verdict to unadjudicated", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    const f = join(dir, "mixed.json");
+    writeFileSync(
+      f,
+      JSON.stringify({
+        pairs: [
+          { sourceId: "S1", verdict: "supported" }, // no claimId → skipped
+          { claimId: "C2", sourceId: "S1", verdict: "banana" }, // invalid verdict → undefined
+        ],
+      }),
+    );
+    const r = applyVerdicts(dir, f);
+    expect(r.pairs).toBe(1); // only the second survived parsing
+    expect(r.adjudicated).toBe(0); // its verdict was coerced away
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("runVerify — dangling citation", () => {
+  it("ignores a claim that cites a source id which does not exist", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, "# R\nA claim citing a real source [S1] and a dangling one [S99].");
+    const wl = runVerify(dir);
+    // S99 is filtered by byId.has → only the real S1 pair is emitted.
+    expect(wl.pairs.some((p) => p.sourceId === "S99")).toBe(false);
+    expect(wl.pairs.some((p) => p.sourceId === "S1")).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 });

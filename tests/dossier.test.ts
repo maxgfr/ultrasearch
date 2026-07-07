@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { writeDossier, readDossier, buildSource, nextSourceId } from "../src/dossier.js";
+import { writeDossier, readDossier, buildSource, nextSourceId, readSourceText, renderDossierMarkdown } from "../src/dossier.js";
 import { getMode } from "../src/modes/registry.js";
 import type { Manifest, RawSource, Source } from "../src/types.js";
 
@@ -78,6 +78,67 @@ describe("renderDossierMarkdown — snippet-only marker", () => {
     // exactly one source marked (the thin one)
     expect(dossier.match(/snippet only/gi)!.length).toBe(1);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("buildSource — snippet derivation", () => {
+  it("derives a focused snippet from the text when the RawSource has none", () => {
+    // the nist raw source has snippet:"" → buildSource falls back to focusedSnippet(text)
+    const s = buildSource(rawSources()[1]!, "S2", "2026-06-13T10:00:00.000Z", "government limits");
+    expect(s.snippet.length).toBeGreaterThan(0);
+    expect(s.snippet).toMatch(/authoritative government/i);
+  });
+});
+
+describe("readSourceText", () => {
+  const s: Source = {
+    id: "S1",
+    url: "https://x.test/1",
+    canonicalUrl: "https://x.test/1",
+    title: "T",
+    backend: "duckduckgo",
+    fetchedAt: "2026-06-13T10:00:00.000Z",
+    lang: "en",
+    domain: "x.test",
+    trust: 0.5,
+    score: 1,
+    extract: "sources/S1.md",
+    snippet: "the fallback snippet",
+  };
+
+  it("returns the snippet when the extract file is missing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-rst-miss-"));
+    expect(readSourceText(dir, s)).toBe("the fallback snippet");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("strips the 3-line header from a normal extract, returning the body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-rst-hdr-"));
+    mkdirSync(join(dir, "sources"), { recursive: true });
+    writeFileSync(join(dir, "sources/S1.md"), "# S1 — T\n- url: https://x.test/1\n- backend: duckduckgo · fetched · trust · score\n\nthe real body text\n");
+    expect(readSourceText(dir, s)).toBe("the real body text");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("returns the whole file for a headerless (legacy/hand-written) extract", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-rst-legacy-"));
+    mkdirSync(join(dir, "sources"), { recursive: true });
+    writeFileSync(join(dir, "sources/S1.md"), "just some legacy text with no header block");
+    expect(readSourceText(dir, s)).toBe("just some legacy text with no header block");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("renderDossierMarkdown — thin & empty branches", () => {
+  it("emits a thin-dossier warning when a recall floor is recorded", () => {
+    const md = renderDossierMarkdown([], manifest({ recallFloor: { count: 1, floor: 5 } }), "## T");
+    expect(md).toMatch(/Thin dossier/);
+    expect(md).toMatch(/recall floor 5/);
+  });
+
+  it("shows the 'no sources retrieved' line for an empty dossier", () => {
+    const md = renderDossierMarkdown([], manifest(), "## T");
+    expect(md).toMatch(/No sources were retrieved/i);
   });
 });
 

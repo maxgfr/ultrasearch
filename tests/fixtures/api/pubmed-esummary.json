@@ -1,0 +1,28 @@
+{
+  "header": { "type": "esummary", "version": "0.3" },
+  "result": {
+    "uids": ["28495875", "30971826"],
+    "28495875": {
+      "uid": "28495875",
+      "title": "A programmable dual-RNA-guided DNA endonuclease in adaptive bacterial immunity.",
+      "pubdate": "2012 Aug 17",
+      "source": "Science",
+      "authors": [
+        { "name": "Jinek M", "authtype": "Author" },
+        { "name": "Doudna JA", "authtype": "Author" }
+      ],
+      "articleids": [
+        { "idtype": "pubmed", "value": "28495875" },
+        { "idtype": "doi", "value": "10.1126/science.aad5227" }
+      ]
+    },
+    "30971826": {
+      "uid": "30971826",
+      "title": "Search and sequence analysis tools for biomedical literature.",
+      "pubdate": "2019",
+      "source": "Nucleic Acids Research",
+      "authors": [{ "name": "Smith J", "authtype": "Author" }],
+      "articleids": [{ "idtype": "pubmed", "value": "30971826" }]
+    }
+  }
+}

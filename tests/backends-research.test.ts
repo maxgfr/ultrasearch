@@ -1,3 +1,4 @@
+import "./_fastfetch.js"; // FIRST: instant backoff for the failure-path tests below
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { arxivBackend } from "../src/backends/arxiv.js";
 import { crossrefBackend } from "../src/backends/crossref.js";
@@ -6,8 +7,15 @@ import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
 import { dblpBackend } from "../src/backends/dblp.js";
+import { hackernewsBackend } from "../src/backends/hackernews.js";
+import { githubBackend } from "../src/backends/github.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
+
+// Compact helpers for the edge-case suites: a JSON body for a URL fragment, and
+// a fetch mock that always fails with the given status (no body).
+const jsonRoute = (frag: string, obj: unknown) => routes([[frag, { body: JSON.stringify(obj), contentType: "application/json" }]]);
+const failWith = (status: number) => installFetchMock(() => ({ status, body: "" }));
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -242,5 +250,216 @@ describe("research backends", () => {
     expect(r.items[1]!.meta?.authors).toEqual(["Solo Researcher"]);
     expect(r.items[1]!.url).toBe("https://dblp.org/rec/x");
     // (the saved real-API fixture canary for dblp lives in parser-drift-api.test.ts)
+  });
+});
+
+// Failure / empty / missing-field branches. Each scholarly-and-community backend
+// wraps its own errors (the registry try/catch then flattens a throw into an
+// empty result too) — so a parser that silently drops data looks identical to
+// "the API had no matches". These tests pin the intended fallback behaviour and
+// guard the bug fixes for the object-or-array + missing-field edge cases.
+describe("research backends — failure & empty branches", () => {
+  it("arxiv reports rate-limiting (503) vs a plain failure (500), and an empty feed", async () => {
+    failWith(503);
+    let r = await arxivBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes?.[0]).toMatch(/rate-limited/i);
+    failWith(500);
+    r = await arxivBackend(makeCtx("x"));
+    expect(r.notes?.[0]).toMatch(/failed/i);
+    installFetchMock(routes([["export.arxiv.org", { body: `<?xml version="1.0"?><feed><title>Empty</title></feed>`, contentType: "application/atom+xml" }]]));
+    r = await arxivBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes?.[0]).toMatch(/no results/i);
+  });
+
+  it("crossref / openalex / semanticscholar / dblp return empty on a failed status", async () => {
+    for (const [name, backend] of [
+      ["crossref", crossrefBackend],
+      ["openalex", openalexBackend],
+      ["semanticscholar", semanticscholarBackend],
+      ["dblp", dblpBackend],
+    ] as const) {
+      failWith(500);
+      const r = await backend(makeCtx("x"));
+      expect(r.items, name).toHaveLength(0);
+      expect(r.notes?.[0], name).toMatch(/failed|empty/i);
+    }
+  });
+
+  it("crossref / openalex / semanticscholar return empty when the API yields no rows", async () => {
+    installFetchMock(jsonRoute("api.crossref.org", { message: { items: [] } }));
+    expect((await crossrefBackend(makeCtx("x"))).items).toHaveLength(0);
+    installFetchMock(jsonRoute("api.openalex.org", { results: [] }));
+    expect((await openalexBackend(makeCtx("x"))).items).toHaveLength(0);
+    installFetchMock(jsonRoute("api.semanticscholar.org", { data: [] }));
+    expect((await semanticscholarBackend(makeCtx("x"))).items).toHaveLength(0);
+  });
+
+  it("europepmc distinguishes rate-limited (429) from failed (404) and an empty result list", async () => {
+    failWith(429);
+    let r = await europepmcBackend(makeCtx("x"));
+    expect(r.notes?.[0]).toMatch(/rate-limited/i);
+    failWith(404);
+    r = await europepmcBackend(makeCtx("x"));
+    expect(r.notes?.[0]).toMatch(/failed or empty/i);
+    installFetchMock(jsonRoute("ebi.ac.uk/europepmc", { resultList: { result: [] } }));
+    r = await europepmcBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+  });
+
+  it("pubmed handles a failed esearch, an empty idlist, and a failed esummary", async () => {
+    failWith(503);
+    let r = await pubmedBackend(makeCtx("x"));
+    expect(r.notes?.[0]).toMatch(/esearch rate-limited/i);
+    installFetchMock(jsonRoute("esearch.fcgi", { esearchresult: { idlist: [] } }));
+    r = await pubmedBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    // esearch OK with ids, but esummary fails → the second guard fires.
+    installFetchMock((url) => {
+      if (url.includes("esearch.fcgi")) return { body: JSON.stringify({ esearchresult: { idlist: ["1"] } }), contentType: "application/json" };
+      return { status: 500, body: "" };
+    });
+    r = await pubmedBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes?.[0]).toMatch(/esummary failed/i);
+  });
+
+  it("hackernews / github return an empty-result note when the API has no hits", async () => {
+    installFetchMock(jsonRoute("hn.algolia.com", { hits: [] }));
+    let r = await hackernewsBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes?.[0]).toMatch(/no results/i);
+    installFetchMock(jsonRoute("api.github.com", { items: [] }));
+    r = await githubBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes?.[0]).toMatch(/no results/i);
+    failWith(403); // GitHub anon rate-limit
+    r = await githubBackend(makeCtx("x"));
+    expect(r.notes?.[0]).toMatch(/failed/i);
+  });
+});
+
+describe("research backends — missing-field fallbacks (regression guards)", () => {
+  it("dblp keeps a single-hit response where result.hits.hit is an OBJECT, not an array", async () => {
+    // dblp's XML→JSON emits a lone match as an object; before the fix this whole
+    // result was discarded and mislabeled as an API failure.
+    installFetchMock(
+      jsonRoute("dblp.org/search/publ", {
+        result: { hits: { "@total": "1", hit: { info: { title: "Solo Paper.", year: "2020", doi: "10.1/solo", ee: "https://doi.org/10.1/solo" } } } },
+      }),
+    );
+    const r = await dblpBackend(makeCtx("very specific query"));
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]!.title).toBe("Solo Paper");
+    expect(r.items[0]!.url).toBe("https://doi.org/10.1/solo");
+    // a missing hits container still degrades cleanly to empty, not a crash
+    installFetchMock(jsonRoute("dblp.org/search/publ", { result: { hits: { "@total": "0" } } }));
+    expect((await dblpBackend(makeCtx("x"))).items).toHaveLength(0);
+  });
+
+  it("crossref preserves organization authors and normalizes a null year to undefined", async () => {
+    installFetchMock(
+      jsonRoute("api.crossref.org", {
+        message: {
+          items: [
+            {
+              title: ["Global Health Report"],
+              author: [{ name: "World Health Organization" }, { given: "Jane", family: "Doe" }],
+              issued: { "date-parts": [[null]] },
+              DOI: "10.1/who",
+              URL: "https://doi.org/10.1/who",
+            },
+          ],
+        },
+      }),
+    );
+    const r = await crossrefBackend(makeCtx("who report"));
+    expect(r.items[0]!.meta?.authors).toEqual(["World Health Organization", "Jane Doe"]);
+    expect(r.items[0]!.meta?.year).toBeUndefined();
+  });
+
+  it("openalex falls back to the DOI when landing_page_url is an empty string", async () => {
+    installFetchMock(
+      jsonRoute("api.openalex.org", {
+        results: [
+          {
+            title: "Paper",
+            doi: "https://doi.org/10.1/oa",
+            publication_year: 2022,
+            primary_location: { landing_page_url: "" },
+            abstract_inverted_index: null,
+          },
+        ],
+      }),
+    );
+    const r = await openalexBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("https://doi.org/10.1/oa");
+    expect(r.items[0]!.text).toContain("(no abstract provided by OpenAlex)");
+  });
+
+  it("semanticscholar falls back url→DOI→arXiv when the paper has no url", async () => {
+    installFetchMock(
+      jsonRoute("api.semanticscholar.org", {
+        data: [
+          { title: "No URL, has DOI", externalIds: { DOI: "10.1/s2" } },
+          { title: "No URL, no DOI, has arXiv", externalIds: { ArXiv: "2101.00001" } },
+        ],
+      }),
+    );
+    const r = await semanticscholarBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("https://doi.org/10.1/s2");
+    expect(r.items[1]!.url).toBe("https://arxiv.org/abs/2101.00001");
+  });
+
+  it("europepmc builds the article link from source/id when there is no DOI, else degrades to empty", async () => {
+    installFetchMock(jsonRoute("ebi.ac.uk/europepmc", { resultList: { result: [{ title: "No DOI record", source: "MED", id: "555", pubYear: "2015" }] } }));
+    let r = await europepmcBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("https://europepmc.org/article/MED/555");
+    installFetchMock(jsonRoute("ebi.ac.uk/europepmc", { resultList: { result: [{ title: "No DOI, no ids" }] } }));
+    r = await europepmcBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("");
+  });
+
+  it("hackernews never emits a '…id=undefined' link and prefers the story url", async () => {
+    installFetchMock(
+      jsonRoute("hn.algolia.com", {
+        hits: [
+          { title: "Story with url", url: "https://example.com/a", objectID: "1" },
+          { story_title: "Ask HN with no url", objectID: "2" },
+          { title: "Malformed hit, no objectID and no url" },
+        ],
+      }),
+    );
+    const r = await hackernewsBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("https://example.com/a");
+    expect(r.items[1]!.url).toBe("https://news.ycombinator.com/item?id=2");
+    expect(r.items[2]!.url).toBe("https://news.ycombinator.com/");
+    for (const it of r.items) expect(`${it.url}${it.text ?? ""}`).not.toContain("undefined");
+  });
+
+  it("github never renders 'undefined' for a missing html_url/title", async () => {
+    installFetchMock(
+      jsonRoute("api.github.com", {
+        items: [{ state: "open", comments: 0, repository_url: "https://api.github.com/repos/o/r" }],
+      }),
+    );
+    const r = await githubBackend(makeCtx("x"));
+    expect(r.items[0]!.url).toBe("");
+    expect(r.items[0]!.title).toBe("Issue: Untitled (o/r)");
+    expect(`${r.items[0]!.title} ${r.items[0]!.text}`).not.toContain("undefined");
+  });
+
+  it("pubmed falls back to a Untitled/pubmed link for a record missing title & DOI", async () => {
+    installFetchMock((url) => {
+      if (url.includes("esearch.fcgi")) return { body: JSON.stringify({ esearchresult: { idlist: ["777"] } }), contentType: "application/json" };
+      if (url.includes("esummary.fcgi"))
+        return { body: JSON.stringify({ result: { uids: ["777"], "777": { source: "J", pubdate: "2018" } } }), contentType: "application/json" };
+      return undefined;
+    });
+    const r = await pubmedBackend(makeCtx("x"));
+    expect(r.items[0]!.title).toBe("Untitled");
+    expect(r.items[0]!.url).toBe("https://pubmed.ncbi.nlm.nih.gov/777/");
+    expect(r.items[0]!.meta?.year).toBe(2018);
   });
 });

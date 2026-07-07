@@ -1,0 +1,28 @@
+{
+  "hitCount": 2,
+  "resultList": {
+    "result": [
+      {
+        "id": "28495875",
+        "source": "MED",
+        "pmid": "28495875",
+        "doi": "10.1126/science.aad5227",
+        "title": "A programmable dual-RNA-guided DNA endonuclease in adaptive bacterial immunity.",
+        "authorString": "Jinek M, Chylinski K, Fonfara I, Hauer M, Doudna JA, Charpentier E.",
+        "journalInfo": { "journal": { "title": "Science" } },
+        "pubYear": "2012",
+        "abstractText": "<p>CRISPR-Cas systems provide bacteria and archaea with adaptive immunity against viruses and plasmids.</p>"
+      },
+      {
+        "id": "30971826",
+        "source": "MED",
+        "pmid": "30971826",
+        "title": "Search and sequence analysis tools for biomedical literature.",
+        "authorString": "Smith J, Doe A.",
+        "journalInfo": { "journal": { "title": "Nucleic Acids Research" } },
+        "pubYear": "2019",
+        "abstractText": "We describe a suite of tools for retrieving and analyzing biomedical text."
+      }
+    ]
+  }
+}
