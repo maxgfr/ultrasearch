@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.7.2](https://github.com/maxgfr/ultrasearch/compare/v1.7.1...v1.7.2) (2026-07-07)
+
+
+### Bug Fixes
+
+* **engine:** harden parsers, isolate render inline formatting, guard the grounding gate ([5e05722](https://github.com/maxgfr/ultrasearch/commit/5e05722c4f77d26fd3f01ebed196c24a0f47c275))
+
 ## [1.7.1](https://github.com/maxgfr/ultrasearch/compare/v1.7.0...v1.7.1) (2026-07-07)
 
 
