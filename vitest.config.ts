@@ -10,15 +10,15 @@ export default defineConfig({
       include: ["src/**"],
       reporter: ["text-summary", "text"],
       // A ratchet, not an aspiration: set a couple of points below the measured
-      // baseline (statements ~94%, branches ~83%, functions ~96%, lines ~96% as
-      // of the parser-hardening + CLI/pipeline test pass) so coverage can't
-      // silently regress. Raise these when real coverage climbs; never lower them
-      // to make a red run pass.
+      // baseline (statements ~95%, branches ~86%, functions ~97%, lines ~97% as
+      // of the audit-hardening + edge-coverage pass) so coverage can't silently
+      // regress. Raise these when real coverage climbs; never lower them to make
+      // a red run pass.
       thresholds: {
-        statements: 92,
-        branches: 81,
-        functions: 95,
-        lines: 94,
+        statements: 93,
+        branches: 83,
+        functions: 96,
+        lines: 95,
       },
     },
   },
