@@ -25,6 +25,11 @@ const DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5000);
 // (multi-page pagination). Keyless engines block aggressive scraping, so we
 // fetch pages sequentially with a small gap. Tunable; 0 disables.
 export const PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5000);
+// Polite pause between a rate-limited scholarly API's per-VARIANT calls
+// (Crossref/OpenAlex/arXiv/Europe PMC), which the registry serializes rather
+// than firing concurrently to avoid tripping their anon quotas. Tunable; 0
+// disables (tests set it to 0 to stay fast).
+export const POLITE_DELAY_MS = envInt("ULTRASEARCH_POLITE_DELAY_MS", 400, 0, 5000);
 
 export interface HttpResult {
   ok: boolean;
@@ -294,6 +299,32 @@ export async function fetchAndExtract(
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
   return { text, title, finalUrl: res.url };
+}
+
+// Consent walls, "enable JavaScript" shells and anti-bot interstitials extract
+// to a short block of boilerplate that would otherwise pass as a source's full
+// text. Flag such an extraction (returning a short reason) so the gatherer keeps
+// only the search snippet instead. BOTH conditions are required — a genuine
+// article ABOUT cookies or CAPTCHAs is long, so the length gate never trips it.
+const JUNK_PATTERNS: [RegExp, string][] = [
+  [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall"],
+  [/\bwe use cookies\b/i, "cookie/consent wall"],
+  [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?enable javascript\b/i, "JavaScript-required shell"],
+  [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell"],
+  [/\bverify (you are|you're|you are a)\b|\bare you a human\b|\bhuman verification\b/i, "anti-bot interstitial"],
+  [/\baccess denied\b|\battention required\b.*cloudflare|\bunusual traffic\b|\bare you a robot\b/i, "anti-bot interstitial"],
+  [/\benable cookies\b|\bchecking your browser\b/i, "anti-bot interstitial"],
+  // FR / DE (the locale layer targets non-EN markets)
+  [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)"],
+  [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)"],
+];
+export function looksLikeJunkExtraction(text: string): string | undefined {
+  const t = text.trim();
+  if (t.length >= 2000) return undefined; // a real article is long — never flag it
+  const head = t.slice(0, 800);
+  for (const [re, reason] of JUNK_PATTERNS) if (re.test(head)) return reason;
+  return undefined;
 }
 
 // The markdown heading a line sits under, ignoring fenced code blocks.

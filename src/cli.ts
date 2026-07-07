@@ -28,7 +28,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
   ultrasearch modes  [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
@@ -45,7 +45,8 @@ Commands:
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
-           --min-sources <n> fails a too-thin dossier).
+           --require-verify makes a missing/empty VERIFY.json a hard failure —
+           the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
 
 Deep research (the agentic tier — see references/deep-research-playbook.md):
@@ -87,6 +88,7 @@ Options:
   --run <dir>          For render/check/verify: the dossier dir to operate on
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
+  --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -145,7 +147,7 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -527,7 +529,7 @@ async function main(): Promise<void> {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : undefined;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

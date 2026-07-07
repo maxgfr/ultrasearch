@@ -863,6 +863,7 @@ function envInt(name, def, min, max) {
 var MAX_ATTEMPTS = envInt("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
 var DEFAULT_RETRY_MS = envInt("ULTRASEARCH_RETRY_MS", 600, 0, 5e3);
 var PAGE_DELAY_MS = envInt("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5e3);
+var POLITE_DELAY_MS = envInt("ULTRASEARCH_POLITE_DELAY_MS", 400, 0, 5e3);
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1054,6 +1055,26 @@ async function fetchAndExtract(url, opts = {}) {
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
   return { text, title, finalUrl: res.url };
+}
+var JUNK_PATTERNS = [
+  [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall"],
+  [/\bwe use cookies\b/i, "cookie/consent wall"],
+  [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?enable javascript\b/i, "JavaScript-required shell"],
+  [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell"],
+  [/\bverify (you are|you're|you are a)\b|\bare you a human\b|\bhuman verification\b/i, "anti-bot interstitial"],
+  [/\baccess denied\b|\battention required\b.*cloudflare|\bunusual traffic\b|\bare you a robot\b/i, "anti-bot interstitial"],
+  [/\benable cookies\b|\bchecking your browser\b/i, "anti-bot interstitial"],
+  // FR / DE (the locale layer targets non-EN markets)
+  [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)"],
+  [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)"]
+];
+function looksLikeJunkExtraction(text) {
+  const t = text.trim();
+  if (t.length >= 2e3) return void 0;
+  const head = t.slice(0, 800);
+  for (const [re, reason] of JUNK_PATTERNS) if (re.test(head)) return reason;
+  return void 0;
 }
 function nearestHeading(lines, anchor) {
   let heading;
@@ -1447,19 +1468,17 @@ var wikipediaBackend = async (ctx) => {
     return { backend: "wikipedia", items: [], notes: [`Wikipedia search failed (status ${sr.status}).`] };
   }
   const pages = sr.data.pages;
-  const items = [];
   const top = pages.slice(0, Math.min(limit, 6));
-  for (let i = 0; i < top.length; i++) {
-    const p = top[i];
-    if (!p?.key) continue;
+  const built = await mapLimit(top, 4, async (p, i) => {
+    if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
     const extract = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
     const text = extract || descExcerpt;
-    if (!text) continue;
-    items.push({
+    if (!text) return null;
+    return {
       url: pageUrl,
       title: decodeEntities(String(p.title ?? p.key)),
       backend: "wikipedia",
@@ -1467,8 +1486,9 @@ var wikipediaBackend = async (ctx) => {
       snippet: (descExcerpt || extract).slice(0, 360),
       text,
       lang
-    });
-  }
+    };
+  });
+  const items = built.filter((x) => x !== null);
   return {
     backend: "wikipedia",
     items,
@@ -1911,6 +1931,16 @@ var HANDLERS = {
   pubmed: pubmedBackend
 };
 var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
+var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc"]);
+async function fanOutVariants(handler, ctx, variants, polite) {
+  if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+  const out = [];
+  for (let i = 0; i < variants.length; i++) {
+    if (i > 0 && POLITE_DELAY_MS) await sleep(POLITE_DELAY_MS);
+    out.push(await handler({ ...ctx, question: variants[i] }));
+  }
+  return out;
+}
 function mergeVariants(backend, lists, notes) {
   const ranked = lists.map((l) => [...l].sort((a, b) => b.score - a.score));
   const fused = rrf(ranked, (it) => canonicalizeUrl(it.url));
@@ -1942,7 +1972,7 @@ async function runBackends(kinds, ctx) {
         const res = await handler(ctx);
         return { ...res, ms: Date.now() - t0 };
       }
-      const perVariant = await Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+      const perVariant = await fanOutVariants(handler, ctx, variants, POLITE_SEQUENTIAL.has(kind));
       const merged = mergeVariants(
         kind,
         perVariant.map((r) => r.items),
@@ -1969,6 +1999,19 @@ var CITATION_RULES = [
   "tolerates flagged hints but FAILS on any *unmarked* unsourced claim, and on any",
   "`[S#]` that does not resolve to a real source."
 ].join("\n");
+function readJson(path, what) {
+  let raw;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch (e) {
+    throw new Error(`${what} could not be read (${path}): ${e.message}`);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    throw new Error(`${what} is not valid JSON (${path}): ${e.message}`);
+  }
+}
 function idNum(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
@@ -2090,8 +2133,8 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
-  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  const sources = readJson(join(dir, "sources.json"), "sources.json");
+  const manifest = readJson(join(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -2166,16 +2209,18 @@ function applyWebEngine(kinds, engine) {
 }
 async function runWebCascade(engines, ctx, breadth = 1) {
   const out = [];
-  const tried = [];
   let enough = 0;
-  for (const engine of engines) {
-    const [r] = await runBackends([engine], ctx);
-    if (!r) continue;
-    out.push(r);
-    tried.push(engine);
-    if (r.items.length >= ctx.options.perSource) enough++;
-    if (enough >= breadth) break;
+  let i = 0;
+  while (i < engines.length && enough < breadth) {
+    const waveSize = Math.min(breadth - enough, engines.length - i);
+    const wave = engines.slice(i, i + waveSize);
+    i += waveSize;
+    for (const r of await runBackends(wave, ctx)) {
+      out.push(r);
+      if (r.items.length >= ctx.options.perSource) enough++;
+    }
   }
+  const tried = out.map((r) => r.backend);
   const producers = out.filter((r) => r.items.length > 0).map((r) => r.backend);
   if (producers.length) {
     const lead = out.find((r) => r.items.length > 0);
@@ -2276,12 +2321,30 @@ async function runGather(options) {
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
-      if (res.text && res.text.trim()) {
-        it.text = res.text;
+      let text = res.text && res.text.trim() ? res.text : "";
+      let junk = text ? looksLikeJunkExtraction(text) : void 0;
+      let title = res.title;
+      if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
+        const altKey = canonicalizeUrl(it.meta.absUrl);
+        let alt = hydrateCache.get(altKey);
+        if (!alt) {
+          alt = await fetchAndExtract(it.meta.absUrl, { acceptLanguage });
+          hydrateCache.set(altKey, alt);
+        }
+        if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
+          text = alt.text;
+          junk = void 0;
+          title = title || alt.title;
+          hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${it.meta.absUrl} instead.`);
+        }
+      }
+      if (text && !junk) {
+        it.text = text;
         it.fullText = true;
-        if (!it.snippet) it.snippet = bestExcerpt(res.text, options.question);
-        if ((!it.title || it.title === it.url) && res.title) it.title = res.title;
+        if (!it.snippet) it.snippet = bestExcerpt(text, options.question);
+        if ((!it.title || it.title === it.url) && title) it.title = title;
       } else {
+        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} \u2014 kept as snippet only.`);
         it.text = it.snippet || "";
         it.fullText = false;
       }
@@ -2989,10 +3052,15 @@ function analyzeFile(file, text) {
   }
   return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
-function applySemantic(dir, result) {
+function applySemantic(dir, result, requireVerify) {
   const p = join5(dir, "VERIFY.json");
   if (!existsSync3(p)) {
-    result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+    if (requireVerify) {
+      result.ok = false;
+      result.errors.push("--require-verify: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
+    } else {
+      result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+    }
     return;
   }
   try {
@@ -3001,6 +3069,10 @@ function applySemantic(dir, result) {
     if (!sem.ok) {
       result.ok = false;
       result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+    }
+    if (requireVerify && !sem.adjudicated) {
+      result.ok = false;
+      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and `verify --apply` before the gate.");
     }
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
@@ -3103,7 +3175,7 @@ function runCheck(dir, opts = {}) {
     errors,
     warnings
   };
-  if (opts.semantic) applySemantic(dir, result);
+  if (opts.semantic || opts.requireVerify) applySemantic(dir, result, opts.requireVerify === true);
   return result;
 }
 function blank(ok, errors) {
@@ -3282,7 +3354,7 @@ function claimStrings(text) {
   return out;
 }
 function runVerify(dir, opts = {}) {
-  const sources = JSON.parse(readFileSync4(join8(dir, "sources.json"), "utf8"));
+  const sources = readJson(join8(dir, "sources.json"), "sources.json");
   const byId = new Map(sources.map((s) => [s.id, s]));
   const textCache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -3355,7 +3427,7 @@ _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources.
   return out.join("\n");
 }
 function parseVerdictFile(verdictsPath) {
-  const raw = JSON.parse(readFileSync4(verdictsPath, "utf8"));
+  const raw = readJson(verdictsPath, `verdicts file`);
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
   const verdicts = [];
   for (const v of list) {
@@ -3461,7 +3533,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
   ultrasearch modes  [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
@@ -3478,7 +3550,8 @@ Commands:
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
            also folds in the verify verdicts: fails on unsupported claims;
-           --min-sources <n> fails a too-thin dossier).
+           --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
+           the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
 
 Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
@@ -3520,6 +3593,7 @@ Options:
   --run <dir>          For render/check/verify: the dossier dir to operate on
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
+  --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -3577,7 +3651,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -3910,7 +3984,7 @@ async function main() {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), minSources });
+      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

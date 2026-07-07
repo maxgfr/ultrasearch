@@ -286,11 +286,18 @@ function analyzeFile(file: string, text: string): FileAnalysis {
 // Fold the resolved semantic-verification record (VERIFY.json) into a check
 // result when `--semantic` is requested. Strictly additive: it can only ADD a
 // failure (a refuted/unsupported claim) on top of the mechanical gate, never
-// relax it. Missing VERIFY.json warns (run `verify` first) but never fails.
-function applySemantic(dir: string, result: CheckResult): void {
+// relax it. Missing VERIFY.json warns (run `verify` first) but never fails —
+// UNLESS `requireVerify`, which turns a missing/empty verdict record into a hard
+// failure so the deep-tier exit gate can't silently pass without adjudication.
+function applySemantic(dir: string, result: CheckResult, requireVerify: boolean): void {
   const p = join(dir, "VERIFY.json");
   if (!existsSync(p)) {
-    result.warnings.push("--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+    if (requireVerify) {
+      result.ok = false;
+      result.errors.push("--require-verify: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
+    } else {
+      result.warnings.push("--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
+    }
     return;
   }
   try {
@@ -299,6 +306,12 @@ function applySemantic(dir: string, result: CheckResult): void {
     if (!sem.ok) {
       result.ok = false;
       result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+    }
+    // A VERIFY.json with nothing adjudicated hasn't verified anything: under
+    // --require-verify that must fail, not quietly pass on an empty record.
+    if (requireVerify && !sem.adjudicated) {
+      result.ok = false;
+      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) — fill the verdicts and `verify --apply` before the gate.");
     }
     if (sem.unadjudicated?.length) {
       result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
@@ -328,7 +341,7 @@ function readManifestSafe(dir: string): Manifest | undefined {
   }
 }
 
-export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: number } = {}): CheckResult {
+export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?: boolean; minSources?: number } = {}): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -423,7 +436,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; minSources?: n
     errors,
     warnings,
   };
-  if (opts.semantic) applySemantic(dir, result);
+  if (opts.semantic || opts.requireVerify) applySemantic(dir, result, opts.requireVerify === true);
   return result;
 }
 
