@@ -67,7 +67,7 @@ Options:
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
-                       built-in planner — use to drive recall with your own phrasings)
+                       built-in planner; kept in dedup order, capped 2/4/6 by depth)
   --max-sources <n>    Cap total sources kept            (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
@@ -84,6 +84,8 @@ Options:
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
+  --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
+                       big win is the deep tier's per-sub-question fan-out
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify: the dossier dir to operate on
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
@@ -147,7 +149,7 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -332,6 +334,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : undefined,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
+    cache: p.bools.has("cache"),
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
   };
@@ -456,6 +459,7 @@ async function main(): Promise<void> {
       const r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
+        cache: p.bools.has("cache"),
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");

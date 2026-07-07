@@ -4,7 +4,8 @@ import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH } from "
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
-import { fetchAndExtract, bestExcerpt, looksLikeJunkExtraction } from "./backends/fetch.js";
+import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { cachedFetchAndExtract } from "./cache.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
 import { toBibtex } from "./bibtex.js";
@@ -169,6 +170,11 @@ export function fuse(lists: RawSource[][]): RawSource[] {
 // original question (see registry), so this only widens the multi-query fan-out.
 export function resolveVariants(options: GatherOptions): string[] {
   if (options.queries && options.queries.length) {
+    // Agent-supplied variants earn a HIGHER cap (2/4/6 by depth) than the
+    // deterministic planner's (1/2/3, see planVariants in util.ts): the agent
+    // knows the domain, so its phrasings are worth more fan-out budget. The
+    // divergence is intentional — keep the two in sync only in spirit, and see
+    // tests/gather.test.ts which pins both so a change here is a conscious one.
     const cap = options.depth === "summary" ? 2 : options.depth === "standard" ? 4 : 6;
     const seen = new Set<string>();
     const out: string[] = [];
@@ -226,7 +232,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
   // re-fetches a page round 1 already hydrated.
-  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string }>();
+  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string; status: number }>();
+  // Wayback dead-link rescues are capped per run so a page full of dead links
+  // can't fan out into dozens of archive.org round-trips.
+  let waybackUsed = 0;
+  const WAYBACK_CAP = 5;
 
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
@@ -249,7 +259,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await fetchAndExtract(it.url, { acceptLanguage });
+        res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -267,7 +277,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const altKey = canonicalizeUrl(it.meta.absUrl);
         let alt = hydrateCache.get(altKey);
         if (!alt) {
-          alt = await fetchAndExtract(it.meta.absUrl, { acceptLanguage });
+          alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
           hydrateCache.set(altKey, alt);
         }
         if (alt.text && alt.text.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -275,6 +285,21 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           junk = undefined;
           title = title || alt.title;
           hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${it.meta.absUrl} instead.`);
+        }
+      }
+
+      // Dead-link rescue: the origin is gone/blocked (404/410/451/403) and we
+      // got nothing — try the Wayback Machine's closest snapshot before dropping
+      // to the snippet. Capped per run; the ORIGINAL url stays the source url.
+      if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+        waybackUsed++; // reserve the slot synchronously (before any await) so the cap holds under concurrency
+        const wb = await rescueViaWayback(it.url, { acceptLanguage });
+        if (wb) {
+          text = wb.text;
+          junk = undefined;
+          title = title || wb.title;
+          it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
+          hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
         }
       }
 

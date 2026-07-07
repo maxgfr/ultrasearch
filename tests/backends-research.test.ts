@@ -5,6 +5,10 @@ import { openalexBackend } from "../src/backends/openalex.js";
 import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
+import { dblpBackend } from "../src/backends/dblp.js";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -196,5 +200,62 @@ describe("research backends", () => {
     expect(r.items[0]!.text).toBeUndefined(); // metadata-only; gather hydrates the landing page
     expect(r.items[0]!.meta?.year).toBe(2020);
     expect(r.items[1]!.url).toContain("pubmed.ncbi.nlm.nih.gov/222");
+  });
+
+  it("dblp parses hits, normalizes a single-author object, and picks the ee URL", async () => {
+    const DBLP = JSON.stringify({
+      result: {
+        hits: {
+          "@total": "2",
+          hit: [
+            {
+              info: {
+                // multi-author (array)
+                authors: { author: [{ text: "Ashish Vaswani" }, { text: "Noam Shazeer" }] },
+                title: "Attention Is All You Need.",
+                venue: "NeurIPS",
+                year: "2017",
+                doi: "10.5555/aiayn",
+                ee: "https://doi.org/10.5555/aiayn",
+                url: "https://dblp.org/rec/conf/nips/aiayn",
+              },
+            },
+            {
+              info: {
+                // single author (object, not array) — must not crash
+                authors: { author: { text: "Solo Researcher" } },
+                title: "A One-Author Paper",
+                year: "2001",
+                url: "https://dblp.org/rec/x",
+              },
+            },
+          ],
+        },
+      },
+    });
+    installFetchMock(routes([["dblp.org/search/publ", { body: DBLP, contentType: "application/json" }]]));
+    const r = await dblpBackend(makeCtx("transformer"));
+    expect(r.items).toHaveLength(2);
+    expect(r.items[0]!.url).toBe("https://doi.org/10.5555/aiayn"); // ee preferred
+    expect(r.items[0]!.title).toBe("Attention Is All You Need"); // trailing period stripped
+    expect(r.items[0]!.meta?.doi).toBe("10.5555/aiayn");
+    expect(r.items[0]!.meta?.authors).toEqual(["Ashish Vaswani", "Noam Shazeer"]);
+    expect(r.items[0]!.meta?.year).toBe(2017);
+    // single-author object normalized to a one-element list; falls back to the record URL
+    expect(r.items[1]!.meta?.authors).toEqual(["Solo Researcher"]);
+    expect(r.items[1]!.url).toBe("https://dblp.org/rec/x");
+  });
+
+  it("dblp still parses the saved real-API fixture (canary)", async () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const body = readFileSync(join(here, "fixtures", "api", "dblp.json"), "utf8");
+    installFetchMock(routes([["dblp.org/search/publ", { body, contentType: "application/json" }]]));
+    const r = await dblpBackend(makeCtx("transformer"));
+    expect(r.items.length).toBeGreaterThanOrEqual(2);
+    for (const it of r.items) {
+      expect(it.url).toMatch(/^https?:\/\//);
+      expect(it.title.length).toBeGreaterThan(0);
+      expect(Array.isArray(it.meta?.authors)).toBe(true);
+    }
   });
 });

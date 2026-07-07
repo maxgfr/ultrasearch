@@ -3,9 +3,9 @@ import type { ModeProfile } from "../types.js";
 // Scholarly literature review. Leans on academic APIs and emits a BibTeX file.
 export const researchMode: ModeProfile = {
   name: "research",
-  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar) + refs.bib.",
+  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp at deep) + refs.bib.",
   backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
-  deepOnly: ["pubmed", "duckduckgo", "wikipedia"],
+  deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
   template: [
     "## Abstract / TL;DR",

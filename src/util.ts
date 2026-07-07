@@ -88,6 +88,7 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   semanticscholar: 0.9,
   europepmc: 0.9,
   pubmed: 0.9,
+  dblp: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -551,6 +552,9 @@ export function planVariants(question: string, depth: Depth): string[] {
       uniq.push(v);
     }
   }
+  // Deterministic-planner cap: 1/2/3 by depth — deliberately LOWER than the
+  // agent-supplied --queries cap (2/4/6, see resolveVariants in gather.ts),
+  // since regex-planned variants are lower-signal than an agent's own phrasings.
   const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
   return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
 }
@@ -716,7 +720,7 @@ const FNV_OFFSET = 0xcbf29ce484222325n;
 const FNV_PRIME = 0x100000001b3n;
 const MASK64 = (1n << 64n) - 1n;
 
-function fnv1a64(s: string): bigint {
+export function fnv1a64(s: string): bigint {
   let h = FNV_OFFSET;
   for (let i = 0; i < s.length; i++) {
     h ^= BigInt(s.charCodeAt(i));

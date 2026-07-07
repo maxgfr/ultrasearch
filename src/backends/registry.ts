@@ -18,6 +18,7 @@ import { openalexBackend } from "./openalex.js";
 import { semanticscholarBackend } from "./semanticscholar.js";
 import { europepmcBackend } from "./europepmc.js";
 import { pubmedBackend } from "./pubmed.js";
+import { dblpBackend } from "./dblp.js";
 
 // Registry of retrieval backends. Each is independent, returns candidate
 // sources + honest notes, and never throws (the runner wraps failures into
@@ -41,6 +42,7 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
+  dblp: dblpBackend,
 };
 
 // Backends that should be queried only ONCE per run regardless of how many
@@ -55,7 +57,7 @@ const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semantics
 // small gap instead of Promise.all-ing them, so we never open N connections to
 // the same rate-limited host at once. They still run concurrently with OTHER
 // backends — only the intra-backend variant fan-out serializes.
-const POLITE_SEQUENTIAL = new Set<BackendKind>(["arxiv", "crossref", "openalex", "europepmc"]);
+const POLITE_SEQUENTIAL = new Set<BackendKind>(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
 
 // Fan a backend across query variants, either concurrently (default) or
 // sequentially with a polite delay (rate-limited scholarly APIs). Returns the

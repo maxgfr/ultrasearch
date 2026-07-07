@@ -277,12 +277,12 @@ const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 
 export async function fetchAndExtract(
   url: string,
   opts: { acceptLanguage?: string } = {},
-): Promise<{ text: string; title?: string; note?: string; finalUrl: string }> {
+): Promise<{ text: string; title?: string; note?: string; finalUrl: string; status: number }> {
   const wantsPdf = PDF_URL_RE.test(url);
   const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
-    return { text: "", finalUrl: res.url, note: `Could not fetch ${url} (${why}).` };
+    return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
   }
   if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
     // A content-type-only PDF (no .pdf in the URL) was fetched as text — refetch
@@ -292,13 +292,37 @@ export async function fetchAndExtract(
     return {
       text,
       finalUrl: res.url,
+      status: res.status,
       note: text ? undefined : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`,
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
-  return { text, title, finalUrl: res.url };
+  return { text, title, finalUrl: res.url, status: res.status };
+}
+
+// Statuses where the origin is gone/blocked and a live re-fetch will never
+// work, so an archived copy is worth trying (410 Gone, 451 legal, 403 blocked).
+export const DEAD_LINK_STATUS = new Set([404, 410, 451, 403]);
+
+// Best-effort dead-link rescue via the Wayback Machine's keyless availability
+// API: ask for the closest snapshot of `url`, and if one exists, fetch + extract
+// it. Returns the recovered text + the snapshot's timestamp/url, or undefined
+// when there is no usable snapshot. The ORIGINAL url stays the source's url;
+// callers record the snapshot in meta + a note. Disable with ULTRASEARCH_NO_WAYBACK.
+export async function rescueViaWayback(
+  url: string,
+  opts: { acceptLanguage?: string } = {},
+): Promise<{ text: string; title?: string; snapshotUrl: string; timestamp: string } | undefined> {
+  if (process.env.ULTRASEARCH_NO_WAYBACK) return undefined;
+  const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
+  const r = await httpJson("GET", api, undefined, { timeoutMs: 10000, userAgent: CONTACT_UA });
+  const snap = r.ok ? r.data?.archived_snapshots?.closest : undefined;
+  if (!snap || snap.available !== true || typeof snap.url !== "string") return undefined;
+  const got = await fetchAndExtract(snap.url, opts);
+  if (!got.text || !got.text.trim() || looksLikeJunkExtraction(got.text)) return undefined;
+  return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
 }
 
 // Consent walls, "enable JavaScript" shells and anti-bot interstitials extract
