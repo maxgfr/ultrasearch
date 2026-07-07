@@ -51,8 +51,10 @@ the verification worklist.
    (`<dir>/q1`, `<dir>/q2`, …) — so you can dispatch the fan-out without ever
    parsing a sub-run's stdout.
 
-2. **Fan out** — one `gather --depth deep --out <its out dir>` per sub-question,
-   passing that sub-question's `queries`. Enrich each thin area with your own
+2. **Fan out** — one `gather --depth deep --cache --out <its out dir>` per
+   sub-question, passing that sub-question's `queries`. `--cache` shares an
+   on-disk fetch cache across the sub-questions, so overlapping URLs are fetched
+   once instead of once per sub-question. Enrich each thin area with your own
    WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
    floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
    Parallel when possible (see the contract below), sequential otherwise.
@@ -90,16 +92,19 @@ the verification worklist.
    subagent ("Parallel verification" below).
 
 6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`
-   then `check --semantic --run <masterDir>`. `--apply` accepts one file, a
-   directory, or a comma list, so sharded verdicts reassemble cleanly (merged by
-   `(claimId, sourceId, file)`, last-wins). A claim fails if its source
+   then `check --semantic --require-verify --run <masterDir>`. `--apply` accepts
+   one file, a directory, or a comma list, so sharded verdicts reassemble cleanly
+   (merged by `(claimId, sourceId, file)`, last-wins). A claim fails if its source
    **refutes** it, or if every cited source is **unsupported** (nothing backs it).
+   `--require-verify` makes a missing or empty `VERIFY.json` a hard failure, so
+   the gate can't silently pass when you forgot to run/apply `verify`.
    The gate also surfaces **contradictions** — claims whose own cited sources
    disagree (one supports, another refutes) — as a warning + a panel in the HTML,
    even when the claim still passes overall. Fix the claim (re-cite, weaken, drop,
    or `fetch` a better source) and re-verify until the gate passes.
-   `check --semantic` is the unified exit gate: mechanical grounding **and**
-   semantic support. Add `--min-sources <n>` to also fail a too-thin master.
+   `check --semantic --require-verify` is the unified exit gate: mechanical
+   grounding **and** semantic support. Add `--min-sources <n>` to also fail a
+   too-thin master.
 
 7. **Loop until dry** — inspect the master dossier + report for residual gaps,
    contradictions, or new sub-questions a round surfaced. If any appear and you
@@ -130,7 +135,7 @@ like (`<skill-dir>` = this skill's absolute directory, resolved by the parent):
 > You are gathering web evidence for ONE sub-question of a larger research run.
 > Run (add `--lang <code> --region <cc>` and translate the `--queries` into that
 > language when the run targets a non-English audience):
-> `node <skill-dir>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --out "<its out dir>"`
+> `node <skill-dir>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --cache --out "<its out dir>"`
 > Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
 > missing), enrich with your own WebSearch and, for each good URL,
 > `node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.

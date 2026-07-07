@@ -14,8 +14,11 @@ question
 plan query variants (full question + keywords + identifiers, by depth)
   │
 [ backends ] ── fan out concurrent, keyless, per-variant ──► RawSource[] per backend
+  │  (web discovery walks engines in concurrent waves up to --web-breadth;
+  │   polite scholarly APIs serialize their per-variant calls)
   │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
-  │  hydrate a candidate pool (bounded concurrency, retry on 429/503)
+  │  hydrate a candidate pool (bounded concurrency, retry on 429/503, optional
+  │   --cache; junk/consent-wall extractions rejected; dead links → Wayback)
   │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
   ▼
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
@@ -46,8 +49,8 @@ merge (re-fuse the combined pool by identity + near-dup, stable S# ids, provenan
 the AGENT writes the tiers against the MASTER dossier
   │  verify [--shards N --shard I] (claim↔source worklist) → skeptics adjudicate
   ▼
-verify --apply <files|dir> + check --semantic  (fail on refuted/unsupported;
-  │  also surfaces contradictions — claims whose cited sources disagree)
+verify --apply <files|dir> + check --semantic --require-verify  (fail on
+  │  refuted/unsupported, or a missing/empty VERIFY.json; surfaces contradictions)
   │  loop until a round surfaces no new sub-questions / gaps
   ▼
 render (verdict badges + contradictions panel + sub-question tree)
@@ -71,10 +74,13 @@ and **contradictions**. See `references/deep-research-playbook.md`.
   the `DEPTH_CAPS` + `DEEP_CAPS` tables.
 - `util.ts` — slug/runId, URL canonicalization + dedupe, trust scoring, and the
   keyword/matcher/RRF machinery (ported from ultradoc) used to excerpt pages.
-- `gather.ts` — the orchestrator: resolve backends → run → fuse → dedupe → cap →
-  hydrate → write dossier (+ refs.bib for research).
-- `dossier.ts` — `writeDossier` / `readDossier` / `buildSource` / `nextSourceId`
-  and the DOSSIER.md renderer; the `CITATION_RULES` block.
+- `gather.ts` — the orchestrator: resolve backends → run (web discovery in
+  concurrent cascade waves) → fuse → dedupe → cap → hydrate (junk-extraction
+  rejection, arXiv/Wayback fallbacks) → write dossier (+ refs.bib for research).
+- `cache.ts` — the opt-in on-disk fetch cache behind `--cache` (canonical-URL
+  key, TTL, successes only), shared across the deep tier's fan-out gathers.
+- `dossier.ts` — `writeDossier` / `readDossier` / `buildSource` / `nextSourceId` /
+  `readJson` (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` block.
 - `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.
 - `check.ts` — the citation grammar + grounding algorithm (with model-hint
   tolerance and per-claim coverage on REPORT); exports the claim parser
@@ -88,8 +94,9 @@ and **contradictions**. See `references/deep-research-playbook.md`.
   (verdict badges + sub-question tree in deep mode).
 - `bibtex.ts` — `toBibtex` for research mode's `refs.bib`.
 - `modes/` — the five `ModeProfile`s + their registry.
-- `backends/` — `fetch.ts` (HTTP + HTML→text + excerpting), the `registry.ts`
-  runner, and one file per backend.
+- `backends/` — `fetch.ts` (HTTP + HTML→text + excerpting + junk detection +
+  Wayback rescue), the `registry.ts` runner (with the polite-sequential fan-out),
+  and one file per backend (web discovery, scholarly incl. `dblp`, community).
 
 ## Build & release
 
@@ -98,9 +105,11 @@ and **contradictions**. See `references/deep-research-playbook.md`.
 - semantic-release (Conventional Commits) computes the next version,
   `scripts/sync-version.mjs` syncs it across `package.json` / `src/types.ts` /
   `SKILL.md`, the bundle is rebuilt, and a GitHub release + tarball are cut.
-- CI runs typecheck, the reproducible-build check, vitest (fully offline), an
-  offline smoke run, the offline evals, and a Node-18 floor job that runs the
-  committed bundle with no devDeps.
+- CI runs typecheck, lint, the reproducible-build check, vitest (fully offline)
+  with a coverage ratchet, an offline smoke run, the offline evals (incl. a
+  RED/GREEN semantic-gate probe), and a Node-18 floor job that runs the committed
+  bundle with no devDeps. Saved-response canaries (`tests/fixtures/api/`) catch
+  scholarly-API schema drift; a weekly network eval reports live-backend recall.
 
 ## Grounding model
 
