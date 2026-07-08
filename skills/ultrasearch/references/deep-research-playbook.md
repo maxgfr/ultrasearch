@@ -96,8 +96,12 @@ the verification worklist.
    one file, a directory, or a comma list, so sharded verdicts reassemble cleanly
    (merged by `(claimId, sourceId, file)`, last-wins). A claim fails if its source
    **refutes** it, or if every cited source is **unsupported** (nothing backs it).
-   `--require-verify` makes a missing or empty `VERIFY.json` a hard failure, so
-   the gate can't silently pass when you forgot to run/apply `verify`.
+   The semantic gate re-derives its verdict from `VERIFY.json`'s `verdicts[]`
+   at check time — a stored `ok` flag is never trusted, so a hand-edited or
+   stale summary can't flip the outcome. Both `--semantic` and
+   `--require-verify` make a missing/unreadable/unadjudicated `VERIFY.json` a
+   hard failure, so the gate can't silently pass when you forgot to run/apply
+   `verify` (drop `--semantic` if you only want the mechanical gate).
    The gate also surfaces **contradictions** — claims whose own cited sources
    disagree (one supports, another refutes) — as a warning + a panel in the HTML,
    even when the claim still passes overall. Fix the claim (re-cite, weaken, drop,

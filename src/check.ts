@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
 import { extractUnits, codeMask, hintMask, appendixMask, stripInlineCode, TOKEN_RE, SOURCE_RE } from "./claims.js";
+import { reduceVerdicts } from "./verify.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -122,47 +123,58 @@ function analyzeFile(file: string, text: string): FileAnalysis {
   return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 
-// Fold the resolved semantic-verification record (VERIFY.json) into a check
-// result when `--semantic` is requested. Strictly additive: it can only ADD a
-// failure (a refuted/unsupported claim) on top of the mechanical gate, never
-// relax it. Missing VERIFY.json warns (run `verify` first) but never fails —
-// UNLESS `requireVerify`, which turns a missing/empty verdict record into a hard
-// failure so the deep-tier exit gate can't silently pass without adjudication.
+// Fold the semantic-verification record (VERIFY.json) into a check result when
+// `--semantic` is requested. Strictly additive: it can only ADD failures on top
+// of the mechanical gate, never relax it. Two integrity rules:
+//   1. FAIL-CLOSED — a missing/unreadable/empty VERIFY.json is an error, not a
+//      warning: a green `--semantic` exit must always mean the gate engaged.
+//      The escape hatch is simply not passing `--semantic`.
+//   2. NEVER TRUST THE STORED SUMMARY — the gate verdict is re-reduced from
+//      `verdicts[]` at check time, so a hand-edited or stale `ok` flag cannot
+//      flip the outcome (in either direction).
+// `requireVerify` keeps its extra meaning for the deep exit gate (also fails on
+// an unadjudicated record); its messages name the flag that tripped.
 function applySemantic(dir: string, result: CheckResult, requireVerify: boolean): void {
+  const flag = requireVerify ? "--require-verify" : "--semantic";
   const p = join(dir, "VERIFY.json");
   if (!existsSync(p)) {
-    if (requireVerify) {
-      result.ok = false;
-      result.errors.push("--require-verify: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
-    } else {
-      result.warnings.push("--semantic: no VERIFY.json — run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
-    }
+    result.ok = false;
+    result.errors.push(`${flag}: no VERIFY.json — run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
+  let stored: VerifyResult;
   try {
-    const sem = JSON.parse(readFileSync(p, "utf8")) as VerifyResult;
-    result.semantic = sem;
-    if (!sem.ok) {
-      result.ok = false;
-      result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
-    }
-    // A VERIFY.json with nothing adjudicated hasn't verified anything: under
-    // --require-verify that must fail, not quietly pass on an empty record.
-    if (requireVerify && !sem.adjudicated) {
-      result.ok = false;
-      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) — fill the verdicts and `verify --apply` before the gate.");
-    }
-    if (sem.unadjudicated?.length) {
-      result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
-    }
-    if (sem.contradictions?.length) {
-      result.warnings.push(
-        `${sem.contradictions.length} claim(s) have contradicting cited sources: ` +
-          `${sem.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`,
-      );
-    }
+    stored = JSON.parse(readFileSync(p, "utf8")) as VerifyResult;
   } catch (e) {
-    result.warnings.push(`--semantic: VERIFY.json is unreadable (${(e as Error).message}).`);
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json is unreadable (${(e as Error).message}) — re-run \`verify --apply <verdicts.json>\`.`);
+    return;
+  }
+  const verdicts = Array.isArray(stored.verdicts) ? stored.verdicts : [];
+  const reduced = reduceVerdicts(verdicts);
+  result.semantic = { ...reduced, verdicts };
+  // A record with nothing actually adjudicated hasn't verified anything — a
+  // bare summary (no verdicts[]) or all-null verdicts must not quietly pass.
+  if (!reduced.adjudicated) {
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json has 0 adjudicated claim(s) — fill the verdicts and \`verify --apply\` before the gate.`);
+    return;
+  }
+  if (stored.ok !== reduced.ok) {
+    result.warnings.push("VERIFY.json's stored gate disagrees with its verdicts[] — re-reduced from the verdicts at check time.");
+  }
+  if (!reduced.ok) {
+    result.ok = false;
+    result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+  }
+  if (reduced.unadjudicated?.length) {
+    result.warnings.push(`${reduced.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
+  }
+  if (reduced.contradictions?.length) {
+    result.warnings.push(
+      `${reduced.contradictions.length} claim(s) have contradicting cited sources: ` +
+        `${reduced.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`,
+    );
   }
 }
 

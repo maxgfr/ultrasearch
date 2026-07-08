@@ -320,13 +320,75 @@ describe("check --semantic composition", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("warns (does not fail) when --semantic is set but no VERIFY.json exists", () => {
+  it("fails closed when --semantic is set but no VERIFY.json exists", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
     report(dir, GROUNDED);
     const r = runCheck(dir, { semantic: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/VERIFY\.json/);
+    // the mechanical gate alone is still green — the escape hatch is dropping --semantic
+    expect(runCheck(dir).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("re-reduces the gate from verdicts[] — a tampered ok:true cannot false-pass", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    runVerify(dir);
+    applyVerdicts(dir, writeVerdicts(dir, { S1: "refuted", S2: "supported" }));
+    // doctor the persisted summary: flip ok to true and empty the failures,
+    // keeping the refuted verdict in verdicts[] — the gate must still fail.
+    const p = join(dir, "VERIFY.json");
+    const stored = JSON.parse(readFileSync(p, "utf8"));
+    stored.ok = true;
+    stored.failures = [];
+    writeFileSync(p, JSON.stringify(stored, null, 2));
+    const r = runCheck(dir, { semantic: true });
+    expect(r.ok).toBe(false);
+    expect(r.warnings.join(" ").toLowerCase()).toContain("re-reduced");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("re-reduces a stale ok:false whose verdicts[] all support — passes with a warning", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    runVerify(dir);
+    applyVerdicts(dir, writeVerdicts(dir, { S1: "supported", S2: "supported" }));
+    const p = join(dir, "VERIFY.json");
+    const stored = JSON.parse(readFileSync(p, "utf8"));
+    stored.ok = false; // stale summary; verdicts[] is the source of truth
+    writeFileSync(p, JSON.stringify(stored, null, 2));
+    const r = runCheck(dir, { semantic: true });
     expect(r.ok).toBe(true);
-    expect(r.warnings.join(" ").toLowerCase()).toContain("verify");
+    expect(r.warnings.join(" ").toLowerCase()).toContain("re-reduced");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed when VERIFY.json carries no verdicts[] (summary alone is not adjudication)", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    writeFileSync(
+      join(dir, "VERIFY.json"),
+      JSON.stringify({ ok: true, pairs: 2, adjudicated: 2, supported: 2, partial: 0, refuted: 0, unsupported: 0, failures: [], unadjudicated: [] }),
+    );
+    const r = runCheck(dir, { semantic: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/0 adjudicated|verdicts/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed when VERIFY.json is unreadable", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    writeFileSync(join(dir, "VERIFY.json"), "{not json");
+    const r = runCheck(dir, { semantic: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ").toLowerCase()).toContain("unreadable");
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -370,11 +432,11 @@ describe("check --require-verify (deep exit gate)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("without the flag, a missing VERIFY.json only warns (back-compat)", () => {
+  it("plain check (no --semantic) never requires VERIFY.json", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
     report(dir, GROUNDED);
-    expect(runCheck(dir, { semantic: true }).ok).toBe(true);
+    expect(runCheck(dir).ok).toBe(true);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -3114,8 +3114,8 @@ function writeReportMarkdown(dir, out) {
 }
 
 // src/check.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
-import { join as join6 } from "path";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { join as join7 } from "path";
 
 // src/claims.ts
 var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
@@ -3280,8 +3280,193 @@ function unitSourceTokens(text) {
   return out;
 }
 
-// src/check.ts
+// src/verify.ts
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
+import { join as join6 } from "path";
 var HARD_FILES = ["REPORT.md"];
+var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
+function claimStrings(text) {
+  const out = [];
+  for (const u of unitsOfFile(text)) {
+    if (u.kind === "text") out.push(u.text);
+    else for (const it of u.items) out.push(it);
+  }
+  return out;
+}
+function runVerify(dir, opts = {}) {
+  const sources = readJson(join6(dir, "sources.json"), "sources.json");
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
+  }
+  const byId = new Map(sources.map((s) => [s.id, s]));
+  const textCache = /* @__PURE__ */ new Map();
+  const textOf = (s) => {
+    let t = textCache.get(s.id);
+    if (t === void 0) {
+      t = readSourceText(dir, s);
+      textCache.set(s.id, t);
+    }
+    return t;
+  };
+  const pairs = [];
+  let claimNo = 0;
+  for (const file of HARD_FILES) {
+    const p = join6(dir, file);
+    if (!existsSync4(p)) continue;
+    const text = readFileSync4(p, "utf8");
+    for (const claim of claimStrings(text)) {
+      const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
+      if (!ids.length) continue;
+      claimNo++;
+      const claimId = `C${claimNo}`;
+      for (const id of ids) {
+        const s = byId.get(id);
+        pairs.push({
+          claimId,
+          file,
+          sourceId: id,
+          claim: claim.trim().slice(0, 400),
+          extractPath: s.extract,
+          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
+          trust: s.trust
+        });
+      }
+    }
+  }
+  const cmp = (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
+  const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
+  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
+  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
+  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
+  const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
+  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  const todo = {
+    run: dir,
+    pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
+  };
+  const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
+  const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
+  writeFileSync6(join6(dir, todoName), JSON.stringify(todo, null, 2));
+  writeFileSync6(join6(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
+  return worklist;
+}
+function renderWorklistMd(wl, total, kept) {
+  const out = [];
+  out.push(`# Verification worklist`);
+  out.push("");
+  out.push(
+    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`.`
+  );
+  if (kept < total) out.push(`
+_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
+  out.push("");
+  for (const p of wl.pairs) {
+    out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
+    out.push(`**Claim:** ${p.claim}`);
+    out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
+    out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
+    out.push("");
+  }
+  return out.join("\n");
+}
+function parseVerdictFile(verdictsPath) {
+  const raw = readJson(verdictsPath, `verdicts file`);
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
+  const verdicts = [];
+  for (const v of list) {
+    if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
+    const verdict = VALID_VERDICTS.includes(v.verdict) ? v.verdict : void 0;
+    verdicts.push({
+      claimId: v.claimId,
+      file: typeof v.file === "string" ? v.file : "",
+      sourceId: v.sourceId,
+      claim: typeof v.claim === "string" ? v.claim : "",
+      extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
+      extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
+      verdict,
+      note: typeof v.note === "string" ? v.note : ""
+    });
+  }
+  return verdicts;
+}
+function applyVerdicts(dir, verdictsPath) {
+  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
+  const merged = /* @__PURE__ */ new Map();
+  for (const p of paths) {
+    for (const v of parseVerdictFile(p)) {
+      merged.set(`${v.claimId} ${v.sourceId}`, v);
+    }
+  }
+  const verdicts = [...merged.values()];
+  const result = reduceVerdicts(verdicts);
+  writeFileSync6(join6(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  return result;
+}
+function reduceVerdicts(verdicts) {
+  const counts = { supported: 0, partial: 0, refuted: 0, unsupported: 0 };
+  for (const v of verdicts) if (v.verdict && counts[v.verdict] !== void 0) counts[v.verdict]++;
+  const byClaim = /* @__PURE__ */ new Map();
+  for (const v of verdicts) {
+    const group = byClaim.get(v.claimId) ?? [];
+    group.push(v);
+    byClaim.set(v.claimId, group);
+  }
+  const failures = [];
+  const unadjudicated = [];
+  const contradictions = [];
+  const uniqSorted = (ids) => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+  for (const [claimId, group] of byClaim) {
+    const adjudicated = group.filter((g) => !!g.verdict);
+    if (adjudicated.length < group.length) unadjudicated.push(claimId);
+    const refuted = adjudicated.find((g) => g.verdict === "refuted");
+    const hasSupport = adjudicated.some((g) => g.verdict === "supported" || g.verdict === "partial");
+    if (refuted) {
+      failures.push({ claimId, sourceId: refuted.sourceId, verdict: "refuted", note: refuted.note });
+    } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
+      const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
+      failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
+    }
+    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
+    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
+    if (supporting.length && refuting.length) {
+      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
+      contradictions.push({
+        claimId,
+        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
+        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
+        note
+      });
+    }
+  }
+  return {
+    ok: failures.length === 0,
+    pairs: verdicts.length,
+    adjudicated: verdicts.filter((v) => !!v.verdict).length,
+    supported: counts.supported,
+    partial: counts.partial,
+    refuted: counts.refuted,
+    unsupported: counts.unsupported,
+    failures,
+    unadjudicated,
+    ...contradictions.length ? { contradictions } : {}
+  };
+}
+function formatVerifyReport(r) {
+  const lines = [];
+  lines.push(`ultrasearch verify: ${r.adjudicated}/${r.pairs} pair(s) adjudicated`);
+  lines.push(`  supported: ${r.supported} \xB7 partial: ${r.partial} \xB7 refuted: ${r.refuted} \xB7 unsupported: ${r.unsupported}`);
+  for (const f of r.failures.slice(0, 12)) {
+    lines.push(`  \u2717 ${f.claimId} (${f.sourceId}): ${f.verdict}${f.note ? " \u2014 " + f.note : ""}`);
+  }
+  if (r.unadjudicated.length) {
+    lines.push(`  \u26A0 ${r.unadjudicated.length} claim(s) not fully adjudicated: ${r.unadjudicated.join(", ")}`);
+  }
+  lines.push(r.ok ? `  \u2713 every claim is backed by a cited source` : `  \u2717 some claims are refuted or unsupported`);
+  return lines.join("\n");
+}
+
+// src/check.ts
+var HARD_FILES2 = ["REPORT.md"];
 var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
 var MIN_CLAIM_WORDS = 6;
 function claimWordCount(unit) {
@@ -3355,42 +3540,48 @@ function analyzeFile(file, text) {
   return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 function applySemantic(dir, result, requireVerify) {
-  const p = join6(dir, "VERIFY.json");
-  if (!existsSync4(p)) {
-    if (requireVerify) {
-      result.ok = false;
-      result.errors.push("--require-verify: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
-    } else {
-      result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
-    }
+  const flag = requireVerify ? "--require-verify" : "--semantic";
+  const p = join7(dir, "VERIFY.json");
+  if (!existsSync5(p)) {
+    result.ok = false;
+    result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
+  let stored;
   try {
-    const sem = JSON.parse(readFileSync4(p, "utf8"));
-    result.semantic = sem;
-    if (!sem.ok) {
-      result.ok = false;
-      result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
-    }
-    if (requireVerify && !sem.adjudicated) {
-      result.ok = false;
-      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and `verify --apply` before the gate.");
-    }
-    if (sem.unadjudicated?.length) {
-      result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
-    }
-    if (sem.contradictions?.length) {
-      result.warnings.push(
-        `${sem.contradictions.length} claim(s) have contradicting cited sources: ${sem.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`
-      );
-    }
+    stored = JSON.parse(readFileSync5(p, "utf8"));
   } catch (e) {
-    result.warnings.push(`--semantic: VERIFY.json is unreadable (${e.message}).`);
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
+    return;
+  }
+  const verdicts = Array.isArray(stored.verdicts) ? stored.verdicts : [];
+  const reduced = reduceVerdicts(verdicts);
+  result.semantic = { ...reduced, verdicts };
+  if (!reduced.adjudicated) {
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and \`verify --apply\` before the gate.`);
+    return;
+  }
+  if (stored.ok !== reduced.ok) {
+    result.warnings.push("VERIFY.json's stored gate disagrees with its verdicts[] \u2014 re-reduced from the verdicts at check time.");
+  }
+  if (!reduced.ok) {
+    result.ok = false;
+    result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+  }
+  if (reduced.unadjudicated?.length) {
+    result.warnings.push(`${reduced.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
+  }
+  if (reduced.contradictions?.length) {
+    result.warnings.push(
+      `${reduced.contradictions.length} claim(s) have contradicting cited sources: ${reduced.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`
+    );
   }
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync4(join6(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync5(join7(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -3398,13 +3589,13 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join6(dir, "sources.json");
-  if (!existsSync4(sourcesPath)) {
+  const sourcesPath = join7(dir, "sources.json");
+  if (!existsSync5(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync4(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync5(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
@@ -3412,11 +3603,11 @@ function runCheck(dir, opts = {}) {
     return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync4(join6(dir, f)));
-  if (!present.some((f) => HARD_FILES.includes(f))) {
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync5(join7(dir, f)));
+  if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync4(join6(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync5(join7(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -3437,7 +3628,7 @@ function runCheck(dir, opts = {}) {
       if (!ids.has(tok)) danglingSet.add(tok);
     }
     for (const u of a.unknownTokens) unknown.add(u);
-    if (HARD_FILES.includes(a.file)) {
+    if (HARD_FILES2.includes(a.file)) {
       for (const c of a.unsourcedClaims) unmarkedUnsourced.push({ file: a.file, text: c });
     }
   }
@@ -3518,7 +3709,7 @@ function formatCheckReport(r, dir) {
 }
 
 // src/plan.ts
-import { join as join7 } from "path";
+import { join as join8 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function mk(question, facet, rationale) {
   return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
@@ -3562,14 +3753,14 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join7(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join8(runRoot, s.id.toLowerCase());
   });
   return { question: q, mode, subQuestions: uniq };
 }
 
 // src/merge.ts
-import { writeFileSync as writeFileSync6 } from "fs";
-import { join as join8 } from "path";
+import { writeFileSync as writeFileSync7 } from "fs";
+import { join as join9 } from "path";
 function toRawSource(s, text) {
   return {
     url: s.url,
@@ -3643,194 +3834,9 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync6(join8(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync7(join9(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
-}
-
-// src/verify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync7 } from "fs";
-import { join as join9 } from "path";
-var HARD_FILES2 = ["REPORT.md"];
-var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
-function claimStrings(text) {
-  const out = [];
-  for (const u of unitsOfFile(text)) {
-    if (u.kind === "text") out.push(u.text);
-    else for (const it of u.items) out.push(it);
-  }
-  return out;
-}
-function runVerify(dir, opts = {}) {
-  const sources = readJson(join9(dir, "sources.json"), "sources.json");
-  if (!Array.isArray(sources)) {
-    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
-  }
-  const byId = new Map(sources.map((s) => [s.id, s]));
-  const textCache = /* @__PURE__ */ new Map();
-  const textOf = (s) => {
-    let t = textCache.get(s.id);
-    if (t === void 0) {
-      t = readSourceText(dir, s);
-      textCache.set(s.id, t);
-    }
-    return t;
-  };
-  const pairs = [];
-  let claimNo = 0;
-  for (const file of HARD_FILES2) {
-    const p = join9(dir, file);
-    if (!existsSync5(p)) continue;
-    const text = readFileSync5(p, "utf8");
-    for (const claim of claimStrings(text)) {
-      const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
-      if (!ids.length) continue;
-      claimNo++;
-      const claimId = `C${claimNo}`;
-      for (const id of ids) {
-        const s = byId.get(id);
-        pairs.push({
-          claimId,
-          file,
-          sourceId: id,
-          claim: claim.trim().slice(0, 400),
-          extractPath: s.extract,
-          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
-          trust: s.trust
-        });
-      }
-    }
-  }
-  const cmp = (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
-  const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
-  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
-  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
-  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
-  const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
-  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
-  const todo = {
-    run: dir,
-    pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
-  };
-  const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
-  const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeFileSync7(join9(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync7(join9(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
-  return worklist;
-}
-function renderWorklistMd(wl, total, kept) {
-  const out = [];
-  out.push(`# Verification worklist`);
-  out.push("");
-  out.push(
-    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`.`
-  );
-  if (kept < total) out.push(`
-_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
-  out.push("");
-  for (const p of wl.pairs) {
-    out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
-    out.push(`**Claim:** ${p.claim}`);
-    out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
-    out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
-    out.push("");
-  }
-  return out.join("\n");
-}
-function parseVerdictFile(verdictsPath) {
-  const raw = readJson(verdictsPath, `verdicts file`);
-  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
-  const verdicts = [];
-  for (const v of list) {
-    if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
-    const verdict = VALID_VERDICTS.includes(v.verdict) ? v.verdict : void 0;
-    verdicts.push({
-      claimId: v.claimId,
-      file: typeof v.file === "string" ? v.file : "",
-      sourceId: v.sourceId,
-      claim: typeof v.claim === "string" ? v.claim : "",
-      extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
-      extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
-      verdict,
-      note: typeof v.note === "string" ? v.note : ""
-    });
-  }
-  return verdicts;
-}
-function applyVerdicts(dir, verdictsPath) {
-  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
-  const merged = /* @__PURE__ */ new Map();
-  for (const p of paths) {
-    for (const v of parseVerdictFile(p)) {
-      merged.set(`${v.claimId} ${v.sourceId}`, v);
-    }
-  }
-  const verdicts = [...merged.values()];
-  const result = reduceVerdicts(verdicts);
-  writeFileSync7(join9(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
-  return result;
-}
-function reduceVerdicts(verdicts) {
-  const counts = { supported: 0, partial: 0, refuted: 0, unsupported: 0 };
-  for (const v of verdicts) if (v.verdict && counts[v.verdict] !== void 0) counts[v.verdict]++;
-  const byClaim = /* @__PURE__ */ new Map();
-  for (const v of verdicts) {
-    const group = byClaim.get(v.claimId) ?? [];
-    group.push(v);
-    byClaim.set(v.claimId, group);
-  }
-  const failures = [];
-  const unadjudicated = [];
-  const contradictions = [];
-  const uniqSorted = (ids) => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
-  for (const [claimId, group] of byClaim) {
-    const adjudicated = group.filter((g) => !!g.verdict);
-    if (adjudicated.length < group.length) unadjudicated.push(claimId);
-    const refuted = adjudicated.find((g) => g.verdict === "refuted");
-    const hasSupport = adjudicated.some((g) => g.verdict === "supported" || g.verdict === "partial");
-    if (refuted) {
-      failures.push({ claimId, sourceId: refuted.sourceId, verdict: "refuted", note: refuted.note });
-    } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
-      const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
-      failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
-    }
-    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
-    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
-    if (supporting.length && refuting.length) {
-      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
-      contradictions.push({
-        claimId,
-        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
-        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
-        note
-      });
-    }
-  }
-  return {
-    ok: failures.length === 0,
-    pairs: verdicts.length,
-    adjudicated: verdicts.filter((v) => !!v.verdict).length,
-    supported: counts.supported,
-    partial: counts.partial,
-    refuted: counts.refuted,
-    unsupported: counts.unsupported,
-    failures,
-    unadjudicated,
-    ...contradictions.length ? { contradictions } : {}
-  };
-}
-function formatVerifyReport(r) {
-  const lines = [];
-  lines.push(`ultrasearch verify: ${r.adjudicated}/${r.pairs} pair(s) adjudicated`);
-  lines.push(`  supported: ${r.supported} \xB7 partial: ${r.partial} \xB7 refuted: ${r.refuted} \xB7 unsupported: ${r.unsupported}`);
-  for (const f of r.failures.slice(0, 12)) {
-    lines.push(`  \u2717 ${f.claimId} (${f.sourceId}): ${f.verdict}${f.note ? " \u2014 " + f.note : ""}`);
-  }
-  if (r.unadjudicated.length) {
-    lines.push(`  \u26A0 ${r.unadjudicated.length} claim(s) not fully adjudicated: ${r.unadjudicated.join(", ")}`);
-  }
-  lines.push(r.ok ? `  \u2713 every claim is backed by a cited source` : `  \u2717 some claims are refuted or unsupported`);
-  return lines.join("\n");
 }
 
 // src/cli.ts

@@ -64,10 +64,12 @@ Key commands:
   `--no-md` / `--no-html` skip either.
 - `check --run <dir> [--semantic] [--require-verify] [--min-sources <n>]` —
   validate citation grounding. Exit non-zero ⇒ ungrounded. `--semantic` also
-  fails on a claim its cited source does not support (folds in `verify`'s
-  verdicts) and reports contradictions; `--require-verify` makes a missing/empty
-  `VERIFY.json` a hard failure (the deep-tier exit gate); `--min-sources <n>`
-  fails a too-thin dossier.
+  fails on a claim its cited source does not support: it re-derives the gate
+  verdict from `VERIFY.json`'s `verdicts[]` at check time (a stored `ok` flag is
+  never trusted) and refuses to pass when `VERIFY.json` is missing or
+  unadjudicated — run `verify` + `verify --apply` first, or drop `--semantic`
+  for the mechanical gate only. `--require-verify` is the deep-tier exit-gate
+  alias of the same rule; `--min-sources <n>` fails a too-thin dossier.
 - `modes [--json]` — list modes and their backend profiles.
 
 `gather` and `fetch` also accept `--cache`: an on-disk fetch cache (24h TTL)
