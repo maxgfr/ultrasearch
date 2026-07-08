@@ -4171,7 +4171,9 @@ function detectSignals(question, clusters) {
   const reasons = [];
   if (words <= 3) reasons.push(`Only ${words} content word(s) \u2014 too broad to scope.`);
   if (!interrogative && words <= 5) reasons.push("Not phrased as a question and quite short \u2014 intent is unclear.");
-  if (clusters >= 3) reasons.push(`The probe spans ${clusters} unrelated topic clusters \u2014 the term may be ambiguous.`);
+  if (clusters >= 3 && words <= 4 && !interrogative) {
+    reasons.push(`The probe spans ${clusters} unrelated topic clusters \u2014 the term may be ambiguous.`);
+  }
   return { words, interrogative, identifiers, clusters, ambiguous: reasons.length > 0, reasons };
 }
 function buildUserQuestions(angles, signals) {

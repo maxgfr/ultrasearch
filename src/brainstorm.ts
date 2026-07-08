@@ -96,7 +96,12 @@ function detectSignals(question: string, clusters: number): BrainstormSignals {
   const reasons: string[] = [];
   if (words <= 3) reasons.push(`Only ${words} content word(s) — too broad to scope.`);
   if (!interrogative && words <= 5) reasons.push("Not phrased as a question and quite short — intent is unclear.");
-  if (clusters >= 3) reasons.push(`The probe spans ${clusters} unrelated topic clusters — the term may be ambiguous.`);
+  // The homonym signal only applies to a SHORT ask: a long, well-formed question
+  // naturally pulls diverse titles from general web search, so probe spread must
+  // not condemn it. Gate on a short, non-interrogative query.
+  if (clusters >= 3 && words <= 4 && !interrogative) {
+    reasons.push(`The probe spans ${clusters} unrelated topic clusters — the term may be ambiguous.`);
+  }
   return { words, interrogative, identifiers, clusters, ambiguous: reasons.length > 0, reasons };
 }
 

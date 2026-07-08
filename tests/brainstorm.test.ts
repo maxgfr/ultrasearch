@@ -37,11 +37,31 @@ describe("runBrainstorm", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("treats a specific interrogative question as researchable", async () => {
+  it("treats a specific interrogative question as researchable even when the probe is noisy", async () => {
+    // A well-formed specific question must NOT be flagged ambiguous just because
+    // a general-web probe returns diverse titles (7 disjoint clusters here).
+    const distinct = [
+      "gardening compost",
+      "quantum entanglement",
+      "medieval heraldry",
+      "sourdough baking",
+      "volcano geology",
+      "jazz saxophone",
+      "tax accounting",
+    ];
+    const DDG = distinct
+      .map((t, i) => `<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fx${i}.test%2Fp">${t}</a><a class="result__snippet">s${i}</a>`)
+      .join("\n");
+    installFetchMock((url) => {
+      if (url.includes("html.duckduckgo.com")) return { body: DDG };
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      return undefined;
+    });
     const dir = scratch();
-    const r = await runBrainstorm(opts("how does HTTP 429 rate limiting work in practice?", { out: dir }));
+    const r = await runBrainstorm(opts("how does HTTP 429 rate limiting work in practice?", { backends: ["duckduckgo"], out: dir }));
     expect(r.signals.interrogative).toBe(true);
-    expect(r.signals.ambiguous).toBe(false);
+    expect(r.signals.clusters).toBeGreaterThanOrEqual(3); // probe was noisy
+    expect(r.signals.ambiguous).toBe(false); // …but the question is specific
     rmSync(dir, { recursive: true, force: true });
   });
 
