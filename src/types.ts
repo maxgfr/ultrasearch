@@ -257,6 +257,8 @@ export interface GatherOptions {
   urls?: string[]; // explicit URLs for the `generic` backend / `search --backend generic`
   since?: string; // recency filter where a backend supports it
   excludeDomains: string[];
+  seedDomains?: string[]; // --seed-domains: primary hosts to also search with `site:` and rank as primary
+
   concurrency?: number; // in-flight page hydration fetches (default 6)
   rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
   cache?: boolean; // --cache: reuse an on-disk fetch cache across runs (deep fan-out)

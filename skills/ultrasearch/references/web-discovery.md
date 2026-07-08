@@ -90,6 +90,19 @@ refer to:"). The filter never drops below the depth's recall floor, so a thin
 genuine pool is kept intact; anything dropped is recorded in the dossier notes
 (`Relevance floor dropped N off-topic result(s) …`).
 
+## Seeding primary domains
+
+When you already know the authoritative hosts for a topic — a vendor's docs or
+engineering blog — pass them so `gather` runs one extra targeted `site:<domain>`
+search per host and ranks them as primary:
+```
+node <skill-dir>/scripts/ultrasearch.mjs gather --q "API Gateway rate limits" \
+  --seed-domains docs.aws.amazon.com,developer.mozilla.org --out <dir>
+```
+Up to 3 domains, comma-separated. This is the fix for keyless discovery missing
+a must-hit primary — the results still come from real searches (no synthetic
+URLs). Major vendor/standards doc hosts are also trusted as primary by default.
+
 ## Fetching specific pages
 
 You can always ground an exact page without discovery:

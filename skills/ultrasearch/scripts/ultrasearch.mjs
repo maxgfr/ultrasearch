@@ -242,7 +242,11 @@ function domainTrust(domain) {
   if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
   if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
   if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.78;
+  if (/(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
+    domain
+  ))
+    return 0.9;
+  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
   if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
   if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
   if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;
@@ -2588,6 +2592,18 @@ async function runGather(options) {
     const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx, breadth)]);
     results = [...restResults, ...webResults];
   }
+  const seedDomains = (options.seedDomains ?? []).slice(0, 3);
+  if (seedDomains.length && webBackends.length > 0 && !explicit) {
+    const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
+    const kw = rankedKeywords(options.question).slice(0, 4).join(" ");
+    const seedResults = await Promise.all(
+      seedDomains.map((d) => {
+        const q = `site:${d} ${kw}`.trim();
+        return runWebCascade(cascade, { ...ctx, question: q, variants: [q], options: { ...options, pages: 1 } }, 1);
+      })
+    );
+    results = [...results, ...seedResults.flat()];
+  }
   const excluded = (it) => {
     const d = domainOf(it.url);
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
@@ -2669,10 +2685,14 @@ async function runGather(options) {
     const years = withContent.map((it) => it.meta?.year).filter((y) => typeof y === "number");
     const minYear = years.length ? Math.min(...years) : 0;
     const maxYear = years.length ? Math.max(...years) : 0;
+    const isSeedDomain = (url) => {
+      const d = domainOf(url);
+      return seedDomains.some((s) => d === s || d.endsWith("." + s));
+    };
     withContent.forEach((it, i) => {
       const content = rawContent[i] / contentMax;
       const rrfN = it.score / rrfMax;
-      const trust = trustScore(it.url, it.backend);
+      const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
     });
@@ -2734,6 +2754,7 @@ async function runGather(options) {
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
     ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
+    ...seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : [],
     ...gapNote ? [gapNote] : [],
     ...thin ? [
       `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`
@@ -4084,6 +4105,8 @@ Options:
   --title <s>          For 'fetch': override the ingested page's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --seed-domains <list>     Also run a targeted site: search for these primary
+                       hosts and rank them as primary (up to 3, comma-separated)
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
@@ -4141,6 +4164,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "url",
   "since",
   "exclude-domains",
+  "seed-domains",
   "title",
   "subquestions",
   "runs",
@@ -4298,6 +4322,7 @@ function buildGatherOptions(p, opts = {}) {
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : void 0,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
     cache: p.bools.has("cache"),

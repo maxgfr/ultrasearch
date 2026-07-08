@@ -324,6 +324,32 @@ describe("E6: --rounds 2 issues a gap-driven follow-up web search", () => {
   });
 });
 
+describe("E6b: --seed-domains issues targeted site: web searches", () => {
+  it("adds a site:<domain> query for each seed domain and records a note", async () => {
+    const DDG = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.aws.amazon.com%2Fpage">AWS quotas</a><a class="result__snippet">rate limiting quotas</a>`;
+    const spy = installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      if (url.includes("html.duckduckgo.com")) return { body: DDG };
+      if (url.includes("docs.aws.amazon.com")) return { body: "<p>API Gateway rate limiting quotas and throttling</p>" };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-seed-"));
+    const r = await runGather(
+      opts({
+        question: "API Gateway rate limiting quotas",
+        webEngine: "ddg",
+        seedDomains: ["docs.aws.amazon.com"],
+        out: dir,
+      }),
+    );
+    const ddgQueries = spy.mock.calls.map((c) => decodeURIComponent(String(c[0]))).filter((u) => u.includes("html.duckduckgo.com"));
+    expect(ddgQueries.some((u) => /site:docs\.aws\.amazon\.com/.test(u))).toBe(true);
+    expect(r.manifest.notes.join(" ")).toMatch(/seed domain/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("E7: web cascade fuses multiple engines at standard/deep, short-circuits at summary", () => {
   const DDG = `
 <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Freal.test%2Fddg1">D1</a><a class="result__snippet">rate limiting d1</a>

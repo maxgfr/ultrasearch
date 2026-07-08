@@ -228,6 +228,24 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     results = [...restResults, ...webResults];
   }
 
+  // --seed-domains: when the agent knows the authoritative hosts for a topic
+  // (vendor eng blogs / official docs), run one extra targeted `site:<domain>`
+  // web search per domain (cap 3) so the primary source is actually retrieved —
+  // keyless discovery otherwise surfaced 0/5 must-hit vendor docs in the eval.
+  // Deterministic: results still come from real searches, no synthetic URLs.
+  const seedDomains = (options.seedDomains ?? []).slice(0, 3);
+  if (seedDomains.length && webBackends.length > 0 && !explicit) {
+    const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
+    const kw = rankedKeywords(options.question).slice(0, 4).join(" ");
+    const seedResults = await Promise.all(
+      seedDomains.map((d) => {
+        const q = `site:${d} ${kw}`.trim();
+        return runWebCascade(cascade, { ...ctx, question: q, variants: [q], options: { ...options, pages: 1 } }, 1);
+      }),
+    );
+    results = [...results, ...seedResults.flat()];
+  }
+
   const excluded = (it: RawSource): boolean => {
     const d = domainOf(it.url);
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
@@ -339,10 +357,16 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     const years = withContent.map((it) => it.meta?.year).filter((y): y is number => typeof y === "number");
     const minYear = years.length ? Math.min(...years) : 0;
     const maxYear = years.length ? Math.max(...years) : 0;
+    const isSeedDomain = (url: string): boolean => {
+      const d = domainOf(url);
+      return seedDomains.some((s) => d === s || d.endsWith("." + s));
+    };
     withContent.forEach((it, i) => {
       const content = rawContent[i]! / contentMax;
       const rrfN = it.score / rrfMax;
-      const trust = trustScore(it.url, it.backend);
+      // A seeded primary domain is ranked as primary (≥0.95) regardless of its
+      // backend/domain class — the agent vouched for it explicitly.
+      const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
     });
@@ -427,6 +451,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
+    ...(seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : []),
     ...(gapNote ? [gapNote] : []),
     ...(thin
       ? [

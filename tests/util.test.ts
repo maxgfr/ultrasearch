@@ -88,6 +88,14 @@ describe("trustScore", () => {
   it("scores SEO/aggregator domains low", () => {
     expect(trustScore("https://www.w3schools.com/x", "duckduckgo")).toBeLessThan(0.5);
   });
+  it("scores major vendor doc hosts as primary (0.9)", () => {
+    expect(trustScore("https://docs.aws.amazon.com/apigateway/x", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
+    expect(trustScore("https://developer.mozilla.org/en-US/docs/Web/HTTP", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
+    expect(trustScore("https://datatracker.ietf.org/doc/rfc6585", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
+  });
+  it("scores generic official-docs subdomains above neutral", () => {
+    expect(trustScore("https://docs.someproject.io/guide", "duckduckgo")).toBeGreaterThanOrEqual(0.82);
+  });
 });
 
 describe("keywords", () => {

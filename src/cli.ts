@@ -81,6 +81,8 @@ Options:
   --title <s>          For 'fetch': override the ingested page's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --seed-domains <list>     Also run a targeted site: search for these primary
+                       hosts and rank them as primary (up to 3, comma-separated)
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
@@ -139,6 +141,7 @@ export const VALUE_FLAGS = new Set([
   "url",
   "since",
   "exclude-domains",
+  "seed-domains",
   "title",
   "subquestions",
   "runs",
@@ -334,6 +337,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     urls: p.values.url ? parseList(p.values.url) : undefined,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : undefined,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : undefined,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
     cache: p.bools.has("cache"),

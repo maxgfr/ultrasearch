@@ -102,6 +102,12 @@ describe("buildGatherOptions", () => {
     expect(o.backends).toEqual(["github", "arxiv"]);
   });
 
+  it("parses --seed-domains into a list (undefined when absent)", () => {
+    const o = buildGatherOptions(parseArgs(["gather", "--q", "x", "--seed-domains", "docs.aws.amazon.com, developer.mozilla.org"]));
+    expect(o.seedDomains).toEqual(["docs.aws.amazon.com", "developer.mozilla.org"]);
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).seedDomains).toBeUndefined();
+  });
+
   it("rejects an unknown backend, and a list that resolves to nothing", () => {
     expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", "bogus"]))).toThrow(/exit:1/);
     expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", " , "]))).toThrow(/exit:1/);

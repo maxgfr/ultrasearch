@@ -102,7 +102,14 @@ function domainTrust(domain: string): number {
   if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
   if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
   if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.78;
+  // Major vendor / standards doc hosts — primary sources for their own products.
+  if (
+    /(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
+      domain,
+    )
+  )
+    return 0.9;
+  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
   if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
   if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
   if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;

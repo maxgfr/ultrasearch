@@ -50,7 +50,9 @@ Key commands:
   `manifest.json`) to a run folder (default `/tmp/ultrasearch/<slug>/<id>`,
   safely outside the user's project — or pick one with `--out`). Modes:
   `topic` (default) · `bug` · `research` · `learn` · `startup`. Depths:
-  `summary` · `standard` · `deep`.
+  `summary` · `standard` · `deep`. Know the authoritative hosts? Pass
+  `--seed-domains docs.aws.amazon.com,developer.mozilla.org` (≤3) to also run a
+  targeted `site:` search for each and rank them as primary.
 - `search --backend <kind> --q "<query>"` — drill ONE backend, print results
   (writes nothing). Use to probe a thin area.
 - `fetch --url <u> --out <dir>` (alias `add-source`) — ingest a URL **you** found
