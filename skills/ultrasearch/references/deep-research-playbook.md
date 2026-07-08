@@ -85,6 +85,14 @@ the verification worklist.
    - `unsupported` — it doesn't address the claim.
    - `refuted` — it contradicts the claim.
 
+   **Numeral rule:** if the claim asserts a specific numeral, date, or quantity
+   (e.g. "10,000 rps", "5,000-request burst", "2017") that does NOT appear in
+   the cited extract, the verdict is at most `partial` — never `supported` —
+   even if the qualitative claim holds. The worklist precomputes this per pair
+   (a `numeralsAbsent` field + a `⚠ Numerals not found` line in `VERIFY.md`), so
+   a correct-but-mis-attributed figure can't slip through. Either find the
+   figure in the full source, re-cite the page that carries it, or downgrade.
+
    Fill each `verdict` (+ a short `note`) and save as `verdicts.json`. Capped at
    `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first. To fan the
    adjudication out, `verify --shards <N> --shard <i>` writes only shard `i`
@@ -161,7 +169,9 @@ each skeptic subagent:
 > Adjudicate the claim↔source pairs in `<masterDir>/VERIFY.todo.<i>.json`. For
 > each, open the cited `sources/S#.md` and set `verdict` to supported · partial ·
 > unsupported · refuted (+ a short `note`). Default to the harsher verdict when
-> unsure. Save as `<masterDir>/verdicts.<i>.json` and reply with the path.
+> unsure. If the pair lists `numeralsAbsent` (a figure/date the claim asserts
+> that isn't in the extract), cap that verdict at `partial` — never `supported`.
+> Save as `<masterDir>/verdicts.<i>.json` and reply with the path.
 
 Then reassemble and gate in one call:
 `verify --apply <masterDir> --run <masterDir>` (a directory picks up every

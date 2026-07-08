@@ -168,6 +168,32 @@ export function stripHtmlComments(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
 }
 
+// Strip group separators (comma, NBSP, narrow NBSP, apostrophe, plain space)
+// BETWEEN digits so "10,000", "10 000" and "1'000" all read "10000". Used on
+// both sides of the numeral-containment test below.
+export function normalizeNumeralText(text: string): string {
+  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
+}
+
+// Specific numerals asserted by a claim, in normalized form ("10,000" →
+// "10000", "99.9%" → "99.9"). Digits inside [S#]/[M] tokens, inline code and
+// markdown-link URLs never count. A bare single digit (even with a %) is too
+// weak a signal and is dropped. Deduped, capped at 8 per claim.
+export function extractNumerals(text: string): string[] {
+  const cleaned = stripInlineCode(text)
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // markdown link → its text (URL digits don't count)
+    .replace(/\[[^\]\n]+\](?!\()/g, " "); // [S#] / [M] / [unknown]
+  const out: string[] = [];
+  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
+    const numeric = normalizeNumeralText(m[0]!).replace(/[,\u00A0\u202F'%]/g, "");
+    const digits = numeric.replace(/\D/g, "");
+    if (digits.length < 2 && !numeric.includes(".")) continue;
+    if (!out.includes(numeric)) out.push(numeric);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+
 // A trailing "## Sources" / "## References" section is the rendered appendix
 // pointer, not research prose: its boilerplate must not count as a factual
 // claim and its [S#] listing must not count as citation coverage (it would

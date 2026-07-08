@@ -314,6 +314,7 @@ export interface CheckResult {
   unknownTokens: string[]; // bracketed non-citations (informational)
   errors: string[];
   warnings: string[];
+  numeralIssues?: { file: string; claim: string; numeral: string; sourceIds: string[] }[]; // claim numerals absent from every cited extract (advisory; --strict-numerals fails)
   semantic?: VerifyResult; // populated only by `check --semantic` (folds VERIFY.json)
 }
 
@@ -336,6 +337,7 @@ export interface ClaimEvidencePair {
   claim: string; // the claim-unit text (capped)
   extractPath: string; // relative path, e.g. "sources/S2.md"
   extractDigest: string; // claim-focused snippet of the cited extract
+  numeralsAbsent?: string[]; // claim numerals NOT found in this source's full extract (normalized) — verdict caps at `partial`
 }
 
 // A ClaimEvidencePair with the agent's judgement filled in.

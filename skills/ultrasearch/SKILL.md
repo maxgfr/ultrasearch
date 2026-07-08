@@ -194,8 +194,12 @@ Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 5. **Verify (adversarial)** — `verify --run <masterDir>` → for each pair in
    `VERIFY.todo.json`, judge whether the cited `sources/S#.md` actually SUPPORTS
    the claim (supported · partial · unsupported · refuted, in ascending
-   harshness; default to the harsher verdict when unsure) → save as `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`,
-   one skeptic subagent per slice.
+   harshness; default to the harsher verdict when unsure). **A specific
+   numeral/date/quantity the claim asserts but the cited extract doesn't
+   contain caps the verdict at `partial`, never `supported`** — flagged pairs
+   carry a precomputed `numeralsAbsent` warning so you can't miss it. Save as
+   `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`, one skeptic
+   subagent per slice.
 6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`,
    then `check --semantic --require-verify --run <masterDir>`. **This is the exit
    gate — never present before it passes** (`--require-verify` refuses to pass if
@@ -232,6 +236,10 @@ default `auto` = keyless cascade) and locale mechanics:
   absolute `<skill-dir>/` prefix everywhere (also inside every subagent prompt).
 - Answering from memory — an unbacked claim is `[M]` or `> [model-hint]`, never
   a bare sentence and never a disguised citation.
+- Citing a figure from memory or from a page you didn't fetch — a numeral,
+  date, or quantity must appear in the cited `[S#]` extract. `fetch --url` the
+  page that carries it before citing, or flag the figure `[M]`. `check` warns
+  (`--strict-numerals` fails) on a claim numeral absent from its cited source.
 - Citing a sub-run `S#` after a merge — only MASTER ids resolve.
 - Presenting before `check` (deep tier: `check --semantic`) passes.
 - Leaning on a `⚠ snippet only` source — re-`fetch` it or find a primary source.

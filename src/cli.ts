@@ -28,7 +28,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
@@ -91,6 +91,8 @@ Options:
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
+  --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
+                       is absent from every cited source extract
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -149,7 +151,7 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -537,7 +539,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : undefined;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
+      const res = runCheck(resolve(dir), {
+        semantic: p.bools.has("semantic"),
+        requireVerify: p.bools.has("require-verify"),
+        strictNumerals: p.bools.has("strict-numerals"),
+        minSources,
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

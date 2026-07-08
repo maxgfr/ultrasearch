@@ -77,6 +77,10 @@ function offline() {
   // wrong claim end-to-end through the shipped bundle (not just via unit tests).
   semanticGateProbe();
 
+  // Numeral gate: a cited claim asserting a figure its source never states must
+  // WARN by default and FAIL under --strict-numerals, end-to-end.
+  numeralGateProbe();
+
   console.log("");
   if (failures) {
     console.error(`offline evals: ${failures} failure(s)`);
@@ -124,6 +128,31 @@ function semanticGateProbe() {
     pass("[semantic-gate] RED refuted→fail, GREEN supported→pass, require-verify enforced");
   } catch (e) {
     fail(`[semantic-gate] ${e.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// RED/GREEN probe of the numeral-grounding heuristic through the bundle: a claim
+// that asserts a figure absent from its cited fixture extract must warn (default
+// check still exits 0) yet FAIL under --strict-numerals; and a figure the source
+// DOES state must stay clean.
+function numeralGateProbe() {
+  const dir = mkdtempSync(join(tmpdir(), "us-eval-num-"));
+  try {
+    const g = run(["gather", "--q", "rate limiting", "--mode", "topic", "--backends", "fixture", "--out", dir]);
+    if (g.status !== 0) return fail(`[numeral-gate] gather failed: ${g.stderr?.trim()?.split("\n").pop()}`);
+    // The fixture extracts describe rate limiting qualitatively but carry no such
+    // figure, so "10,000 requests per second" is a correct-but-unattributed number.
+    writeFileSync(join(dir, "REPORT.md"), "# R\n## Claim\nThe account default is 10,000 requests per second steady-state per the source [S1].\n");
+    const warn = run(["check", "--run", dir]);
+    const strict = run(["check", "--strict-numerals", "--run", dir]);
+    if (warn.status !== 0) return fail("[numeral-gate] default check should WARN (exit 0), not fail");
+    if (!/numeral/i.test(warn.stdout || "")) return fail("[numeral-gate] default check did not surface the numeral warning");
+    if (strict.status === 0) return fail("[numeral-gate] --strict-numerals let an unattributed figure pass");
+    pass("[numeral-gate] warns by default, --strict-numerals fails an unattributed figure");
+  } catch (e) {
+    fail(`[numeral-gate] ${e.message}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -1,7 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
-import { extractUnits, codeMask, hintMask, appendixMask, stripInlineCode, TOKEN_RE, SOURCE_RE } from "./claims.js";
+import {
+  extractUnits,
+  codeMask,
+  hintMask,
+  appendixMask,
+  stripInlineCode,
+  unitsOfFile,
+  unitSourceTokens,
+  extractNumerals,
+  normalizeNumeralText,
+  TOKEN_RE,
+  SOURCE_RE,
+} from "./claims.js";
+import { readSourceText } from "./dossier.js";
 import { reduceVerdicts } from "./verify.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
@@ -192,7 +205,7 @@ function readManifestSafe(dir: string): Manifest | undefined {
   }
 }
 
-export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?: boolean; minSources?: number } = {}): CheckResult {
+export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?: boolean; minSources?: number; strictNumerals?: boolean } = {}): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -267,6 +280,59 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
 
+  // Numeral grounding (advisory; `--strict-numerals` fails): a specific figure
+  // asserted by a cited claim should appear in at least ONE of its cited
+  // extracts — the "correct number, wrong source" class that mechanical
+  // citation-presence can't see. Containment is tested on normalized text
+  // (group separators stripped) and is deliberately fail-open: an unreadable
+  // extract means UNKNOWN, not absent. Extracts are read + normalized lazily
+  // and at most once each, so an 80-source dossier stays cheap.
+  const numeralIssues: NonNullable<CheckResult["numeralIssues"]> = [];
+  const bySourceId = new Map(sources.map((s) => [s.id, s] as const));
+  const normCache = new Map<string, string | null>();
+  const normOf = (id: string): string | null => {
+    let t = normCache.get(id);
+    if (t === undefined) {
+      // A missing extract file means UNKNOWN, not absent — readSourceText's
+      // snippet fallback is too thin to prove a figure is unattributed.
+      const s = bySourceId.get(id);
+      try {
+        t = s && existsSync(join(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
+      } catch {
+        t = null;
+      }
+      normCache.set(id, t);
+    }
+    return t;
+  };
+  for (const f of present) {
+    if (!HARD_FILES.includes(f)) continue;
+    for (const u of unitsOfFile(readFileSync(join(dir, f), "utf8"))) {
+      for (const claim of u.kind === "text" ? [u.text] : u.items) {
+        const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
+        if (!cited.length) continue;
+        const nums = extractNumerals(claim);
+        if (!nums.length) continue;
+        const texts = cited.map(normOf).filter((t): t is string => t !== null);
+        if (!texts.length) continue;
+        for (const n of nums) {
+          if (!texts.some((t) => t.includes(n))) {
+            numeralIssues.push({ file: f, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
+          }
+        }
+      }
+    }
+  }
+  if (numeralIssues.length) {
+    const eg = numeralIssues[0]!;
+    const msg =
+      `${numeralIssues.length} numeral(s) in cited claim(s) not found in any cited source extract ` +
+      `(e.g. "${eg.numeral}" cited to ${eg.sourceIds.join(", ")}). ` +
+      `Verify the attribution, \`fetch --url\` the page that carries the figure, or flag it [M].`;
+    if (opts.strictNumerals) errors.push(`--strict-numerals: ${msg}`);
+    else warnings.push(msg);
+  }
+
   // Recall: a thin dossier (flagged by `gather`) warns; `--min-sources N` makes
   // a hard floor that fails the gate, so a high-stakes run can require coverage.
   const manifest = readManifestSafe(dir);
@@ -285,6 +351,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
 
   const result: CheckResult = {
     ok: errors.length === 0,
+    ...(numeralIssues.length ? { numeralIssues } : {}),
     filesChecked: present,
     sourceCitations,
     modelHints,
@@ -320,6 +387,8 @@ export function formatCheckReport(r: CheckResult, dir: string): string {
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
   lines.push(`  citations: ${r.sourceCitations} · model-hints: ${r.modelHints} · dangling: ${r.dangling.length} · unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  ✗ [${u.file}] unsourced: "${u.text}…"`);
+  for (const n of (r.numeralIssues ?? []).slice(0, 5))
+    lines.push(`  ⚠ [${n.file}] numeral "${n.numeral}" not in ${n.sourceIds.join("/")}: "${n.claim.slice(0, 80)}…"`);
   if (r.semantic) {
     const s = r.semantic;
     lines.push(`  semantic: supported ${s.supported} · partial ${s.partial} · refuted ${s.refuted} · unsupported ${s.unsupported}`);

@@ -3242,6 +3242,21 @@ function extractUnits(lines, code, hint) {
 function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
 }
+function normalizeNumeralText(text) {
+  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
+}
+function extractNumerals(text) {
+  const cleaned = stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ");
+  const out = [];
+  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
+    const numeric = normalizeNumeralText(m[0]).replace(/[,\u00A0\u202F'%]/g, "");
+    const digits = numeric.replace(/\D/g, "");
+    if (digits.length < 2 && !numeric.includes(".")) continue;
+    if (!out.includes(numeric)) out.push(numeric);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
 var APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
 function appendixMask(lines) {
   const mask = new Array(lines.length).fill(false);
@@ -3308,6 +3323,15 @@ function runVerify(dir, opts = {}) {
     }
     return t;
   };
+  const normCache = /* @__PURE__ */ new Map();
+  const normOf = (s) => {
+    let t = normCache.get(s.id);
+    if (t === void 0) {
+      t = normalizeNumeralText(textOf(s));
+      normCache.set(s.id, t);
+    }
+    return t;
+  };
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
@@ -3319,8 +3343,10 @@ function runVerify(dir, opts = {}) {
       if (!ids.length) continue;
       claimNo++;
       const claimId = `C${claimNo}`;
+      const nums = extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id);
+        const numeralsAbsent = nums.filter((n) => !normOf(s).includes(n));
         pairs.push({
           claimId,
           file,
@@ -3328,6 +3354,7 @@ function runVerify(dir, opts = {}) {
           claim: claim.trim().slice(0, 400),
           extractPath: s.extract,
           extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
+          ...numeralsAbsent.length ? { numeralsAbsent } : {},
           trust: s.trust
         });
       }
@@ -3355,7 +3382,7 @@ function renderWorklistMd(wl, total, kept) {
   out.push(`# Verification worklist`);
   out.push("");
   out.push(
-    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`.`
+    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`. A specific numeral/date/quantity asserted by the claim but absent from the cited extract caps the verdict at **partial** \u2014 never \`supported\` (flagged pairs carry a precomputed warning).`
   );
   if (kept < total) out.push(`
 _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
@@ -3364,6 +3391,11 @@ _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources.
     out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
     out.push(`**Claim:** ${p.claim}`);
     out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
+    if (p.numeralsAbsent?.length) {
+      out.push(
+        `**\u26A0 Numerals not found in this source's extract:** ${p.numeralsAbsent.join(", ")} \u2014 verdict caps at *partial* unless you locate them in the full extract.`
+      );
+    }
     out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
     out.push("");
   }
@@ -3651,6 +3683,46 @@ function runCheck(dir, opts = {}) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
+  const numeralIssues = [];
+  const bySourceId = new Map(sources.map((s) => [s.id, s]));
+  const normCache = /* @__PURE__ */ new Map();
+  const normOf = (id) => {
+    let t = normCache.get(id);
+    if (t === void 0) {
+      const s = bySourceId.get(id);
+      try {
+        t = s && existsSync5(join7(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
+      } catch {
+        t = null;
+      }
+      normCache.set(id, t);
+    }
+    return t;
+  };
+  for (const f of present) {
+    if (!HARD_FILES2.includes(f)) continue;
+    for (const u of unitsOfFile(readFileSync5(join7(dir, f), "utf8"))) {
+      for (const claim of u.kind === "text" ? [u.text] : u.items) {
+        const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
+        if (!cited.length) continue;
+        const nums = extractNumerals(claim);
+        if (!nums.length) continue;
+        const texts = cited.map(normOf).filter((t) => t !== null);
+        if (!texts.length) continue;
+        for (const n of nums) {
+          if (!texts.some((t) => t.includes(n))) {
+            numeralIssues.push({ file: f, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
+          }
+        }
+      }
+    }
+  }
+  if (numeralIssues.length) {
+    const eg = numeralIssues[0];
+    const msg = `${numeralIssues.length} numeral(s) in cited claim(s) not found in any cited source extract (e.g. "${eg.numeral}" cited to ${eg.sourceIds.join(", ")}). Verify the attribution, \`fetch --url\` the page that carries the figure, or flag it [M].`;
+    if (opts.strictNumerals) errors.push(`--strict-numerals: ${msg}`);
+    else warnings.push(msg);
+  }
   const manifest = readManifestSafe(dir);
   if (manifest?.recallFloor) {
     warnings.push(
@@ -3664,6 +3736,7 @@ function runCheck(dir, opts = {}) {
   }
   const result = {
     ok: errors.length === 0,
+    ...numeralIssues.length ? { numeralIssues } : {},
     filesChecked: present,
     sourceCitations,
     modelHints,
@@ -3697,6 +3770,8 @@ function formatCheckReport(r, dir) {
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
   lines.push(`  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  \u2717 [${u.file}] unsourced: "${u.text}\u2026"`);
+  for (const n of (r.numeralIssues ?? []).slice(0, 5))
+    lines.push(`  \u26A0 [${n.file}] numeral "${n.numeral}" not in ${n.sourceIds.join("/")}: "${n.claim.slice(0, 80)}\u2026"`);
   if (r.semantic) {
     const s = r.semantic;
     lines.push(`  semantic: supported ${s.supported} \xB7 partial ${s.partial} \xB7 refuted ${s.refuted} \xB7 unsupported ${s.unsupported}`);
@@ -3850,7 +3925,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
@@ -3913,6 +3988,8 @@ Options:
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
+  --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
+                       is absent from every cited source extract
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -3970,7 +4047,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -4305,7 +4382,12 @@ async function main(argv = process.argv.slice(2)) {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
+      const res = runCheck(resolve(dir), {
+        semantic: p.bools.has("semantic"),
+        requireVerify: p.bools.has("require-verify"),
+        strictNumerals: p.bools.has("strict-numerals"),
+        minSources
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
