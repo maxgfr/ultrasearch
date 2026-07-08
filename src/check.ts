@@ -1,11 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
-import { extractUnits, codeMask, hintMask, stripInlineCode, TOKEN_RE, SOURCE_RE } from "./claims.js";
+import { extractUnits, codeMask, hintMask, appendixMask, stripInlineCode, TOKEN_RE, SOURCE_RE } from "./claims.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
-export { codeMask, hintMask, extractUnits, unitsOfFile, unitSourceTokens } from "./claims.js";
+export { codeMask, hintMask, appendixMask, extractUnits, unitsOfFile, unitSourceTokens } from "./claims.js";
 export type { Unit } from "./claims.js";
 
 // Tiers + extra docs that may carry citations. REPORT is hard-checked for
@@ -19,6 +19,7 @@ const MIN_CLAIM_WORDS = 6;
 interface FileAnalysis {
   file: string;
   sourceTokens: string[]; // every [S#] occurrence (with duplicates)
+  appendixSourceTokens: string[]; // [S#] inside a Sources/References appendix — dangling-checked only
   modelHints: number; // [M] markers + model-hint blockquote regions
   unknownTokens: string[];
   unsourcedClaims: string[]; // claim units lacking a source and not flagged
@@ -58,14 +59,19 @@ function analyzeFile(file: string, text: string): FileAnalysis {
   const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
+  const appendix = appendixMask(lines);
 
   const sourceTokens: string[] = [];
+  const appendixSourceTokens: string[] = [];
   const unknownTokens: string[] = [];
   let mMarkers = 0;
 
   // Tokenize over non-code lines (inline code stripped), excluding model-hint
   // regions from the [M]/source accounting is unnecessary — but a [S#] inside
-  // backticks must not count (C1), hence stripInlineCode.
+  // backticks must not count (C1), hence stripInlineCode. A [S#] inside the
+  // Sources/References appendix is the rendered listing, not a citation: it is
+  // kept ONLY for dangling detection (the gate never relaxes), never for
+  // coverage/cited-set accounting.
   for (let i = 0; i < lines.length; i++) {
     if (code[i]) continue;
     const masked = stripInlineCode(lines[i]!);
@@ -73,7 +79,9 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     let m: RegExpExecArray | null;
     while ((m = TOKEN_RE.exec(masked))) {
       const tok = m[1]!.trim();
-      if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
+      if (SOURCE_RE.test(tok)) (appendix[i] ? appendixSourceTokens : sourceTokens).push(tok);
+      else if (appendix[i])
+        continue; // appendix boilerplate carries no [M]/unknown accounting
       else if (tok === "M") mMarkers++;
       else if (/^model-hint$/i.test(tok))
         continue; // the hint-region label, not a citation
@@ -89,7 +97,11 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     return true;
   };
 
-  for (const u of extractUnits(lines, code, hint)) {
+  for (const u of extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i]!),
+  )) {
     if (u.kind === "text") {
       flag(u.text);
     } else {
@@ -107,7 +119,7 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     }
   }
 
-  return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
+  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 
 // Fold the resolved semantic-verification record (VERIFY.json) into a check
@@ -212,6 +224,9 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
       } else {
         danglingSet.add(tok);
       }
+    }
+    for (const tok of a.appendixSourceTokens) {
+      if (!ids.has(tok)) danglingSet.add(tok);
     }
     for (const u of a.unknownTokens) unknown.add(u);
     if (HARD_FILES.includes(a.file)) {

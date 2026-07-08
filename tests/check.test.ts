@@ -223,3 +223,61 @@ describe("runCheck", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("runCheck — Sources/References appendix mask", () => {
+  it("does not flag the Sources pointer line as an unsourced claim", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, `${GROUNDED}\n\n## Sources\nSee the appendix rendered from the dossier for the full annotated source listing.`);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true);
+    expect(r.unmarkedUnsourced).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not count appendix [S#] as citations or cited ids", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(
+      dir,
+      `# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n## Sources\n- [S1] Rate limiting algorithms\n- [S2] Token bucket overview`,
+    );
+    const r = runCheck(dir);
+    expect(r.sourceCitations).toBe(1);
+    expect(r.uncitedSources).toContain("S2");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("still fails a dangling citation inside the appendix", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, `${GROUNDED}\n\n## Sources\n- [S99] A source that does not exist in the dossier`);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(false);
+    expect(r.dangling).toContain("S99");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("masks a References appendix the same way", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, `${GROUNDED}\n\n## References\nRendered from the dossier sources listing with trust scores and fetch dates.`);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true);
+    expect(r.unmarkedUnsourced).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ends the mask at the next same-level heading", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(
+      dir,
+      `${GROUNDED}\n\n## Sources\nSee the appendix for the annotated listing.\n\n## Open questions\nThis substantive factual claim after the appendix has no source attached at all.`,
+    );
+    const r = runCheck(dir);
+    expect(r.ok).toBe(false);
+    expect(r.unmarkedUnsourced.length).toBeGreaterThan(0);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -64,6 +64,11 @@ at least one `[S#]` (or a model-hint flag). Known limits you should not lean on:
   comment can't ground a claim). Markdown links are not citations.
 - Section **headings** are treated as structure, not claims — don't smuggle a
   factual assertion into a heading.
+- A trailing `## Sources` / `## References` section is the rendered appendix,
+  not prose: its lines are never claims and its `[S#]` listing does not count
+  as citation coverage (a dangling `[S#]` there still fails). Cite in the body
+  — a report whose only `[S#]` sit in the appendix fails with "No source
+  citations found".
 
 ## Semantic verification (the deep tier)
 

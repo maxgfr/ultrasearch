@@ -64,6 +64,19 @@ describe("runVerify (worklist)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("emits no pairs from the Sources appendix (boilerplate is not a claim)", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(
+      dir,
+      `${GROUNDED}\n\n## Sources\nSee the appendix rendered from the dossier [S1] [S2].\n- [S1] Rate limiting algorithms\n- [S2] Token bucket overview`,
+    );
+    const r = runVerify(dir);
+    expect(r.pairs.length).toBe(2);
+    expect(r.pairs.map((p) => p.claimId)).toEqual(["C1", "C2"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("pairs a claim whose [S#] is on a continuation line (parser parity with check)", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);

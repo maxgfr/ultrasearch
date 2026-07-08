@@ -3242,11 +3242,31 @@ function extractUnits(lines, code, hint) {
 function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
 }
+var APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
+function appendixMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^\s*(#{1,6})\s/.exec(lines[i]);
+    if (level && h && h[1].length <= level) level = 0;
+    if (!level) {
+      const a = APPENDIX_HEADING.exec(lines[i]);
+      if (a) level = a[1].length;
+    }
+    mask[i] = level > 0;
+  }
+  return mask;
+}
 function unitsOfFile(text) {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint } = hintMask(lines);
-  return extractUnits(lines, code, hint);
+  const appendix = appendixMask(lines);
+  return extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i])
+  );
 }
 function unitSourceTokens(text) {
   const masked = stripInlineCode(text);
@@ -3285,7 +3305,9 @@ function analyzeFile(file, text) {
   const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
+  const appendix = appendixMask(lines);
   const sourceTokens = [];
+  const appendixSourceTokens = [];
   const unknownTokens = [];
   let mMarkers = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -3295,7 +3317,9 @@ function analyzeFile(file, text) {
     let m;
     while (m = TOKEN_RE.exec(masked)) {
       const tok = m[1].trim();
-      if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
+      if (SOURCE_RE.test(tok)) (appendix[i] ? appendixSourceTokens : sourceTokens).push(tok);
+      else if (appendix[i])
+        continue;
       else if (tok === "M") mMarkers++;
       else if (/^model-hint$/i.test(tok))
         continue;
@@ -3309,7 +3333,11 @@ function analyzeFile(file, text) {
     unsourcedClaims.push(unit.trim().slice(0, 120));
     return true;
   };
-  for (const u of extractUnits(lines, code, hint)) {
+  for (const u of extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i])
+  )) {
     if (u.kind === "text") {
       flag(u.text);
     } else {
@@ -3324,7 +3352,7 @@ function analyzeFile(file, text) {
       }
     }
   }
-  return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
+  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 function applySemantic(dir, result, requireVerify) {
   const p = join6(dir, "VERIFY.json");
@@ -3404,6 +3432,9 @@ function runCheck(dir, opts = {}) {
       } else {
         danglingSet.add(tok);
       }
+    }
+    for (const tok of a.appendixSourceTokens) {
+      if (!ids.has(tok)) danglingSet.add(tok);
     }
     for (const u of a.unknownTokens) unknown.add(u);
     if (HARD_FILES.includes(a.file)) {

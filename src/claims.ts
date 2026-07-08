@@ -168,6 +168,29 @@ export function stripHtmlComments(text: string): string {
   return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
 }
 
+// A trailing "## Sources" / "## References" section is the rendered appendix
+// pointer, not research prose: its boilerplate must not count as a factual
+// claim and its [S#] listing must not count as citation coverage (it would
+// otherwise mark every source "cited" and pad verify's supported count).
+const APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
+
+// Mark every line of each appendix section: from its heading (inclusive) to
+// the next heading of the same or shallower level (exclusive), or EOF.
+export function appendixMask(lines: string[]): boolean[] {
+  const mask = new Array(lines.length).fill(false);
+  let level = 0; // 0 = not inside an appendix section
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^\s*(#{1,6})\s/.exec(lines[i]!);
+    if (level && h && h[1]!.length <= level) level = 0;
+    if (!level) {
+      const a = APPENDIX_HEADING.exec(lines[i]!);
+      if (a) level = a[1]!.length;
+    }
+    mask[i] = level > 0;
+  }
+  return mask;
+}
+
 // Split a hard-checked report file's raw text into claim units, applying the
 // SAME masking `runCheck` uses (HTML comments blanked, code fences and
 // model-hint regions excluded). Exposed so `verify` extracts exactly the claims
@@ -176,7 +199,12 @@ export function unitsOfFile(text: string): Unit[] {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint } = hintMask(lines);
-  return extractUnits(lines, code, hint);
+  const appendix = appendixMask(lines);
+  return extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i]!),
+  );
 }
 
 // The distinct [S#] source ids cited within a piece of claim text, in order.
