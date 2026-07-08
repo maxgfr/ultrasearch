@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
+description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'. When the ask is vague, a brainstorm command probes it and proposes angles + clarifying questions ('help me scope this research question')."
 license: MIT
 metadata:
   version: 1.7.2
@@ -91,6 +91,19 @@ step-by-step with subagent contracts is under **Deep research mode** below and i
 You are invoked once and expected to return a grounded, cited report folder. Do
 not hand control back mid-retrieval.
 
+**Step 0 — clarity gate (only when the question is vague).** If the ask is
+under-specified — ≤3 content words, not phrased as a question, a plausible
+homonym (e.g. "mercury", "rust"), or missing scope/audience/timeframe — don't
+guess. Run `brainstorm` first:
+```
+node <skill-dir>/scripts/ultrasearch.mjs brainstorm --q "<the vague ask>" --mode <m>
+```
+It does a shallow keyless probe and writes `BRAINSTORM.md` with candidate
+angles, refined questions, and 2-4 questions to put to the user. Read it,
+present the angles + those questions to the user (an `AskUserQuestion`-style
+choice), then proceed from step 1 with the refined question. Skip this whenever
+the question is already specific.
+
 1. **Resolve intent.** Restate the question. Pick a `--mode` (default `topic`;
    use `bug` for an error, `research` for a literature review, `learn` to teach
    it, `startup` for market research) and a `--depth` (`standard` default;
@@ -177,8 +190,10 @@ network is down. Don't loop forever and don't invent sources to satisfy `check`:
 When the user wants an exhaustive, *verified* deep-dive — they say "deep
 research", "exhaustively research/verify X", or it is a high-stakes briefing —
 run the multi-agent loop instead of the single pass. Deep is a **tier**, not a
-mode: it composes with any `--mode` (still picked in step 1). Every step is a
-plain CLI call; parallel subagents are an *optimization*, never a requirement.
+mode: it composes with any `--mode` (still picked in step 1). Run the Step 0
+clarity gate first when the question is vague — a deep sweep on an ambiguous ask
+wastes the most effort. Every step is a plain CLI call; parallel subagents are
+an *optimization*, never a requirement.
 Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 `references/deep-research-playbook.md`.
 

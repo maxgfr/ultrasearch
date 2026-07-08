@@ -39,9 +39,16 @@ describe("SKILL.md", () => {
     expect(pkg.version).toBe(VERSION);
   });
 
-  it("has a trigger-rich description", () => {
+  it("has a trigger-rich description within the length cap", () => {
     expect(fm.description.length).toBeGreaterThan(200);
+    expect(fm.description.length).toBeLessThanOrEqual(1000);
     expect(fm.description.toLowerCase()).toContain("check");
+  });
+
+  it("documents the brainstorm clarity gate", () => {
+    expect(fm.description.toLowerCase()).toContain("brainstorm");
+    expect(skill).toMatch(/clarity gate/i);
+    expect(skill).toMatch(/ultrasearch\.mjs\s+brainstorm/);
   });
 
   it("only documents commands that actually exist", () => {
