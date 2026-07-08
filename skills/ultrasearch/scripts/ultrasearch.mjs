@@ -4003,19 +4003,95 @@ function formatCheckReport(r, dir) {
 }
 
 // src/plan.ts
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync7 } from "fs";
 import { join as join8 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
-function mk(question, facet, rationale) {
-  return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
+function subjectOf(question) {
+  const bare = question.trim().replace(/\?+\s*$/, "");
+  let s = bare;
+  const strip = /^(please\s+)?(deep\s+|thoroughly\s+|exhaustively\s+)?(research(?:\s+on)?|explain|describe|tell me about|teach me|give me|summari[sz]e|what(?:'s| is| are)?|how (?:do(?:es)?|to)|why (?:is|are|do(?:es)?)|when (?:did|was)|who (?:is|are))\b[:\s]*/i;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(strip, "").trim();
+  } while (s !== prev && s.length > 0);
+  s = s.replace(/^(about|on|regarding|of)\s+/i, "").replace(/^(the|a|an)\s+/i, "").trim();
+  return keywords(s).length >= 2 ? s : bare;
+}
+var FACET_PATTERNS = [
+  // topic / research
+  { re: /what it is|definition/i, ask: (s) => `What is ${s} and how is it defined?`, terms: ["definition", "overview"] },
+  { re: /how it works|key concepts|mechanism/i, ask: (s) => `How does ${s} work under the hood?`, terms: ["how it works", "internals"] },
+  { re: /history|evolution|background|motivation/i, ask: (s) => `What is the history and motivation behind ${s}?`, terms: ["history", "origin"] },
+  { re: /current state|today/i, ask: (s) => `What is the current state of ${s} today?`, terms: ["current", "latest"] },
+  {
+    re: /variants|approaches|alternatives|compar|methods/i,
+    ask: (s) => `What are the main variants and approaches to ${s}, and how do they compare?`,
+    terms: ["comparison", "alternatives"]
+  },
+  { re: /controvers|debate|gaps|open problem/i, ask: (s) => `What are the open debates, gaps or limitations of ${s}?`, terms: ["limitations", "criticism"] },
+  {
+    re: /practical|implication|future direction/i,
+    ask: (s) => `What are the practical implications and future directions of ${s}?`,
+    terms: ["best practices", "use cases"]
+  },
+  { re: /key papers|literature/i, ask: (s) => `What are the key papers and prior work on ${s}?`, terms: ["paper", "prior work"] },
+  { re: /findings|consensus|results/i, ask: (s) => `What are the main findings and consensus on ${s}?`, terms: ["findings", "evidence"] },
+  // bug
+  { re: /symptom|reproduction/i, ask: (s) => `What are the symptoms and how do you reproduce ${s}?`, terms: ["error", "reproduce"] },
+  { re: /root cause/i, ask: (s) => `What is the root cause of ${s}?`, terms: ["root cause", "why"] },
+  { re: /candidate fix|fixes|solution/i, ask: (s) => `What are the candidate fixes for ${s}?`, terms: ["fix", "resolve"] },
+  { re: /related issues|versions affected/i, ask: (s) => `What related issues or affected versions are known for ${s}?`, terms: ["issue", "version"] },
+  { re: /workaround/i, ask: (s) => `What workarounds exist for ${s}?`, terms: ["workaround", "mitigation"] },
+  { re: /diagnostic/i, ask: (s) => `What further diagnostics help when ${s} persists?`, terms: ["debug", "diagnose"] },
+  // learn
+  { re: /learning objective|objectives/i, ask: (s) => `What should someone learn first about ${s}?`, terms: ["basics", "introduction"] },
+  { re: /prerequisite/i, ask: (s) => `What are the prerequisites for learning ${s}?`, terms: ["prerequisite", "fundamentals"] },
+  { re: /lesson|glossary|concept/i, ask: (s) => `What are the core concepts of ${s}?`, terms: ["concept", "explanation"] },
+  { re: /worked example|example/i, ask: (s) => `What are good worked examples of ${s}?`, terms: ["example", "tutorial"] },
+  { re: /exercise/i, ask: (s) => `What exercises help practise ${s}?`, terms: ["exercise", "practice"] },
+  // startup
+  { re: /problem|customer/i, ask: (s) => `What problem does ${s} solve and for which customers?`, terms: ["problem", "customer"] },
+  { re: /market siz/i, ask: (s) => `How large is the market for ${s} (TAM/SAM/SOM)?`, terms: ["market size", "TAM"] },
+  { re: /competit/i, ask: (s) => `Who are the competitors in ${s} and how are they positioned?`, terms: ["competitor", "alternatives"] },
+  { re: /pricing|business model/i, ask: (s) => `What pricing and business models are used in ${s}?`, terms: ["pricing", "business model"] },
+  { re: /go-to-market|channel/i, ask: (s) => `What go-to-market channels work for ${s}?`, terms: ["go to market", "acquisition"] },
+  { re: /trends|timing/i, ask: (s) => `What trends and timing favour ${s} now?`, terms: ["trend", "timing"] },
+  { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, terms: ["risk", "moat"] }
+];
+function facetQuestion(subject, heading) {
+  for (const p of FACET_PATTERNS) {
+    if (p.re.test(heading)) return { question: p.ask(subject), terms: p.terms };
+  }
+  return { question: `What does the evidence say about ${heading.toLowerCase()} for ${subject}?`, terms: keywords(heading).slice(0, 2) };
+}
+function dedupeQueries(qs) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const q of qs) {
+    const k = q.trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(q.trim());
+  }
+  return out;
+}
+function mk(question, facet, rationale, queries) {
+  return { id: "", question, facet, queries: queries ?? planVariants(question, "deep"), rationale };
 }
 function templateFacets(question, template) {
+  const subject = subjectOf(question);
+  const subjKeywords = rankedKeywords(subject).slice(0, 3).join(" ");
   const out = [];
   for (const line of template.split("\n")) {
     const m = /^##\s+(.+?)\s*$/.exec(line.trim());
     if (!m) continue;
     const heading = m[1].trim();
     if (SKIP_HEADING.test(heading)) continue;
-    out.push(mk(`${question} \u2014 ${heading}`, "template", `mode facet: ${heading}`));
+    const fq = facetQuestion(subject, heading);
+    const facetQuery = `${subjKeywords} ${fq.terms.slice(0, 2).join(" ")}`.trim();
+    const queries = dedupeQueries([...planVariants(fq.question, "deep").slice(0, 2), facetQuery]);
+    out.push(mk(fq.question, "template", `mode facet: ${heading}`, queries));
   }
   return out;
 }
@@ -4036,12 +4112,20 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     }
   }
   const seen = /* @__PURE__ */ new Set();
+  const usedQueries = /* @__PURE__ */ new Set();
   const uniq = [];
   const limit = Math.max(1, Math.floor(cap));
   for (const s of subs) {
     const key = s.question.toLowerCase();
     if (!s.question || seen.has(key)) continue;
     seen.add(key);
+    const q2 = s.queries.filter((v) => {
+      const k = v.toLowerCase();
+      if (usedQueries.has(k)) return false;
+      usedQueries.add(k);
+      return true;
+    });
+    s.queries = q2.length ? q2 : s.queries.slice(0, 1);
     uniq.push(s);
     if (uniq.length >= limit) break;
   }
@@ -4049,11 +4133,16 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     s.id = `Q${i + 1}`;
     if (runRoot) s.out = join8(runRoot, s.id.toLowerCase());
   });
-  return { question: q, mode, subQuestions: uniq };
+  const result = { question: q, mode, subQuestions: uniq };
+  if (runRoot) {
+    mkdirSync3(runRoot, { recursive: true });
+    writeFileSync7(join8(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+  }
+  return result;
 }
 
 // src/merge.ts
-import { writeFileSync as writeFileSync7 } from "fs";
+import { writeFileSync as writeFileSync8 } from "fs";
 import { join as join9 } from "path";
 function toRawSource(s, text) {
   return {
@@ -4128,7 +4217,7 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync7(join9(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync8(join9(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

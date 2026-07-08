@@ -44,12 +44,16 @@ the verification worklist.
 ## The loop
 
 1. **Decompose** — `plan --q "<question>" --mode <m> --run-root <dir>` →
-   sub-questions (JSON). Facets come from the mode template, distinctive keywords,
-   and any identifiers in the question. Override with `--subquestions "a|b|c"` when
-   you can do better. Bounded by `DEEP_CAPS.maxSubQuestions` (6). With
-   `--run-root` each sub-question also carries a deterministic `out` dir
-   (`<dir>/q1`, `<dir>/q2`, …) — so you can dispatch the fan-out without ever
-   parsing a sub-run's stdout.
+   sub-questions (JSON). Each mode-template facet becomes a genuinely
+   interrogative sub-question about the SUBJECT (scaffolding like "deep research
+   on …" is stripped) — e.g. "How does &lt;subject&gt; work under the hood?",
+   "What are the main variants and approaches …?" — with facet-specific,
+   cross-facet-deduplicated queries, so the fan-out searches differently per
+   angle rather than re-issuing one query. Plus any identifiers in the question.
+   Override with `--subquestions "a|b|c"` when you can do better. Bounded by
+   `DEEP_CAPS.maxSubQuestions` (6). With `--run-root` each sub-question carries a
+   deterministic `out` dir (`<dir>/q1`, `<dir>/q2`, …) and the plan is written to
+   `<dir>/PLAN.json` — so you can dispatch the fan-out without parsing stdout.
 
 2. **Fan out** — one `gather --depth deep --cache --out <its out dir>` per
    sub-question, passing that sub-question's `queries`. `--cache` shares an
