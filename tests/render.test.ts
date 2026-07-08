@@ -101,6 +101,30 @@ describe("renderHtml", () => {
     expect(html).toContain("Rate limiting");
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("flags a source no report tier cites as uncited (HTML)", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 3);
+    writeFileSync(join(dir, "REPORT.md"), `# R\n## How it works\nA token bucket refills at a steady rate [S1] and bursts up to size [S2].`);
+    const html = renderHtml(dir);
+    // S3 is never cited → its <li> is marked uncited; S1/S2 are not.
+    expect(html).toMatch(/id="src-S3"[^>]*class="[^"]*s-uncited/);
+    expect(html).toContain("chip-uncited");
+    expect(html).not.toMatch(/id="src-S1"[^>]*class="[^"]*s-uncited/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not mark anything uncited before any report tier cites a source", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(join(dir, "REPORT.md"), `# R\nNothing cited yet in this draft.`);
+    const html = renderHtml(dir);
+    // the CSS rule mentions the class names; assert no <li> carries it and no
+    // chip is actually rendered in the sources list
+    expect(html).not.toMatch(/<li[^>]*class="[^"]*s-uncited/);
+    expect(html).not.toMatch(/class="chip-uncited"[^>]*>uncited</);
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 describe("buildReportMarkdown / writeReportMarkdown", () => {
@@ -116,6 +140,16 @@ describe("buildReportMarkdown / writeReportMarkdown", () => {
     expect(md).toContain("Token bucket refills [S1].");
     expect(md).toContain("## Sources");
     expect(md).toContain("**[S1]**");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("marks an uncited source in the markdown appendix", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 3);
+    writeFileSync(join(dir, "REPORT.md"), "# Rate limiting\n## How it works\nToken bucket refills [S1] and leaky bucket smooths [S2].");
+    const md = buildReportMarkdown(dir);
+    expect(md).toMatch(/\*\*\[S3\]\*\*.*· uncited/);
+    expect(md).not.toMatch(/\*\*\[S1\]\*\*.*· uncited/);
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -2744,6 +2744,197 @@ async function addSource(dir, url, opts = {}) {
 // src/render.ts
 import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync5 } from "fs";
 import { join as join5 } from "path";
+
+// src/claims.ts
+var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
+var SOURCE_RE = /^S\d+$/;
+function codeMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      mask[i] = true;
+      inFence = !inFence;
+      continue;
+    }
+    mask[i] = inFence;
+  }
+  return mask;
+}
+function hintMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let regions = 0;
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s*>/.test(lines[i])) {
+      let j = i;
+      let isHint = false;
+      while (j < lines.length && /^\s*>/.test(lines[j])) {
+        if (/\[model-hint\]/i.test(lines[j])) isHint = true;
+        j++;
+      }
+      if (isHint) {
+        regions++;
+        for (let k = i; k < j; k++) mask[k] = true;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return { mask, regions };
+}
+function stripInlineCode(line) {
+  return line.replace(/`[^`\n]*`/g, " ");
+}
+function isHeadingOrRule(t) {
+  return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
+}
+function isTableSeparator(line) {
+  return /\|/.test(line) && /^[\s:|-]+$/.test(line.trim()) && /-/.test(line);
+}
+function isTableRow(line) {
+  return /\|/.test(line.trim()) && !isTableSeparator(line);
+}
+function tableCells(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
+}
+function isListItem(line) {
+  return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
+}
+function extractUnits(lines, code, hint) {
+  const units = [];
+  let prose = [];
+  const flush = () => {
+    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
+    prose = [];
+  };
+  let i = 0;
+  while (i < lines.length) {
+    if (code[i] || hint[i]) {
+      flush();
+      i++;
+      continue;
+    }
+    const line = stripInlineCode(lines[i]);
+    const t = line.trim();
+    if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
+      flush();
+      i++;
+      continue;
+    }
+    if (isTableRow(line)) {
+      flush();
+      units.push({ kind: "text", text: tableCells(line) });
+      i++;
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      flush();
+      const quoted = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const ql = stripInlineCode(lines[i]);
+        if (!/^\s*>/.test(ql)) break;
+        const dq = ql.replace(/^\s*>\s?/, "").trim();
+        if (dq) quoted.push(dq);
+        i++;
+      }
+      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
+      continue;
+    }
+    if (isListItem(line)) {
+      flush();
+      const items = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const l = stripInlineCode(lines[i]);
+        const tt = l.trim();
+        if (tt === "" || isHeadingOrRule(tt) || isTableSeparator(l) || isTableRow(l)) break;
+        if (isListItem(l)) {
+          items.push(l.replace(/^\s*([-*+]|\d+\.)\s+/, "").trim());
+        } else if (items.length) {
+          items[items.length - 1] += " " + tt;
+        } else {
+          items.push(tt);
+        }
+        i++;
+      }
+      units.push({ kind: "list", items });
+      continue;
+    }
+    prose.push(line);
+    i++;
+  }
+  flush();
+  return units;
+}
+function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+function normalizeNumeralText(text) {
+  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
+}
+function extractNumerals(text) {
+  const cleaned = stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ");
+  const out = [];
+  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
+    const numeric = normalizeNumeralText(m[0]).replace(/[,\u00A0\u202F'%]/g, "");
+    const digits = numeric.replace(/\D/g, "");
+    if (digits.length < 2 && !numeric.includes(".")) continue;
+    if (!out.includes(numeric)) out.push(numeric);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+var APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
+function appendixMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^\s*(#{1,6})\s/.exec(lines[i]);
+    if (level && h && h[1].length <= level) level = 0;
+    if (!level) {
+      const a = APPENDIX_HEADING.exec(lines[i]);
+      if (a) level = a[1].length;
+    }
+    mask[i] = level > 0;
+  }
+  return mask;
+}
+function unitsOfFile(text) {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const { mask: hint } = hintMask(lines);
+  const appendix = appendixMask(lines);
+  return extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i])
+  );
+}
+function unitSourceTokens(text) {
+  const masked = stripInlineCode(text);
+  const out = [];
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(masked)) {
+    const tok = m[1].trim();
+    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
+  }
+  return out;
+}
+function citedSourceIds(text) {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const appendix = appendixMask(lines);
+  const out = /* @__PURE__ */ new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (code[i] || appendix[i]) continue;
+    for (const tok of unitSourceTokens(lines[i])) out.add(tok);
+  }
+  return out;
+}
+
+// src/render.ts
 var VERDICT_SEVERITY = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 var TIERS = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
@@ -2928,8 +3119,19 @@ a.cite.v-refuted{color:#c1121f;font-weight:700}
 .contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
 .contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
 .snippet-only{color:#9a6700}
+li.s-uncited{opacity:.6}
+.chip-uncited{color:#6a737d;background:#eef1f4;border-radius:4px;padding:0 .35rem;font-size:.82em}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
+function citedAcrossTiers(dir) {
+  const cited = /* @__PURE__ */ new Set();
+  for (const t of TIERS) {
+    const p = join5(dir, t.file);
+    if (!existsSync3(p)) continue;
+    for (const id of citedSourceIds(readFileSync3(p, "utf8"))) cited.add(id);
+  }
+  return cited;
+}
 function readVerify(dir) {
   const p = join5(dir, "VERIFY.json");
   if (!existsSync3(p)) return void 0;
@@ -2990,7 +3192,7 @@ function renderHtml(dir) {
   }
   if (verify) main2.push(verificationSection(verify));
   if (subs.length) main2.push(subQuestionsSection(manifest, sources));
-  main2.push(sourcesSection(sources));
+  main2.push(sourcesSection(sources, citedAcrossTiers(dir)));
   main2.push("</main>");
   const title = escapeHtml(manifest.question || "ultrasearch report");
   const metaLine = `${escapeHtml(manifest.mode)} \xB7 depth ${escapeHtml(manifest.depth)} \xB7 ${sources.length} sources \xB7 ${escapeHtml(manifest.builtAt)} \xB7 generated by ultrasearch`;
@@ -3035,15 +3237,19 @@ function subQuestionsSection(manifest, sources) {
   }).join("");
   return `<section id="subquestions"><h1>Sub-questions</h1><ol class="subq">${items}</ol></section>`;
 }
-function sourcesSection(sources) {
+function sourcesSection(sources, cited) {
+  const mark = cited.size > 0;
   const items = sources.map((s) => {
+    const uncited = mark && !cited.has(s.id);
     const meta = [
       s.backend,
       s.domain,
       `<span class="trust" title="trust score">trust ${s.trust}</span>`,
-      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : []
+      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : [],
+      ...uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []
     ].join(" \xB7 ");
-    return `<li id="src-${s.id}"><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
+    const cls = uncited ? ` class="s-uncited"` : "";
+    return `<li id="src-${s.id}"${cls}><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
   }).join("\n");
   return `<section id="sources"><h1>Sources</h1><ol class="sources">${items}</ol></section>`;
 }
@@ -3096,9 +3302,12 @@ function buildReportMarkdown(dir) {
   }
   parts.push("---", "", `## Sources`, "");
   if (sources.length) {
+    const cited = citedAcrossTiers(dir);
+    const mark = cited.size > 0;
     for (const s of sources) {
       const flag = s.fullText === false ? " \xB7 \u26A0 snippet only" : "";
-      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}`);
+      const uncited = mark && !cited.has(s.id) ? " \xB7 uncited" : "";
+      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}${uncited}`);
     }
   } else {
     parts.push("_No sources in this dossier yet._");
@@ -3116,184 +3325,6 @@ function writeReportMarkdown(dir, out) {
 // src/check.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
 import { join as join7 } from "path";
-
-// src/claims.ts
-var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
-var SOURCE_RE = /^S\d+$/;
-function codeMask(lines) {
-  const mask = new Array(lines.length).fill(false);
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i])) {
-      mask[i] = true;
-      inFence = !inFence;
-      continue;
-    }
-    mask[i] = inFence;
-  }
-  return mask;
-}
-function hintMask(lines) {
-  const mask = new Array(lines.length).fill(false);
-  let regions = 0;
-  let i = 0;
-  while (i < lines.length) {
-    if (/^\s*>/.test(lines[i])) {
-      let j = i;
-      let isHint = false;
-      while (j < lines.length && /^\s*>/.test(lines[j])) {
-        if (/\[model-hint\]/i.test(lines[j])) isHint = true;
-        j++;
-      }
-      if (isHint) {
-        regions++;
-        for (let k = i; k < j; k++) mask[k] = true;
-      }
-      i = j;
-    } else {
-      i++;
-    }
-  }
-  return { mask, regions };
-}
-function stripInlineCode(line) {
-  return line.replace(/`[^`\n]*`/g, " ");
-}
-function isHeadingOrRule(t) {
-  return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
-}
-function isTableSeparator(line) {
-  return /\|/.test(line) && /^[\s:|-]+$/.test(line.trim()) && /-/.test(line);
-}
-function isTableRow(line) {
-  return /\|/.test(line.trim()) && !isTableSeparator(line);
-}
-function tableCells(line) {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
-}
-function isListItem(line) {
-  return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
-}
-function extractUnits(lines, code, hint) {
-  const units = [];
-  let prose = [];
-  const flush = () => {
-    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
-    prose = [];
-  };
-  let i = 0;
-  while (i < lines.length) {
-    if (code[i] || hint[i]) {
-      flush();
-      i++;
-      continue;
-    }
-    const line = stripInlineCode(lines[i]);
-    const t = line.trim();
-    if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
-      flush();
-      i++;
-      continue;
-    }
-    if (isTableRow(line)) {
-      flush();
-      units.push({ kind: "text", text: tableCells(line) });
-      i++;
-      continue;
-    }
-    if (/^\s*>/.test(line)) {
-      flush();
-      const quoted = [];
-      while (i < lines.length && !code[i] && !hint[i]) {
-        const ql = stripInlineCode(lines[i]);
-        if (!/^\s*>/.test(ql)) break;
-        const dq = ql.replace(/^\s*>\s?/, "").trim();
-        if (dq) quoted.push(dq);
-        i++;
-      }
-      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
-      continue;
-    }
-    if (isListItem(line)) {
-      flush();
-      const items = [];
-      while (i < lines.length && !code[i] && !hint[i]) {
-        const l = stripInlineCode(lines[i]);
-        const tt = l.trim();
-        if (tt === "" || isHeadingOrRule(tt) || isTableSeparator(l) || isTableRow(l)) break;
-        if (isListItem(l)) {
-          items.push(l.replace(/^\s*([-*+]|\d+\.)\s+/, "").trim());
-        } else if (items.length) {
-          items[items.length - 1] += " " + tt;
-        } else {
-          items.push(tt);
-        }
-        i++;
-      }
-      units.push({ kind: "list", items });
-      continue;
-    }
-    prose.push(line);
-    i++;
-  }
-  flush();
-  return units;
-}
-function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
-}
-function normalizeNumeralText(text) {
-  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
-}
-function extractNumerals(text) {
-  const cleaned = stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ");
-  const out = [];
-  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
-    const numeric = normalizeNumeralText(m[0]).replace(/[,\u00A0\u202F'%]/g, "");
-    const digits = numeric.replace(/\D/g, "");
-    if (digits.length < 2 && !numeric.includes(".")) continue;
-    if (!out.includes(numeric)) out.push(numeric);
-    if (out.length >= 8) break;
-  }
-  return out;
-}
-var APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
-function appendixMask(lines) {
-  const mask = new Array(lines.length).fill(false);
-  let level = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const h = /^\s*(#{1,6})\s/.exec(lines[i]);
-    if (level && h && h[1].length <= level) level = 0;
-    if (!level) {
-      const a = APPENDIX_HEADING.exec(lines[i]);
-      if (a) level = a[1].length;
-    }
-    mask[i] = level > 0;
-  }
-  return mask;
-}
-function unitsOfFile(text) {
-  const lines = stripHtmlComments(text).split("\n");
-  const code = codeMask(lines);
-  const { mask: hint } = hintMask(lines);
-  const appendix = appendixMask(lines);
-  return extractUnits(
-    lines,
-    code,
-    hint.map((h, i) => h || appendix[i])
-  );
-}
-function unitSourceTokens(text) {
-  const masked = stripInlineCode(text);
-  const out = [];
-  TOKEN_RE.lastIndex = 0;
-  let m;
-  while (m = TOKEN_RE.exec(masked)) {
-    const tok = m[1].trim();
-    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
-  }
-  return out;
-}
 
 // src/verify.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";

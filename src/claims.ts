@@ -247,3 +247,19 @@ export function unitSourceTokens(text: string): string[] {
   }
   return out;
 }
+
+// The set of source ids CITED by a report file's body, applying the same masks
+// as `check`'s accounting: code fences, HTML comments and the Sources/References
+// appendix are excluded (a [S#] in the appendix listing is not a citation).
+// Shared so `render` and `check` can never disagree on what counts as cited.
+export function citedSourceIds(text: string): Set<string> {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const appendix = appendixMask(lines);
+  const out = new Set<string>();
+  for (let i = 0; i < lines.length; i++) {
+    if (code[i] || appendix[i]) continue;
+    for (const tok of unitSourceTokens(lines[i]!)) out.add(tok);
+  }
+  return out;
+}
