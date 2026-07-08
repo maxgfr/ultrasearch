@@ -45,19 +45,19 @@ describe("lang/region is wired into the web backends", () => {
 });
 
 describe("R6: --web-engine filters the discovery backends", () => {
-  const topic = getMode("topic"); // [wikipedia, searxng, duckduckgo]
+  const topic = getMode("topic"); // [wikipedia, searxng, duckduckgo, standards]
   const ctx = (engine: any) => makeCtx("x", { webEngine: engine }).options;
   it("auto keeps both searxng and duckduckgo", () => {
-    expect(resolveBackends(ctx("auto"), topic)).toEqual(["wikipedia", "searxng", "duckduckgo"]);
+    expect(resolveBackends(ctx("auto"), topic)).toEqual(["wikipedia", "searxng", "duckduckgo", "standards"]);
   });
   it("ddg keeps only duckduckgo among discovery", () => {
-    expect(resolveBackends(ctx("ddg"), topic)).toEqual(["wikipedia", "duckduckgo"]);
+    expect(resolveBackends(ctx("ddg"), topic)).toEqual(["wikipedia", "duckduckgo", "standards"]);
   });
   it("searxng keeps only searxng among discovery", () => {
-    expect(resolveBackends(ctx("searxng"), topic)).toEqual(["wikipedia", "searxng"]);
+    expect(resolveBackends(ctx("searxng"), topic)).toEqual(["wikipedia", "searxng", "standards"]);
   });
   it("claude drops both discovery backends (agent drives WebSearch)", () => {
-    expect(resolveBackends(ctx("claude"), topic)).toEqual(["wikipedia"]);
+    expect(resolveBackends(ctx("claude"), topic)).toEqual(["wikipedia", "standards"]);
   });
 });
 

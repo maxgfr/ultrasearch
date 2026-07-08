@@ -7,12 +7,16 @@ modes`.
 
 | Mode | Backends (standard) | + deep-only | Extras |
 |------|--------------------|-------------|--------|
-| `topic` | wikipedia, searxng, duckduckgo | — | — |
-| `bug` | stackexchange, github, duckduckgo, hackernews | searxng | — |
+| `topic` | wikipedia, searxng, duckduckgo, standards | — | — |
+| `bug` | stackexchange, github, duckduckgo, hackernews, standards | searxng | — |
 | `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, duckduckgo, wikipedia | `bibtex` (refs.bib) |
-| `learn` | wikipedia, duckduckgo, searxng | — | `glossary`, `exercises` |
+| `learn` | wikipedia, duckduckgo, searxng | standards | `glossary`, `exercises` |
 | `startup` | duckduckgo, searxng, hackernews | wikipedia | — |
 
+`standards` surfaces the defining spec for standards-backed topics via two
+keyless JSON APIs — IETF Datatracker (RFCs; an explicit "RFC 6585" resolves
+directly, else a title search) and MDN Web Docs search — so a normative claim
+(HTTP 429 → RFC 6585 + MDN) rests on the standard, not a secondary blog.
 `stackexchange` fans out across Stack Overflow + Server Fault + Super User +
 Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers,
 `pubmed` (deep) adds MeSH-indexed/clinical records, and `dblp` (deep) adds the

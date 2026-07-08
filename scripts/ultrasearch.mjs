@@ -24,6 +24,7 @@ var ALL_BACKENDS = [
   "europepmc",
   "pubmed",
   "dblp",
+  "standards",
   "generic",
   "fixture",
   "claude"
@@ -66,7 +67,7 @@ import { tmpdir as tmpdir2 } from "os";
 var topicMode = {
   name: "topic",
   description: "General briefing on any subject (Wikipedia + general web).",
-  backends: ["wikipedia", "searxng", "duckduckgo"],
+  backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
   deepOnly: [],
   extras: [],
   template: [
@@ -86,7 +87,7 @@ var topicMode = {
 var bugMode = {
   name: "bug",
   description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
-  backends: ["stackexchange", "github", "duckduckgo", "hackernews"],
+  backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
   deepOnly: ["searxng"],
   extras: [],
   template: [
@@ -128,7 +129,7 @@ var learnMode = {
   name: "learn",
   description: "Pedagogical lesson with glossary, worked examples and exercises (rich HTML).",
   backends: ["wikipedia", "duckduckgo", "searxng"],
-  deepOnly: [],
+  deepOnly: ["standards"],
   extras: ["glossary", "exercises"],
   template: [
     "## Learning objectives",
@@ -232,6 +233,7 @@ var BACKEND_TRUST = {
   europepmc: 0.9,
   pubmed: 0.9,
   dblp: 0.9,
+  standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -2153,6 +2155,95 @@ ${desc}`,
   };
 };
 
+// src/backends/standards.ts
+var DATATRACKER = "https://datatracker.ietf.org/api/v1/doc/document/";
+var MDN = "https://developer.mozilla.org/api/v1/search";
+async function rfcByNumber(n) {
+  const r = await httpJson("GET", `${DATATRACKER}?format=json&name=rfc${n}`, void 0, { timeoutMs: 1e4 });
+  const o = Array.isArray(r.data?.objects) ? r.data.objects[0] : void 0;
+  if (!o?.rfc_number) return null;
+  return rfcSource(o, 100);
+}
+function rfcSource(o, score) {
+  const n = Number(o.rfc_number);
+  const title = String(o.title ?? `RFC ${n}`);
+  const abstract = String(o.abstract ?? "").trim();
+  return {
+    url: `https://www.rfc-editor.org/rfc/rfc${n}`,
+    title: `RFC ${n}: ${title}`,
+    backend: "standards",
+    score,
+    snippet: abstract.slice(0, 360) || title,
+    ...abstract ? { text: `${title}
+
+${abstract}` } : {},
+    meta: { rfcNumber: n }
+  };
+}
+var standardsBackend = async (ctx) => {
+  const items = [];
+  const notes = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (s) => {
+    if (s && !seen.has(s.url)) {
+      seen.add(s.url);
+      items.push(s);
+    }
+  };
+  const perSource = Math.max(3, Math.min(8, ctx.options.perSource));
+  const qTerms = new Set(keywords(ctx.question));
+  const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
+  const [rfcHits, mdnResult, titleResult] = await Promise.all([
+    Promise.all(rfcNums.map((n) => rfcByNumber(n).catch(() => null))),
+    // 2. MDN search (discovery — url + summary, gather hydrates).
+    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, void 0, { timeoutMs: 1e4 }).catch(() => ({
+      ok: false,
+      status: 0,
+      data: void 0
+    })),
+    // 3. Datatracker keyword title search (kept only when rfc_number is set and
+    //    a query term actually appears — kills the "RFC 2429 shares digits" class).
+    (() => {
+      const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
+      if (!bigram) return Promise.resolve({ ok: false, status: 0, data: void 0 });
+      return httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, void 0, { timeoutMs: 1e4 }).catch(
+        () => ({
+          ok: false,
+          status: 0,
+          data: void 0
+        })
+      );
+    })()
+  ]);
+  for (const s of rfcHits) add(s);
+  const mdnDocs = Array.isArray(mdnResult.data?.documents) ? mdnResult.data.documents : [];
+  for (let i = 0; i < Math.min(perSource, mdnDocs.length, 5); i++) {
+    const d = mdnDocs[i];
+    if (!d?.mdn_url) continue;
+    add({
+      url: `https://developer.mozilla.org${d.mdn_url}`,
+      title: String(d.title ?? d.mdn_url),
+      backend: "standards",
+      score: 50 - i,
+      snippet: String(d.summary ?? "").slice(0, 360)
+    });
+  }
+  const titleObjs = Array.isArray(titleResult.data?.objects) ? titleResult.data.objects : [];
+  let kept = 0;
+  for (const o of titleObjs) {
+    if (kept >= 5) break;
+    if (!o?.rfc_number) continue;
+    const hay = keywords(`${o.title ?? ""} ${o.abstract ?? ""}`);
+    if (![...qTerms].some((t) => hay.includes(t))) continue;
+    add(rfcSource(o, 40 - kept));
+    kept++;
+  }
+  const apiDown = !mdnResult.ok && !titleResult.ok && rfcHits.every((x) => x === null);
+  if (apiDown) notes.push("Standards backends (IETF datatracker + MDN) were unreachable.");
+  notes.push(items.length ? `Standards backend returned ${items.length} spec(s).` : "Standards backend found no matching specs.");
+  return { backend: "standards", items, notes };
+};
+
 // src/backends/registry.ts
 var HANDLERS = {
   searxng: searxngBackend,
@@ -2172,9 +2263,10 @@ var HANDLERS = {
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
-  dblp: dblpBackend
+  dblp: dblpBackend,
+  standards: standardsBackend
 };
-var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
+var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic"]);
 var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
 async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));

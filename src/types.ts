@@ -25,6 +25,7 @@ export type BackendKind =
   | "europepmc"
   | "pubmed"
   | "dblp"
+  | "standards"
   | "generic"
   | "fixture"
   | "claude";
@@ -46,6 +47,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "europepmc",
   "pubmed",
   "dblp",
+  "standards",
   "generic",
   "fixture",
   "claude",

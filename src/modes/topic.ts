@@ -5,7 +5,7 @@ import type { ModeProfile } from "../types.js";
 export const topicMode: ModeProfile = {
   name: "topic",
   description: "General briefing on any subject (Wikipedia + general web).",
-  backends: ["wikipedia", "searxng", "duckduckgo"],
+  backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
   deepOnly: [],
   extras: [],
   template: [
