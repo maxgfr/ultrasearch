@@ -1650,10 +1650,15 @@ var wikipediaBackend = async (ctx) => {
   }
   const pages = sr.data.pages;
   const top = pages.slice(0, Math.min(limit, 6));
+  let disambigSkipped = 0;
   const built = await mapLimit(top, 4, async (p, i) => {
     if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
+    if (dr.data?.type === "disambiguation") {
+      disambigSkipped++;
+      return null;
+    }
     const extract = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
@@ -1670,11 +1675,9 @@ var wikipediaBackend = async (ctx) => {
     };
   });
   const items = built.filter((x) => x !== null);
-  return {
-    backend: "wikipedia",
-    items,
-    notes: items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`]
-  };
+  const notes = items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`];
+  if (disambigSkipped) notes.push(`Skipped ${disambigSkipped} disambiguation page(s).`);
+  return { backend: "wikipedia", items, notes };
 };
 
 // src/backends/generic.ts
