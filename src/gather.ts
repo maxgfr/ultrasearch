@@ -20,7 +20,9 @@ import {
   canonicalizeUrl,
   buildBm25Index,
   bm25Score,
+  bm25MatchedTerms,
   bm25Tokenize,
+  applyRelevanceFloor,
   recencyScore,
   dedupeNearDuplicates,
   trustScore,
@@ -345,8 +347,28 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-    const near = dedupeNearDuplicates(withContent);
-    return { merged: near.items.slice(0, options.maxSources), withContent, hydrateNotes, droppedDup, nearDropped: near.dropped, queryTerms: bm25.queryTerms };
+
+    // Relevance floor: drop off-topic noise before the near-dup pass and slice.
+    // A candidate is off-topic when it has no query-term overlap (or matched only
+    // on a numeric false-friend), or when its hydrated text is a Wikipedia-style
+    // disambiguation stub ("… may refer to:"). Forced into the off-topic bucket
+    // by returning no matched terms — the floor's safety valve keeps a thin pool
+    // from emptying itself.
+    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
+    const isDisambiguation = (it: RawSource): boolean => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
+    const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+    const { kept, dropped } = applyRelevanceFloor(withContent, (it) => (isDisambiguation(it) ? [] : (matchedByUrl.get(it.url) ?? [])), bm25.queryTerms, floor);
+    const floorDropped = dropped.length;
+    const near = dedupeNearDuplicates(kept);
+    return {
+      merged: near.items.slice(0, options.maxSources),
+      withContent: kept,
+      hydrateNotes,
+      droppedDup,
+      nearDropped: near.dropped,
+      floorDropped,
+      queryTerms: bm25.queryTerms,
+    };
   }
 
   const lists = results.map((r) => [...r.items].sort((a, b) => b.score - a.score));
@@ -404,6 +426,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...r.hydrateNotes,
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
+    ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
     ...(gapNote ? [gapNote] : []),
     ...(thin
       ? [

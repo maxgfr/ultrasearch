@@ -727,6 +727,41 @@ export function buildBm25Index(question: string, docs: Bm25Doc[], opts: { k1?: n
   return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
 }
 
+// The distinct query terms that actually occur in a document's field-weighted
+// token stream — the overlap signal the relevance floor keys on (empty overlap
+// or an all-numeric overlap ⇒ off-topic). Shares tokenization with bm25Score so
+// the two agree on what a term is.
+export function bm25MatchedTerms(index: Bm25Index, doc: Bm25Doc): string[] {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+
+// Off-topic filter for the ranked candidate pool. A candidate is off-topic when
+// its query-term overlap is EMPTY (the "Venezuelan sanctions" class) or matched
+// ONLY on numeric terms (a year / PR-number false friend like a GitHub PR whose
+// number shares digits with the query). Only active when the query has ≥2 terms
+// including ≥1 alphabetic one — a single-term or all-numeric query has too weak
+// a signal to filter on. NEVER drops below `floor`: if dropping would leave
+// fewer than the floor, the highest-ranked "off-topic" ones are kept (a thin
+// genuine pool must survive its own filter). `ranked` must be best-first.
+export function applyRelevanceFloor<T>(ranked: T[], matchedOf: (t: T) => string[], queryTerms: string[], floor: number): { kept: T[]; dropped: T[] } {
+  const isAlpha = (t: string) => /\p{L}/u.test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
+  const offTopic = (t: T): boolean => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept: T[] = [];
+  const dropped: T[] = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  // Safety valve: never leave fewer than `floor`. Re-admit the best-ranked
+  // dropped candidates (they were appended in best-first order) until met.
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift()!);
+  return { kept, dropped };
+}
+
 // BM25F score of one document against the index (raw, ≥0). Callers normalize by
 // the pool max (see gather.ts) the same way fusion rank is normalized.
 export function bm25Score(index: Bm25Index, doc: Bm25Doc): number {

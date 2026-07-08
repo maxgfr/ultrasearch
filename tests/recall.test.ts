@@ -2,7 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { planVariants, identityKey, extractIdentifiers, contentCoverage, buildMatcher, arxivIdFromUrl, doiFromUrl } from "../src/util.js";
+import {
+  planVariants,
+  identityKey,
+  extractIdentifiers,
+  contentCoverage,
+  buildMatcher,
+  arxivIdFromUrl,
+  doiFromUrl,
+  buildBm25Index,
+  bm25MatchedTerms,
+  applyRelevanceFloor,
+} from "../src/util.js";
 import { fuse, runGather } from "../src/gather.js";
 import type { GatherOptions, RawSource, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
@@ -92,6 +103,62 @@ describe("arxivIdFromUrl / doiFromUrl", () => {
   });
 });
 
+describe("bm25MatchedTerms", () => {
+  it("returns the distinct query terms present in the doc", () => {
+    const idx = buildBm25Index("token bucket rate limiting", [
+      { id: "a", title: "", headings: "", body: "the token bucket controls the request rate" },
+      { id: "b", title: "", headings: "", body: "gardening and weather in spring" },
+      { id: "c", title: "", headings: "", body: "" },
+    ]);
+    const matched = (body: string) => bm25MatchedTerms(idx, { id: "x", title: "", headings: "", body }).sort();
+    expect(matched("the token bucket controls the request rate")).toEqual(["bucket", "rate", "token"].sort());
+    expect(matched("gardening and weather in spring")).toEqual([]);
+  });
+});
+
+describe("applyRelevanceFloor", () => {
+  const q = ["token", "bucket", "rate"]; // ≥2 terms, alphabetic
+  it("drops a zero-overlap candidate but keeps on-topic ones", () => {
+    const items = [
+      { id: "on", m: ["token", "bucket"] },
+      { id: "off", m: [] },
+      { id: "on2", m: ["rate"] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, q, 0);
+    expect(r.kept.map((x) => x.id)).toEqual(["on", "on2"]);
+    expect(r.dropped.map((x) => x.id)).toEqual(["off"]);
+  });
+
+  it("drops a candidate matched ONLY on a numeric term (year / PR-number false friend)", () => {
+    const items = [
+      { id: "real", m: ["rate", "limit"] },
+      { id: "prbump", m: ["2024"] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, ["rate", "limit", "2024"], 0);
+    expect(r.dropped.map((x) => x.id)).toEqual(["prbump"]);
+  });
+
+  it("never drops below the recall floor — keeps the best off-topic ones", () => {
+    const items = [
+      { id: "a", m: ["token"] },
+      { id: "b", m: [] },
+      { id: "c", m: [] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, q, 3); // floor 3, pool 3 → keep all
+    expect(r.kept).toHaveLength(3);
+    expect(r.dropped).toHaveLength(0);
+  });
+
+  it("is inactive for a single-term or all-numeric query", () => {
+    const items = [
+      { id: "a", m: [] },
+      { id: "b", m: ["rate"] },
+    ];
+    expect(applyRelevanceFloor(items, (x) => x.m, ["rate"], 0).dropped).toHaveLength(0);
+    expect(applyRelevanceFloor(items, (x) => x.m, ["429", "2024"], 0).dropped).toHaveLength(0);
+  });
+});
+
 describe("fuse (identity dedup + meta merge)", () => {
   it("collapses the same DOI across two backends into one entry, preferring text and merging meta", () => {
     const a = raw({ url: "https://arxiv.org/abs/1", backend: "arxiv", score: 3, text: "the abstract", meta: { doi: "10.1/x" } });
@@ -145,6 +212,30 @@ describe("E2: content-aware re-rank promotes the on-topic page over backend rank
     await runGather(opts({ backends: ["generic"], urls: ["https://t.test/page-a", "https://t.test/page-b"], out: dir }));
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources[0]!.url).toContain("page-b"); // content relevance wins
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("E2b: relevance floor drops an off-topic page from a pool above the floor", () => {
+  it("drops a zero-overlap page and records a manifest note (summary depth, floor 3)", async () => {
+    installFetchMock((url) => {
+      if (url.includes("off")) return { body: "<p>sanctions during the Venezuelan crisis and diplomatic relations</p>" };
+      const n = url.match(/on(\d)/)?.[1] ?? "";
+      return { body: `<p>rate limiting token bucket leaky bucket controls the request rate ${n}</p>` };
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-floor-"));
+    const r = await runGather(
+      opts({
+        question: "rate limiting token bucket leaky bucket",
+        depth: "summary", // floor 3
+        backends: ["generic"],
+        urls: ["https://t.test/on1", "https://t.test/on2", "https://t.test/on3", "https://t.test/off"],
+        out: dir,
+      }),
+    );
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources.some((s) => s.url.includes("off"))).toBe(false);
+    expect(r.manifest.notes.join(" ")).toMatch(/relevance floor/i);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -702,6 +702,25 @@ function buildBm25Index(question, docs, opts = {}) {
   }
   return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
 }
+function bm25MatchedTerms(index, doc) {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
+  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
+  const offTopic = (t) => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept = [];
+  const dropped = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
+  return { kept, dropped };
+}
 function bm25Score(index, doc) {
   if (!index.queryTerms.length) return 0;
   const toks = docTokens(doc, index.titleWeight, index.headingWeight);
@@ -2655,8 +2674,21 @@ async function runGather(options) {
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-    const near = dedupeNearDuplicates(withContent);
-    return { merged: near.items.slice(0, options.maxSources), withContent, hydrateNotes, droppedDup, nearDropped: near.dropped, queryTerms: bm25.queryTerms };
+    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
+    const isDisambiguation = (it) => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
+    const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+    const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
+    const floorDropped = dropped.length;
+    const near = dedupeNearDuplicates(kept);
+    return {
+      merged: near.items.slice(0, options.maxSources),
+      withContent: kept,
+      hydrateNotes,
+      droppedDup,
+      nearDropped: near.dropped,
+      floorDropped,
+      queryTerms: bm25.queryTerms
+    };
   }
   const lists = results.map((r2) => [...r2.items].sort((a, b) => b.score - a.score));
   let r = await assemble(lists);
@@ -2698,6 +2730,7 @@ async function runGather(options) {
     ...r.hydrateNotes,
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
+    ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
     ...gapNote ? [gapNote] : [],
     ...thin ? [
       `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`

@@ -80,6 +80,16 @@ is English-centric — treat its hits accordingly). Scholarly APIs (arXiv, Cross
 The dossier is the evidence; **write the report in the user's own language** even
 when the sources are in another — quote the original and gloss it where helpful.
 
+## Relevance floor (off-topic noise)
+
+After fetch + content-aware re-ranking, `gather` drops candidates with **no
+meaningful query-term overlap** — a page that matched nothing from the question,
+matched only on a numeric false-friend (a year or a GitHub PR number sharing
+digits with the query), or is a Wikipedia-style disambiguation stub ("… may
+refer to:"). The filter never drops below the depth's recall floor, so a thin
+genuine pool is kept intact; anything dropped is recorded in the dossier notes
+(`Relevance floor dropped N off-topic result(s) …`).
+
 ## Fetching specific pages
 
 You can always ground an exact page without discovery:
