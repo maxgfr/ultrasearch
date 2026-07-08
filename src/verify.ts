@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
-import { unitsOfFile, unitSourceTokens } from "./check.js";
+import { extractNumerals, normalizeNumeralText, unitSourceTokens, unitsOfFile } from "./claims.js";
 import { readJson, readSourceText } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 
@@ -52,6 +52,17 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
     }
     return t;
   };
+  // Numeral containment is tested against the FULL extract (not the 600-char
+  // digest, which may legitimately omit the figure), normalized once per source.
+  const normCache = new Map<string, string>();
+  const normOf = (s: Source): string => {
+    let t = normCache.get(s.id);
+    if (t === undefined) {
+      t = normalizeNumeralText(textOf(s));
+      normCache.set(s.id, t);
+    }
+    return t;
+  };
 
   const pairs: (ClaimEvidencePair & { trust: number })[] = [];
   let claimNo = 0;
@@ -64,8 +75,13 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
       if (!ids.length) continue;
       claimNo++;
       const claimId = `C${claimNo}`;
+      const nums = extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id)!;
+        // Precompute which claim numerals this source's extract does NOT
+        // contain, so the adjudicating skeptic cannot miss a specific figure
+        // that its cited source never states (verdict caps at `partial`).
+        const numeralsAbsent = nums.filter((n) => !normOf(s).includes(n));
         pairs.push({
           claimId,
           file,
@@ -73,6 +89,7 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
           claim: claim.trim().slice(0, 400),
           extractPath: s.extract,
           extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
+          ...(numeralsAbsent.length ? { numeralsAbsent } : {}),
           trust: s.trust,
         });
       }
@@ -119,7 +136,9 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
     `For each pair below, open the cited extract and judge whether it **supports** the claim. ` +
       `In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported · partial · refuted · unsupported, ` +
       `add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run ` +
-      `\`ultrasearch verify --apply verdicts.json --run <dir>\`.`,
+      `\`ultrasearch verify --apply verdicts.json --run <dir>\`. ` +
+      `A specific numeral/date/quantity asserted by the claim but absent from the cited extract caps the ` +
+      `verdict at **partial** — never \`supported\` (flagged pairs carry a precomputed warning).`,
   );
   if (kept < total) out.push(`\n_Showing ${kept} of ${total} pair(s) — capped at the highest-trust sources._`);
   out.push("");
@@ -127,6 +146,11 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
     out.push(`## ${p.claimId} · ${p.sourceId}`);
     out.push(`**Claim:** ${p.claim}`);
     out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
+    if (p.numeralsAbsent?.length) {
+      out.push(
+        `**⚠ Numerals not found in this source's extract:** ${p.numeralsAbsent.join(", ")} — verdict caps at *partial* unless you locate them in the full extract.`,
+      );
+    }
     out.push(`**Verdict:** _____ · **Note:** _____`);
     out.push("");
   }

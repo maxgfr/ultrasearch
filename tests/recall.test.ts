@@ -2,7 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { planVariants, identityKey, extractIdentifiers, contentCoverage, buildMatcher } from "../src/util.js";
+import {
+  planVariants,
+  identityKey,
+  extractIdentifiers,
+  contentCoverage,
+  buildMatcher,
+  arxivIdFromUrl,
+  doiFromUrl,
+  buildBm25Index,
+  bm25MatchedTerms,
+  applyRelevanceFloor,
+} from "../src/util.js";
 import { fuse, runGather } from "../src/gather.js";
 import type { GatherOptions, RawSource, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
@@ -54,6 +65,97 @@ describe("identityKey", () => {
     expect(identityKey(raw({ meta: { doi: "https://doi.org/10.1/ABC" } }))).toBe("doi:10.1/abc");
     expect(identityKey(raw({ meta: { arxivId: "1706.03762v5" } }))).toBe("arxiv:1706.03762");
     expect(identityKey(raw({ url: "https://x.test/a/" }))).toBe("https://x.test/a");
+  });
+
+  it("collapses arXiv abs/pdf/html URL variants (no backend meta) to one key", () => {
+    const abs = identityKey(raw({ url: "https://arxiv.org/abs/2405.12345v2" }));
+    expect(abs).toBe("arxiv:2405.12345");
+    expect(identityKey(raw({ url: "https://arxiv.org/pdf/2405.12345.pdf" }))).toBe(abs);
+    expect(identityKey(raw({ url: "https://arxiv.org/html/2405.12345" }))).toBe(abs);
+    expect(identityKey(raw({ url: "https://export.arxiv.org/abs/2405.12345" }))).toBe(abs);
+    expect(identityKey(raw({ meta: { arxivId: "2405.12345" } }))).toBe(abs);
+  });
+
+  it("collapses a DOI-in-path URL to the DOI key even without backend meta", () => {
+    const canonical = identityKey(raw({ meta: { doi: "10.1145/3576915" } }));
+    expect(identityKey(raw({ url: "https://doi.org/10.1145/3576915" }))).toBe(canonical);
+    expect(identityKey(raw({ url: "https://dl.acm.org/doi/10.1145/3576915" }))).toBe(canonical);
+    expect(identityKey(raw({ url: "https://dl.acm.org/doi/full/10.1145/3576915" }))).toBe(canonical);
+  });
+
+  it("does NOT collapse a non-arXiv host that merely has an /abs/ path", () => {
+    const k = identityKey(raw({ url: "https://example.com/abs/2405.12345" }));
+    expect(k).not.toMatch(/^arxiv:/);
+  });
+});
+
+describe("arxivIdFromUrl / doiFromUrl", () => {
+  it("extracts the modern arXiv id, stripping version and .pdf", () => {
+    expect(arxivIdFromUrl("https://arxiv.org/abs/2405.12345v3")).toBe("2405.12345");
+    expect(arxivIdFromUrl("https://arxiv.org/pdf/2405.12345.pdf")).toBe("2405.12345");
+    expect(arxivIdFromUrl("https://example.com/x")).toBeUndefined();
+  });
+
+  it("extracts a DOI from doi.org and publisher /doi/ paths", () => {
+    expect(doiFromUrl("https://doi.org/10.1145/3576915")).toBe("10.1145/3576915");
+    expect(doiFromUrl("https://dl.acm.org/doi/full/10.1145/3576915")).toBe("10.1145/3576915");
+    expect(doiFromUrl("https://example.com/no/doi/here")).toBeUndefined();
+  });
+});
+
+describe("bm25MatchedTerms", () => {
+  it("returns the distinct query terms present in the doc", () => {
+    const idx = buildBm25Index("token bucket rate limiting", [
+      { id: "a", title: "", headings: "", body: "the token bucket controls the request rate" },
+      { id: "b", title: "", headings: "", body: "gardening and weather in spring" },
+      { id: "c", title: "", headings: "", body: "" },
+    ]);
+    const matched = (body: string) => bm25MatchedTerms(idx, { id: "x", title: "", headings: "", body }).sort();
+    expect(matched("the token bucket controls the request rate")).toEqual(["bucket", "rate", "token"].sort());
+    expect(matched("gardening and weather in spring")).toEqual([]);
+  });
+});
+
+describe("applyRelevanceFloor", () => {
+  const q = ["token", "bucket", "rate"]; // ≥2 terms, alphabetic
+  it("drops a zero-overlap candidate but keeps on-topic ones", () => {
+    const items = [
+      { id: "on", m: ["token", "bucket"] },
+      { id: "off", m: [] },
+      { id: "on2", m: ["rate"] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, q, 0);
+    expect(r.kept.map((x) => x.id)).toEqual(["on", "on2"]);
+    expect(r.dropped.map((x) => x.id)).toEqual(["off"]);
+  });
+
+  it("drops a candidate matched ONLY on a numeric term (year / PR-number false friend)", () => {
+    const items = [
+      { id: "real", m: ["rate", "limit"] },
+      { id: "prbump", m: ["2024"] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, ["rate", "limit", "2024"], 0);
+    expect(r.dropped.map((x) => x.id)).toEqual(["prbump"]);
+  });
+
+  it("never drops below the recall floor — keeps the best off-topic ones", () => {
+    const items = [
+      { id: "a", m: ["token"] },
+      { id: "b", m: [] },
+      { id: "c", m: [] },
+    ];
+    const r = applyRelevanceFloor(items, (x) => x.m, q, 3); // floor 3, pool 3 → keep all
+    expect(r.kept).toHaveLength(3);
+    expect(r.dropped).toHaveLength(0);
+  });
+
+  it("is inactive for a single-term or all-numeric query", () => {
+    const items = [
+      { id: "a", m: [] },
+      { id: "b", m: ["rate"] },
+    ];
+    expect(applyRelevanceFloor(items, (x) => x.m, ["rate"], 0).dropped).toHaveLength(0);
+    expect(applyRelevanceFloor(items, (x) => x.m, ["429", "2024"], 0).dropped).toHaveLength(0);
   });
 });
 
@@ -110,6 +212,30 @@ describe("E2: content-aware re-rank promotes the on-topic page over backend rank
     await runGather(opts({ backends: ["generic"], urls: ["https://t.test/page-a", "https://t.test/page-b"], out: dir }));
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources[0]!.url).toContain("page-b"); // content relevance wins
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("E2b: relevance floor drops an off-topic page from a pool above the floor", () => {
+  it("drops a zero-overlap page and records a manifest note (summary depth, floor 3)", async () => {
+    installFetchMock((url) => {
+      if (url.includes("off")) return { body: "<p>sanctions during the Venezuelan crisis and diplomatic relations</p>" };
+      const n = url.match(/on(\d)/)?.[1] ?? "";
+      return { body: `<p>rate limiting token bucket leaky bucket controls the request rate ${n}</p>` };
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-floor-"));
+    const r = await runGather(
+      opts({
+        question: "rate limiting token bucket leaky bucket",
+        depth: "summary", // floor 3
+        backends: ["generic"],
+        urls: ["https://t.test/on1", "https://t.test/on2", "https://t.test/on3", "https://t.test/off"],
+        out: dir,
+      }),
+    );
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources.some((s) => s.url.includes("off"))).toBe(false);
+    expect(r.manifest.notes.join(" ")).toMatch(/relevance floor/i);
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -195,6 +321,32 @@ describe("E6: --rounds 2 issues a gap-driven follow-up web search", () => {
     expect(r2.manifest.notes.join(" ")).toMatch(/Gap round/);
     rmSync(d1, { recursive: true, force: true });
     rmSync(d2, { recursive: true, force: true });
+  });
+});
+
+describe("E6b: --seed-domains issues targeted site: web searches", () => {
+  it("adds a site:<domain> query for each seed domain and records a note", async () => {
+    const DDG = `
+<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.aws.amazon.com%2Fpage">AWS quotas</a><a class="result__snippet">rate limiting quotas</a>`;
+    const spy = installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      if (url.includes("html.duckduckgo.com")) return { body: DDG };
+      if (url.includes("docs.aws.amazon.com")) return { body: "<p>API Gateway rate limiting quotas and throttling</p>" };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-seed-"));
+    const r = await runGather(
+      opts({
+        question: "API Gateway rate limiting quotas",
+        webEngine: "ddg",
+        seedDomains: ["docs.aws.amazon.com"],
+        out: dir,
+      }),
+    );
+    const ddgQueries = spy.mock.calls.map((c) => decodeURIComponent(String(c[0]))).filter((u) => u.includes("html.duckduckgo.com"));
+    expect(ddgQueries.some((u) => /site:docs\.aws\.amazon\.com/.test(u))).toBe(true);
+    expect(r.manifest.notes.join(" ")).toMatch(/seed domain/i);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 

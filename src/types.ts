@@ -25,6 +25,7 @@ export type BackendKind =
   | "europepmc"
   | "pubmed"
   | "dblp"
+  | "standards"
   | "generic"
   | "fixture"
   | "claude";
@@ -46,6 +47,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "europepmc",
   "pubmed",
   "dblp",
+  "standards",
   "generic",
   "fixture",
   "claude",
@@ -257,6 +259,8 @@ export interface GatherOptions {
   urls?: string[]; // explicit URLs for the `generic` backend / `search --backend generic`
   since?: string; // recency filter where a backend supports it
   excludeDomains: string[];
+  seedDomains?: string[]; // --seed-domains: primary hosts to also search with `site:` and rank as primary
+
   concurrency?: number; // in-flight page hydration fetches (default 6)
   rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
   cache?: boolean; // --cache: reuse an on-disk fetch cache across runs (deep fan-out)
@@ -314,6 +318,7 @@ export interface CheckResult {
   unknownTokens: string[]; // bracketed non-citations (informational)
   errors: string[];
   warnings: string[];
+  numeralIssues?: { file: string; claim: string; numeral: string; sourceIds: string[] }[]; // claim numerals absent from every cited extract (advisory; --strict-numerals fails)
   semantic?: VerifyResult; // populated only by `check --semantic` (folds VERIFY.json)
 }
 
@@ -336,6 +341,7 @@ export interface ClaimEvidencePair {
   claim: string; // the claim-unit text (capped)
   extractPath: string; // relative path, e.g. "sources/S2.md"
   extractDigest: string; // claim-focused snippet of the cited extract
+  numeralsAbsent?: string[]; // claim numerals NOT found in this source's full extract (normalized) — verdict caps at `partial`
 }
 
 // A ClaimEvidencePair with the agent's judgement filled in.

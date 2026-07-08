@@ -4,7 +4,7 @@ import type { ModeProfile } from "../types.js";
 export const bugMode: ModeProfile = {
   name: "bug",
   description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
-  backends: ["stackexchange", "github", "duckduckgo", "hackernews"],
+  backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
   deepOnly: ["searxng"],
   extras: [],
   template: [

@@ -22,6 +22,7 @@ honest notes in the dossier.
 | `europepmc` | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core` | Biomedical/life-sciences. `resultType=core` returns the abstract inline (content backend). Carries DOI + journal + year. |
 | `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract. |
 | `dblp` | `GET https://dblp.org/search/publ/api?q=…&format=json` | Computer-science bibliography (research deep). Metadata-only → the gatherer hydrates the `ee`/DOI landing page; DOI/author metadata dedupes it against Crossref/OpenAlex and feeds `refs.bib`. |
+| `standards` | `GET https://datatracker.ietf.org/api/v1/doc/document/?format=json&name=rfc<n>` (or `&title__icontains=…`) + `GET https://developer.mozilla.org/api/v1/search?q=…&locale=en-US` | Defining specs for standards-backed topics (topic/bug standard, learn deep). An explicit "RFC 6585" resolves directly; else a title search kept to real RFC numbers with a word-boundary relevance re-check (drops the "RFC 2429 shares digits" false friend). RFC abstract is the text; the source URL is `rfc-editor.org/rfc/rfc<n>` (clean full text on hydration). MDN hits are discovery (url + summary). |
 
 ## Content extraction
 

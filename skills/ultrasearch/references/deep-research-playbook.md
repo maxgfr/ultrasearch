@@ -44,12 +44,16 @@ the verification worklist.
 ## The loop
 
 1. **Decompose** — `plan --q "<question>" --mode <m> --run-root <dir>` →
-   sub-questions (JSON). Facets come from the mode template, distinctive keywords,
-   and any identifiers in the question. Override with `--subquestions "a|b|c"` when
-   you can do better. Bounded by `DEEP_CAPS.maxSubQuestions` (6). With
-   `--run-root` each sub-question also carries a deterministic `out` dir
-   (`<dir>/q1`, `<dir>/q2`, …) — so you can dispatch the fan-out without ever
-   parsing a sub-run's stdout.
+   sub-questions (JSON). Each mode-template facet becomes a genuinely
+   interrogative sub-question about the SUBJECT (scaffolding like "deep research
+   on …" is stripped) — e.g. "How does &lt;subject&gt; work under the hood?",
+   "What are the main variants and approaches …?" — with facet-specific,
+   cross-facet-deduplicated queries, so the fan-out searches differently per
+   angle rather than re-issuing one query. Plus any identifiers in the question.
+   Override with `--subquestions "a|b|c"` when you can do better. Bounded by
+   `DEEP_CAPS.maxSubQuestions` (6). With `--run-root` each sub-question carries a
+   deterministic `out` dir (`<dir>/q1`, `<dir>/q2`, …) and the plan is written to
+   `<dir>/PLAN.json` — so you can dispatch the fan-out without parsing stdout.
 
 2. **Fan out** — one `gather --depth deep --cache --out <its out dir>` per
    sub-question, passing that sub-question's `queries`. `--cache` shares an
@@ -85,6 +89,14 @@ the verification worklist.
    - `unsupported` — it doesn't address the claim.
    - `refuted` — it contradicts the claim.
 
+   **Numeral rule:** if the claim asserts a specific numeral, date, or quantity
+   (e.g. "10,000 rps", "5,000-request burst", "2017") that does NOT appear in
+   the cited extract, the verdict is at most `partial` — never `supported` —
+   even if the qualitative claim holds. The worklist precomputes this per pair
+   (a `numeralsAbsent` field + a `⚠ Numerals not found` line in `VERIFY.md`), so
+   a correct-but-mis-attributed figure can't slip through. Either find the
+   figure in the full source, re-cite the page that carries it, or downgrade.
+
    Fill each `verdict` (+ a short `note`) and save as `verdicts.json`. Capped at
    `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first. To fan the
    adjudication out, `verify --shards <N> --shard <i>` writes only shard `i`
@@ -96,8 +108,12 @@ the verification worklist.
    one file, a directory, or a comma list, so sharded verdicts reassemble cleanly
    (merged by `(claimId, sourceId, file)`, last-wins). A claim fails if its source
    **refutes** it, or if every cited source is **unsupported** (nothing backs it).
-   `--require-verify` makes a missing or empty `VERIFY.json` a hard failure, so
-   the gate can't silently pass when you forgot to run/apply `verify`.
+   The semantic gate re-derives its verdict from `VERIFY.json`'s `verdicts[]`
+   at check time — a stored `ok` flag is never trusted, so a hand-edited or
+   stale summary can't flip the outcome. Both `--semantic` and
+   `--require-verify` make a missing/unreadable/unadjudicated `VERIFY.json` a
+   hard failure, so the gate can't silently pass when you forgot to run/apply
+   `verify` (drop `--semantic` if you only want the mechanical gate).
    The gate also surfaces **contradictions** — claims whose own cited sources
    disagree (one supports, another refutes) — as a warning + a panel in the HTML,
    even when the claim still passes overall. Fix the claim (re-cite, weaken, drop,
@@ -157,7 +173,9 @@ each skeptic subagent:
 > Adjudicate the claim↔source pairs in `<masterDir>/VERIFY.todo.<i>.json`. For
 > each, open the cited `sources/S#.md` and set `verdict` to supported · partial ·
 > unsupported · refuted (+ a short `note`). Default to the harsher verdict when
-> unsure. Save as `<masterDir>/verdicts.<i>.json` and reply with the path.
+> unsure. If the pair lists `numeralsAbsent` (a figure/date the claim asserts
+> that isn't in the extract), cap that verdict at `partial` — never `supported`.
+> Save as `<masterDir>/verdicts.<i>.json` and reply with the path.
 
 Then reassemble and gate in one call:
 `verify --apply <masterDir> --run <masterDir>` (a directory picks up every

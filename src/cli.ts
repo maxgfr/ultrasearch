@@ -15,6 +15,7 @@ import { addSource } from "./enrich.js";
 import { writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { runPlan } from "./plan.js";
+import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 
@@ -28,8 +29,9 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
+  ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
@@ -48,6 +50,9 @@ Commands:
            --require-verify makes a missing/empty VERIFY.json a hard failure —
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
+  brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
+           propose candidate angles + clarifying questions before a full run
+           (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
 
 Deep research (the agentic tier — see references/deep-research-playbook.md):
   plan     Decompose a question into sub-questions (JSON) for the fan-out:
@@ -81,6 +86,8 @@ Options:
   --title <s>          For 'fetch': override the ingested page's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --seed-domains <list>     Also run a targeted site: search for these primary
+                       hosts and rank them as primary (up to 3, comma-separated)
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
@@ -91,6 +98,8 @@ Options:
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
+  --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
+                       is absent from every cited source extract
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -113,7 +122,7 @@ Grounding:
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
 `;
 
-export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
+export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "brainstorm", "plan", "merge", "verify"]);
 export const VALUE_FLAGS = new Set([
   "q",
   "question",
@@ -137,6 +146,7 @@ export const VALUE_FLAGS = new Set([
   "url",
   "since",
   "exclude-domains",
+  "seed-domains",
   "title",
   "subquestions",
   "runs",
@@ -149,7 +159,7 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -332,6 +342,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     urls: p.values.url ? parseList(p.values.url) : undefined,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : undefined,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : undefined,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
     cache: p.bools.has("cache"),
@@ -405,6 +416,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         out.push(`            backends: ${m.backends.join(", ")}${m.deepOnly.length ? ` (+deep: ${m.deepOnly.join(", ")})` : ""}`);
         if (m.extras.length) out.push(`            extras:   ${m.extras.join(", ")}`);
       }
+      process.stdout.write(out.join("\n") + "\n");
+      return;
+    }
+
+    case "brainstorm": {
+      const options = buildGatherOptions(p);
+      const result = await runBrainstorm(options);
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        return;
+      }
+      const out: string[] = [];
+      out.push(`ultrasearch brainstorm: "${result.question}"`);
+      out.push(result.signals.ambiguous ? `  ⚠ under-specified — ${result.signals.reasons.join(" ")}` : `  ✓ specific enough to research directly`);
+      if (result.angles.length) {
+        out.push("  candidate angles:");
+        for (const a of result.angles) out.push(`    · ${a.label}`);
+      }
+      if (result.candidateQuestions.length) {
+        out.push("  candidate refined questions:");
+        for (const c of result.candidateQuestions) out.push(`    · ${c.question}`);
+      }
+      out.push("  ask the user:");
+      for (const q of result.userQuestions) out.push(`    ? ${q}`);
+      out.push(`  written: ${resolve(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -537,7 +573,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : undefined;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
+      const res = runCheck(resolve(dir), {
+        semantic: p.bools.has("semantic"),
+        requireVerify: p.bools.has("require-verify"),
+        strictNumerals: p.bools.has("strict-numerals"),
+        minSources,
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {

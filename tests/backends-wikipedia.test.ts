@@ -60,6 +60,29 @@ describe("wikipediaBackend", () => {
     expect(`${it.title} ${it.snippet} ${it.text}`).not.toMatch(/&(amp|quot|#0?39);/);
   });
 
+  it("skips a disambiguation page (type=disambiguation) and notes it", async () => {
+    const search = JSON.stringify({
+      pages: [
+        { key: "Mercury", title: "Mercury", excerpt: "Mercury may refer to" },
+        { key: "Rate_limiting", title: "Rate limiting", excerpt: "controls request rate" },
+      ],
+    });
+    const disambig = JSON.stringify({
+      type: "disambiguation",
+      extract: "Mercury may refer to several things.",
+      content_urls: { desktop: { page: "https://en.wikipedia.org/wiki/Mercury" } },
+    });
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: search, contentType: "application/json" };
+      if (url.includes("/summary/Mercury")) return { body: disambig, contentType: "application/json" };
+      if (url.includes("/summary/Rate_limiting")) return { body: SUMMARY_RL, contentType: "application/json" };
+      return undefined;
+    });
+    const r = await wikipediaBackend(makeCtx("mercury"));
+    expect(r.items.map((i) => i.title)).toEqual(["Rate limiting"]);
+    expect(r.notes.join(" ")).toMatch(/disambiguation/i);
+  });
+
   it("notes a failed search", async () => {
     installFetchMock(() => ({ status: 500, body: "" }));
     const r = await wikipediaBackend(makeCtx("x"));

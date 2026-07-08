@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Manifest, Source, VerdictKind, VerifyResult } from "./types.js";
 import { readDossier } from "./dossier.js";
+import { citedSourceIds } from "./claims.js";
 import { slugify } from "./util.js";
 
 // Verdict severity (worst wins) for the per-source citation badge.
@@ -252,8 +253,24 @@ a.cite.v-refuted{color:#c1121f;font-weight:700}
 .contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
 .contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
 .snippet-only{color:#9a6700}
+li.s-uncited{opacity:.6}
+.chip-uncited{color:#6a737d;background:#eef1f4;border-radius:4px;padding:0 .35rem;font-size:.82em}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
+
+// The set of source ids cited by any present report tier (REPORT/SUMMARY/
+// glossary), using the shared citation accounting (appendix + code excluded).
+// Empty when no tier cites anything yet (a pre-report render) — callers must not
+// mark everything "uncited" in that case.
+function citedAcrossTiers(dir: string): Set<string> {
+  const cited = new Set<string>();
+  for (const t of TIERS) {
+    const p = join(dir, t.file);
+    if (!existsSync(p)) continue;
+    for (const id of citedSourceIds(readFileSync(p, "utf8"))) cited.add(id);
+  }
+  return cited;
+}
 
 // Read the resolved semantic-verification record, if one exists.
 function readVerify(dir: string): VerifyResult | undefined {
@@ -331,7 +348,7 @@ export function renderHtml(dir: string): string {
   }
   if (verify) main.push(verificationSection(verify));
   if (subs.length) main.push(subQuestionsSection(manifest, sources));
-  main.push(sourcesSection(sources));
+  main.push(sourcesSection(sources, citedAcrossTiers(dir)));
   main.push("</main>");
 
   const title = escapeHtml(manifest.question || "ultrasearch report");
@@ -405,16 +422,22 @@ function subQuestionsSection(manifest: Manifest, sources: Source[]): string {
   return `<section id="subquestions"><h1>Sub-questions</h1><ol class="subq">${items}</ol></section>`;
 }
 
-function sourcesSection(sources: Source[]): string {
+function sourcesSection(sources: Source[], cited: Set<string>): string {
+  // Only distinguish cited/uncited once at least one citation exists — a
+  // pre-report render (empty `cited`) must not dim every source.
+  const mark = cited.size > 0;
   const items = sources
     .map((s) => {
+      const uncited = mark && !cited.has(s.id);
       const meta = [
         s.backend,
         s.domain,
         `<span class="trust" title="trust score">trust ${s.trust}</span>`,
         ...(s.fullText === false ? [`<span class="snippet-only" title="page fetch failed — snippet only">⚠ snippet only</span>`] : []),
+        ...(uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []),
       ].join(" · ");
-      return `<li id="src-${s.id}"><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
+      const cls = uncited ? ` class="s-uncited"` : "";
+      return `<li id="src-${s.id}"${cls}><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
     })
     .join("\n");
   return `<section id="sources"><h1>Sources</h1><ol class="sources">${items}</ol></section>`;
@@ -491,9 +514,12 @@ export function buildReportMarkdown(dir: string): string {
 
   parts.push("---", "", `## Sources`, "");
   if (sources.length) {
+    const cited = citedAcrossTiers(dir);
+    const mark = cited.size > 0;
     for (const s of sources) {
       const flag = s.fullText === false ? " · ⚠ snippet only" : "";
-      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) — ${s.backend} · ${s.domain} · trust ${s.trust}${flag}`);
+      const uncited = mark && !cited.has(s.id) ? " · uncited" : "";
+      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) — ${s.backend} · ${s.domain} · trust ${s.trust}${flag}${uncited}`);
     }
   } else {
     parts.push("_No sources in this dossier yet._");

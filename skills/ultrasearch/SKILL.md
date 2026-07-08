@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'."
+description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML) grounded in fetched sources. Five modes: topic, bug (debug an error via Stack Overflow/GitHub/HN), research (lit review + BibTeX), learn (lesson + glossary), startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'is there prior art / papers on X'. Opt-in deep tier adds question decomposition and adversarial per-claim verification; triggers 'deep research on X', 'exhaustively research/verify X'. When the ask is vague, a brainstorm command probes it and proposes angles + clarifying questions ('help me scope this research question')."
 license: MIT
 metadata:
   version: 1.7.2
@@ -50,7 +50,9 @@ Key commands:
   `manifest.json`) to a run folder (default `/tmp/ultrasearch/<slug>/<id>`,
   safely outside the user's project — or pick one with `--out`). Modes:
   `topic` (default) · `bug` · `research` · `learn` · `startup`. Depths:
-  `summary` · `standard` · `deep`.
+  `summary` · `standard` · `deep`. Know the authoritative hosts? Pass
+  `--seed-domains docs.aws.amazon.com,developer.mozilla.org` (≤3) to also run a
+  targeted `site:` search for each and rank them as primary.
 - `search --backend <kind> --q "<query>"` — drill ONE backend, print results
   (writes nothing). Use to probe a thin area.
 - `fetch --url <u> --out <dir>` (alias `add-source`) — ingest a URL **you** found
@@ -64,10 +66,12 @@ Key commands:
   `--no-md` / `--no-html` skip either.
 - `check --run <dir> [--semantic] [--require-verify] [--min-sources <n>]` —
   validate citation grounding. Exit non-zero ⇒ ungrounded. `--semantic` also
-  fails on a claim its cited source does not support (folds in `verify`'s
-  verdicts) and reports contradictions; `--require-verify` makes a missing/empty
-  `VERIFY.json` a hard failure (the deep-tier exit gate); `--min-sources <n>`
-  fails a too-thin dossier.
+  fails on a claim its cited source does not support: it re-derives the gate
+  verdict from `VERIFY.json`'s `verdicts[]` at check time (a stored `ok` flag is
+  never trusted) and refuses to pass when `VERIFY.json` is missing or
+  unadjudicated — run `verify` + `verify --apply` first, or drop `--semantic`
+  for the mechanical gate only. `--require-verify` is the deep-tier exit-gate
+  alias of the same rule; `--min-sources <n>` fails a too-thin dossier.
 - `modes [--json]` — list modes and their backend profiles.
 
 `gather` and `fetch` also accept `--cache`: an on-disk fetch cache (24h TTL)
@@ -86,6 +90,19 @@ step-by-step with subagent contracts is under **Deep research mode** below and i
 
 You are invoked once and expected to return a grounded, cited report folder. Do
 not hand control back mid-retrieval.
+
+**Step 0 — clarity gate (only when the question is vague).** If the ask is
+under-specified — ≤3 content words, not phrased as a question, a plausible
+homonym (e.g. "mercury", "rust"), or missing scope/audience/timeframe — don't
+guess. Run `brainstorm` first:
+```
+node <skill-dir>/scripts/ultrasearch.mjs brainstorm --q "<the vague ask>" --mode <m>
+```
+It does a shallow keyless probe and writes `BRAINSTORM.md` with candidate
+angles, refined questions, and 2-4 questions to put to the user. Read it,
+present the angles + those questions to the user (an `AskUserQuestion`-style
+choice), then proceed from step 1 with the refined question. Skip this whenever
+the question is already specific.
 
 1. **Resolve intent.** Restate the question. Pick a `--mode` (default `topic`;
    use `bug` for an error, `research` for a literature review, `learn` to teach
@@ -173,8 +190,10 @@ network is down. Don't loop forever and don't invent sources to satisfy `check`:
 When the user wants an exhaustive, *verified* deep-dive — they say "deep
 research", "exhaustively research/verify X", or it is a high-stakes briefing —
 run the multi-agent loop instead of the single pass. Deep is a **tier**, not a
-mode: it composes with any `--mode` (still picked in step 1). Every step is a
-plain CLI call; parallel subagents are an *optimization*, never a requirement.
+mode: it composes with any `--mode` (still picked in step 1). Run the Step 0
+clarity gate first when the question is vague — a deep sweep on an ambiguous ask
+wastes the most effort. Every step is a plain CLI call; parallel subagents are
+an *optimization*, never a requirement.
 Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 `references/deep-research-playbook.md`.
 
@@ -192,8 +211,12 @@ Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 5. **Verify (adversarial)** — `verify --run <masterDir>` → for each pair in
    `VERIFY.todo.json`, judge whether the cited `sources/S#.md` actually SUPPORTS
    the claim (supported · partial · unsupported · refuted, in ascending
-   harshness; default to the harsher verdict when unsure) → save as `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`,
-   one skeptic subagent per slice.
+   harshness; default to the harsher verdict when unsure). **A specific
+   numeral/date/quantity the claim asserts but the cited extract doesn't
+   contain caps the verdict at `partial`, never `supported`** — flagged pairs
+   carry a precomputed `numeralsAbsent` warning so you can't miss it. Save as
+   `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`, one skeptic
+   subagent per slice.
 6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`,
    then `check --semantic --require-verify --run <masterDir>`. **This is the exit
    gate — never present before it passes** (`--require-verify` refuses to pass if
@@ -230,6 +253,10 @@ default `auto` = keyless cascade) and locale mechanics:
   absolute `<skill-dir>/` prefix everywhere (also inside every subagent prompt).
 - Answering from memory — an unbacked claim is `[M]` or `> [model-hint]`, never
   a bare sentence and never a disguised citation.
+- Citing a figure from memory or from a page you didn't fetch — a numeral,
+  date, or quantity must appear in the cited `[S#]` extract. `fetch --url` the
+  page that carries it before citing, or flag the figure `[M]`. `check` warns
+  (`--strict-numerals` fails) on a claim numeral absent from its cited source.
 - Citing a sub-run `S#` after a merge — only MASTER ids resolve.
 - Presenting before `check` (deep tier: `check --semantic`) passes.
 - Leaning on a `⚠ snippet only` source — re-`fetch` it or find a primary source.

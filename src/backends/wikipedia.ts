@@ -19,10 +19,18 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
   // (bounded) — this was the backend's latency floor. mapLimit preserves index
   // order, so the search-rank score (top.length - i) and item order are unchanged.
   const top = pages.slice(0, Math.min(limit, 6));
+  let disambigSkipped = 0;
   const built = await mapLimit(top, 4, async (p: any, i): Promise<RawSource | null> => {
     if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, undefined, { timeoutMs: 10000 });
+    // A disambiguation page ("Mercury may refer to …") is a router, not a
+    // source — the REST summary marks it `type: "disambiguation"`. Skip it at
+    // the source so it never eats a slot or seeds off-topic fan-out.
+    if (dr.data?.type === "disambiguation") {
+      disambigSkipped++;
+      return null;
+    }
     // The REST API returns HTML entities (&amp; &quot; &#039;) in extracts and
     // search excerpts, and the excerpt also carries <span class="searchmatch">
     // highlight tags. Strip tags, then decode entities so titles/snippets/text
@@ -44,9 +52,7 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
   });
   const items: RawSource[] = built.filter((x): x is RawSource => x !== null);
 
-  return {
-    backend: "wikipedia",
-    items,
-    notes: items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`],
-  };
+  const notes = items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`];
+  if (disambigSkipped) notes.push(`Skipped ${disambigSkipped} disambiguation page(s).`);
+  return { backend: "wikipedia", items, notes };
 };

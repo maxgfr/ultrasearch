@@ -14,7 +14,10 @@ either output.
 - **One section per tier** — `SUMMARY.md`, `REPORT.md`, and
   `glossary.md` if present, rendered from markdown.
 - **Sources appendix** — built from `sources.json`: each source as
-  `[S#] title` (linked to the original URL) with backend · domain · trust.
+  `[S#] title` (linked to the original URL) with backend · domain · trust. A
+  source no report tier cites is dimmed and tagged `uncited` (in `index.md`,
+  `· uncited`), so a reader can tell research the report actually used from
+  retrieved-but-unused noise. Nothing is dimmed before any tier cites a source.
 - **Verification section** (deep tier, when `VERIFY.json` is present) — a table
   of every claim's verdict (supported · partial · refuted · unsupported) with the
   cited source and note, plus a headline grounded/failed status.

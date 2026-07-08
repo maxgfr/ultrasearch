@@ -74,6 +74,19 @@ describe("main() — modes", () => {
   });
 });
 
+describe("main() — brainstorm", () => {
+  it("probes a vague question and prints angles + user questions (text + json)", async () => {
+    const d = mkdtempSync(join(tmpdir(), "us-cli-brainstorm-"));
+    const text = await run(["brainstorm", "--q", "rust", "--backends", "fixture", "--out", d]);
+    expect(text.out).toMatch(/under-specified|specific enough/);
+    expect(text.out).toMatch(/ask the user/i);
+    expect(existsSync(join(d, "BRAINSTORM.md"))).toBe(true);
+    const j = await run(["brainstorm", "--q", "rust", "--backends", "fixture", "--out", d, "--json"]);
+    expect(JSON.parse(j.out).signals.ambiguous).toBe(true);
+    rmSync(d, { recursive: true, force: true });
+  });
+});
+
 describe("main() — gather", () => {
   it("emits a human summary to stderr by default", async () => {
     const d = mkdtempSync(join(tmpdir(), "us-cli-gather-"));

@@ -6,7 +6,7 @@ export const learnMode: ModeProfile = {
   name: "learn",
   description: "Pedagogical lesson with glossary, worked examples and exercises (rich HTML).",
   backends: ["wikipedia", "duckduckgo", "searxng"],
-  deepOnly: [],
+  deepOnly: ["standards"],
   extras: ["glossary", "exercises"],
   template: [
     "## Learning objectives",

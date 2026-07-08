@@ -89,6 +89,7 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   europepmc: 0.9,
   pubmed: 0.9,
   dblp: 0.9,
+  standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -102,7 +103,14 @@ function domainTrust(domain: string): number {
   if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
   if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
   if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.78;
+  // Major vendor / standards doc hosts — primary sources for their own products.
+  if (
+    /(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
+      domain,
+    )
+  )
+    return 0.9;
+  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
   if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
   if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
   if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;
@@ -492,15 +500,64 @@ export function rrf<T>(lists: T[][], keyOf: (item: T) => string, k = 60): Map<st
   return score;
 }
 
+// Pull an arXiv id out of a URL — so abs/pdf/html variants of the SAME paper
+// (surfaced by a web backend with no `meta.arxivId`) still collapse to one key.
+// Handles modern ids (2405.12345) and legacy ids (math.GT/0309136), any
+// arxiv.org subdomain, and strips the version suffix and a trailing .pdf.
+export function arxivIdFromUrl(url: string): string | undefined {
+  let host: string;
+  let path: string;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return undefined;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return undefined;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1]!.toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1]!.toLowerCase();
+  return undefined;
+}
+
+// Pull a DOI out of a URL — doi.org resolver links AND publisher landing pages
+// that carry the DOI in their path (dl.acm.org/doi/…, /doi/full/…, /doi/pdf/…).
+// Returns the normalized DOI so a DOI-in-path collapses with a bare DOI.
+export function doiFromUrl(url: string): string | undefined {
+  let host: string;
+  let path: string;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return undefined;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : undefined;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]!).replace(/\/+$/, ""));
+  return undefined;
+}
+
 // Identity key for de-duplication that is stronger than URL: the same work
 // surfaced as an arXiv abstract, a DOI URL and a journal landing page (across
 // arxiv/crossref/openalex/semanticscholar) collapses to one key so it doesn't
-// eat several source slots. Falls back to canonical URL.
+// eat several source slots. Prefers backend metadata, then falls back to
+// identifiers parsed out of the URL itself, then the canonical URL.
 export function identityKey(item: RawSource): string {
   const doi = item.meta?.doi;
   if (doi) return "doi:" + normalizeDoi(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  const urlDoi = doiFromUrl(item.url);
+  if (urlDoi) return "doi:" + urlDoi;
+  const urlArxiv = arxivIdFromUrl(item.url);
+  if (urlArxiv) return "arxiv:" + urlArxiv;
   return canonicalizeUrl(item.url);
 }
 
@@ -676,6 +733,41 @@ export function buildBm25Index(question: string, docs: Bm25Doc[], opts: { k1?: n
     idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
   }
   return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+
+// The distinct query terms that actually occur in a document's field-weighted
+// token stream — the overlap signal the relevance floor keys on (empty overlap
+// or an all-numeric overlap ⇒ off-topic). Shares tokenization with bm25Score so
+// the two agree on what a term is.
+export function bm25MatchedTerms(index: Bm25Index, doc: Bm25Doc): string[] {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+
+// Off-topic filter for the ranked candidate pool. A candidate is off-topic when
+// its query-term overlap is EMPTY (the "Venezuelan sanctions" class) or matched
+// ONLY on numeric terms (a year / PR-number false friend like a GitHub PR whose
+// number shares digits with the query). Only active when the query has ≥2 terms
+// including ≥1 alphabetic one — a single-term or all-numeric query has too weak
+// a signal to filter on. NEVER drops below `floor`: if dropping would leave
+// fewer than the floor, the highest-ranked "off-topic" ones are kept (a thin
+// genuine pool must survive its own filter). `ranked` must be best-first.
+export function applyRelevanceFloor<T>(ranked: T[], matchedOf: (t: T) => string[], queryTerms: string[], floor: number): { kept: T[]; dropped: T[] } {
+  const isAlpha = (t: string) => /\p{L}/u.test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
+  const offTopic = (t: T): boolean => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept: T[] = [];
+  const dropped: T[] = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  // Safety valve: never leave fewer than `floor`. Re-admit the best-ranked
+  // dropped candidates (they were appended in best-first order) until met.
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift()!);
+  return { kept, dropped };
 }
 
 // BM25F score of one document against the index (raw, ≥0). Callers normalize by

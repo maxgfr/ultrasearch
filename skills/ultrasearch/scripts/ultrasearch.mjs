@@ -24,6 +24,7 @@ var ALL_BACKENDS = [
   "europepmc",
   "pubmed",
   "dblp",
+  "standards",
   "generic",
   "fixture",
   "claude"
@@ -66,7 +67,7 @@ import { tmpdir as tmpdir2 } from "os";
 var topicMode = {
   name: "topic",
   description: "General briefing on any subject (Wikipedia + general web).",
-  backends: ["wikipedia", "searxng", "duckduckgo"],
+  backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
   deepOnly: [],
   extras: [],
   template: [
@@ -86,7 +87,7 @@ var topicMode = {
 var bugMode = {
   name: "bug",
   description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
-  backends: ["stackexchange", "github", "duckduckgo", "hackernews"],
+  backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
   deepOnly: ["searxng"],
   extras: [],
   template: [
@@ -128,7 +129,7 @@ var learnMode = {
   name: "learn",
   description: "Pedagogical lesson with glossary, worked examples and exercises (rich HTML).",
   backends: ["wikipedia", "duckduckgo", "searxng"],
-  deepOnly: [],
+  deepOnly: ["standards"],
   extras: ["glossary", "exercises"],
   template: [
     "## Learning objectives",
@@ -232,6 +233,7 @@ var BACKEND_TRUST = {
   europepmc: 0.9,
   pubmed: 0.9,
   dblp: 0.9,
+  standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
   stackexchange: 0.72,
@@ -242,7 +244,11 @@ function domainTrust(domain) {
   if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
   if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
   if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.78;
+  if (/(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
+    domain
+  ))
+    return 0.9;
+  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
   if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
   if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
   if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;
@@ -557,11 +563,50 @@ function rrf(lists, keyOf, k = 60) {
   }
   return score;
 }
+function arxivIdFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1].toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1].toLowerCase();
+  return void 0;
+}
+function doiFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
+  return void 0;
+}
 function identityKey(item) {
   const doi = item.meta?.doi;
   if (doi) return "doi:" + normalizeDoi(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  const urlDoi = doiFromUrl(item.url);
+  if (urlDoi) return "doi:" + urlDoi;
+  const urlArxiv = arxivIdFromUrl(item.url);
+  if (urlArxiv) return "arxiv:" + urlArxiv;
   return canonicalizeUrl(item.url);
 }
 function extractIdentifiers(question) {
@@ -662,6 +707,25 @@ function buildBm25Index(question, docs, opts = {}) {
     idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
   }
   return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+function bm25MatchedTerms(index, doc) {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
+  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
+  const offTopic = (t) => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept = [];
+  const dropped = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
+  return { kept, dropped };
 }
 function bm25Score(index, doc) {
   if (!index.queryTerms.length) return 0;
@@ -1592,10 +1656,15 @@ var wikipediaBackend = async (ctx) => {
   }
   const pages = sr.data.pages;
   const top = pages.slice(0, Math.min(limit, 6));
+  let disambigSkipped = 0;
   const built = await mapLimit(top, 4, async (p, i) => {
     if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
     const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
+    if (dr.data?.type === "disambiguation") {
+      disambigSkipped++;
+      return null;
+    }
     const extract = dr.ok ? decodeEntities(String(dr.data?.extract ?? "")) : "";
     const pageUrl = dr.data?.content_urls?.desktop?.page ?? `${host}/wiki/${encodeURIComponent(p.key)}`;
     const descExcerpt = decodeEntities(String(p.excerpt ?? "").replace(/<[^>]+>/g, ""));
@@ -1612,11 +1681,9 @@ var wikipediaBackend = async (ctx) => {
     };
   });
   const items = built.filter((x) => x !== null);
-  return {
-    backend: "wikipedia",
-    items,
-    notes: items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`]
-  };
+  const notes = items.length ? [`Wikipedia returned ${items.length} page(s).`] : [`Wikipedia returned no usable pages.`];
+  if (disambigSkipped) notes.push(`Skipped ${disambigSkipped} disambiguation page(s).`);
+  return { backend: "wikipedia", items, notes };
 };
 
 // src/backends/generic.ts
@@ -2088,6 +2155,82 @@ ${desc}`,
   };
 };
 
+// src/backends/standards.ts
+var DATATRACKER = "https://datatracker.ietf.org/api/v1/doc/document/";
+var MDN = "https://developer.mozilla.org/api/v1/search";
+async function rfcByNumber(n) {
+  const r = await httpJson("GET", `${DATATRACKER}?format=json&name=rfc${n}`, void 0, { timeoutMs: 1e4 });
+  const o = Array.isArray(r.data?.objects) ? r.data.objects[0] : void 0;
+  if (!o?.rfc_number) return null;
+  return rfcSource(o, 100);
+}
+function rfcSource(o, score) {
+  const n = Number(o.rfc_number);
+  const title = String(o.title ?? `RFC ${n}`);
+  const abstract = String(o.abstract ?? "").trim();
+  return {
+    url: `https://www.rfc-editor.org/rfc/rfc${n}`,
+    title: `RFC ${n}: ${title}`,
+    backend: "standards",
+    score,
+    snippet: abstract.slice(0, 360) || title,
+    ...abstract ? { text: `${title}
+
+${abstract}` } : {},
+    meta: { rfcNumber: n }
+  };
+}
+var standardsBackend = async (ctx) => {
+  const items = [];
+  const notes = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (s) => {
+    if (s && !seen.has(s.url)) {
+      seen.add(s.url);
+      items.push(s);
+    }
+  };
+  const perSource = Math.max(3, Math.min(8, ctx.options.perSource));
+  const qTerms = new Set(keywords(ctx.question));
+  const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
+  const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
+  const [rfcHits, mdnResult, titleResult] = await Promise.all([
+    Promise.all(rfcNums.map((n) => rfcByNumber(n))),
+    // 2. MDN search (discovery — url + summary, gather hydrates).
+    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, void 0, { timeoutMs: 1e4 }),
+    // 3. Datatracker keyword title search (kept only when rfc_number is set and
+    //    a query term actually appears — kills the "RFC 2429 shares digits" class).
+    bigram ? httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, void 0, { timeoutMs: 1e4 }) : Promise.resolve({ ok: false, status: 0, data: void 0 })
+  ]);
+  for (const s of rfcHits) add(s);
+  const mdnDocs = Array.isArray(mdnResult.data?.documents) ? mdnResult.data.documents : [];
+  for (let i = 0; i < Math.min(perSource, mdnDocs.length, 5); i++) {
+    const d = mdnDocs[i];
+    if (!d?.mdn_url) continue;
+    add({
+      url: `https://developer.mozilla.org${d.mdn_url}`,
+      title: String(d.title ?? d.mdn_url),
+      backend: "standards",
+      score: 50 - i,
+      snippet: String(d.summary ?? "").slice(0, 360)
+    });
+  }
+  const titleObjs = Array.isArray(titleResult.data?.objects) ? titleResult.data.objects : [];
+  let kept = 0;
+  for (const o of titleObjs) {
+    if (kept >= 5) break;
+    if (!o?.rfc_number) continue;
+    const hay = keywords(`${o.title ?? ""} ${o.abstract ?? ""}`);
+    if (![...qTerms].some((t) => hay.includes(t))) continue;
+    add(rfcSource(o, 40 - kept));
+    kept++;
+  }
+  const apiDown = !mdnResult.ok && !titleResult.ok && rfcHits.every((x) => x === null);
+  if (apiDown) notes.push("Standards backends (IETF datatracker + MDN) were unreachable.");
+  notes.push(items.length ? `Standards backend returned ${items.length} spec(s).` : "Standards backend found no matching specs.");
+  return { backend: "standards", items, notes };
+};
+
 // src/backends/registry.ts
 var HANDLERS = {
   searxng: searxngBackend,
@@ -2107,9 +2250,10 @@ var HANDLERS = {
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
-  dblp: dblpBackend
+  dblp: dblpBackend,
+  standards: standardsBackend
 };
-var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "fixture", "generic"]);
+var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic"]);
 var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
 async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
@@ -2527,6 +2671,18 @@ async function runGather(options) {
     const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx, breadth)]);
     results = [...restResults, ...webResults];
   }
+  const seedDomains = (options.seedDomains ?? []).slice(0, 3);
+  if (seedDomains.length && webBackends.length > 0 && !explicit) {
+    const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
+    const kw = rankedKeywords(options.question).slice(0, 4).join(" ");
+    const seedResults = await Promise.all(
+      seedDomains.map((d) => {
+        const q = `site:${d} ${kw}`.trim();
+        return runWebCascade(cascade, { ...ctx, question: q, variants: [q], options: { ...options, pages: 1 } }, 1);
+      })
+    );
+    results = [...results, ...seedResults.flat()];
+  }
   const excluded = (it) => {
     const d = domainOf(it.url);
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
@@ -2608,16 +2764,33 @@ async function runGather(options) {
     const years = withContent.map((it) => it.meta?.year).filter((y) => typeof y === "number");
     const minYear = years.length ? Math.min(...years) : 0;
     const maxYear = years.length ? Math.max(...years) : 0;
+    const isSeedDomain = (url) => {
+      const d = domainOf(url);
+      return seedDomains.some((s) => d === s || d.endsWith("." + s));
+    };
     withContent.forEach((it, i) => {
       const content = rawContent[i] / contentMax;
       const rrfN = it.score / rrfMax;
-      const trust = trustScore(it.url, it.backend);
+      const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-    const near = dedupeNearDuplicates(withContent);
-    return { merged: near.items.slice(0, options.maxSources), withContent, hydrateNotes, droppedDup, nearDropped: near.dropped, queryTerms: bm25.queryTerms };
+    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
+    const isDisambiguation = (it) => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
+    const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+    const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
+    const floorDropped = dropped.length;
+    const near = dedupeNearDuplicates(kept);
+    return {
+      merged: near.items.slice(0, options.maxSources),
+      withContent: kept,
+      hydrateNotes,
+      droppedDup,
+      nearDropped: near.dropped,
+      floorDropped,
+      queryTerms: bm25.queryTerms
+    };
   }
   const lists = results.map((r2) => [...r2.items].sort((a, b) => b.score - a.score));
   let r = await assemble(lists);
@@ -2659,6 +2832,8 @@ async function runGather(options) {
     ...r.hydrateNotes,
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
+    ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
+    ...seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : [],
     ...gapNote ? [gapNote] : [],
     ...thin ? [
       `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`
@@ -2744,6 +2919,197 @@ async function addSource(dir, url, opts = {}) {
 // src/render.ts
 import { existsSync as existsSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync5 } from "fs";
 import { join as join5 } from "path";
+
+// src/claims.ts
+var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
+var SOURCE_RE = /^S\d+$/;
+function codeMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) {
+      mask[i] = true;
+      inFence = !inFence;
+      continue;
+    }
+    mask[i] = inFence;
+  }
+  return mask;
+}
+function hintMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let regions = 0;
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s*>/.test(lines[i])) {
+      let j = i;
+      let isHint = false;
+      while (j < lines.length && /^\s*>/.test(lines[j])) {
+        if (/\[model-hint\]/i.test(lines[j])) isHint = true;
+        j++;
+      }
+      if (isHint) {
+        regions++;
+        for (let k = i; k < j; k++) mask[k] = true;
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return { mask, regions };
+}
+function stripInlineCode(line) {
+  return line.replace(/`[^`\n]*`/g, " ");
+}
+function isHeadingOrRule(t) {
+  return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
+}
+function isTableSeparator(line) {
+  return /\|/.test(line) && /^[\s:|-]+$/.test(line.trim()) && /-/.test(line);
+}
+function isTableRow(line) {
+  return /\|/.test(line.trim()) && !isTableSeparator(line);
+}
+function tableCells(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
+}
+function isListItem(line) {
+  return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
+}
+function extractUnits(lines, code, hint) {
+  const units = [];
+  let prose = [];
+  const flush = () => {
+    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
+    prose = [];
+  };
+  let i = 0;
+  while (i < lines.length) {
+    if (code[i] || hint[i]) {
+      flush();
+      i++;
+      continue;
+    }
+    const line = stripInlineCode(lines[i]);
+    const t = line.trim();
+    if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
+      flush();
+      i++;
+      continue;
+    }
+    if (isTableRow(line)) {
+      flush();
+      units.push({ kind: "text", text: tableCells(line) });
+      i++;
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      flush();
+      const quoted = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const ql = stripInlineCode(lines[i]);
+        if (!/^\s*>/.test(ql)) break;
+        const dq = ql.replace(/^\s*>\s?/, "").trim();
+        if (dq) quoted.push(dq);
+        i++;
+      }
+      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
+      continue;
+    }
+    if (isListItem(line)) {
+      flush();
+      const items = [];
+      while (i < lines.length && !code[i] && !hint[i]) {
+        const l = stripInlineCode(lines[i]);
+        const tt = l.trim();
+        if (tt === "" || isHeadingOrRule(tt) || isTableSeparator(l) || isTableRow(l)) break;
+        if (isListItem(l)) {
+          items.push(l.replace(/^\s*([-*+]|\d+\.)\s+/, "").trim());
+        } else if (items.length) {
+          items[items.length - 1] += " " + tt;
+        } else {
+          items.push(tt);
+        }
+        i++;
+      }
+      units.push({ kind: "list", items });
+      continue;
+    }
+    prose.push(line);
+    i++;
+  }
+  flush();
+  return units;
+}
+function stripHtmlComments(text) {
+  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+}
+function normalizeNumeralText(text) {
+  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
+}
+function extractNumerals(text) {
+  const cleaned = stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ");
+  const out = [];
+  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
+    const numeric = normalizeNumeralText(m[0]).replace(/[,\u00A0\u202F'%]/g, "");
+    const digits = numeric.replace(/\D/g, "");
+    if (digits.length < 2 && !numeric.includes(".")) continue;
+    if (!out.includes(numeric)) out.push(numeric);
+    if (out.length >= 8) break;
+  }
+  return out;
+}
+var APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
+function appendixMask(lines) {
+  const mask = new Array(lines.length).fill(false);
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const h = /^\s*(#{1,6})\s/.exec(lines[i]);
+    if (level && h && h[1].length <= level) level = 0;
+    if (!level) {
+      const a = APPENDIX_HEADING.exec(lines[i]);
+      if (a) level = a[1].length;
+    }
+    mask[i] = level > 0;
+  }
+  return mask;
+}
+function unitsOfFile(text) {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const { mask: hint } = hintMask(lines);
+  const appendix = appendixMask(lines);
+  return extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i])
+  );
+}
+function unitSourceTokens(text) {
+  const masked = stripInlineCode(text);
+  const out = [];
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(masked)) {
+    const tok = m[1].trim();
+    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
+  }
+  return out;
+}
+function citedSourceIds(text) {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const appendix = appendixMask(lines);
+  const out = /* @__PURE__ */ new Set();
+  for (let i = 0; i < lines.length; i++) {
+    if (code[i] || appendix[i]) continue;
+    for (const tok of unitSourceTokens(lines[i])) out.add(tok);
+  }
+  return out;
+}
+
+// src/render.ts
 var VERDICT_SEVERITY = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
 var TIERS = [
   { id: "summary", label: "Summary", file: "SUMMARY.md" },
@@ -2928,8 +3294,19 @@ a.cite.v-refuted{color:#c1121f;font-weight:700}
 .contradictions{margin-top:1rem;padding:.6rem .9rem;border-left:3px solid #c1121f;background:#fbe9e7;border-radius:6px}
 .contradictions h2{margin:.2rem 0 .4rem;font-size:1rem}
 .snippet-only{color:#9a6700}
+li.s-uncited{opacity:.6}
+.chip-uncited{color:#6a737d;background:#eef1f4;border-radius:4px;padding:0 .35rem;font-size:.82em}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
+function citedAcrossTiers(dir) {
+  const cited = /* @__PURE__ */ new Set();
+  for (const t of TIERS) {
+    const p = join5(dir, t.file);
+    if (!existsSync3(p)) continue;
+    for (const id of citedSourceIds(readFileSync3(p, "utf8"))) cited.add(id);
+  }
+  return cited;
+}
 function readVerify(dir) {
   const p = join5(dir, "VERIFY.json");
   if (!existsSync3(p)) return void 0;
@@ -2990,7 +3367,7 @@ function renderHtml(dir) {
   }
   if (verify) main2.push(verificationSection(verify));
   if (subs.length) main2.push(subQuestionsSection(manifest, sources));
-  main2.push(sourcesSection(sources));
+  main2.push(sourcesSection(sources, citedAcrossTiers(dir)));
   main2.push("</main>");
   const title = escapeHtml(manifest.question || "ultrasearch report");
   const metaLine = `${escapeHtml(manifest.mode)} \xB7 depth ${escapeHtml(manifest.depth)} \xB7 ${sources.length} sources \xB7 ${escapeHtml(manifest.builtAt)} \xB7 generated by ultrasearch`;
@@ -3035,15 +3412,19 @@ function subQuestionsSection(manifest, sources) {
   }).join("");
   return `<section id="subquestions"><h1>Sub-questions</h1><ol class="subq">${items}</ol></section>`;
 }
-function sourcesSection(sources) {
+function sourcesSection(sources, cited) {
+  const mark = cited.size > 0;
   const items = sources.map((s) => {
+    const uncited = mark && !cited.has(s.id);
     const meta = [
       s.backend,
       s.domain,
       `<span class="trust" title="trust score">trust ${s.trust}</span>`,
-      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : []
+      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : [],
+      ...uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []
     ].join(" \xB7 ");
-    return `<li id="src-${s.id}"><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
+    const cls = uncited ? ` class="s-uncited"` : "";
+    return `<li id="src-${s.id}"${cls}><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
   }).join("\n");
   return `<section id="sources"><h1>Sources</h1><ol class="sources">${items}</ol></section>`;
 }
@@ -3096,9 +3477,12 @@ function buildReportMarkdown(dir) {
   }
   parts.push("---", "", `## Sources`, "");
   if (sources.length) {
+    const cited = citedAcrossTiers(dir);
+    const mark = cited.size > 0;
     for (const s of sources) {
       const flag = s.fullText === false ? " \xB7 \u26A0 snippet only" : "";
-      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}`);
+      const uncited = mark && !cited.has(s.id) ? " \xB7 uncited" : "";
+      parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}${uncited}`);
     }
   } else {
     parts.push("_No sources in this dossier yet._");
@@ -3114,52 +3498,215 @@ function writeReportMarkdown(dir, out) {
 }
 
 // src/check.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { join as join7 } from "path";
+
+// src/verify.ts
+import { existsSync as existsSync4, readFileSync as readFileSync4, writeFileSync as writeFileSync6 } from "fs";
 import { join as join6 } from "path";
 var HARD_FILES = ["REPORT.md"];
+var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
+function claimStrings(text) {
+  const out = [];
+  for (const u of unitsOfFile(text)) {
+    if (u.kind === "text") out.push(u.text);
+    else for (const it of u.items) out.push(it);
+  }
+  return out;
+}
+function runVerify(dir, opts = {}) {
+  const sources = readJson(join6(dir, "sources.json"), "sources.json");
+  if (!Array.isArray(sources)) {
+    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
+  }
+  const byId = new Map(sources.map((s) => [s.id, s]));
+  const textCache = /* @__PURE__ */ new Map();
+  const textOf = (s) => {
+    let t = textCache.get(s.id);
+    if (t === void 0) {
+      t = readSourceText(dir, s);
+      textCache.set(s.id, t);
+    }
+    return t;
+  };
+  const normCache = /* @__PURE__ */ new Map();
+  const normOf = (s) => {
+    let t = normCache.get(s.id);
+    if (t === void 0) {
+      t = normalizeNumeralText(textOf(s));
+      normCache.set(s.id, t);
+    }
+    return t;
+  };
+  const pairs = [];
+  let claimNo = 0;
+  for (const file of HARD_FILES) {
+    const p = join6(dir, file);
+    if (!existsSync4(p)) continue;
+    const text = readFileSync4(p, "utf8");
+    for (const claim of claimStrings(text)) {
+      const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
+      if (!ids.length) continue;
+      claimNo++;
+      const claimId = `C${claimNo}`;
+      const nums = extractNumerals(claim);
+      for (const id of ids) {
+        const s = byId.get(id);
+        const numeralsAbsent = nums.filter((n) => !normOf(s).includes(n));
+        pairs.push({
+          claimId,
+          file,
+          sourceId: id,
+          claim: claim.trim().slice(0, 400),
+          extractPath: s.extract,
+          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
+          ...numeralsAbsent.length ? { numeralsAbsent } : {},
+          trust: s.trust
+        });
+      }
+    }
+  }
+  const cmp = (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
+  const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
+  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
+  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
+  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
+  const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
+  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  const todo = {
+    run: dir,
+    pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
+  };
+  const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
+  const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
+  writeFileSync6(join6(dir, todoName), JSON.stringify(todo, null, 2));
+  writeFileSync6(join6(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
+  return worklist;
+}
+function renderWorklistMd(wl, total, kept) {
+  const out = [];
+  out.push(`# Verification worklist`);
+  out.push("");
+  out.push(
+    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`. A specific numeral/date/quantity asserted by the claim but absent from the cited extract caps the verdict at **partial** \u2014 never \`supported\` (flagged pairs carry a precomputed warning).`
+  );
+  if (kept < total) out.push(`
+_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
+  out.push("");
+  for (const p of wl.pairs) {
+    out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
+    out.push(`**Claim:** ${p.claim}`);
+    out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
+    if (p.numeralsAbsent?.length) {
+      out.push(
+        `**\u26A0 Numerals not found in this source's extract:** ${p.numeralsAbsent.join(", ")} \u2014 verdict caps at *partial* unless you locate them in the full extract.`
+      );
+    }
+    out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
+    out.push("");
+  }
+  return out.join("\n");
+}
+function parseVerdictFile(verdictsPath) {
+  const raw = readJson(verdictsPath, `verdicts file`);
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
+  const verdicts = [];
+  for (const v of list) {
+    if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
+    const verdict = VALID_VERDICTS.includes(v.verdict) ? v.verdict : void 0;
+    verdicts.push({
+      claimId: v.claimId,
+      file: typeof v.file === "string" ? v.file : "",
+      sourceId: v.sourceId,
+      claim: typeof v.claim === "string" ? v.claim : "",
+      extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
+      extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
+      verdict,
+      note: typeof v.note === "string" ? v.note : ""
+    });
+  }
+  return verdicts;
+}
+function applyVerdicts(dir, verdictsPath) {
+  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
+  const merged = /* @__PURE__ */ new Map();
+  for (const p of paths) {
+    for (const v of parseVerdictFile(p)) {
+      merged.set(`${v.claimId} ${v.sourceId}`, v);
+    }
+  }
+  const verdicts = [...merged.values()];
+  const result = reduceVerdicts(verdicts);
+  writeFileSync6(join6(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  return result;
+}
+function reduceVerdicts(verdicts) {
+  const counts = { supported: 0, partial: 0, refuted: 0, unsupported: 0 };
+  for (const v of verdicts) if (v.verdict && counts[v.verdict] !== void 0) counts[v.verdict]++;
+  const byClaim = /* @__PURE__ */ new Map();
+  for (const v of verdicts) {
+    const group = byClaim.get(v.claimId) ?? [];
+    group.push(v);
+    byClaim.set(v.claimId, group);
+  }
+  const failures = [];
+  const unadjudicated = [];
+  const contradictions = [];
+  const uniqSorted = (ids) => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+  for (const [claimId, group] of byClaim) {
+    const adjudicated = group.filter((g) => !!g.verdict);
+    if (adjudicated.length < group.length) unadjudicated.push(claimId);
+    const refuted = adjudicated.find((g) => g.verdict === "refuted");
+    const hasSupport = adjudicated.some((g) => g.verdict === "supported" || g.verdict === "partial");
+    if (refuted) {
+      failures.push({ claimId, sourceId: refuted.sourceId, verdict: "refuted", note: refuted.note });
+    } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
+      const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
+      failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
+    }
+    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
+    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
+    if (supporting.length && refuting.length) {
+      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
+      contradictions.push({
+        claimId,
+        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
+        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
+        note
+      });
+    }
+  }
+  return {
+    ok: failures.length === 0,
+    pairs: verdicts.length,
+    adjudicated: verdicts.filter((v) => !!v.verdict).length,
+    supported: counts.supported,
+    partial: counts.partial,
+    refuted: counts.refuted,
+    unsupported: counts.unsupported,
+    failures,
+    unadjudicated,
+    ...contradictions.length ? { contradictions } : {}
+  };
+}
+function formatVerifyReport(r) {
+  const lines = [];
+  lines.push(`ultrasearch verify: ${r.adjudicated}/${r.pairs} pair(s) adjudicated`);
+  lines.push(`  supported: ${r.supported} \xB7 partial: ${r.partial} \xB7 refuted: ${r.refuted} \xB7 unsupported: ${r.unsupported}`);
+  for (const f of r.failures.slice(0, 12)) {
+    lines.push(`  \u2717 ${f.claimId} (${f.sourceId}): ${f.verdict}${f.note ? " \u2014 " + f.note : ""}`);
+  }
+  if (r.unadjudicated.length) {
+    lines.push(`  \u26A0 ${r.unadjudicated.length} claim(s) not fully adjudicated: ${r.unadjudicated.join(", ")}`);
+  }
+  lines.push(r.ok ? `  \u2713 every claim is backed by a cited source` : `  \u2717 some claims are refuted or unsupported`);
+  return lines.join("\n");
+}
+
+// src/check.ts
+var HARD_FILES2 = ["REPORT.md"];
 var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
-var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
-var SOURCE_RE = /^S\d+$/;
 var MIN_CLAIM_WORDS = 6;
-function codeMask(lines) {
-  const mask = new Array(lines.length).fill(false);
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i])) {
-      mask[i] = true;
-      inFence = !inFence;
-      continue;
-    }
-    mask[i] = inFence;
-  }
-  return mask;
-}
-function hintMask(lines) {
-  const mask = new Array(lines.length).fill(false);
-  let regions = 0;
-  let i = 0;
-  while (i < lines.length) {
-    if (/^\s*>/.test(lines[i])) {
-      let j = i;
-      let isHint = false;
-      while (j < lines.length && /^\s*>/.test(lines[j])) {
-        if (/\[model-hint\]/i.test(lines[j])) isHint = true;
-        j++;
-      }
-      if (isHint) {
-        regions++;
-        for (let k = i; k < j; k++) mask[k] = true;
-      }
-      i = j;
-    } else {
-      i++;
-    }
-  }
-  return { mask, regions };
-}
-function stripInlineCode(line) {
-  return line.replace(/`[^`\n]*`/g, " ");
-}
 function claimWordCount(unit) {
   const stripped = unit.replace(/\[[^\]\n]+\](?!\()/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#>*`_~|]/g, " ");
   const words = stripped.split(/\s+/).filter((w) => /[\p{L}\p{N}]{2,}/u.test(w));
@@ -3177,111 +3724,13 @@ function hasHintMarker(unit) {
   while (m = TOKEN_RE.exec(unit)) if (m[1].trim() === "M") return true;
   return false;
 }
-function isHeadingOrRule(t) {
-  return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
-}
-function isTableSeparator(line) {
-  return /\|/.test(line) && /^[\s:|-]+$/.test(line.trim()) && /-/.test(line);
-}
-function isTableRow(line) {
-  return /\|/.test(line.trim()) && !isTableSeparator(line);
-}
-function tableCells(line) {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
-}
-function isListItem(line) {
-  return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
-}
-function extractUnits(lines, code, hint) {
-  const units = [];
-  let prose = [];
-  const flush = () => {
-    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
-    prose = [];
-  };
-  let i = 0;
-  while (i < lines.length) {
-    if (code[i] || hint[i]) {
-      flush();
-      i++;
-      continue;
-    }
-    const line = stripInlineCode(lines[i]);
-    const t = line.trim();
-    if (t === "" || isHeadingOrRule(t) || isTableSeparator(line)) {
-      flush();
-      i++;
-      continue;
-    }
-    if (isTableRow(line)) {
-      flush();
-      units.push({ kind: "text", text: tableCells(line) });
-      i++;
-      continue;
-    }
-    if (/^\s*>/.test(line)) {
-      flush();
-      const quoted = [];
-      while (i < lines.length && !code[i] && !hint[i]) {
-        const ql = stripInlineCode(lines[i]);
-        if (!/^\s*>/.test(ql)) break;
-        const dq = ql.replace(/^\s*>\s?/, "").trim();
-        if (dq) quoted.push(dq);
-        i++;
-      }
-      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
-      continue;
-    }
-    if (isListItem(line)) {
-      flush();
-      const items = [];
-      while (i < lines.length && !code[i] && !hint[i]) {
-        const l = stripInlineCode(lines[i]);
-        const tt = l.trim();
-        if (tt === "" || isHeadingOrRule(tt) || isTableSeparator(l) || isTableRow(l)) break;
-        if (isListItem(l)) {
-          items.push(l.replace(/^\s*([-*+]|\d+\.)\s+/, "").trim());
-        } else if (items.length) {
-          items[items.length - 1] += " " + tt;
-        } else {
-          items.push(tt);
-        }
-        i++;
-      }
-      units.push({ kind: "list", items });
-      continue;
-    }
-    prose.push(line);
-    i++;
-  }
-  flush();
-  return units;
-}
-function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
-}
-function unitsOfFile(text) {
-  const lines = stripHtmlComments(text).split("\n");
-  const code = codeMask(lines);
-  const { mask: hint } = hintMask(lines);
-  return extractUnits(lines, code, hint);
-}
-function unitSourceTokens(text) {
-  const masked = stripInlineCode(text);
-  const out = [];
-  TOKEN_RE.lastIndex = 0;
-  let m;
-  while (m = TOKEN_RE.exec(masked)) {
-    const tok = m[1].trim();
-    if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
-  }
-  return out;
-}
 function analyzeFile(file, text) {
   const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
+  const appendix = appendixMask(lines);
   const sourceTokens = [];
+  const appendixSourceTokens = [];
   const unknownTokens = [];
   let mMarkers = 0;
   for (let i = 0; i < lines.length; i++) {
@@ -3291,7 +3740,9 @@ function analyzeFile(file, text) {
     let m;
     while (m = TOKEN_RE.exec(masked)) {
       const tok = m[1].trim();
-      if (SOURCE_RE.test(tok)) sourceTokens.push(tok);
+      if (SOURCE_RE.test(tok)) (appendix[i] ? appendixSourceTokens : sourceTokens).push(tok);
+      else if (appendix[i])
+        continue;
       else if (tok === "M") mMarkers++;
       else if (/^model-hint$/i.test(tok))
         continue;
@@ -3305,7 +3756,11 @@ function analyzeFile(file, text) {
     unsourcedClaims.push(unit.trim().slice(0, 120));
     return true;
   };
-  for (const u of extractUnits(lines, code, hint)) {
+  for (const u of extractUnits(
+    lines,
+    code,
+    hint.map((h, i) => h || appendix[i])
+  )) {
     if (u.kind === "text") {
       flag(u.text);
     } else {
@@ -3320,45 +3775,51 @@ function analyzeFile(file, text) {
       }
     }
   }
-  return { file, sourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
+  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
 }
 function applySemantic(dir, result, requireVerify) {
-  const p = join6(dir, "VERIFY.json");
-  if (!existsSync4(p)) {
-    if (requireVerify) {
-      result.ok = false;
-      result.errors.push("--require-verify: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` before the semantic gate.");
-    } else {
-      result.warnings.push("--semantic: no VERIFY.json \u2014 run `verify` then `verify --apply <verdicts.json>` first; semantic gate skipped.");
-    }
+  const flag = requireVerify ? "--require-verify" : "--semantic";
+  const p = join7(dir, "VERIFY.json");
+  if (!existsSync5(p)) {
+    result.ok = false;
+    result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
+  let stored;
   try {
-    const sem = JSON.parse(readFileSync4(p, "utf8"));
-    result.semantic = sem;
-    if (!sem.ok) {
-      result.ok = false;
-      result.errors.push(`Semantic verification failed: ${sem.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
-    }
-    if (requireVerify && !sem.adjudicated) {
-      result.ok = false;
-      result.errors.push("--require-verify: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and `verify --apply` before the gate.");
-    }
-    if (sem.unadjudicated?.length) {
-      result.warnings.push(`${sem.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
-    }
-    if (sem.contradictions?.length) {
-      result.warnings.push(
-        `${sem.contradictions.length} claim(s) have contradicting cited sources: ${sem.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`
-      );
-    }
+    stored = JSON.parse(readFileSync5(p, "utf8"));
   } catch (e) {
-    result.warnings.push(`--semantic: VERIFY.json is unreadable (${e.message}).`);
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
+    return;
+  }
+  const verdicts = Array.isArray(stored.verdicts) ? stored.verdicts : [];
+  const reduced = reduceVerdicts(verdicts);
+  result.semantic = { ...reduced, verdicts };
+  if (!reduced.adjudicated) {
+    result.ok = false;
+    result.errors.push(`${flag}: VERIFY.json has 0 adjudicated claim(s) \u2014 fill the verdicts and \`verify --apply\` before the gate.`);
+    return;
+  }
+  if (stored.ok !== reduced.ok) {
+    result.warnings.push("VERIFY.json's stored gate disagrees with its verdicts[] \u2014 re-reduced from the verdicts at check time.");
+  }
+  if (!reduced.ok) {
+    result.ok = false;
+    result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+  }
+  if (reduced.unadjudicated?.length) {
+    result.warnings.push(`${reduced.unadjudicated.length} claim(s) not fully adjudicated by verify.`);
+  }
+  if (reduced.contradictions?.length) {
+    result.warnings.push(
+      `${reduced.contradictions.length} claim(s) have contradicting cited sources: ${reduced.contradictions.map((c) => c.claimId).join(", ")} (see VERIFY.json).`
+    );
   }
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync4(join6(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync5(join7(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -3366,13 +3827,13 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join6(dir, "sources.json");
-  if (!existsSync4(sourcesPath)) {
+  const sourcesPath = join7(dir, "sources.json");
+  if (!existsSync5(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync4(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync5(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
@@ -3380,11 +3841,11 @@ function runCheck(dir, opts = {}) {
     return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync4(join6(dir, f)));
-  if (!present.some((f) => HARD_FILES.includes(f))) {
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync5(join7(dir, f)));
+  if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync4(join6(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync5(join7(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -3401,8 +3862,11 @@ function runCheck(dir, opts = {}) {
         danglingSet.add(tok);
       }
     }
+    for (const tok of a.appendixSourceTokens) {
+      if (!ids.has(tok)) danglingSet.add(tok);
+    }
     for (const u of a.unknownTokens) unknown.add(u);
-    if (HARD_FILES.includes(a.file)) {
+    if (HARD_FILES2.includes(a.file)) {
       for (const c of a.unsourcedClaims) unmarkedUnsourced.push({ file: a.file, text: c });
     }
   }
@@ -3425,6 +3889,46 @@ function runCheck(dir, opts = {}) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
+  const numeralIssues = [];
+  const bySourceId = new Map(sources.map((s) => [s.id, s]));
+  const normCache = /* @__PURE__ */ new Map();
+  const normOf = (id) => {
+    let t = normCache.get(id);
+    if (t === void 0) {
+      const s = bySourceId.get(id);
+      try {
+        t = s && existsSync5(join7(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
+      } catch {
+        t = null;
+      }
+      normCache.set(id, t);
+    }
+    return t;
+  };
+  for (const f of present) {
+    if (!HARD_FILES2.includes(f)) continue;
+    for (const u of unitsOfFile(readFileSync5(join7(dir, f), "utf8"))) {
+      for (const claim of u.kind === "text" ? [u.text] : u.items) {
+        const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
+        if (!cited.length) continue;
+        const nums = extractNumerals(claim);
+        if (!nums.length) continue;
+        const texts = cited.map(normOf).filter((t) => t !== null);
+        if (!texts.length) continue;
+        for (const n of nums) {
+          if (!texts.some((t) => t.includes(n))) {
+            numeralIssues.push({ file: f, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
+          }
+        }
+      }
+    }
+  }
+  if (numeralIssues.length) {
+    const eg = numeralIssues[0];
+    const msg = `${numeralIssues.length} numeral(s) in cited claim(s) not found in any cited source extract (e.g. "${eg.numeral}" cited to ${eg.sourceIds.join(", ")}). Verify the attribution, \`fetch --url\` the page that carries the figure, or flag it [M].`;
+    if (opts.strictNumerals) errors.push(`--strict-numerals: ${msg}`);
+    else warnings.push(msg);
+  }
   const manifest = readManifestSafe(dir);
   if (manifest?.recallFloor) {
     warnings.push(
@@ -3438,6 +3942,7 @@ function runCheck(dir, opts = {}) {
   }
   const result = {
     ok: errors.length === 0,
+    ...numeralIssues.length ? { numeralIssues } : {},
     filesChecked: present,
     sourceCitations,
     modelHints,
@@ -3471,6 +3976,8 @@ function formatCheckReport(r, dir) {
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
   lines.push(`  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  \u2717 [${u.file}] unsourced: "${u.text}\u2026"`);
+  for (const n of (r.numeralIssues ?? []).slice(0, 5))
+    lines.push(`  \u26A0 [${n.file}] numeral "${n.numeral}" not in ${n.sourceIds.join("/")}: "${n.claim.slice(0, 80)}\u2026"`);
   if (r.semantic) {
     const s = r.semantic;
     lines.push(`  semantic: supported ${s.supported} \xB7 partial ${s.partial} \xB7 refuted ${s.refuted} \xB7 unsupported ${s.unsupported}`);
@@ -3483,19 +3990,95 @@ function formatCheckReport(r, dir) {
 }
 
 // src/plan.ts
-import { join as join7 } from "path";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync7 } from "fs";
+import { join as join8 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
-function mk(question, facet, rationale) {
-  return { id: "", question, facet, queries: planVariants(question, "deep"), rationale };
+function subjectOf(question) {
+  const bare = question.trim().replace(/\?+\s*$/, "");
+  let s = bare;
+  const strip = /^(please\s+)?(deep\s+|thoroughly\s+|exhaustively\s+)?(research(?:\s+on)?|explain|describe|tell me about|teach me|give me|summari[sz]e|what(?:'s| is| are)?|how (?:do(?:es)?|to)|why (?:is|are|do(?:es)?)|when (?:did|was)|who (?:is|are))\b[:\s]*/i;
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(strip, "").trim();
+  } while (s !== prev && s.length > 0);
+  s = s.replace(/^(about|on|regarding|of)\s+/i, "").replace(/^(the|a|an)\s+/i, "").trim();
+  return keywords(s).length >= 2 ? s : bare;
+}
+var FACET_PATTERNS = [
+  // topic / research
+  { re: /what it is|definition/i, ask: (s) => `What is ${s} and how is it defined?`, terms: ["definition", "overview"] },
+  { re: /how it works|key concepts|mechanism/i, ask: (s) => `How does ${s} work under the hood?`, terms: ["how it works", "internals"] },
+  { re: /history|evolution|background|motivation/i, ask: (s) => `What is the history and motivation behind ${s}?`, terms: ["history", "origin"] },
+  { re: /current state|today/i, ask: (s) => `What is the current state of ${s} today?`, terms: ["current", "latest"] },
+  {
+    re: /variants|approaches|alternatives|compar|methods/i,
+    ask: (s) => `What are the main variants and approaches to ${s}, and how do they compare?`,
+    terms: ["comparison", "alternatives"]
+  },
+  { re: /controvers|debate|gaps|open problem/i, ask: (s) => `What are the open debates, gaps or limitations of ${s}?`, terms: ["limitations", "criticism"] },
+  {
+    re: /practical|implication|future direction/i,
+    ask: (s) => `What are the practical implications and future directions of ${s}?`,
+    terms: ["best practices", "use cases"]
+  },
+  { re: /key papers|literature/i, ask: (s) => `What are the key papers and prior work on ${s}?`, terms: ["paper", "prior work"] },
+  { re: /findings|consensus|results/i, ask: (s) => `What are the main findings and consensus on ${s}?`, terms: ["findings", "evidence"] },
+  // bug
+  { re: /symptom|reproduction/i, ask: (s) => `What are the symptoms and how do you reproduce ${s}?`, terms: ["error", "reproduce"] },
+  { re: /root cause/i, ask: (s) => `What is the root cause of ${s}?`, terms: ["root cause", "why"] },
+  { re: /candidate fix|fixes|solution/i, ask: (s) => `What are the candidate fixes for ${s}?`, terms: ["fix", "resolve"] },
+  { re: /related issues|versions affected/i, ask: (s) => `What related issues or affected versions are known for ${s}?`, terms: ["issue", "version"] },
+  { re: /workaround/i, ask: (s) => `What workarounds exist for ${s}?`, terms: ["workaround", "mitigation"] },
+  { re: /diagnostic/i, ask: (s) => `What further diagnostics help when ${s} persists?`, terms: ["debug", "diagnose"] },
+  // learn
+  { re: /learning objective|objectives/i, ask: (s) => `What should someone learn first about ${s}?`, terms: ["basics", "introduction"] },
+  { re: /prerequisite/i, ask: (s) => `What are the prerequisites for learning ${s}?`, terms: ["prerequisite", "fundamentals"] },
+  { re: /lesson|glossary|concept/i, ask: (s) => `What are the core concepts of ${s}?`, terms: ["concept", "explanation"] },
+  { re: /worked example|example/i, ask: (s) => `What are good worked examples of ${s}?`, terms: ["example", "tutorial"] },
+  { re: /exercise/i, ask: (s) => `What exercises help practise ${s}?`, terms: ["exercise", "practice"] },
+  // startup
+  { re: /problem|customer/i, ask: (s) => `What problem does ${s} solve and for which customers?`, terms: ["problem", "customer"] },
+  { re: /market siz/i, ask: (s) => `How large is the market for ${s} (TAM/SAM/SOM)?`, terms: ["market size", "TAM"] },
+  { re: /competit/i, ask: (s) => `Who are the competitors in ${s} and how are they positioned?`, terms: ["competitor", "alternatives"] },
+  { re: /pricing|business model/i, ask: (s) => `What pricing and business models are used in ${s}?`, terms: ["pricing", "business model"] },
+  { re: /go-to-market|channel/i, ask: (s) => `What go-to-market channels work for ${s}?`, terms: ["go to market", "acquisition"] },
+  { re: /trends|timing/i, ask: (s) => `What trends and timing favour ${s} now?`, terms: ["trend", "timing"] },
+  { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, terms: ["risk", "moat"] }
+];
+function facetQuestion(subject, heading) {
+  for (const p of FACET_PATTERNS) {
+    if (p.re.test(heading)) return { question: p.ask(subject), terms: p.terms };
+  }
+  return { question: `What does the evidence say about ${heading.toLowerCase()} for ${subject}?`, terms: keywords(heading).slice(0, 2) };
+}
+function dedupeQueries(qs) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const q of qs) {
+    const k = q.trim().toLowerCase();
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    out.push(q.trim());
+  }
+  return out;
+}
+function mk(question, facet, rationale, queries) {
+  return { id: "", question, facet, queries: queries ?? planVariants(question, "deep"), rationale };
 }
 function templateFacets(question, template) {
+  const subject = subjectOf(question);
+  const subjKeywords = rankedKeywords(subject).slice(0, 3).join(" ");
   const out = [];
   for (const line of template.split("\n")) {
     const m = /^##\s+(.+?)\s*$/.exec(line.trim());
     if (!m) continue;
     const heading = m[1].trim();
     if (SKIP_HEADING.test(heading)) continue;
-    out.push(mk(`${question} \u2014 ${heading}`, "template", `mode facet: ${heading}`));
+    const fq = facetQuestion(subject, heading);
+    const facetQuery = `${subjKeywords} ${fq.terms.slice(0, 2).join(" ")}`.trim();
+    const queries = dedupeQueries([...planVariants(fq.question, "deep").slice(0, 2), facetQuery]);
+    out.push(mk(fq.question, "template", `mode facet: ${heading}`, queries));
   }
   return out;
 }
@@ -3516,25 +4099,177 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     }
   }
   const seen = /* @__PURE__ */ new Set();
+  const usedQueries = /* @__PURE__ */ new Set();
   const uniq = [];
   const limit = Math.max(1, Math.floor(cap));
   for (const s of subs) {
     const key = s.question.toLowerCase();
     if (!s.question || seen.has(key)) continue;
     seen.add(key);
+    const q2 = s.queries.filter((v) => {
+      const k = v.toLowerCase();
+      if (usedQueries.has(k)) return false;
+      usedQueries.add(k);
+      return true;
+    });
+    s.queries = q2.length ? q2 : s.queries.slice(0, 1);
     uniq.push(s);
     if (uniq.length >= limit) break;
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join7(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join8(runRoot, s.id.toLowerCase());
   });
-  return { question: q, mode, subQuestions: uniq };
+  const result = { question: q, mode, subQuestions: uniq };
+  if (runRoot) {
+    mkdirSync3(runRoot, { recursive: true });
+    writeFileSync7(join8(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+  }
+  return result;
+}
+
+// src/brainstorm.ts
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync8 } from "fs";
+import { join as join9 } from "path";
+var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
+var PROBE_CAP = 10;
+var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
+function titleTokens(title) {
+  return [...new Set(keywords(title).map((k) => foldTerm(k)))].filter((t) => t.length >= 2);
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+function clusterTitles(results) {
+  const clusters = [];
+  for (const r of results) {
+    const toks = new Set(titleTokens(r.title));
+    if (!toks.size) continue;
+    const hit = clusters.find((c) => jaccard(c.tokens, toks) >= 0.2);
+    if (hit) {
+      hit.titles.push(r);
+      for (const t of toks) hit.tokens.add(t);
+    } else {
+      clusters.push({ titles: [r], tokens: new Set(toks) });
+    }
+  }
+  return clusters;
+}
+function angleLabel(cluster) {
+  const freq = /* @__PURE__ */ new Map();
+  for (const t of cluster.titles) for (const tok of titleTokens(t.title)) freq.set(tok, (freq.get(tok) ?? 0) + 1);
+  const terms = [...freq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([t]) => t);
+  return { label: terms.join(" ") || cluster.titles[0].title.slice(0, 40), terms };
+}
+function detectSignals(question, clusters) {
+  const words = keywords(question).length;
+  const interrogative = INTERROGATIVE.test(question.trim());
+  const identifiers = extractIdentifiers(question);
+  const reasons = [];
+  if (words <= 3) reasons.push(`Only ${words} content word(s) \u2014 too broad to scope.`);
+  if (!interrogative && words <= 5) reasons.push("Not phrased as a question and quite short \u2014 intent is unclear.");
+  if (clusters >= 3 && words <= 4 && !interrogative) {
+    reasons.push(`The probe spans ${clusters} unrelated topic clusters \u2014 the term may be ambiguous.`);
+  }
+  return { words, interrogative, identifiers, clusters, ambiguous: reasons.length > 0, reasons };
+}
+function buildUserQuestions(angles, signals) {
+  const qs = [];
+  if (angles.length >= 2) {
+    qs.push(
+      `Which of these do you mean: ${angles.slice(0, 3).map((a) => a.label).join(" \xB7 ")}? (or something else)`
+    );
+  }
+  qs.push("Who is this for, and how deep should it go \u2014 a quick overview or a thorough deep dive?");
+  if (!signals.identifiers.some((id) => /^\d{4}$/.test(id))) {
+    qs.push("Any timeframe or recency constraint \u2014 the current state, or the historical picture too?");
+  }
+  if (qs.length < 4) {
+    qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
+  }
+  return qs.slice(0, 4);
+}
+function buildCandidateQuestions(question, mode, angles) {
+  const headings = getMode(mode).template.split("\n").map((l) => /^##\s+(.+?)\s*$/.exec(l.trim())?.[1]?.trim()).filter((h) => !!h && !/^(tl;?dr|abstract|executive summary|sources|references)/i.test(h)).slice(0, 2);
+  const subjects = [subjectOf(question), ...angles.map((a) => a.label)];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const subject of subjects) {
+    for (const heading of headings) {
+      const fq = facetQuestion(subject, heading);
+      const key = fq.question.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ question: fq.question, facet: heading, rationale: `angle: ${subject}` });
+      if (out.length >= 6) return out;
+    }
+  }
+  return out;
+}
+async function runBrainstorm(options) {
+  const mode = getMode(options.mode);
+  const backends = options.backends?.length ? options.backends : PROBE_BACKENDS;
+  const ctx = { question: options.question, mode, options: { ...options, perSource: 5 }, variants: [options.question] };
+  const backendResults = await runBackends(backends, ctx);
+  const notes = backendResults.flatMap((r) => r.notes);
+  const fused = fuse(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
+  const results = fused.map((s) => ({ title: s.title, url: s.url, domain: domainOf(s.url) }));
+  const clusters = clusterTitles(results);
+  const angles = clusters.slice().sort((a, b) => b.titles.length - a.titles.length).slice(0, 4).map((c) => {
+    const { label, terms } = angleLabel(c);
+    return { label, terms, examples: c.titles.slice(0, 2).map((t) => ({ title: t.title, domain: t.domain })) };
+  });
+  const signals = detectSignals(options.question, clusters.length);
+  const candidateQuestions = buildCandidateQuestions(options.question, options.mode, angles);
+  const userQuestions = buildUserQuestions(angles, signals);
+  const dir = options.out ?? defaultRunDir("brainstorm", options.question);
+  const result = {
+    question: options.question,
+    mode: options.mode,
+    dir,
+    probe: { backendsUsed: backends, results, notes },
+    signals,
+    angles,
+    candidateQuestions,
+    userQuestions
+  };
+  mkdirSync4(dir, { recursive: true });
+  writeFileSync8(join9(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeFileSync8(join9(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  return result;
+}
+function renderBrainstormMd(r) {
+  const out = [];
+  out.push(`# Brainstorm \u2014 ${r.question}`, "");
+  out.push(
+    r.signals.ambiguous ? `**This question looks under-specified.** ${r.signals.reasons.join(" ")}` : "**This question looks specific enough to research directly.**",
+    ""
+  );
+  if (r.angles.length) {
+    out.push("## Candidate angles", "");
+    for (const a of r.angles) {
+      const eg = a.examples.map((e) => `${e.title} (${e.domain})`).join("; ");
+      out.push(`- **${a.label}**${eg ? ` \u2014 e.g. ${eg}` : ""}`);
+    }
+    out.push("");
+  }
+  if (r.candidateQuestions.length) {
+    out.push("## Candidate refined questions", "");
+    for (const c of r.candidateQuestions) out.push(`- ${c.question}  _(${c.facet})_`);
+    out.push("");
+  }
+  out.push("## Questions to ask the user", "");
+  for (const q of r.userQuestions) out.push(`- ${q}`);
+  out.push("");
+  return out.join("\n");
 }
 
 // src/merge.ts
-import { writeFileSync as writeFileSync6 } from "fs";
-import { join as join8 } from "path";
+import { writeFileSync as writeFileSync9 } from "fs";
+import { join as join10 } from "path";
 function toRawSource(s, text) {
   return {
     url: s.url,
@@ -3608,194 +4343,9 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync6(join8(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync9(join10(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
-}
-
-// src/verify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5, writeFileSync as writeFileSync7 } from "fs";
-import { join as join9 } from "path";
-var HARD_FILES2 = ["REPORT.md"];
-var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
-function claimStrings(text) {
-  const out = [];
-  for (const u of unitsOfFile(text)) {
-    if (u.kind === "text") out.push(u.text);
-    else for (const it of u.items) out.push(it);
-  }
-  return out;
-}
-function runVerify(dir, opts = {}) {
-  const sources = readJson(join9(dir, "sources.json"), "sources.json");
-  if (!Array.isArray(sources)) {
-    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
-  }
-  const byId = new Map(sources.map((s) => [s.id, s]));
-  const textCache = /* @__PURE__ */ new Map();
-  const textOf = (s) => {
-    let t = textCache.get(s.id);
-    if (t === void 0) {
-      t = readSourceText(dir, s);
-      textCache.set(s.id, t);
-    }
-    return t;
-  };
-  const pairs = [];
-  let claimNo = 0;
-  for (const file of HARD_FILES2) {
-    const p = join9(dir, file);
-    if (!existsSync5(p)) continue;
-    const text = readFileSync5(p, "utf8");
-    for (const claim of claimStrings(text)) {
-      const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
-      if (!ids.length) continue;
-      claimNo++;
-      const claimId = `C${claimNo}`;
-      for (const id of ids) {
-        const s = byId.get(id);
-        pairs.push({
-          claimId,
-          file,
-          sourceId: id,
-          claim: claim.trim().slice(0, 400),
-          extractPath: s.extract,
-          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
-          trust: s.trust
-        });
-      }
-    }
-  }
-  const cmp = (a, b) => b.trust - a.trust || a.claimId.localeCompare(b.claimId) || a.sourceId.localeCompare(b.sourceId);
-  const max = Math.max(1, Math.floor(opts.maxVerify ?? DEEP_CAPS.maxVerify));
-  const kept = pairs.length > max ? pairs.slice().sort(cmp).slice(0, max) : pairs;
-  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
-  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
-  const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
-  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
-  const todo = {
-    run: dir,
-    pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
-  };
-  const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
-  const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeFileSync7(join9(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync7(join9(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
-  return worklist;
-}
-function renderWorklistMd(wl, total, kept) {
-  const out = [];
-  out.push(`# Verification worklist`);
-  out.push("");
-  out.push(
-    `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`.`
-  );
-  if (kept < total) out.push(`
-_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
-  out.push("");
-  for (const p of wl.pairs) {
-    out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
-    out.push(`**Claim:** ${p.claim}`);
-    out.push(`**Cited source (\`${p.extractPath}\`):** ${p.extractDigest}`);
-    out.push(`**Verdict:** _____ \xB7 **Note:** _____`);
-    out.push("");
-  }
-  return out.join("\n");
-}
-function parseVerdictFile(verdictsPath) {
-  const raw = readJson(verdictsPath, `verdicts file`);
-  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
-  const verdicts = [];
-  for (const v of list) {
-    if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
-    const verdict = VALID_VERDICTS.includes(v.verdict) ? v.verdict : void 0;
-    verdicts.push({
-      claimId: v.claimId,
-      file: typeof v.file === "string" ? v.file : "",
-      sourceId: v.sourceId,
-      claim: typeof v.claim === "string" ? v.claim : "",
-      extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
-      extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
-      verdict,
-      note: typeof v.note === "string" ? v.note : ""
-    });
-  }
-  return verdicts;
-}
-function applyVerdicts(dir, verdictsPath) {
-  const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
-  const merged = /* @__PURE__ */ new Map();
-  for (const p of paths) {
-    for (const v of parseVerdictFile(p)) {
-      merged.set(`${v.claimId} ${v.sourceId}`, v);
-    }
-  }
-  const verdicts = [...merged.values()];
-  const result = reduceVerdicts(verdicts);
-  writeFileSync7(join9(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
-  return result;
-}
-function reduceVerdicts(verdicts) {
-  const counts = { supported: 0, partial: 0, refuted: 0, unsupported: 0 };
-  for (const v of verdicts) if (v.verdict && counts[v.verdict] !== void 0) counts[v.verdict]++;
-  const byClaim = /* @__PURE__ */ new Map();
-  for (const v of verdicts) {
-    const group = byClaim.get(v.claimId) ?? [];
-    group.push(v);
-    byClaim.set(v.claimId, group);
-  }
-  const failures = [];
-  const unadjudicated = [];
-  const contradictions = [];
-  const uniqSorted = (ids) => [...new Set(ids)].sort((a, b) => a.localeCompare(b));
-  for (const [claimId, group] of byClaim) {
-    const adjudicated = group.filter((g) => !!g.verdict);
-    if (adjudicated.length < group.length) unadjudicated.push(claimId);
-    const refuted = adjudicated.find((g) => g.verdict === "refuted");
-    const hasSupport = adjudicated.some((g) => g.verdict === "supported" || g.verdict === "partial");
-    if (refuted) {
-      failures.push({ claimId, sourceId: refuted.sourceId, verdict: "refuted", note: refuted.note });
-    } else if (adjudicated.length === group.length && adjudicated.length > 0 && !hasSupport) {
-      const u = adjudicated.find((g) => g.verdict === "unsupported") ?? adjudicated[0];
-      failures.push({ claimId, sourceId: u.sourceId, verdict: u.verdict, note: u.note });
-    }
-    const supporting = adjudicated.filter((g) => g.verdict === "supported" || g.verdict === "partial");
-    const refuting = adjudicated.filter((g) => g.verdict === "refuted");
-    if (supporting.length && refuting.length) {
-      const note = refuting.find((g) => g.note)?.note ?? supporting.find((g) => g.note)?.note ?? "";
-      contradictions.push({
-        claimId,
-        supporting: uniqSorted(supporting.map((g) => g.sourceId)),
-        refuting: uniqSorted(refuting.map((g) => g.sourceId)),
-        note
-      });
-    }
-  }
-  return {
-    ok: failures.length === 0,
-    pairs: verdicts.length,
-    adjudicated: verdicts.filter((v) => !!v.verdict).length,
-    supported: counts.supported,
-    partial: counts.partial,
-    refuted: counts.refuted,
-    unsupported: counts.unsupported,
-    failures,
-    unadjudicated,
-    ...contradictions.length ? { contradictions } : {}
-  };
-}
-function formatVerifyReport(r) {
-  const lines = [];
-  lines.push(`ultrasearch verify: ${r.adjudicated}/${r.pairs} pair(s) adjudicated`);
-  lines.push(`  supported: ${r.supported} \xB7 partial: ${r.partial} \xB7 refuted: ${r.refuted} \xB7 unsupported: ${r.unsupported}`);
-  for (const f of r.failures.slice(0, 12)) {
-    lines.push(`  \u2717 ${f.claimId} (${f.sourceId}): ${f.verdict}${f.note ? " \u2014 " + f.note : ""}`);
-  }
-  if (r.unadjudicated.length) {
-    lines.push(`  \u26A0 ${r.unadjudicated.length} claim(s) not fully adjudicated: ${r.unadjudicated.join(", ")}`);
-  }
-  lines.push(r.ok ? `  \u2713 every claim is backed by a cited source` : `  \u2717 some claims are refuted or unsupported`);
-  return lines.join("\n");
 }
 
 // src/cli.ts
@@ -3809,8 +4359,9 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
+  ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
@@ -3829,6 +4380,9 @@ Commands:
            --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
+  brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
+           propose candidate angles + clarifying questions before a full run
+           (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
 
 Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
   plan     Decompose a question into sub-questions (JSON) for the fan-out:
@@ -3862,6 +4416,8 @@ Options:
   --title <s>          For 'fetch': override the ingested page's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
+  --seed-domains <list>     Also run a targeted site: search for these primary
+                       hosts and rank them as primary (up to 3, comma-separated)
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
@@ -3872,6 +4428,8 @@ Options:
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
+  --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
+                       is absent from every cited source extract
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --json               Machine-readable output
   -h, --help           Show this help
@@ -3893,7 +4451,7 @@ Grounding:
     ultrasearch render --run <dir>   # \u2192 index.html + index.md
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
 `;
-var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
+var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "brainstorm", "plan", "merge", "verify"]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
   "question",
@@ -3917,6 +4475,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "url",
   "since",
   "exclude-domains",
+  "seed-domains",
   "title",
   "subquestions",
   "runs",
@@ -3929,7 +4488,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "cache"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -4074,6 +4633,7 @@ function buildGatherOptions(p, opts = {}) {
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
+    seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : void 0,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
     cache: p.bools.has("cache"),
@@ -4139,6 +4699,30 @@ async function main(argv = process.argv.slice(2)) {
         out.push(`            backends: ${m.backends.join(", ")}${m.deepOnly.length ? ` (+deep: ${m.deepOnly.join(", ")})` : ""}`);
         if (m.extras.length) out.push(`            extras:   ${m.extras.join(", ")}`);
       }
+      process.stdout.write(out.join("\n") + "\n");
+      return;
+    }
+    case "brainstorm": {
+      const options = buildGatherOptions(p);
+      const result = await runBrainstorm(options);
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        return;
+      }
+      const out = [];
+      out.push(`ultrasearch brainstorm: "${result.question}"`);
+      out.push(result.signals.ambiguous ? `  \u26A0 under-specified \u2014 ${result.signals.reasons.join(" ")}` : `  \u2713 specific enough to research directly`);
+      if (result.angles.length) {
+        out.push("  candidate angles:");
+        for (const a of result.angles) out.push(`    \xB7 ${a.label}`);
+      }
+      if (result.candidateQuestions.length) {
+        out.push("  candidate refined questions:");
+        for (const c of result.candidateQuestions) out.push(`    \xB7 ${c.question}`);
+      }
+      out.push("  ask the user:");
+      for (const q of result.userQuestions) out.push(`    ? ${q}`);
+      out.push(`  written: ${resolve(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -4264,7 +4848,12 @@ async function main(argv = process.argv.slice(2)) {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve(dir), { semantic: p.bools.has("semantic"), requireVerify: p.bools.has("require-verify"), minSources });
+      const res = runCheck(resolve(dir), {
+        semantic: p.bools.has("semantic"),
+        requireVerify: p.bools.has("require-verify"),
+        strictNumerals: p.bools.has("strict-numerals"),
+        minSources
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
