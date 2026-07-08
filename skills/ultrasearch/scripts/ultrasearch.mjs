@@ -3116,11 +3116,10 @@ function writeReportMarkdown(dir, out) {
 // src/check.ts
 import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
 import { join as join6 } from "path";
-var HARD_FILES = ["REPORT.md"];
-var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
+
+// src/claims.ts
 var TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
 var SOURCE_RE = /^S\d+$/;
-var MIN_CLAIM_WORDS = 6;
 function codeMask(lines) {
   const mask = new Array(lines.length).fill(false);
   let inFence = false;
@@ -3159,23 +3158,6 @@ function hintMask(lines) {
 }
 function stripInlineCode(line) {
   return line.replace(/`[^`\n]*`/g, " ");
-}
-function claimWordCount(unit) {
-  const stripped = unit.replace(/\[[^\]\n]+\](?!\()/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#>*`_~|]/g, " ");
-  const words = stripped.split(/\s+/).filter((w) => /[\p{L}\p{N}]{2,}/u.test(w));
-  return words.length;
-}
-function hasSourceToken(unit) {
-  TOKEN_RE.lastIndex = 0;
-  let m;
-  while (m = TOKEN_RE.exec(unit)) if (SOURCE_RE.test(m[1].trim())) return true;
-  return false;
-}
-function hasHintMarker(unit) {
-  TOKEN_RE.lastIndex = 0;
-  let m;
-  while (m = TOKEN_RE.exec(unit)) if (m[1].trim() === "M") return true;
-  return false;
 }
 function isHeadingOrRule(t) {
   return /^#{1,6}\s/.test(t) || /^([-*_])\1{2,}$/.test(t);
@@ -3276,6 +3258,28 @@ function unitSourceTokens(text) {
     if (SOURCE_RE.test(tok) && !out.includes(tok)) out.push(tok);
   }
   return out;
+}
+
+// src/check.ts
+var HARD_FILES = ["REPORT.md"];
+var SOFT_FILES = ["SUMMARY.md", "glossary.md"];
+var MIN_CLAIM_WORDS = 6;
+function claimWordCount(unit) {
+  const stripped = unit.replace(/\[[^\]\n]+\](?!\()/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[#>*`_~|]/g, " ");
+  const words = stripped.split(/\s+/).filter((w) => /[\p{L}\p{N}]{2,}/u.test(w));
+  return words.length;
+}
+function hasSourceToken(unit) {
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(unit)) if (SOURCE_RE.test(m[1].trim())) return true;
+  return false;
+}
+function hasHintMarker(unit) {
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(unit)) if (m[1].trim() === "M") return true;
+  return false;
 }
 function analyzeFile(file, text) {
   const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");

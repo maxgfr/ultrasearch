@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
-import { unitsOfFile, unitSourceTokens } from "./check.js";
+import { unitsOfFile, unitSourceTokens } from "./claims.js";
 import { readJson, readSourceText } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 
