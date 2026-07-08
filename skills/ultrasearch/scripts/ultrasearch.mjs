@@ -557,11 +557,50 @@ function rrf(lists, keyOf, k = 60) {
   }
   return score;
 }
+function arxivIdFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1].toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1].toLowerCase();
+  return void 0;
+}
+function doiFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
+  return void 0;
+}
 function identityKey(item) {
   const doi = item.meta?.doi;
   if (doi) return "doi:" + normalizeDoi(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  const urlDoi = doiFromUrl(item.url);
+  if (urlDoi) return "doi:" + urlDoi;
+  const urlArxiv = arxivIdFromUrl(item.url);
+  if (urlArxiv) return "arxiv:" + urlArxiv;
   return canonicalizeUrl(item.url);
 }
 function extractIdentifiers(question) {

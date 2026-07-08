@@ -492,15 +492,64 @@ export function rrf<T>(lists: T[][], keyOf: (item: T) => string, k = 60): Map<st
   return score;
 }
 
+// Pull an arXiv id out of a URL — so abs/pdf/html variants of the SAME paper
+// (surfaced by a web backend with no `meta.arxivId`) still collapse to one key.
+// Handles modern ids (2405.12345) and legacy ids (math.GT/0309136), any
+// arxiv.org subdomain, and strips the version suffix and a trailing .pdf.
+export function arxivIdFromUrl(url: string): string | undefined {
+  let host: string;
+  let path: string;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return undefined;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return undefined;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1]!.toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1]!.toLowerCase();
+  return undefined;
+}
+
+// Pull a DOI out of a URL — doi.org resolver links AND publisher landing pages
+// that carry the DOI in their path (dl.acm.org/doi/…, /doi/full/…, /doi/pdf/…).
+// Returns the normalized DOI so a DOI-in-path collapses with a bare DOI.
+export function doiFromUrl(url: string): string | undefined {
+  let host: string;
+  let path: string;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return undefined;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : undefined;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]!).replace(/\/+$/, ""));
+  return undefined;
+}
+
 // Identity key for de-duplication that is stronger than URL: the same work
 // surfaced as an arXiv abstract, a DOI URL and a journal landing page (across
 // arxiv/crossref/openalex/semanticscholar) collapses to one key so it doesn't
-// eat several source slots. Falls back to canonical URL.
+// eat several source slots. Prefers backend metadata, then falls back to
+// identifiers parsed out of the URL itself, then the canonical URL.
 export function identityKey(item: RawSource): string {
   const doi = item.meta?.doi;
   if (doi) return "doi:" + normalizeDoi(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  const urlDoi = doiFromUrl(item.url);
+  if (urlDoi) return "doi:" + urlDoi;
+  const urlArxiv = arxivIdFromUrl(item.url);
+  if (urlArxiv) return "arxiv:" + urlArxiv;
   return canonicalizeUrl(item.url);
 }
 

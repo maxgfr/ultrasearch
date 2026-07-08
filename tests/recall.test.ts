@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { rmSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { planVariants, identityKey, extractIdentifiers, contentCoverage, buildMatcher } from "../src/util.js";
+import { planVariants, identityKey, extractIdentifiers, contentCoverage, buildMatcher, arxivIdFromUrl, doiFromUrl } from "../src/util.js";
 import { fuse, runGather } from "../src/gather.js";
 import type { GatherOptions, RawSource, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
@@ -54,6 +54,41 @@ describe("identityKey", () => {
     expect(identityKey(raw({ meta: { doi: "https://doi.org/10.1/ABC" } }))).toBe("doi:10.1/abc");
     expect(identityKey(raw({ meta: { arxivId: "1706.03762v5" } }))).toBe("arxiv:1706.03762");
     expect(identityKey(raw({ url: "https://x.test/a/" }))).toBe("https://x.test/a");
+  });
+
+  it("collapses arXiv abs/pdf/html URL variants (no backend meta) to one key", () => {
+    const abs = identityKey(raw({ url: "https://arxiv.org/abs/2405.12345v2" }));
+    expect(abs).toBe("arxiv:2405.12345");
+    expect(identityKey(raw({ url: "https://arxiv.org/pdf/2405.12345.pdf" }))).toBe(abs);
+    expect(identityKey(raw({ url: "https://arxiv.org/html/2405.12345" }))).toBe(abs);
+    expect(identityKey(raw({ url: "https://export.arxiv.org/abs/2405.12345" }))).toBe(abs);
+    expect(identityKey(raw({ meta: { arxivId: "2405.12345" } }))).toBe(abs);
+  });
+
+  it("collapses a DOI-in-path URL to the DOI key even without backend meta", () => {
+    const canonical = identityKey(raw({ meta: { doi: "10.1145/3576915" } }));
+    expect(identityKey(raw({ url: "https://doi.org/10.1145/3576915" }))).toBe(canonical);
+    expect(identityKey(raw({ url: "https://dl.acm.org/doi/10.1145/3576915" }))).toBe(canonical);
+    expect(identityKey(raw({ url: "https://dl.acm.org/doi/full/10.1145/3576915" }))).toBe(canonical);
+  });
+
+  it("does NOT collapse a non-arXiv host that merely has an /abs/ path", () => {
+    const k = identityKey(raw({ url: "https://example.com/abs/2405.12345" }));
+    expect(k).not.toMatch(/^arxiv:/);
+  });
+});
+
+describe("arxivIdFromUrl / doiFromUrl", () => {
+  it("extracts the modern arXiv id, stripping version and .pdf", () => {
+    expect(arxivIdFromUrl("https://arxiv.org/abs/2405.12345v3")).toBe("2405.12345");
+    expect(arxivIdFromUrl("https://arxiv.org/pdf/2405.12345.pdf")).toBe("2405.12345");
+    expect(arxivIdFromUrl("https://example.com/x")).toBeUndefined();
+  });
+
+  it("extracts a DOI from doi.org and publisher /doi/ paths", () => {
+    expect(doiFromUrl("https://doi.org/10.1145/3576915")).toBe("10.1145/3576915");
+    expect(doiFromUrl("https://dl.acm.org/doi/full/10.1145/3576915")).toBe("10.1145/3576915");
+    expect(doiFromUrl("https://example.com/no/doi/here")).toBeUndefined();
   });
 });
 
