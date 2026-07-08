@@ -48,28 +48,19 @@ export const standardsBackend: Backend = async (ctx): Promise<BackendResult> => 
   const qTerms = new Set(keywords(ctx.question));
 
   // 1. Explicit "RFC 6585" mentions → direct datatracker lookups (cap 3).
+  // httpJson never throws (it returns {ok:false} on any failure), so these
+  // calls need no catch guard — a down API just yields empty results + a note.
   const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
+  const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
   const [rfcHits, mdnResult, titleResult] = await Promise.all([
-    Promise.all(rfcNums.map((n) => rfcByNumber(n).catch(() => null))),
+    Promise.all(rfcNums.map((n) => rfcByNumber(n))),
     // 2. MDN search (discovery — url + summary, gather hydrates).
-    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, undefined, { timeoutMs: 10000 }).catch(() => ({
-      ok: false,
-      status: 0,
-      data: undefined,
-    })),
+    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, undefined, { timeoutMs: 10000 }),
     // 3. Datatracker keyword title search (kept only when rfc_number is set and
     //    a query term actually appears — kills the "RFC 2429 shares digits" class).
-    (() => {
-      const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
-      if (!bigram) return Promise.resolve({ ok: false, status: 0, data: undefined });
-      return httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, undefined, { timeoutMs: 10000 }).catch(
-        () => ({
-          ok: false,
-          status: 0,
-          data: undefined,
-        }),
-      );
-    })(),
+    bigram
+      ? httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, undefined, { timeoutMs: 10000 })
+      : Promise.resolve({ ok: false, status: 0, data: undefined }),
   ]);
 
   for (const s of rfcHits) add(s);

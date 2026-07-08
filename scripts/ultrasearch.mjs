@@ -2193,27 +2193,14 @@ var standardsBackend = async (ctx) => {
   const perSource = Math.max(3, Math.min(8, ctx.options.perSource));
   const qTerms = new Set(keywords(ctx.question));
   const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
+  const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
   const [rfcHits, mdnResult, titleResult] = await Promise.all([
-    Promise.all(rfcNums.map((n) => rfcByNumber(n).catch(() => null))),
+    Promise.all(rfcNums.map((n) => rfcByNumber(n))),
     // 2. MDN search (discovery — url + summary, gather hydrates).
-    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, void 0, { timeoutMs: 1e4 }).catch(() => ({
-      ok: false,
-      status: 0,
-      data: void 0
-    })),
+    httpJson("GET", `${MDN}?q=${encodeURIComponent(ctx.question)}&locale=en-US`, void 0, { timeoutMs: 1e4 }),
     // 3. Datatracker keyword title search (kept only when rfc_number is set and
     //    a query term actually appears — kills the "RFC 2429 shares digits" class).
-    (() => {
-      const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
-      if (!bigram) return Promise.resolve({ ok: false, status: 0, data: void 0 });
-      return httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, void 0, { timeoutMs: 1e4 }).catch(
-        () => ({
-          ok: false,
-          status: 0,
-          data: void 0
-        })
-      );
-    })()
+    bigram ? httpJson("GET", `${DATATRACKER}?format=json&title__icontains=${encodeURIComponent(bigram)}&limit=10`, void 0, { timeoutMs: 1e4 }) : Promise.resolve({ ok: false, status: 0, data: void 0 })
   ]);
   for (const s of rfcHits) add(s);
   const mdnDocs = Array.isArray(mdnResult.data?.documents) ? mdnResult.data.documents : [];

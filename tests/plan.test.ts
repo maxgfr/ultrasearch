@@ -35,6 +35,17 @@ describe("runPlan", () => {
     expect(new Set(qs).size).toBe(qs.length);
   });
 
+  it("produces interrogative, subject-bearing facets for every mode", () => {
+    for (const mode of ["topic", "bug", "research", "learn", "startup"] as const) {
+      const facets = runPlan("api rate limiting", mode).subQuestions.filter((s) => s.facet === "template");
+      expect(facets.length).toBeGreaterThan(0);
+      for (const s of facets) {
+        expect(s.question).toMatch(/\?$/);
+        expect(s.question).not.toContain(" — ");
+      }
+    }
+  });
+
   it("assigns stable Q# ids and caps at DEEP_CAPS.maxSubQuestions", () => {
     const r = runPlan("a fairly rich question about distributed systems and consensus protocols", "topic");
     expect(r.subQuestions.length).toBeGreaterThan(0);
