@@ -4141,9 +4141,146 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
   return result;
 }
 
-// src/merge.ts
-import { writeFileSync as writeFileSync8 } from "fs";
+// src/brainstorm.ts
+import { mkdirSync as mkdirSync4, writeFileSync as writeFileSync8 } from "fs";
 import { join as join9 } from "path";
+var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
+var PROBE_CAP = 10;
+var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
+function titleTokens(title) {
+  return [...new Set(keywords(title).map((k) => foldTerm(k)))].filter((t) => t.length >= 2);
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+function clusterTitles(results) {
+  const clusters = [];
+  for (const r of results) {
+    const toks = new Set(titleTokens(r.title));
+    if (!toks.size) continue;
+    const hit = clusters.find((c) => jaccard(c.tokens, toks) >= 0.2);
+    if (hit) {
+      hit.titles.push(r);
+      for (const t of toks) hit.tokens.add(t);
+    } else {
+      clusters.push({ titles: [r], tokens: new Set(toks) });
+    }
+  }
+  return clusters;
+}
+function angleLabel(cluster) {
+  const freq = /* @__PURE__ */ new Map();
+  for (const t of cluster.titles) for (const tok of titleTokens(t.title)) freq.set(tok, (freq.get(tok) ?? 0) + 1);
+  const terms = [...freq.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 3).map(([t]) => t);
+  return { label: terms.join(" ") || cluster.titles[0].title.slice(0, 40), terms };
+}
+function detectSignals(question, clusters) {
+  const words = keywords(question).length;
+  const interrogative = INTERROGATIVE.test(question.trim());
+  const identifiers = extractIdentifiers(question);
+  const reasons = [];
+  if (words <= 3) reasons.push(`Only ${words} content word(s) \u2014 too broad to scope.`);
+  if (!interrogative && words <= 5) reasons.push("Not phrased as a question and quite short \u2014 intent is unclear.");
+  if (clusters >= 3) reasons.push(`The probe spans ${clusters} unrelated topic clusters \u2014 the term may be ambiguous.`);
+  return { words, interrogative, identifiers, clusters, ambiguous: reasons.length > 0, reasons };
+}
+function buildUserQuestions(angles, signals) {
+  const qs = [];
+  if (angles.length >= 2) {
+    qs.push(
+      `Which of these do you mean: ${angles.slice(0, 3).map((a) => a.label).join(" \xB7 ")}? (or something else)`
+    );
+  }
+  qs.push("Who is this for, and how deep should it go \u2014 a quick overview or a thorough deep dive?");
+  if (!signals.identifiers.some((id) => /^\d{4}$/.test(id))) {
+    qs.push("Any timeframe or recency constraint \u2014 the current state, or the historical picture too?");
+  }
+  if (qs.length < 4) {
+    qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
+  }
+  return qs.slice(0, 4);
+}
+function buildCandidateQuestions(question, mode, angles) {
+  const headings = getMode(mode).template.split("\n").map((l) => /^##\s+(.+?)\s*$/.exec(l.trim())?.[1]?.trim()).filter((h) => !!h && !/^(tl;?dr|abstract|executive summary|sources|references)/i.test(h)).slice(0, 2);
+  const subjects = [subjectOf(question), ...angles.map((a) => a.label)];
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const subject of subjects) {
+    for (const heading of headings) {
+      const fq = facetQuestion(subject, heading);
+      const key = fq.question.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ question: fq.question, facet: heading, rationale: `angle: ${subject}` });
+      if (out.length >= 6) return out;
+    }
+  }
+  return out;
+}
+async function runBrainstorm(options) {
+  const mode = getMode(options.mode);
+  const backends = options.backends?.length ? options.backends : PROBE_BACKENDS;
+  const ctx = { question: options.question, mode, options: { ...options, perSource: 5 }, variants: [options.question] };
+  const backendResults = await runBackends(backends, ctx);
+  const notes = backendResults.flatMap((r) => r.notes);
+  const fused = fuse(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
+  const results = fused.map((s) => ({ title: s.title, url: s.url, domain: domainOf(s.url) }));
+  const clusters = clusterTitles(results);
+  const angles = clusters.slice().sort((a, b) => b.titles.length - a.titles.length).slice(0, 4).map((c) => {
+    const { label, terms } = angleLabel(c);
+    return { label, terms, examples: c.titles.slice(0, 2).map((t) => ({ title: t.title, domain: t.domain })) };
+  });
+  const signals = detectSignals(options.question, clusters.length);
+  const candidateQuestions = buildCandidateQuestions(options.question, options.mode, angles);
+  const userQuestions = buildUserQuestions(angles, signals);
+  const dir = options.out ?? defaultRunDir("brainstorm", options.question);
+  const result = {
+    question: options.question,
+    mode: options.mode,
+    dir,
+    probe: { backendsUsed: backends, results, notes },
+    signals,
+    angles,
+    candidateQuestions,
+    userQuestions
+  };
+  mkdirSync4(dir, { recursive: true });
+  writeFileSync8(join9(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeFileSync8(join9(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  return result;
+}
+function renderBrainstormMd(r) {
+  const out = [];
+  out.push(`# Brainstorm \u2014 ${r.question}`, "");
+  out.push(
+    r.signals.ambiguous ? `**This question looks under-specified.** ${r.signals.reasons.join(" ")}` : "**This question looks specific enough to research directly.**",
+    ""
+  );
+  if (r.angles.length) {
+    out.push("## Candidate angles", "");
+    for (const a of r.angles) {
+      const eg = a.examples.map((e) => `${e.title} (${e.domain})`).join("; ");
+      out.push(`- **${a.label}**${eg ? ` \u2014 e.g. ${eg}` : ""}`);
+    }
+    out.push("");
+  }
+  if (r.candidateQuestions.length) {
+    out.push("## Candidate refined questions", "");
+    for (const c of r.candidateQuestions) out.push(`- ${c.question}  _(${c.facet})_`);
+    out.push("");
+  }
+  out.push("## Questions to ask the user", "");
+  for (const q of r.userQuestions) out.push(`- ${q}`);
+  out.push("");
+  return out.join("\n");
+}
+
+// src/merge.ts
+import { writeFileSync as writeFileSync9 } from "fs";
+import { join as join10 } from "path";
 function toRawSource(s, text) {
   return {
     url: s.url,
@@ -4217,7 +4354,7 @@ function runMerge(options) {
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
   if (mode.extras.includes("bibtex")) {
-    writeFileSync8(join9(dir, "refs.bib"), toBibtex(sources));
+    writeFileSync9(join10(dir, "refs.bib"), toBibtex(sources));
   }
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
@@ -4235,6 +4372,7 @@ Usage:
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
+  ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
@@ -4253,6 +4391,9 @@ Commands:
            --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
   modes    List the report modes and their backend profiles.
+  brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
+           propose candidate angles + clarifying questions before a full run
+           (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
 
 Deep research (the agentic tier \u2014 see references/deep-research-playbook.md):
   plan     Decompose a question into sub-questions (JSON) for the fan-out:
@@ -4321,7 +4462,7 @@ Grounding:
     ultrasearch render --run <dir>   # \u2192 index.html + index.md
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
 `;
-var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "plan", "merge", "verify"]);
+var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "brainstorm", "plan", "merge", "verify"]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
   "question",
@@ -4569,6 +4710,30 @@ async function main(argv = process.argv.slice(2)) {
         out.push(`            backends: ${m.backends.join(", ")}${m.deepOnly.length ? ` (+deep: ${m.deepOnly.join(", ")})` : ""}`);
         if (m.extras.length) out.push(`            extras:   ${m.extras.join(", ")}`);
       }
+      process.stdout.write(out.join("\n") + "\n");
+      return;
+    }
+    case "brainstorm": {
+      const options = buildGatherOptions(p);
+      const result = await runBrainstorm(options);
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+        return;
+      }
+      const out = [];
+      out.push(`ultrasearch brainstorm: "${result.question}"`);
+      out.push(result.signals.ambiguous ? `  \u26A0 under-specified \u2014 ${result.signals.reasons.join(" ")}` : `  \u2713 specific enough to research directly`);
+      if (result.angles.length) {
+        out.push("  candidate angles:");
+        for (const a of result.angles) out.push(`    \xB7 ${a.label}`);
+      }
+      if (result.candidateQuestions.length) {
+        out.push("  candidate refined questions:");
+        for (const c of result.candidateQuestions) out.push(`    \xB7 ${c.question}`);
+      }
+      out.push("  ask the user:");
+      for (const q of result.userQuestions) out.push(`    ? ${q}`);
+      out.push(`  written: ${resolve(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
