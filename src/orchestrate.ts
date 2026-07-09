@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { agentContracts, phaseWorkflowScript, runbookMd } from "./orchestrate-templates.js";
 import type { ClaimEvidencePair, PlanResult } from "./types.js";
+import { shq } from "./util.js";
 
 // ---------------------------------------------------------------------------
 // `ultrasearch orchestrate` — emit the run's multi-agent orchestration from its
@@ -80,8 +81,8 @@ export function listPhases(runDir: string, engineAbs: string): PhaseInfo[] {
       ids: planIds,
       ...(plan ? { plan } : {}),
       prerequisite: plan
-        ? `node ${engineAbs} plan --q ${JSON.stringify(plan.question)} --mode ${plan.mode} --run-root ${run}`
-        : `node ${engineAbs} plan --q "<question>" --mode <m> --run-root ${run}`,
+        ? `node ${shq(engineAbs)} plan --q ${shq(plan.question)} --mode ${plan.mode} --run-root ${shq(run)}`
+        : `node ${shq(engineAbs)} plan --q "<question>" --mode <m> --run-root ${shq(run)}`,
     },
     {
       name: "verify",
@@ -89,7 +90,7 @@ export function listPhases(runDir: string, engineAbs: string): PhaseInfo[] {
       worklist: verPath,
       items: verIds.length,
       ids: verIds,
-      prerequisite: `node ${engineAbs} verify --run ${run}`,
+      prerequisite: `node ${shq(engineAbs)} verify --run ${shq(run)}`,
     },
   ];
 }

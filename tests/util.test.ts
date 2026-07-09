@@ -1,5 +1,7 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  shq,
   slugify,
   runId,
   canonicalizeUrl,
@@ -163,5 +165,27 @@ describe("simhash / near-duplicate dedup", () => {
     expect(items).toHaveLength(2);
     expect(items.some((i) => i.url.includes("a.test"))).toBe(true); // higher-scored survivor
     expect(items.some((i) => i.url.includes("b.test"))).toBe(false);
+  });
+});
+
+describe("shq — shell single-quoting for emitted command lines", () => {
+  it("wraps plain text in single quotes", () => {
+    expect(shq("hello world")).toBe("'hello world'");
+    expect(shq("/tmp/run dir/q1")).toBe("'/tmp/run dir/q1'");
+  });
+
+  it("escapes embedded single quotes as '\"'\"'", () => {
+    expect(shq("it's")).toBe(`'it'"'"'s'`);
+  });
+
+  it("replaces newlines with spaces (a command line must stay one line)", () => {
+    expect(shq("line one\nline two\r\nline three")).toBe("'line one line two line three'");
+  });
+
+  it("neutralizes backticks, $, | and ; — the shell gets the text verbatim", () => {
+    const nasty = "how much does `uname` cost? it's $99 | true; echo pwned";
+    // printf %s <arg> through a real shell: no expansion, no execution.
+    const echoed = execFileSync("sh", ["-c", `printf %s ${shq(nasty)}`], { encoding: "utf8" });
+    expect(echoed).toBe(nasty);
   });
 });

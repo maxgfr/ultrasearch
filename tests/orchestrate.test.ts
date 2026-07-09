@@ -344,6 +344,59 @@ describe("orchestrate — contracts & runbook", () => {
   });
 });
 
+describe("orchestrate — shell-safe emission (US-2)", () => {
+  // A question exercising every shell hazard the emitter must neutralize:
+  // command substitution, variable expansion, pipes, quotes and a newline.
+  const NASTY = "how much does `uname` cost? it's $99 | maybe\nmore";
+  // shq()'s rendering: newline → space, ' → '"'"', wrapped in single quotes.
+  const NASTY_SHQ = `'how much does \`uname\` cost? it'"'"'s $99 | maybe more'`;
+
+  function nastyRun(): string {
+    const run = mkdtempSync(join(tmpdir(), "us-orch-nasty-"));
+    runPlan(NASTY, "topic", ["angle one about pricing", "angle two about safety"], 2, run, "standard");
+    return run;
+  }
+
+  it("single-quotes the question and the paths in the gather prerequisite", () => {
+    const run = nastyRun();
+    const [gather] = listPhases(run, ENGINE);
+    expect(gather!.prerequisite).toContain(`--q ${NASTY_SHQ}`);
+    expect(gather!.prerequisite).toContain(`--run-root '${run}'`);
+    expect(gather!.prerequisite).not.toContain("\n");
+  });
+
+  it("single-quotes the question and the paths in the workflow-tail merge fold", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const src = readWf(run, "gather");
+    expect(src).toContain(`--q ${NASTY_SHQ}`);
+    expect(src).toContain(`--master '${run}'`);
+    expect(src).toContain(`--runs '${join(run, "q1")},${join(run, "q2")}'`);
+  });
+
+  it("the RUNBOOK merge command quotes the question — it stays equal to PLAN.json's question", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    expect(rb).toContain(`--q ${NASTY_SHQ}`);
+    // the paths in every runnable step are quoted too
+    expect(rb).toContain(`--run '${run}'`);
+    expect(rb).toContain(`--master '${run}'`);
+  });
+
+  it("the RUNBOOK phase-status table survives pipes and newlines in the prerequisite", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    const rows = rb.split("\n").filter((l) => l.startsWith("| gather |"));
+    expect(rows.length).toBe(1); // one line — the newline was collapsed
+    const row = rows[0]!;
+    // pipes inside cells are escaped, so the row still has exactly 4 columns
+    expect(row).toContain("\\|");
+    expect(row.split(/(?<!\\)\|/).length - 2).toBe(4);
+  });
+});
+
 describe("orchestrate — eco mode & phase gating", () => {
   it("--eco emits RUNBOOK + contracts only, no workflow scripts", () => {
     const run = makeRun({ plan: 5, verify: 2 });

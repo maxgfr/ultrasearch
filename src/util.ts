@@ -5,6 +5,15 @@ export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// Shell-single-quote a value for the command lines `orchestrate` emits (the
+// free-text question and every path). Single quotes are the only POSIX shell
+// context with zero expansion — backticks, `$`, `|`, `;` all stay literal.
+// Embedded single quotes close/reopen the quoting (' → '"'"'); newlines are
+// collapsed to spaces so an emitted command line stays one line.
+export function shq(s: string): string {
+  return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
+}
+
 // Turn an arbitrary identifier into a filesystem-safe slug, e.g.
 // "How does HTTP rate limiting work?" -> "how-does-http-rate-limiting-work".
 export function slugify(input: string): string {
