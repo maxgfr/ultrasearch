@@ -73,9 +73,15 @@ Key commands:
   for the mechanical gate only. `--require-verify` is the deep-tier exit-gate
   alias of the same rule; `--min-sources <n>` fails a too-thin dossier.
 - `modes [--json]` — list modes and their backend profiles.
+- `orchestrate --run <dir> [--phase gather|verify] [--eco] [--list]` — emit the
+  run's multi-agent orchestration from its CURRENT worklists (`PLAN.json`,
+  `VERIFY.todo.json`): one launchable workflow per ready phase, the
+  `agents/<role>.md` dispatch contracts (gatherer, skeptic) and a sequential
+  `RUNBOOK.md`, all under `<dir>/orchestration/`. The default execution path on
+  a subagent-capable harness — see **Orchestration — route by harness** below.
 
 `gather` and `fetch` also accept `--cache`: an on-disk fetch cache (24h TTL)
-reused across runs — pass it on every deep-tier fan-out `gather` so the
+reused across runs — pass it on every fan-out `gather` so the
 sub-questions don't re-fetch the same URLs.
 
 **Deep research tier** — the agentic loop layered on top: `plan` (decompose into
@@ -111,7 +117,16 @@ the question is already specific.
    **Decide the search language/region** (`--lang`/`--region`) — the locale rule
    above.
 
-2. **Gather.** Run:
+2. **Gather.** Default on a subagent harness: fan the gather out even at
+   standard depth —
+   ```
+   node <skill-dir>/scripts/ultrasearch.mjs plan --q "<precise question>" --mode <m> --max-subquestions 3 --run-root <RUN>
+   node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> --phase gather
+   ```
+   then dispatch the emitted workflow (one gatherer per sub-question, each
+   writing only its own sub-dossier) and run the `merge` fold shown in the
+   workflow tail yourself — see **Orchestration — route by harness**. On an
+   eco/no-subagent run, do the single sequential gather instead:
    ```
    node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d>
    ```
@@ -152,7 +167,14 @@ the question is already specific.
    For `research` mode, the engine has already written `refs.bib`; reference it.
    For `learn` mode, also write `glossary.md` (term — definition, one per line).
 
-6. **Render & check.**
+6. **Verify, render & check.** Default on a subagent harness: adversarially
+   verify the report's claims before presenting, even at standard depth —
+   `verify --run <dir>` writes the claim↔source worklist, then
+   `orchestrate --run <dir> --phase verify` emits the skeptic fan-out; dispatch
+   it, save the returned verdict fragments as `<dir>/verdicts.<i>.json`, fold
+   with `verify --apply <dir> --run <dir>`, and gate with
+   `check --run <dir> --semantic`. On an eco/no-subagent run, the mechanical
+   gate alone is the floor:
    ```
    node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>   # → index.html + index.md
    node <skill-dir>/scripts/ultrasearch.mjs check  --run <dir>
@@ -166,6 +188,35 @@ the question is already specific.
 7. **Present.** Give the user the SUMMARY, the path to the run folder,
    `index.html` and `index.md`, the source count, and any gaps or contradictions
    you found.
+
+## Orchestration — route by harness
+
+Two phases fan out: `PLAN.json` (one sub-question per gatherer) and
+`VERIFY.todo.json` (claim↔source pairs for the skeptics) are independent
+per-item worklists. The engine manages the fan-out — `orchestrate` emits the
+orchestration from the CURRENT worklists, with absolute paths and the real item
+ids baked in:
+
+```
+node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
+```
+
+| Your harness | How to run each fan-out phase |
+|---|---|
+| Has the Workflow tool | `orchestrate --run <RUN> --phase <p>`, then `Workflow({ scriptPath: "<RUN>/orchestration/<p>.workflow.mjs" })`. Gatherers write ONLY their own sub-dossier and return coverage notes; skeptics return verdict fragments. You run the folds: `merge` after gather, save fragments as `verdicts.<i>.json` then `verify --apply` after verify. |
+| Subagents but no Workflow tool | Same `orchestrate`; dispatch one subagent per batch following `<RUN>/orchestration/agents/<role>.md` (the workflow script shows batches + prompts). One writer: you fold results in. |
+| Eco mode, or no subagents | `orchestrate --run <RUN> --eco` → follow `<RUN>/orchestration/RUNBOOK.md` sequentially, playing each role yourself. Correctness-identical; only wall-clock differs. |
+
+Fan-out is an optimization, never a requirement — the gates (`check`,
+`verify --apply`) are harness-independent and every phase has a sequential
+fallback with identical artifacts. Subagents never write outside their own
+sub-dossier: the emitted contracts end with the one-writer rule, and the folds
+(`merge`, the fail-closed `verify --apply`) always stay with you, the
+orchestrator. Re-run `orchestrate` whenever a worklist changes (emission is
+deterministic and idempotent); `--phase <p>` before its worklist exists fails
+and names the command that produces it. At standard depth keep the plan small
+(`--max-subquestions 3`); a worklist of ≤3 items gets an eco nudge — the
+sequential path is equivalent and cheaper there.
 
 ## When retrieval fails
 
@@ -197,10 +248,14 @@ an *optimization*, never a requirement.
 Full playbook (subagent contracts, sharding recipe, signals, budget caps):
 `references/deep-research-playbook.md`.
 
-1. **Decompose** — `node <skill-dir>/scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --run-root <dir>`
-   → sub-questions (JSON), each with ready `queries` and an `out` dir. Review;
-   override with `--subquestions "a|b|c"` when you know the domain better.
-2. **Fan out** — per sub-question (subagents or a sequential loop):
+1. **Decompose** — `node <skill-dir>/scripts/ultrasearch.mjs plan --q "<question>" --mode <m> --depth deep --run-root <dir>`
+   → sub-questions (JSON), each with ready `queries` and an `out` dir, persisted
+   to `<dir>/PLAN.json` (`--depth deep` is recorded there so the orchestrated
+   fan-out gathers deep). Review; override with `--subquestions "a|b|c"` when
+   you know the domain better.
+2. **Fan out** — per sub-question (default on a subagent harness:
+   `orchestrate --run <dir> --phase gather` emits this exact fan-out as a
+   launchable workflow + the gatherer contract; sequential loop otherwise):
    `gather --q "<sub-question>" --queries "<its queries>" --mode <m> --depth deep --cache --out <its out dir>`
    (`--cache` shares fetched pages across the sub-questions), then enrich thin
    sub-dossiers (your WebSearch + `fetch`, step 4 above) before they feed the merge.
@@ -215,8 +270,11 @@ Full playbook (subagent contracts, sharding recipe, signals, budget caps):
    numeral/date/quantity the claim asserts but the cited extract doesn't
    contain caps the verdict at `partial`, never `supported`** — flagged pairs
    carry a precomputed `numeralsAbsent` warning so you can't miss it. Save as
-   `verdicts.json`. Parallel: `verify --shards <N> --shard <i>`, one skeptic
-   subagent per slice.
+   `verdicts.json`. Parallel (default on a subagent harness):
+   `orchestrate --run <masterDir> --phase verify` emits the skeptic fan-out
+   over the worklist as a launchable workflow + the skeptic contract — you
+   save the returned fragments as `verdicts.<i>.json` yourself. Alternatively
+   `verify --shards <N> --shard <i>`, one skeptic subagent per slice.
 6. **Gate** — `verify --apply <verdicts.json | dir | a,b,c> --run <masterDir>`,
    then `check --semantic --require-verify --run <masterDir>`. **This is the exit
    gate — never present before it passes** (`--require-verify` refuses to pass if

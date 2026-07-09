@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { realpathSync, existsSync, statSync, readdirSync } from "node:fs";
 import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
@@ -18,6 +18,7 @@ import { runPlan } from "./plan.js";
 import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
+import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -35,6 +36,7 @@ Usage:
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
+  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -64,6 +66,12 @@ Deep research (the agentic tier — see references/deep-research-playbook.md):
            (--apply <files>) gate on refuted/unsupported claims. --shards <n>
            --shard <i> writes shard i only (one skeptic subagent per shard);
            --apply accepts several verdict files (comma list or a directory).
+  orchestrate  Emit the run's multi-agent orchestration from its CURRENT
+           worklists: one launchable workflow per ready phase (gather fans out
+           one gatherer per PLAN.json sub-question; verify fans skeptics over
+           VERIFY.todo.json) + the agents/<role>.md dispatch contracts + a
+           sequential RUNBOOK.md, under <run>/orchestration/. Subagents return
+           fragments; the merge / verify --apply folds stay with you.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -94,7 +102,12 @@ Options:
   --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
                        big win is the deep tier's per-sub-question fan-out
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
-  --run <dir>          For render/check/verify: the dossier dir to operate on
+  --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
+  --phase <name>       For 'orchestrate': emit one phase only — gather | verify
+                       (exit 2 when its worklist does not exist yet)
+  --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md —
+                       the explicit sequential low-token path
+  --list               For 'orchestrate': print the phases + readiness as JSON
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
@@ -122,7 +135,20 @@ Grounding:
     ultrasearch check  --run <dir>   # exit≠0 if a claim is ungrounded
 `;
 
-export const COMMANDS = new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "brainstorm", "plan", "merge", "verify"]);
+export const COMMANDS = new Set([
+  "gather",
+  "search",
+  "fetch",
+  "add-source",
+  "render",
+  "check",
+  "modes",
+  "brainstorm",
+  "plan",
+  "merge",
+  "verify",
+  "orchestrate",
+]);
 export const VALUE_FLAGS = new Set([
   "q",
   "question",
@@ -158,8 +184,9 @@ export const VALUE_FLAGS = new Set([
   "shards",
   "shard",
   "min-sources",
+  "phase",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "eco", "list"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -565,6 +592,51 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
             `  adjudicate each verdict, save as verdicts.json, then: ` +
             `ultrasearch verify --apply verdicts.json --run ${rdir}\n`,
         );
+      }
+      return;
+    }
+
+    case "orchestrate": {
+      const dir = p.values.run;
+      if (!dir) {
+        process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
+        process.exit(2);
+      }
+      // The engine's own absolute path — baked into every emitted artifact so
+      // subagents (own cwd, no repo notion) can invoke it. Realpath: the bundle
+      // may be reached through a symlinked skill dir.
+      const engineAbs = realpathSync(fileURLToPath(import.meta.url));
+      if (p.bools.has("list")) {
+        if (!existsSync(resolve(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve(dir)}\n`);
+          process.exit(2);
+        }
+        process.stdout.write(JSON.stringify({ phases: listPhases(dir, engineAbs) }, null, 2) + "\n");
+        return;
+      }
+      const res = orchestrateRun(dir, engineAbs, {
+        phase: p.values.phase,
+        eco: p.bools.has("eco"),
+      });
+      if (res.exitCode !== 0) {
+        for (const e of res.errors) process.stderr.write(`ultrasearch orchestrate: ${e}\n`);
+        process.exit(res.exitCode);
+      }
+      const lines: string[] = ["ultrasearch orchestrate: generated"];
+      for (const w of res.written) lines.push(`  ${w}`);
+      const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
+      if (workflows.length) {
+        lines.push("");
+        for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
+        lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) — you stay the sole writer.");
+      } else {
+        lines.push(`Follow ${join(resolve(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+      }
+      process.stdout.write(lines.join("\n") + "\n");
+      for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note — ${n}\n`);
+      // Surface the valid phase names once, so a scripted caller can discover them without --help.
+      if (p.values.phase === undefined && workflows.length === 0 && !p.bools.has("eco")) {
+        process.stderr.write(`ultrasearch orchestrate: no ready phase — phases are ${PHASES.join(", ")} (see --list).\n`);
       }
       return;
     }
