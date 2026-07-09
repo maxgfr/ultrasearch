@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { resolve } from "path";
+import { join as join13, resolve as resolve2 } from "path";
 import { pathToFileURL, fileURLToPath } from "url";
-import { realpathSync, existsSync as existsSync6, statSync, readdirSync } from "fs";
+import { realpathSync, existsSync as existsSync7, statSync, readdirSync } from "fs";
 
 // src/types.ts
 var VERSION = "1.8.0";
@@ -4082,7 +4082,7 @@ function templateFacets(question, template) {
   }
   return out;
 }
-function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runRoot) {
+function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runRoot, depth) {
   const q = question.trim();
   let subs;
   if (override?.length) {
@@ -4120,7 +4120,7 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     s.id = `Q${i + 1}`;
     if (runRoot) s.out = join8(runRoot, s.id.toLowerCase());
   });
-  const result = { question: q, mode, subQuestions: uniq };
+  const result = { question: q, mode, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     mkdirSync3(runRoot, { recursive: true });
     writeFileSync7(join8(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
@@ -4348,6 +4348,330 @@ function runMerge(options) {
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
+// src/orchestrate.ts
+import { existsSync as existsSync6, mkdirSync as mkdirSync5, readFileSync as readFileSync6, writeFileSync as writeFileSync10 } from "fs";
+import { join as join12, resolve } from "path";
+
+// src/orchestrate-templates.ts
+import { join as join11 } from "path";
+var ONE_WRITER_FOOTER = `
+## Return, don't write
+
+Return ONLY the structured output specified above. Do NOT write, edit, or delete any file; do NOT run any engine command that writes (\`gather\`, \`fetch\`, \`merge\`, \`verify\`, \`render\`). The orchestrator is the sole writer \u2014 it saves your verdict fragments as \`verdicts.<i>.json\` itself and runs the fail-closed fold (\`verify --apply\`). Exception: if a note is prose too large to return, write ONLY to \`<RUN>/orchestration/out/<role>-<batch>.md\` (a file namespaced to you alone) and return its path.
+`;
+var GATHERER_FOOTER = `
+## Return, don't write (one sanctioned exception)
+
+Return the structured output specified above. Your ONLY sanctioned writes are \`gather --out\` / \`fetch --out\` into YOUR OWN sub-dossier dir(s) \u2014 the \`out\` dir of each of your ITEMS, disjoint from every other gatherer's by construction. NEVER touch the parent run dir, the master dossier, any report tier (SUMMARY.md/REPORT.md), PLAN.json, or another sub-question's dir. The orchestrator is the sole writer everywhere else \u2014 it runs the \`merge\` fold itself. Exception: if a coverage note is prose too large to return, write ONLY to \`<RUN>/orchestration/out/gatherer-<batch>.md\` (a file namespaced to you alone) and return its path.
+`;
+var GATHER_SCHEMA = {
+  type: "object",
+  required: ["gathered"],
+  properties: {
+    gathered: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["id", "out", "coverage", "newSubQuestions"],
+        properties: {
+          id: { type: "string", description: "the sub-question id (Q#)" },
+          out: { type: "string", description: "the sub-dossier dir you gathered into (absolute)" },
+          coverage: { type: "string", description: "one-line coverage note" },
+          newSubQuestions: { type: "array", items: { type: "string" }, description: "NEW sub-questions you discovered (empty array for none)" }
+        }
+      }
+    }
+  }
+};
+var VERIFY_SCHEMA = {
+  type: "object",
+  required: ["verdicts"],
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["claimId", "sourceId", "verdict", "note"],
+        properties: {
+          claimId: { type: "string" },
+          sourceId: { type: "string" },
+          verdict: { enum: ["supported", "partial", "unsupported", "refuted"] },
+          note: { type: "string", description: "one line grounded in the cited extract" }
+        }
+      }
+    }
+  }
+};
+function mergeHint(engineAbs, ph, runAbs) {
+  const outs = ph.plan ? ph.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())) : [`${join11(runAbs, "q1")},\u2026`];
+  const q = ph.plan ? ph.plan.question : "<question>";
+  const mode = ph.plan ? ph.plan.mode : "<mode>";
+  return [
+    `node ${engineAbs} merge --runs "${outs.join(",")}" --master ${runAbs} --q ${JSON.stringify(q)} --mode ${mode}`,
+    `then write SUMMARY.md/REPORT.md against the MASTER [S#] ids, and feed any NEW sub-questions into the next round.`
+  ];
+}
+var PHASE_SPECS = {
+  gather: {
+    role: "gatherer",
+    title: "Gather",
+    schema: GATHER_SCHEMA,
+    batchSize: 1,
+    // one gatherer per sub-question — the playbook's fan-out
+    description: (n) => `Gather web evidence for the ${n} sub-question(s) of an ultrasearch run (one gatherer per sub-question; the dossier union stays with the orchestrator)`,
+    applyHint: mergeHint
+  },
+  verify: {
+    role: "skeptic",
+    title: "Verify",
+    schema: VERIFY_SCHEMA,
+    batchSize: 8,
+    // BATCH_SIZE — one skeptic per batch of claim↔source pairs
+    description: (n) => `Adversarially verify the ${n} claim\u2194source pair(s) of an ultrasearch report (skeptic fan-out, fail-closed fold)`,
+    applyHint: (engine, _ph, run) => [
+      `save each returned fragment as ${join11(run, "verdicts.<i>.json")} then reassemble + gate:`,
+      `node ${engine} verify --apply ${run} --run ${run}   # a dir picks up every verdicts*.json`
+    ]
+  }
+};
+function phaseSpec(name) {
+  const spec = PHASE_SPECS[name];
+  if (!spec) throw new Error(`no phase spec for "${name}"`);
+  return spec;
+}
+function toBatches(ids, batchSize) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += batchSize) out.push(ids.slice(i, i + batchSize));
+  return out;
+}
+function phaseWorkflowScript(ph, runAbs, engineAbs, smallWorklist) {
+  const spec = phaseSpec(ph.name);
+  const scriptPath = join11(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
+  const meta = { name: `ultrasearch-${ph.name}`, description: spec.description(ph.items), phases: [{ title: spec.title }] };
+  const batches = ph.items <= smallWorklist ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
+  const hint = spec.applyHint(engineAbs, ph, runAbs);
+  return [
+    `export const meta = ${JSON.stringify(meta)}`,
+    ``,
+    `// NOT a plain Node script: launch via the Workflow tool \u2014 Workflow({ scriptPath: ${JSON.stringify(scriptPath)} }).`,
+    `// Emitted by \`ultrasearch orchestrate\` from the CURRENT worklist. The worklist is the source`,
+    `// of truth: if it changes, re-run \`orchestrate --phase ${ph.name}\` before launching.`,
+    ``,
+    `// Constants for THIS run (injected at emit time; no Date.now/Math.random in this harness).`,
+    `const RUN = ${JSON.stringify(runAbs)}`,
+    `const ENGINE = ${JSON.stringify(engineAbs)}`,
+    `const WORKLIST = ${JSON.stringify(ph.worklist)}`,
+    `const AGENTS = RUN + '/orchestration/agents'`,
+    `const BATCHES = ${JSON.stringify(batches)}`,
+    `const SCHEMA = ${JSON.stringify(spec.schema)}`,
+    ``,
+    `function contract(name, extra) {`,
+    `  return 'Read and follow the dispatch contract at ' + AGENTS + '/' + name + '.md VERBATIM.\\n'`,
+    `    + 'Constants: RUN=' + RUN + '  ENGINE=' + ENGINE + '  WORKLIST=' + WORKLIST + '.\\n'`,
+    `    + 'Invoke the engine only by its ABSOLUTE path: node ' + ENGINE + ' <cmd> \u2014 stay within the contract write rules.'`,
+    `    + (extra ? '\\n' + extra : '')`,
+    `}`,
+    ``,
+    `log('ultrasearch ${ph.name}: ' + ${JSON.stringify(String(ph.items))} + ' item(s) across ' + BATCHES.length + ' agent(s)')`,
+    ``,
+    `phase(${JSON.stringify(spec.title)})`,
+    `const results = await pipeline(BATCHES, (batch, _item, i) =>`,
+    `  agent(contract('${spec.role}', 'ITEMS=' + batch.join(',')), { label: '${ph.name}:' + (i + 1), phase: ${JSON.stringify(spec.title)}, agentType: 'general-purpose', schema: SCHEMA }))`,
+    ``,
+    `// One-writer rule: this workflow only COLLECTS the subagents' fragments. The main agent`,
+    `// runs the fold itself:`,
+    ...hint.map((l) => `//   ${l}`),
+    `return { phase: ${JSON.stringify(ph.name)}, worklist: WORKLIST, results: results.filter(Boolean) }`,
+    ``
+  ].join("\n");
+}
+function agentContracts(runAbs, engineAbs) {
+  const gathererFooter = GATHERER_FOOTER.replaceAll("<RUN>", runAbs);
+  const skepticFooter = ONE_WRITER_FOOTER.replaceAll("<RUN>", runAbs);
+  return {
+    gatherer: `# Contract: gatherer
+
+You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
+
+Worklist: \`${join11(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+
+For EACH of your sub-questions:
+
+1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --cache --out "<its out dir>"\`
+   (\`--cache\` shares the on-disk fetch cache across the fan-out, so overlapping URLs are fetched once.)
+2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin** (or an angle is missing), enrich with your own WebSearch and, for each good URL:
+   \`node ${engineAbs} fetch --url "<url>" --out "<its out dir>"\`
+3. Do NOT write any report tier.
+
+Return (structured output): \`{ "gathered": [{ "id", "out", "coverage", "newSubQuestions" }] }\` \u2014 for each of your ITEMS: its \`out\` dir, a one-line coverage note, and any NEW sub-questions you discovered (an empty array for none).
+${gathererFooter}`,
+    skeptic: `# Contract: skeptic
+
+You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
+
+Worklist: \`${join11(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+
+For EACH of your pairs:
+
+1. Open the cited source's full extract at \`${runAbs}/<extractPath>\` (the \`extractDigest\` in the worklist is only a claim-focused preview) and read the relevant passage in context.
+2. Judge whether the source actually SUPPORTS the claim:
+   - \`supported\` \u2014 the source states the claim.
+   - \`partial\` \u2014 it supports part / a weaker version.
+   - \`unsupported\` \u2014 it doesn't address the claim.
+   - \`refuted\` \u2014 it contradicts the claim.
+   When unsure, choose the HARSHER verdict \u2014 a false pass is worse than a false fail.
+3. **Numeral rule:** if the pair lists \`numeralsAbsent\` (a figure/date/quantity the claim asserts that is not in the cited extract), the verdict caps at \`partial\` \u2014 never \`supported\` \u2014 unless you locate the figure in the full extract.
+4. \`note\` is REQUIRED \u2014 one line grounded in what you read (quote or paraphrase the decisive passage).
+
+Return (structured output): \`{ "verdicts": [{ "claimId", "sourceId", "verdict", "note" }] }\` \u2014 your ITEMS only.
+${skepticFooter}`
+  };
+}
+function runbookMd(phases, runAbs, engineAbs) {
+  const status = phases.map((p) => `| ${p.name} | \`${p.worklist}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${p.prerequisite}\` |`).join("\n");
+  const engine = `node ${engineAbs}`;
+  const gather = phases.find((p) => p.name === "gather");
+  const outs = gather?.plan ? gather.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())).join(",") : "<the out dirs, comma-joined>";
+  const q = gather?.plan ? JSON.stringify(gather.plan.question) : '"<question>"';
+  const mode = gather?.plan ? gather.plan.mode : "<m>";
+  return `# ultrasearch \u2014 sequential RUNBOOK (eco / no-subagent fallback)
+
+Run: \`${runAbs}\` \xB7 Engine: \`${engine}\`
+
+Generated by \`ultrasearch orchestrate\` from the CURRENT run state. This sequential path is
+correctness-identical to the multi-agent workflows \u2014 same worklists, same contracts, same
+fail-closed gates; only wall-clock differs.
+Parallel subagents are an optimization, never a requirement.
+
+## Phase status
+
+| Phase | Worklist | Status | Produce it with |
+|---|---|---|---|
+${status}
+
+## The loop (play every role yourself, one item at a time)
+
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${runAbs}\` \u2192 \`${join11(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\`; deep tier: add \`--depth deep\`).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join11(runAbs, "PLAN.json")}\`, apply \`${join11(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q \u2026 --queries \u2026 --cache --out <its out dir>\`, then enrich a thin sub-dossier (your WebSearch + \`fetch --url \u2026 --out <its out dir>\`).
+3. **Merge** \u2014 \`${engine} merge --runs "${outs}" --master ${runAbs} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
+4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${runAbs}\` writes \`${join11(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join11(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join11(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${runAbs} --run ${runAbs}\`.
+6. **Gate** \u2014 \`${engine} render --run ${runAbs}\` and \`${engine} check --run ${runAbs} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
+7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Stop when a round surfaces nothing new.
+
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${runAbs} --phase <p>\` then \`Workflow({ scriptPath: "${join11(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+`;
+}
+
+// src/orchestrate.ts
+var PHASES = ["gather", "verify"];
+var SMALL_WORKLIST = 3;
+function listPhases(runDir, engineAbs) {
+  const run = resolve(runDir);
+  const planPath = join12(run, "PLAN.json");
+  let plan;
+  if (existsSync6(planPath)) {
+    try {
+      const f = JSON.parse(readFileSync6(planPath, "utf8"));
+      if (f && Array.isArray(f.subQuestions)) plan = f;
+    } catch {
+    }
+  }
+  const planIds = plan ? plan.subQuestions.map((s) => s.id) : [];
+  const verPath = join12(run, "VERIFY.todo.json");
+  let verIds = [];
+  let verReady = false;
+  if (existsSync6(verPath)) {
+    try {
+      const f = JSON.parse(readFileSync6(verPath, "utf8"));
+      if (f && Array.isArray(f.pairs)) {
+        verReady = true;
+        verIds = f.pairs.map((p) => `${p.claimId}:${p.sourceId}`);
+      }
+    } catch {
+    }
+  }
+  return [
+    {
+      name: "gather",
+      ready: plan !== void 0,
+      worklist: planPath,
+      items: planIds.length,
+      ids: planIds,
+      ...plan ? { plan } : {},
+      prerequisite: plan ? `node ${engineAbs} plan --q ${JSON.stringify(plan.question)} --mode ${plan.mode} --run-root ${run}` : `node ${engineAbs} plan --q "<question>" --mode <m> --run-root ${run}`
+    },
+    {
+      name: "verify",
+      ready: verReady,
+      worklist: verPath,
+      items: verIds.length,
+      ids: verIds,
+      prerequisite: `node ${engineAbs} verify --run ${run}`
+    }
+  ];
+}
+function orchestrateRun(runDir, engineAbs, opts = {}) {
+  const run = resolve(runDir);
+  if (!existsSync6(run)) {
+    return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
+  }
+  const phases = listPhases(run, engineAbs);
+  let selected = phases.filter((p) => p.ready);
+  if (opts.phase !== void 0) {
+    const ph = phases.find((p) => p.name === opts.phase);
+    if (!ph) {
+      return {
+        exitCode: 2,
+        written: [],
+        notices: [],
+        errors: [`unknown phase "${opts.phase}" \u2014 expected one of: ${PHASES.join(", ")}.`],
+        phases
+      };
+    }
+    if (!ph.ready) {
+      return {
+        exitCode: 2,
+        written: [],
+        notices: [],
+        errors: [`phase "${ph.name}" is not ready \u2014 its worklist ${ph.worklist} does not exist yet. Produce it first: ${ph.prerequisite}`],
+        phases
+      };
+    }
+    selected = [ph];
+  }
+  const orchDir = join12(run, "orchestration");
+  const agentsDir = join12(orchDir, "agents");
+  mkdirSync5(join12(orchDir, "out"), { recursive: true });
+  mkdirSync5(agentsDir, { recursive: true });
+  const written = [];
+  const notices = [];
+  for (const [name, content] of Object.entries(agentContracts(run, engineAbs))) {
+    const p = join12(agentsDir, `${name}.md`);
+    writeFileSync10(p, content);
+    written.push(p);
+  }
+  if (!opts.eco) {
+    for (const ph of selected) {
+      if (ph.items === 0) {
+        notices.push(`phase "${ph.name}": worklist is empty \u2014 nothing to orchestrate.`);
+        continue;
+      }
+      if (ph.items <= SMALL_WORKLIST) {
+        notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
+      }
+      const p = join12(orchDir, `${ph.name}.workflow.mjs`);
+      writeFileSync10(p, phaseWorkflowScript(ph, run, engineAbs, SMALL_WORKLIST));
+      written.push(p);
+    }
+  }
+  const rb = join12(orchDir, "RUNBOOK.md");
+  writeFileSync10(rb, runbookMd(phases, run, engineAbs));
+  written.push(rb);
+  return { exitCode: 0, written, notices, errors: [], phases };
+}
+
 // src/cli.ts
 var HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic \u2014 fan out keyless web search,
@@ -4365,6 +4689,7 @@ Usage:
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
+  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -4394,6 +4719,12 @@ Deep research (the agentic tier \u2014 see references/deep-research-playbook.md)
            (--apply <files>) gate on refuted/unsupported claims. --shards <n>
            --shard <i> writes shard i only (one skeptic subagent per shard);
            --apply accepts several verdict files (comma list or a directory).
+  orchestrate  Emit the run's multi-agent orchestration from its CURRENT
+           worklists: one launchable workflow per ready phase (gather fans out
+           one gatherer per PLAN.json sub-question; verify fans skeptics over
+           VERIFY.todo.json) + the agents/<role>.md dispatch contracts + a
+           sequential RUNBOOK.md, under <run>/orchestration/. Subagents return
+           fragments; the merge / verify --apply folds stay with you.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -4424,7 +4755,12 @@ Options:
   --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
                        big win is the deep tier's per-sub-question fan-out
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
-  --run <dir>          For render/check/verify: the dossier dir to operate on
+  --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
+  --phase <name>       For 'orchestrate': emit one phase only \u2014 gather | verify
+                       (exit 2 when its worklist does not exist yet)
+  --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md \u2014
+                       the explicit sequential low-token path
+  --list               For 'orchestrate': print the phases + readiness as JSON
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
@@ -4451,7 +4787,20 @@ Grounding:
     ultrasearch render --run <dir>   # \u2192 index.html + index.md
     ultrasearch check  --run <dir>   # exit\u22600 if a claim is ungrounded
 `;
-var COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "render", "check", "modes", "brainstorm", "plan", "merge", "verify"]);
+var COMMANDS = /* @__PURE__ */ new Set([
+  "gather",
+  "search",
+  "fetch",
+  "add-source",
+  "render",
+  "check",
+  "modes",
+  "brainstorm",
+  "plan",
+  "merge",
+  "verify",
+  "orchestrate"
+]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
   "question",
@@ -4486,9 +4835,10 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "run-root",
   "shards",
   "shard",
-  "min-sources"
+  "min-sources",
+  "phase"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "eco", "list"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -4563,10 +4913,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve(x));
-  const abs = resolve(spec);
-  if (existsSync6(abs) && statSync(abs).isDirectory()) {
-    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve(abs, f));
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve2(x));
+  const abs = resolve2(spec);
+  if (existsSync7(abs) && statSync(abs).isDirectory()) {
+    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve2(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -4637,7 +4987,7 @@ function buildGatherOptions(p, opts = {}) {
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
     cache: p.bools.has("cache"),
-    out: p.values.out ? resolve(p.values.out) : void 0,
+    out: p.values.out ? resolve2(p.values.out) : void 0,
     json: p.bools.has("json")
   };
 }
@@ -4722,7 +5072,7 @@ async function main(argv = process.argv.slice(2)) {
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve2(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -4730,8 +5080,8 @@ async function main(argv = process.argv.slice(2)) {
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve(p.values["run-root"]) : void 0;
-      const result = runPlan(options.question, options.mode, override, cap, runRoot);
+      const runRoot = p.values["run-root"] ? resolve2(p.values["run-root"]) : void 0;
+      const result = runPlan(options.question, options.mode, override, cap, runRoot, options.depth);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       const rootHint = runRoot ? ` \u2014 each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(
@@ -4741,13 +5091,13 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve2(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync6(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync7(d)) fail(`run dir not found: ${d}`);
       const mode = p.values.mode ? oneOf("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve(p.values.master) : void 0,
+        master: p.values.master ? resolve2(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode
       });
@@ -4770,7 +5120,7 @@ async function main(argv = process.argv.slice(2)) {
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve(dir), url, {
+      const r = await addSource(resolve2(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         cache: p.bools.has("cache")
@@ -4794,10 +5144,10 @@ async function main(argv = process.argv.slice(2)) {
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve(dir);
+      const rdir = resolve2(dir);
       const written = {};
       if (!p.bools.has("no-html")) {
-        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve(p.values.out) : void 0);
+        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve2(p.values.out) : void 0);
         process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
       }
@@ -4812,7 +5162,7 @@ async function main(argv = process.argv.slice(2)) {
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve(dir);
+      const rdir = resolve2(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -4844,11 +5194,55 @@ async function main(argv = process.argv.slice(2)) {
       }
       return;
     }
+    case "orchestrate": {
+      const dir = p.values.run;
+      if (!dir) {
+        process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
+        process.exit(2);
+      }
+      const engineAbs = realpathSync(fileURLToPath(import.meta.url));
+      if (p.bools.has("list")) {
+        if (!existsSync7(resolve2(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve2(dir)}
+`);
+          process.exit(2);
+        }
+        process.stdout.write(JSON.stringify({ phases: listPhases(dir, engineAbs) }, null, 2) + "\n");
+        return;
+      }
+      const res = orchestrateRun(dir, engineAbs, {
+        phase: p.values.phase,
+        eco: p.bools.has("eco")
+      });
+      if (res.exitCode !== 0) {
+        for (const e of res.errors) process.stderr.write(`ultrasearch orchestrate: ${e}
+`);
+        process.exit(res.exitCode);
+      }
+      const lines = ["ultrasearch orchestrate: generated"];
+      for (const w of res.written) lines.push(`  ${w}`);
+      const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
+      if (workflows.length) {
+        lines.push("");
+        for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
+        lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
+      } else {
+        lines.push(`Follow ${join13(resolve2(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+      }
+      process.stdout.write(lines.join("\n") + "\n");
+      for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
+`);
+      if (p.values.phase === void 0 && workflows.length === 0 && !p.bools.has("eco")) {
+        process.stderr.write(`ultrasearch orchestrate: no ready phase \u2014 phases are ${PHASES.join(", ")} (see --list).
+`);
+      }
+      return;
+    }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve(dir), {
+      const res = runCheck(resolve2(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -4857,7 +5251,7 @@ async function main(argv = process.argv.slice(2)) {
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve2(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;

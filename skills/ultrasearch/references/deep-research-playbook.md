@@ -41,6 +41,14 @@ deterministic: `plan --run-root` hands you the sub-run dirs up front (no parsing
 stdout), and `verify --shards` + multi-file `verify --apply` split and reassemble
 the verification worklist.
 
+> **The engine now EMITS this playbook's fan-out.** `orchestrate --run <dir>
+> --phase gather|verify` turns the run's CURRENT `PLAN.json` /
+> `VERIFY.todo.json` into a launchable per-phase workflow, the
+> `agents/gatherer.md` + `agents/skeptic.md` dispatch contracts (the same
+> wording as the contracts below), and a sequential `RUNBOOK.md` — see
+> SKILL.md's **Orchestration — route by harness**. The copy-paste contracts
+> below remain the canonical wording and the no-`orchestrate` fallback.
+
 ## The loop
 
 1. **Decompose** — `plan --q "<question>" --mode <m> --run-root <dir>` →
@@ -54,6 +62,9 @@ the verification worklist.
    `DEEP_CAPS.maxSubQuestions` (6). With `--run-root` each sub-question carries a
    deterministic `out` dir (`<dir>/q1`, `<dir>/q2`, …) and the plan is written to
    `<dir>/PLAN.json` — so you can dispatch the fan-out without parsing stdout.
+   Pass `--depth deep` so the plan records the run's depth and an orchestrated
+   fan-out (`orchestrate --phase gather`) gathers deep; a standard-tier plan
+   omits it and fans out at standard depth.
 
 2. **Fan out** — one `gather --depth deep --cache --out <its out dir>` per
    sub-question, passing that sub-question's `queries`. `--cache` shares an
@@ -183,6 +194,12 @@ Then reassemble and gate in one call:
 contradiction that spans two shards (S1 supports in shard 0, S2 refutes in
 shard 1) is detected only after this merge — which is exactly when it runs.
 
+The emitted variant (`orchestrate --run <masterDir> --phase verify`) batches the
+ONE `VERIFY.todo.json` by `claimId:sourceId` instead of sharding it: skeptics
+only RETURN verdict fragments (strict one-writer — no subagent touches the
+master dir) and YOU save each fragment as `<masterDir>/verdicts.<i>.json` before
+the same reassembling `verify --apply`.
+
 ## Signals to act on
 
 The engine surfaces three deterministic signals; react to each:
@@ -203,7 +220,10 @@ The engine surfaces three deterministic signals; react to each:
 If your harness has a workflow/orchestration primitive, the shape is a
 `pipeline` over the sub-questions (each item: gather → enrich) feeding a `merge`,
 then a `parallel` fan-out of the verify shards into the reassembling `--apply`.
-The CLI calls are identical; the primitive only schedules them.
+The CLI calls are identical; the primitive only schedules them. You don't have
+to write that script yourself: `orchestrate --run <dir> --phase gather|verify`
+emits it (`<dir>/orchestration/<phase>.workflow.mjs`, batches and absolute
+paths baked in) from the current worklists.
 
 ## Budget
 

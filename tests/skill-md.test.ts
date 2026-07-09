@@ -57,9 +57,20 @@ describe("SKILL.md", () => {
       expect(COMMANDS.has(cmd!), `SKILL.md references unknown command "${cmd}"`).toBe(true);
     }
     // and the core commands are documented
-    for (const core of ["gather", "fetch", "render", "check"]) {
+    for (const core of ["gather", "fetch", "render", "check", "orchestrate"]) {
       expect(referenced.has(core), `SKILL.md should document "${core}"`).toBe(true);
     }
+  });
+
+  it("documents the orchestration route-by-harness table and keeps the portability contract", () => {
+    expect(skill).toMatch(/## Orchestration — route by harness/);
+    // The three harness rows: Workflow tool / subagents-only / eco-or-none.
+    expect(skill).toMatch(/Workflow tool/);
+    expect(skill).toMatch(/--eco/);
+    // The family CLI shape.
+    expect(skill).toMatch(/orchestrate --run <RUN> \[--phase gather\|verify\] \[--eco\] \[--list\]/);
+    // The portability sentence stays verbatim — fan-out never becomes a requirement.
+    expect(skill).toMatch(/parallel subagents are\s+an \*optimization\*, never a requirement/i);
   });
 
   it("references only reference files that exist on disk", () => {
