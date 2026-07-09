@@ -25,7 +25,7 @@ Parallel subagents are an optimization, never a requirement.
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`<RUN>\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** — \`node '<ENGINE>' verify --run '<RUN>'\` writes \`<RUN>/VERIFY.todo.json\`. For EVERY pair, apply \`<RUN>/orchestration/agents/skeptic.md\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`<RUN>/verdicts.json\`, then fold: \`node '<ENGINE>' verify --apply '<RUN>' --run '<RUN>'\`.
 6. **Gate** — \`node '<ENGINE>' render --run '<RUN>'\` and \`node '<ENGINE>' check --run '<RUN>' --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
-7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Stop when a round surfaces nothing new.
+7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
 With subagents available, prefer the emitted workflows instead: \`orchestrate --run '<RUN>' --phase <p>\` then \`Workflow({ scriptPath: "<RUN>/orchestration/<p>.workflow.mjs" })\` — you stay the sole writer either way.
 "
@@ -74,6 +74,8 @@ You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ul
 
 Worklist: \`<RUN>/PLAN.json\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
+**Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering — a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
+
 For EACH of your sub-questions:
 
 1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
@@ -97,6 +99,8 @@ exports[`orchestrate — contracts & runbook > golden shape (paths normalized) >
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
 Worklist: \`<RUN>/VERIFY.todo.json\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,…>\`).
+
+**Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating — a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
 For EACH of your pairs:
 

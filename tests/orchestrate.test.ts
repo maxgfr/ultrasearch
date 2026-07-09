@@ -363,6 +363,28 @@ describe("orchestrate — contracts & runbook", () => {
     expect(rb).toMatch(/optimization, never a requirement/i);
   });
 
+  it("verify workflow tail + RUNBOOK instruct clearing stale verdicts*.json before a re-fold (round-2 hygiene)", () => {
+    const run = makeRun({ plan: 4, verify: 4 });
+    orchestrateRun(run, ENGINE);
+    // the `--apply <dir>` glob refolds EVERY verdicts*.json — a round-2 re-plan
+    // renumbers claim ids, so stale round-1 fragments corrupt the fold last-wins.
+    expect(readWf(run, "verify")).toMatch(/delete or archive .*verdicts\*?\./i);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    expect(rb).toMatch(/delete or archive .*verdicts/i);
+    expect(rb).toMatch(/renumbers claim ids/i);
+  });
+
+  it("both contracts carry the stale-id guard: stop and report when an ITEMS id left the worklist (a re-plan renumbers)", () => {
+    const run = makeRun({ plan: 2, verify: 2 });
+    orchestrateRun(run, ENGINE);
+    for (const f of ["gatherer.md", "skeptic.md"]) {
+      const md = readFileSync(join(run, "orchestration", "agents", f), "utf8");
+      expect(md, f).toMatch(/no longer in the worklist/i);
+      expect(md, f).toMatch(/STOP and report/i);
+      expect(md, f).toMatch(/renumbers/i);
+    }
+  });
+
   it("golden shape (paths normalized)", () => {
     const run = makeRun({ plan: 4, verify: 2 });
     orchestrateRun(run, ENGINE);

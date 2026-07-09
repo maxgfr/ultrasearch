@@ -133,6 +133,8 @@ const PHASE_SPECS: Record<string, PhaseSpec> = {
     collapseFloor: (smallWorklist) => smallWorklist, // cheap per-pair judgments: ≤ SMALL_WORKLIST doesn't amortize
     description: (n) => `Adversarially verify the ${n} claim↔source pair(s) of an ultrasearch report (skeptic fan-out, fail-closed fold)`,
     applyHint: (engine, _ph, run) => [
+      `round 2+: delete or archive the previous round's verdicts*.json FIRST — re-running verify renumbers claim ids,`,
+      `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
       `save each returned fragment as ${join(run, "verdicts.<i>.json")} then reassemble + gate:`,
       `node ${shq(engine)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`,
     ],
@@ -208,6 +210,8 @@ You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ul
 
 Worklist: \`${join(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
+**Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering — a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
+
 For EACH of your sub-questions:
 
 1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
@@ -224,6 +228,8 @@ ${gathererFooter}`,
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
 Worklist: \`${join(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,…>\`).
+
+**Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating — a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
 For EACH of your pairs:
 
@@ -278,7 +284,7 @@ ${status}
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** — \`${engine} verify --run ${run}\` writes \`${join(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** — \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
-7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Stop when a round surfaces nothing new.
+7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
 With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` — you stay the sole writer either way.
 `;

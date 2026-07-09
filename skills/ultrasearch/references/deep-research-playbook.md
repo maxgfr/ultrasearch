@@ -137,11 +137,13 @@ the verification worklist.
    contradictions, or new sub-questions a round surfaced. If any appear and you
    are under the round budget (`DEEP_CAPS.maxRounds`, 3), fan out the new
    sub-questions, `merge` them into the **same** master, and re-verify: `verify`
-   regenerates the worklist afresh (prior verdicts are NOT carried over), so
-   adjudicate the new pairs into a fresh `verdicts.<round>.json` and re-apply
-   with the DIRECTORY form (`verify --apply <masterDir> --run <masterDir>`),
-   which reassembles every round's verdict files in one call. Stop when a round
-   surfaces nothing new.
+   regenerates the worklist afresh and RENUMBERS claim ids (prior verdicts are
+   NOT carried over). First delete or archive the previous round's
+   `verdicts*.json` — the directory form refolds every `verdicts*.json`, so a
+   stale round-1 file filed under renumbered ids corrupts the fold last-wins —
+   then adjudicate the fresh worklist into new `verdicts.<i>.json` file(s) and
+   re-apply with the DIRECTORY form (`verify --apply <masterDir> --run
+   <masterDir>`). Stop when a round surfaces nothing new.
 
 8. **Render & present** — `render --run <masterDir>` → `index.html` (per-claim
    verdict badges, a contradictions panel, the sub-question tree) + the
