@@ -89,6 +89,15 @@ interface PhaseSpec {
   schema: unknown;
   /** One agent per batch of at most this many worklist items (1 = one gatherer per sub-question). */
   batchSize: number;
+  /**
+   * Collapse the fan-out to a single batch (and nudge --eco) when the worklist
+   * is at or under this floor. Per-phase because the units differ in weight:
+   * a gather unit is a FULL sub-question gather (heavy — fan out at any count
+   * ≥ 2, collapse only a single-item worklist), while a verify unit is one
+   * cheap claim↔source judgment (a worklist ≤ smallWorklist doesn't amortize
+   * a fan-out).
+   */
+  collapseFloor: (smallWorklist: number) => number;
   description: (items: number) => string;
   /** The orchestrator's fold step, shown as comment lines in the workflow tail + in the runbook. */
   applyHint: (engineAbs: string, ph: PhaseInfo, runAbs: string) => string[];
@@ -111,6 +120,7 @@ const PHASE_SPECS: Record<string, PhaseSpec> = {
     title: "Gather",
     schema: GATHER_SCHEMA,
     batchSize: 1, // one gatherer per sub-question — the playbook's fan-out
+    collapseFloor: () => 1, // heavy units: fan out at any count ≥ 2
     description: (n) =>
       `Gather web evidence for the ${n} sub-question(s) of an ultrasearch run (one gatherer per sub-question; the dossier union stays with the orchestrator)`,
     applyHint: mergeHint,
@@ -120,6 +130,7 @@ const PHASE_SPECS: Record<string, PhaseSpec> = {
     title: "Verify",
     schema: VERIFY_SCHEMA,
     batchSize: 8, // BATCH_SIZE — one skeptic per batch of claim↔source pairs
+    collapseFloor: (smallWorklist) => smallWorklist, // cheap per-pair judgments: ≤ SMALL_WORKLIST doesn't amortize
     description: (n) => `Adversarially verify the ${n} claim↔source pair(s) of an ultrasearch report (skeptic fan-out, fail-closed fold)`,
     applyHint: (engine, _ph, run) => [
       `save each returned fragment as ${join(run, "verdicts.<i>.json")} then reassemble + gate:`,
@@ -145,9 +156,11 @@ export function phaseWorkflowScript(ph: PhaseInfo, runAbs: string, engineAbs: st
   const spec = phaseSpec(ph.name);
   const scriptPath = join(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
   const meta = { name: `ultrasearch-${ph.name}`, description: spec.description(ph.items), phases: [{ title: spec.title }] };
-  // A worklist at or under the small floor doesn't amortize a fan-out: collapse
-  // it to a single batch (one agent plays every item) — the eco nudge fires too.
-  const batches = ph.items <= smallWorklist ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
+  // A worklist at or under the phase's collapse floor doesn't amortize a
+  // fan-out: collapse it to a single batch (one agent plays every item) — the
+  // eco nudge fires too. The floor is per-phase (heavy gather units keep one
+  // gatherer per sub-question at any count ≥ 2; cheap verify pairs collapse ≤ SMALL_WORKLIST).
+  const batches = ph.items <= spec.collapseFloor(smallWorklist) ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
   const hint = spec.applyHint(engineAbs, ph, runAbs);
   return [
     `export const meta = ${JSON.stringify(meta)}`,

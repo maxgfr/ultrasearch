@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { agentContracts, phaseWorkflowScript, runbookMd } from "./orchestrate-templates.js";
+import { agentContracts, phaseSpec, phaseWorkflowScript, runbookMd } from "./orchestrate-templates.js";
 import type { ClaimEvidencePair, PlanResult } from "./types.js";
 import { shq } from "./util.js";
 
@@ -23,7 +23,12 @@ import { shq } from "./util.js";
 export const PHASES = ["gather", "verify"] as const;
 export type PhaseName = (typeof PHASES)[number];
 
-/** Small worklists don't amortize a fan-out — orchestrate says so and nudges --eco. */
+/**
+ * Small worklists don't amortize a fan-out — orchestrate says so and nudges
+ * --eco. The floor is per-phase (each PhaseSpec's collapseFloor): verify's
+ * cheap claim↔source pairs collapse at ≤ SMALL_WORKLIST, while gather's heavy
+ * per-sub-question units keep one gatherer each at any count ≥ 2.
+ */
 export const SMALL_WORKLIST = 3;
 /** One skeptic per batch of at most this many verify pairs (gather fans out 1 sub-question per agent). */
 export const BATCH_SIZE = 8;
@@ -163,7 +168,7 @@ export function orchestrateRun(runDir: string, engineAbs: string, opts: Orchestr
         notices.push(`phase "${ph.name}": worklist is empty — nothing to orchestrate.`);
         continue;
       }
-      if (ph.items <= SMALL_WORKLIST) {
+      if (ph.items <= phaseSpec(ph.name).collapseFloor(SMALL_WORKLIST)) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) — the sequential --eco path is equivalent and cheaper.`);
       }
       const p = join(orchDir, `${ph.name}.workflow.mjs`);

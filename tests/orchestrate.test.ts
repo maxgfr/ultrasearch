@@ -224,14 +224,34 @@ describe("orchestrate — emitted workflow", () => {
     expect(src).toContain("schema: SCHEMA");
   });
 
-  it("small worklist (≤ SMALL_WORKLIST) → single agent + an eco notice, for both phases", () => {
-    const run = makeRun({ plan: 3, verify: 2 });
+  // Gather units are HEAVY (a full sub-question gather each); verify units are
+  // cheap per-pair judgments. The small-worklist collapse is therefore
+  // per-phase: gather fans out at ANY count ≥ 2, verify collapses at ≤ SMALL_WORKLIST.
+  it("gather at the standard-depth default (3 sub-questions) fans out 3 gatherers — no collapse, no eco nudge", () => {
+    const run = makeRun({ plan: 3 });
     const res = orchestrateRun(run, ENGINE);
-    for (const phase of ["gather", "verify"]) {
-      const m = readWf(run, phase).match(/const BATCHES = (\[.*?\])\n/s);
-      expect((JSON.parse(m![1]!) as string[][]).length, `${phase} should collapse to a single batch`).toBe(1);
-    }
-    expect(res.notices.filter((n) => n.includes("--eco")).length).toBe(2);
+    const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
+    const batches = JSON.parse(m![1]!) as string[][];
+    expect(batches.length).toBe(3);
+    for (const b of batches) expect(b.length).toBe(1);
+    expect(batches.flat()).toEqual(["Q1", "Q2", "Q3"]);
+    expect(res.notices.filter((n) => n.includes("gather") && n.includes("--eco")).length).toBe(0);
+  });
+
+  it("a single-sub-question gather collapses to one agent + the eco nudge", () => {
+    const run = makeRun({ plan: 1 });
+    const res = orchestrateRun(run, ENGINE);
+    const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
+    expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
+    expect(res.notices.some((n) => n.includes("gather") && n.includes("--eco"))).toBe(true);
+  });
+
+  it("verify keeps the ≤ SMALL_WORKLIST collapse (single agent + eco nudge at 3 pairs)", () => {
+    const run = makeRun({ verify: 3 });
+    const res = orchestrateRun(run, ENGINE);
+    const m = readWf(run, "verify").match(/const BATCHES = (\[.*?\])\n/s);
+    expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
+    expect(res.notices.some((n) => n.includes("verify") && n.includes("--eco"))).toBe(true);
     expect(SMALL_WORKLIST).toBeLessThan(BATCH_SIZE);
   });
 
