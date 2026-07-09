@@ -186,6 +186,9 @@ function listModes() {
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+function shq(s) {
+  return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
+}
 function slugify(input) {
   return input.toLowerCase().replace(/^https?:\/\//, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "run";
 }
@@ -3609,7 +3612,7 @@ _Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources.
 }
 function parseVerdictFile(verdictsPath) {
   const raw = readJson(verdictsPath, `verdicts file`);
-  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
+  const list = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : Array.isArray(raw?.verdicts) ? raw.verdicts : [];
   const verdicts = [];
   for (const v of list) {
     if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
@@ -3624,6 +3627,11 @@ function parseVerdictFile(verdictsPath) {
       verdict,
       note: typeof v.note === "string" ? v.note : ""
     });
+  }
+  if (verdicts.length === 0) {
+    throw new Error(
+      `${verdictsPath}: no verdict rows found \u2014 expected a bare array, { pairs: [...] } or { verdicts: [...] } with at least one { claimId, sourceId, verdict, note } row (fail-closed: an empty fold would pass a 0/0 gate).`
+    );
   }
   return verdicts;
 }
@@ -4318,11 +4326,13 @@ function runMerge(options) {
   const mode = getMode(modeName);
   const builtAt = dossiers.map((d) => d.manifest.builtAt).sort().at(-1) ?? dossiers[0].manifest.builtAt;
   const subQuestions = dossiers.map((d, i) => ({ id: `Q${i + 1}`, question: d.manifest.question }));
+  const rank = (d) => ALL_DEPTHS.indexOf(d);
+  const depth = dossiers.map((d) => d.manifest.depth).filter((d) => d !== void 0).sort((a, b) => rank(a) - rank(b)).at(-1) ?? "deep";
   const manifest = {
     version: VERSION,
     question,
     mode: modeName,
-    depth: "deep",
+    depth,
     lang: dossiers[0].manifest.lang ?? "en",
     backends: [...new Set(dossiers.flatMap((d) => d.manifest.backends))],
     backendsUsed: [...new Set(dossiers.flatMap((d) => d.manifest.backendsUsed))],
@@ -4407,7 +4417,7 @@ function mergeHint(engineAbs, ph, runAbs) {
   const q = ph.plan ? ph.plan.question : "<question>";
   const mode = ph.plan ? ph.plan.mode : "<mode>";
   return [
-    `node ${engineAbs} merge --runs "${outs.join(",")}" --master ${runAbs} --q ${JSON.stringify(q)} --mode ${mode}`,
+    `node ${shq(engineAbs)} merge --runs ${shq(outs.join(","))} --master ${shq(runAbs)} --q ${shq(q)} --mode ${mode}`,
     `then write SUMMARY.md/REPORT.md against the MASTER [S#] ids, and feed any NEW sub-questions into the next round.`
   ];
 }
@@ -4418,6 +4428,8 @@ var PHASE_SPECS = {
     schema: GATHER_SCHEMA,
     batchSize: 1,
     // one gatherer per sub-question — the playbook's fan-out
+    collapseFloor: () => 1,
+    // heavy units: fan out at any count ≥ 2
     description: (n) => `Gather web evidence for the ${n} sub-question(s) of an ultrasearch run (one gatherer per sub-question; the dossier union stays with the orchestrator)`,
     applyHint: mergeHint
   },
@@ -4427,10 +4439,14 @@ var PHASE_SPECS = {
     schema: VERIFY_SCHEMA,
     batchSize: 8,
     // BATCH_SIZE — one skeptic per batch of claim↔source pairs
+    collapseFloor: (smallWorklist) => smallWorklist,
+    // cheap per-pair judgments: ≤ SMALL_WORKLIST doesn't amortize
     description: (n) => `Adversarially verify the ${n} claim\u2194source pair(s) of an ultrasearch report (skeptic fan-out, fail-closed fold)`,
     applyHint: (engine, _ph, run) => [
+      `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
+      `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
       `save each returned fragment as ${join11(run, "verdicts.<i>.json")} then reassemble + gate:`,
-      `node ${engine} verify --apply ${run} --run ${run}   # a dir picks up every verdicts*.json`
+      `node ${shq(engine)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
     ]
   }
 };
@@ -4448,7 +4464,7 @@ function phaseWorkflowScript(ph, runAbs, engineAbs, smallWorklist) {
   const spec = phaseSpec(ph.name);
   const scriptPath = join11(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
   const meta = { name: `ultrasearch-${ph.name}`, description: spec.description(ph.items), phases: [{ title: spec.title }] };
-  const batches = ph.items <= smallWorklist ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
+  const batches = ph.items <= spec.collapseFloor(smallWorklist) ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
   const hint = spec.applyHint(engineAbs, ph, runAbs);
   return [
     `export const meta = ${JSON.stringify(meta)}`,
@@ -4495,6 +4511,8 @@ You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ul
 
 Worklist: \`${join11(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
+**Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
+
 For EACH of your sub-questions:
 
 1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
@@ -4511,6 +4529,8 @@ ${gathererFooter}`,
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
 Worklist: \`${join11(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+
+**Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
 For EACH of your pairs:
 
@@ -4529,12 +4549,14 @@ ${skepticFooter}`
   };
 }
 function runbookMd(phases, runAbs, engineAbs) {
-  const status = phases.map((p) => `| ${p.name} | \`${p.worklist}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${p.prerequisite}\` |`).join("\n");
-  const engine = `node ${engineAbs}`;
+  const cell = (s) => s.replace(/\r?\n/g, " ").replaceAll("|", "\\|");
+  const status = phases.map((p) => `| ${p.name} | \`${cell(p.worklist)}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${cell(p.prerequisite)}\` |`).join("\n");
+  const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
-  const outs = gather?.plan ? gather.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())).join(",") : "<the out dirs, comma-joined>";
-  const q = gather?.plan ? JSON.stringify(gather.plan.question) : '"<question>"';
+  const outs = gather?.plan ? shq(gather.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const q = gather?.plan ? shq(gather.plan.question) : '"<question>"';
   const mode = gather?.plan ? gather.plan.mode : "<m>";
+  const run = shq(runAbs);
   return `# ultrasearch \u2014 sequential RUNBOOK (eco / no-subagent fallback)
 
 Run: \`${runAbs}\` \xB7 Engine: \`${engine}\`
@@ -4552,15 +4574,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${runAbs}\` \u2192 \`${join11(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\`; deep tier: add \`--depth deep\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join11(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
 2. **Gather per sub-question** \u2014 for EVERY entry in \`${join11(runAbs, "PLAN.json")}\`, apply \`${join11(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q \u2026 --queries \u2026 --cache --out <its out dir>\`, then enrich a thin sub-dossier (your WebSearch + \`fetch --url \u2026 --out <its out dir>\`).
-3. **Merge** \u2014 \`${engine} merge --runs "${outs}" --master ${runAbs} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
+3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${runAbs}\` writes \`${join11(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join11(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join11(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${runAbs} --run ${runAbs}\`.
-6. **Gate** \u2014 \`${engine} render --run ${runAbs}\` and \`${engine} check --run ${runAbs} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
-7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Stop when a round surfaces nothing new.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join11(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join11(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join11(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
+7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${runAbs} --phase <p>\` then \`Workflow({ scriptPath: "${join11(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join11(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `;
 }
 
@@ -4600,7 +4622,11 @@ function listPhases(runDir, engineAbs) {
       items: planIds.length,
       ids: planIds,
       ...plan ? { plan } : {},
-      prerequisite: plan ? `node ${engineAbs} plan --q ${JSON.stringify(plan.question)} --mode ${plan.mode} --run-root ${run}` : `node ${engineAbs} plan --q "<question>" --mode <m> --run-root ${run}`
+      prerequisite: plan ? (
+        // Carry the persisted depth (when present) so re-running the prerequisite
+        // regenerates the SAME plan instead of silently dropping the field.
+        `node ${shq(engineAbs)} plan --q ${shq(plan.question)} --mode ${plan.mode}${plan.depth ? ` --depth ${plan.depth}` : ""} --run-root ${shq(run)}`
+      ) : `node ${shq(engineAbs)} plan --q "<question>" --mode <m> --run-root ${shq(run)}`
     },
     {
       name: "verify",
@@ -4608,7 +4634,7 @@ function listPhases(runDir, engineAbs) {
       worklist: verPath,
       items: verIds.length,
       ids: verIds,
-      prerequisite: `node ${engineAbs} verify --run ${run}`
+      prerequisite: `node ${shq(engineAbs)} verify --run ${shq(run)}`
     }
   ];
 }
@@ -4658,7 +4684,7 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
         notices.push(`phase "${ph.name}": worklist is empty \u2014 nothing to orchestrate.`);
         continue;
       }
-      if (ph.items <= SMALL_WORKLIST) {
+      if (ph.items <= phaseSpec(ph.name).collapseFloor(SMALL_WORKLIST)) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
       const p = join12(orchDir, `${ph.name}.workflow.mjs`);
@@ -5081,7 +5107,8 @@ async function main(argv = process.argv.slice(2)) {
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : void 0;
       const runRoot = p.values["run-root"] ? resolve2(p.values["run-root"]) : void 0;
-      const result = runPlan(options.question, options.mode, override, cap, runRoot, options.depth);
+      const depth = p.values.depth !== void 0 ? options.depth : void 0;
+      const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       const rootHint = runRoot ? ` \u2014 each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(

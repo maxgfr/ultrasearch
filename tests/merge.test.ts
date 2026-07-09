@@ -12,13 +12,7 @@ function scratch(): string {
 }
 
 // A real sub-dossier (proper 3-line extract headers) for one sub-question.
-function subDossier(
-  dir: string,
-  question: string,
-  raws: RawSource[],
-  builtAt = "2026-06-14T10:00:00.000Z",
-  depth: Manifest["depth"] = "deep",
-): void {
+function subDossier(dir: string, question: string, raws: RawSource[], builtAt = "2026-06-14T10:00:00.000Z", depth: Manifest["depth"] = "deep"): void {
   const manifest: Manifest = {
     version: "1.2.0",
     question,
@@ -262,8 +256,20 @@ describe("runMerge", () => {
     const root = scratch();
     const d1 = join(root, "r1");
     const d2 = join(root, "r2");
-    subDossier(d1, "q one", [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") }], undefined, "standard");
-    subDossier(d2, "q two", [{ url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "b", text: longText("b content") }], undefined, "standard");
+    subDossier(
+      d1,
+      "q one",
+      [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") }],
+      undefined,
+      "standard",
+    );
+    subDossier(
+      d2,
+      "q two",
+      [{ url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "b", text: longText("b content") }],
+      undefined,
+      "standard",
+    );
     const m = join(root, "m");
     const r = runMerge({ runs: [d1, d2], master: m, question: "Q" });
     expect(r.manifest.depth).toBe("standard");
@@ -275,8 +281,20 @@ describe("runMerge", () => {
     const root = scratch();
     const d1 = join(root, "r1");
     const d2 = join(root, "r2");
-    subDossier(d1, "q one", [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") }], undefined, "standard");
-    subDossier(d2, "q two", [{ url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "b", text: longText("b content") }], undefined, "deep");
+    subDossier(
+      d1,
+      "q one",
+      [{ url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 1, snippet: "a", text: longText("a content") }],
+      undefined,
+      "standard",
+    );
+    subDossier(
+      d2,
+      "q two",
+      [{ url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "b", text: longText("b content") }],
+      undefined,
+      "deep",
+    );
     const mixed = join(root, "m1");
     expect(runMerge({ runs: [d1, d2], master: mixed, question: "Q" }).manifest.depth).toBe("deep");
     // strip depth from d1's manifest (an old, pre-field sub-dossier)
