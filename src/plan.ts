@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ModeName, PlanResult, SubQuestion } from "./types.js";
+import type { Depth, ModeName, PlanResult, SubQuestion } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { rankedKeywords, extractIdentifiers, keywords, planVariants } from "./util.js";
@@ -132,8 +132,17 @@ function templateFacets(question: string, template: string): SubQuestion[] {
 // `runRoot` is given, each sub-question also carries a deterministic `out` dir
 // (<runRoot>/q1…/qN) AND the plan is written to <runRoot>/PLAN.json so the
 // orchestrator can dispatch one fan-out gather per sub-question without parsing
-// stdout.
-export function runPlan(question: string, mode: ModeName, override?: string[], cap: number = DEEP_CAPS.maxSubQuestions, runRoot?: string): PlanResult {
+// stdout. `depth` (when given) is persisted with the plan, so an orchestrated
+// fan-out gathers at the depth the run was planned at (standard runs stay
+// standard; the deep tier passes `deep`).
+export function runPlan(
+  question: string,
+  mode: ModeName,
+  override?: string[],
+  cap: number = DEEP_CAPS.maxSubQuestions,
+  runRoot?: string,
+  depth?: Depth,
+): PlanResult {
   const q = question.trim();
   let subs: SubQuestion[];
   if (override?.length) {
@@ -175,7 +184,7 @@ export function runPlan(question: string, mode: ModeName, override?: string[], c
     s.id = `Q${i + 1}`;
     if (runRoot) s.out = join(runRoot, s.id.toLowerCase());
   });
-  const result: PlanResult = { question: q, mode, subQuestions: uniq };
+  const result: PlanResult = { question: q, mode, ...(depth ? { depth } : {}), subQuestions: uniq };
   if (runRoot) {
     mkdirSync(runRoot, { recursive: true });
     writeFileSync(join(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));

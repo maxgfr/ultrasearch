@@ -143,6 +143,8 @@ export interface SubQuestion {
 export interface PlanResult {
   question: string;
   mode: ModeName;
+  /** The requested retrieval depth, persisted into PLAN.json so `orchestrate` emits fan-out gathers at the run's depth (absent on older plans, which were deep-tier only). */
+  depth?: Depth;
   subQuestions: SubQuestion[];
 }
 

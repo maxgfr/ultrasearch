@@ -114,6 +114,20 @@ describe("runPlan", () => {
     expect(onDisk).toEqual(r);
     rmSync(root, { recursive: true, force: true });
   });
+
+  it("persists the requested depth into PLAN.json (so orchestrated gathers fan out at the run's depth)", () => {
+    const root = mkdtempSync(join(tmpdir(), "us-plan-"));
+    const r = runPlan("rate limiting", "topic", undefined, undefined, root, "deep");
+    expect(r.depth).toBe("deep");
+    const onDisk = JSON.parse(readFileSync(join(root, "PLAN.json"), "utf8"));
+    expect(onDisk.depth).toBe("deep");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("leaves depth off the result when not given (old callers stay byte-identical)", () => {
+    const r = runPlan("rate limiting", "topic");
+    expect("depth" in r).toBe(false);
+  });
 });
 
 describe("subjectOf", () => {
