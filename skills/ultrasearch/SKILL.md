@@ -120,7 +120,7 @@ the question is already specific.
 2. **Gather.** Default on a subagent harness: fan the gather out even at
    standard depth —
    ```
-   node <skill-dir>/scripts/ultrasearch.mjs plan --q "<precise question>" --mode <m> --max-subquestions 3 --run-root <RUN>
+   node <skill-dir>/scripts/ultrasearch.mjs plan --q "<precise question>" --mode <m> --depth standard --max-subquestions 3 --run-root <RUN>
    node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> --phase gather
    ```
    then dispatch the emitted workflow (one gatherer per sub-question, each
@@ -215,8 +215,11 @@ sub-dossier: the emitted contracts end with the one-writer rule, and the folds
 orchestrator. Re-run `orchestrate` whenever a worklist changes (emission is
 deterministic and idempotent); `--phase <p>` before its worklist exists fails
 and names the command that produces it. At standard depth keep the plan small
-(`--max-subquestions 3`); a worklist of ≤3 items gets an eco nudge — the
-sequential path is equivalent and cheaper there.
+(`--max-subquestions 3`). Gather units are heavy (a full sub-question gather
+each), so the gather phase keeps one gatherer per sub-question at any count
+≥2 — only a single-sub-question plan gets the eco nudge. Verify pairs are
+cheap per-pair judgments, so a verify worklist of ≤3 pairs collapses to one
+agent with the nudge — the sequential path is equivalent and cheaper there.
 
 ## When retrieval fails
 

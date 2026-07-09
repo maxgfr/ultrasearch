@@ -105,6 +105,15 @@ describe("orchestrate — listPhases", () => {
     expect(gather!.plan!.mode).toBe("topic");
     expect(gather!.plan!.depth).toBe("standard");
     expect(gather!.prerequisite).toContain("how does HTTP rate limiting work");
+    // re-running the prerequisite must regenerate the SAME plan — including its depth
+    expect(gather!.prerequisite).toContain("--depth standard");
+  });
+
+  it("a plan without a depth field yields a prerequisite without --depth (the deep fallback is the contract's)", () => {
+    const run = mkdtempSync(join(tmpdir(), "us-orch-nodepth-"));
+    runPlan("how does HTTP rate limiting work", "topic", ["angle one", "angle two"], 2, run);
+    const [gather] = listPhases(run, ENGINE);
+    expect(gather!.prerequisite).not.toContain("--depth");
   });
 });
 
@@ -224,14 +233,34 @@ describe("orchestrate — emitted workflow", () => {
     expect(src).toContain("schema: SCHEMA");
   });
 
-  it("small worklist (≤ SMALL_WORKLIST) → single agent + an eco notice, for both phases", () => {
-    const run = makeRun({ plan: 3, verify: 2 });
+  // Gather units are HEAVY (a full sub-question gather each); verify units are
+  // cheap per-pair judgments. The small-worklist collapse is therefore
+  // per-phase: gather fans out at ANY count ≥ 2, verify collapses at ≤ SMALL_WORKLIST.
+  it("gather at the standard-depth default (3 sub-questions) fans out 3 gatherers — no collapse, no eco nudge", () => {
+    const run = makeRun({ plan: 3 });
     const res = orchestrateRun(run, ENGINE);
-    for (const phase of ["gather", "verify"]) {
-      const m = readWf(run, phase).match(/const BATCHES = (\[.*?\])\n/s);
-      expect((JSON.parse(m![1]!) as string[][]).length, `${phase} should collapse to a single batch`).toBe(1);
-    }
-    expect(res.notices.filter((n) => n.includes("--eco")).length).toBe(2);
+    const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
+    const batches = JSON.parse(m![1]!) as string[][];
+    expect(batches.length).toBe(3);
+    for (const b of batches) expect(b.length).toBe(1);
+    expect(batches.flat()).toEqual(["Q1", "Q2", "Q3"]);
+    expect(res.notices.filter((n) => n.includes("gather") && n.includes("--eco")).length).toBe(0);
+  });
+
+  it("a single-sub-question gather collapses to one agent + the eco nudge", () => {
+    const run = makeRun({ plan: 1 });
+    const res = orchestrateRun(run, ENGINE);
+    const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
+    expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
+    expect(res.notices.some((n) => n.includes("gather") && n.includes("--eco"))).toBe(true);
+  });
+
+  it("verify keeps the ≤ SMALL_WORKLIST collapse (single agent + eco nudge at 3 pairs)", () => {
+    const run = makeRun({ verify: 3 });
+    const res = orchestrateRun(run, ENGINE);
+    const m = readWf(run, "verify").match(/const BATCHES = (\[.*?\])\n/s);
+    expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
+    expect(res.notices.some((n) => n.includes("verify") && n.includes("--eco"))).toBe(true);
     expect(SMALL_WORKLIST).toBeLessThan(BATCH_SIZE);
   });
 
@@ -334,6 +363,28 @@ describe("orchestrate — contracts & runbook", () => {
     expect(rb).toMatch(/optimization, never a requirement/i);
   });
 
+  it("verify workflow tail + RUNBOOK instruct clearing stale verdicts*.json before a re-fold (round-2 hygiene)", () => {
+    const run = makeRun({ plan: 4, verify: 4 });
+    orchestrateRun(run, ENGINE);
+    // the `--apply <dir>` glob refolds EVERY verdicts*.json — a round-2 re-plan
+    // renumbers claim ids, so stale round-1 fragments corrupt the fold last-wins.
+    expect(readWf(run, "verify")).toMatch(/delete or archive .*verdicts\*?\./i);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    expect(rb).toMatch(/delete or archive .*verdicts/i);
+    expect(rb).toMatch(/renumbers claim ids/i);
+  });
+
+  it("both contracts carry the stale-id guard: stop and report when an ITEMS id left the worklist (a re-plan renumbers)", () => {
+    const run = makeRun({ plan: 2, verify: 2 });
+    orchestrateRun(run, ENGINE);
+    for (const f of ["gatherer.md", "skeptic.md"]) {
+      const md = readFileSync(join(run, "orchestration", "agents", f), "utf8");
+      expect(md, f).toMatch(/no longer in the worklist/i);
+      expect(md, f).toMatch(/STOP and report/i);
+      expect(md, f).toMatch(/renumbers/i);
+    }
+  });
+
   it("golden shape (paths normalized)", () => {
     const run = makeRun({ plan: 4, verify: 2 });
     orchestrateRun(run, ENGINE);
@@ -341,6 +392,59 @@ describe("orchestrate — contracts & runbook", () => {
     expect(stable(readFileSync(join(run, "orchestration", "agents", "gatherer.md"), "utf8"), run)).toMatchSnapshot("gatherer.md");
     expect(stable(readFileSync(join(run, "orchestration", "agents", "skeptic.md"), "utf8"), run)).toMatchSnapshot("skeptic.md");
     expect(stable(readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8"), run)).toMatchSnapshot("RUNBOOK.md");
+  });
+});
+
+describe("orchestrate — shell-safe emission (US-2)", () => {
+  // A question exercising every shell hazard the emitter must neutralize:
+  // command substitution, variable expansion, pipes, quotes and a newline.
+  const NASTY = "how much does `uname` cost? it's $99 | maybe\nmore";
+  // shq()'s rendering: newline → space, ' → '"'"', wrapped in single quotes.
+  const NASTY_SHQ = `'how much does \`uname\` cost? it'"'"'s $99 | maybe more'`;
+
+  function nastyRun(): string {
+    const run = mkdtempSync(join(tmpdir(), "us-orch-nasty-"));
+    runPlan(NASTY, "topic", ["angle one about pricing", "angle two about safety"], 2, run, "standard");
+    return run;
+  }
+
+  it("single-quotes the question and the paths in the gather prerequisite", () => {
+    const run = nastyRun();
+    const [gather] = listPhases(run, ENGINE);
+    expect(gather!.prerequisite).toContain(`--q ${NASTY_SHQ}`);
+    expect(gather!.prerequisite).toContain(`--run-root '${run}'`);
+    expect(gather!.prerequisite).not.toContain("\n");
+  });
+
+  it("single-quotes the question and the paths in the workflow-tail merge fold", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const src = readWf(run, "gather");
+    expect(src).toContain(`--q ${NASTY_SHQ}`);
+    expect(src).toContain(`--master '${run}'`);
+    expect(src).toContain(`--runs '${join(run, "q1")},${join(run, "q2")}'`);
+  });
+
+  it("the RUNBOOK merge command quotes the question — it stays equal to PLAN.json's question", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    expect(rb).toContain(`--q ${NASTY_SHQ}`);
+    // the paths in every runnable step are quoted too
+    expect(rb).toContain(`--run '${run}'`);
+    expect(rb).toContain(`--master '${run}'`);
+  });
+
+  it("the RUNBOOK phase-status table survives pipes and newlines in the prerequisite", () => {
+    const run = nastyRun();
+    orchestrateRun(run, ENGINE);
+    const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
+    const rows = rb.split("\n").filter((l) => l.startsWith("| gather |"));
+    expect(rows.length).toBe(1); // one line — the newline was collapsed
+    const row = rows[0]!;
+    // pipes inside cells are escaped, so the row still has exactly 4 columns
+    expect(row).toContain("\\|");
+    expect(row.split(/(?<!\\)\|/).length - 2).toBe(4);
   });
 });
 

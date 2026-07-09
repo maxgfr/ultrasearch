@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { PhaseInfo } from "./orchestrate.js";
+import { shq } from "./util.js";
 
 // ---------------------------------------------------------------------------
 // Templates for `ultrasearch orchestrate` — the generator that turns the run's
@@ -88,6 +89,15 @@ interface PhaseSpec {
   schema: unknown;
   /** One agent per batch of at most this many worklist items (1 = one gatherer per sub-question). */
   batchSize: number;
+  /**
+   * Collapse the fan-out to a single batch (and nudge --eco) when the worklist
+   * is at or under this floor. Per-phase because the units differ in weight:
+   * a gather unit is a FULL sub-question gather (heavy — fan out at any count
+   * ≥ 2, collapse only a single-item worklist), while a verify unit is one
+   * cheap claim↔source judgment (a worklist ≤ smallWorklist doesn't amortize
+   * a fan-out).
+   */
+  collapseFloor: (smallWorklist: number) => number;
   description: (items: number) => string;
   /** The orchestrator's fold step, shown as comment lines in the workflow tail + in the runbook. */
   applyHint: (engineAbs: string, ph: PhaseInfo, runAbs: string) => string[];
@@ -99,7 +109,7 @@ function mergeHint(engineAbs: string, ph: PhaseInfo, runAbs: string): string[] {
   const q = ph.plan ? ph.plan.question : "<question>";
   const mode = ph.plan ? ph.plan.mode : "<mode>";
   return [
-    `node ${engineAbs} merge --runs "${outs.join(",")}" --master ${runAbs} --q ${JSON.stringify(q)} --mode ${mode}`,
+    `node ${shq(engineAbs)} merge --runs ${shq(outs.join(","))} --master ${shq(runAbs)} --q ${shq(q)} --mode ${mode}`,
     `then write SUMMARY.md/REPORT.md against the MASTER [S#] ids, and feed any NEW sub-questions into the next round.`,
   ];
 }
@@ -110,6 +120,7 @@ const PHASE_SPECS: Record<string, PhaseSpec> = {
     title: "Gather",
     schema: GATHER_SCHEMA,
     batchSize: 1, // one gatherer per sub-question — the playbook's fan-out
+    collapseFloor: () => 1, // heavy units: fan out at any count ≥ 2
     description: (n) =>
       `Gather web evidence for the ${n} sub-question(s) of an ultrasearch run (one gatherer per sub-question; the dossier union stays with the orchestrator)`,
     applyHint: mergeHint,
@@ -119,10 +130,13 @@ const PHASE_SPECS: Record<string, PhaseSpec> = {
     title: "Verify",
     schema: VERIFY_SCHEMA,
     batchSize: 8, // BATCH_SIZE — one skeptic per batch of claim↔source pairs
+    collapseFloor: (smallWorklist) => smallWorklist, // cheap per-pair judgments: ≤ SMALL_WORKLIST doesn't amortize
     description: (n) => `Adversarially verify the ${n} claim↔source pair(s) of an ultrasearch report (skeptic fan-out, fail-closed fold)`,
     applyHint: (engine, _ph, run) => [
+      `round 2+: delete or archive the previous round's verdicts*.json FIRST — re-running verify renumbers claim ids,`,
+      `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
       `save each returned fragment as ${join(run, "verdicts.<i>.json")} then reassemble + gate:`,
-      `node ${engine} verify --apply ${run} --run ${run}   # a dir picks up every verdicts*.json`,
+      `node ${shq(engine)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`,
     ],
   },
 };
@@ -144,9 +158,11 @@ export function phaseWorkflowScript(ph: PhaseInfo, runAbs: string, engineAbs: st
   const spec = phaseSpec(ph.name);
   const scriptPath = join(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
   const meta = { name: `ultrasearch-${ph.name}`, description: spec.description(ph.items), phases: [{ title: spec.title }] };
-  // A worklist at or under the small floor doesn't amortize a fan-out: collapse
-  // it to a single batch (one agent plays every item) — the eco nudge fires too.
-  const batches = ph.items <= smallWorklist ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
+  // A worklist at or under the phase's collapse floor doesn't amortize a
+  // fan-out: collapse it to a single batch (one agent plays every item) — the
+  // eco nudge fires too. The floor is per-phase (heavy gather units keep one
+  // gatherer per sub-question at any count ≥ 2; cheap verify pairs collapse ≤ SMALL_WORKLIST).
+  const batches = ph.items <= spec.collapseFloor(smallWorklist) ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
   const hint = spec.applyHint(engineAbs, ph, runAbs);
   return [
     `export const meta = ${JSON.stringify(meta)}`,
@@ -194,6 +210,8 @@ You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ul
 
 Worklist: \`${join(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
+**Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering — a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
+
 For EACH of your sub-questions:
 
 1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
@@ -210,6 +228,8 @@ ${gathererFooter}`,
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
 Worklist: \`${join(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,…>\`).
+
+**Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating — a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
 For EACH of your pairs:
 
@@ -229,14 +249,18 @@ ${skepticFooter}`,
 }
 
 export function runbookMd(phases: PhaseInfo[], runAbs: string, engineAbs: string): string {
+  // A markdown table cell must stay one line with its pipes escaped — the
+  // prerequisite embeds the (shell-quoted) free-text question.
+  const cell = (s: string) => s.replace(/\r?\n/g, " ").replaceAll("|", "\\|");
   const status = phases
-    .map((p) => `| ${p.name} | \`${p.worklist}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${p.prerequisite}\` |`)
+    .map((p) => `| ${p.name} | \`${cell(p.worklist)}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${cell(p.prerequisite)}\` |`)
     .join("\n");
-  const engine = `node ${engineAbs}`;
+  const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
-  const outs = gather?.plan ? gather.plan.subQuestions.map((s) => s.out ?? join(runAbs, s.id.toLowerCase())).join(",") : "<the out dirs, comma-joined>";
-  const q = gather?.plan ? JSON.stringify(gather.plan.question) : '"<question>"';
+  const outs = gather?.plan ? shq(gather.plan.subQuestions.map((s) => s.out ?? join(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const q = gather?.plan ? shq(gather.plan.question) : '"<question>"';
   const mode = gather?.plan ? gather.plan.mode : "<m>";
+  const run = shq(runAbs);
   return `# ultrasearch — sequential RUNBOOK (eco / no-subagent fallback)
 
 Run: \`${runAbs}\` · Engine: \`${engine}\`
@@ -254,14 +278,14 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${runAbs}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\`; deep tier: add \`--depth deep\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
 2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q … --queries … --cache --out <its out dir>\`, then enrich a thin sub-dossier (your WebSearch + \`fetch --url … --out <its out dir>\`).
-3. **Merge** — \`${engine} merge --runs "${outs}" --master ${runAbs} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
+3. **Merge** — \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** — \`${engine} verify --run ${runAbs}\` writes \`${join(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${runAbs} --run ${runAbs}\`.
-6. **Gate** — \`${engine} render --run ${runAbs}\` and \`${engine} check --run ${runAbs} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
-7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Stop when a round surfaces nothing new.
+5. **Verify the claims** — \`${engine} verify --run ${run}\` writes \`${join(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+6. **Gate** — \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
+7. **Loop until dry** — NEW sub-questions from step 2 → fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${runAbs} --phase <p>\` then \`Workflow({ scriptPath: "${join(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` — you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` — you stay the sole writer either way.
 `;
 }

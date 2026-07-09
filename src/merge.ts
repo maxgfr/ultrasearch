@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
-import { VERSION } from "./types.js";
+import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
+import { ALL_DEPTHS, VERSION } from "./types.js";
 import { readDossier, readSourceText, writeDossier } from "./dossier.js";
 import { fuse, defaultRunDir } from "./gather.js";
 import { dedupeNearDuplicates, identityKey, slugify } from "./util.js";
@@ -91,12 +91,23 @@ export function runMerge(options: MergeOptions): MergeResult {
       .sort()
       .at(-1) ?? dossiers[0]!.manifest.builtAt;
   const subQuestions = dossiers.map((d, i) => ({ id: `Q${i + 1}`, question: d.manifest.question }));
+  // Stamp the master with the sub-dossiers' ACTUAL depth (the deepest, when
+  // they differ) — a standard-tier fan-out merged into a master stays standard.
+  // A pre-field input manifest (no depth) falls back to deep, the only tier
+  // that existed then.
+  const rank = (d: Depth): number => ALL_DEPTHS.indexOf(d);
+  const depth: Depth =
+    dossiers
+      .map((d) => d.manifest.depth)
+      .filter((d): d is Depth => d !== undefined)
+      .sort((a, b) => rank(a) - rank(b))
+      .at(-1) ?? "deep";
 
   const manifest: Manifest = {
     version: VERSION,
     question,
     mode: modeName,
-    depth: "deep",
+    depth,
     lang: dossiers[0]!.manifest.lang ?? "en",
     backends: [...new Set(dossiers.flatMap((d) => d.manifest.backends))],
     backendsUsed: [...new Set(dossiers.flatMap((d) => d.manifest.backendsUsed))],
