@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.9.1](https://github.com/maxgfr/ultrasearch/compare/v1.9.0...v1.9.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* **orchestrate:** verified review findings — fail-closed fold, shell-safe emission, per-phase fan-out floor ([#12](https://github.com/maxgfr/ultrasearch/issues/12)) ([36a2f30](https://github.com/maxgfr/ultrasearch/commit/36a2f3060800a6601dc62457b60b31831fb3baed))
+
 # [1.9.0](https://github.com/maxgfr/ultrasearch/compare/v1.8.0...v1.9.0) (2026-07-09)
 
 
