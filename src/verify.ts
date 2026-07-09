@@ -158,10 +158,14 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
 }
 
 // Parse + validate one agent-filled verdicts file (a `{ pairs: Verdict[] }`
-// object or a bare `Verdict[]` array) into normalized Verdict records.
+// object, a `{ verdicts: Verdict[] }` object — the shape the orchestrate-emitted
+// skeptic fragments return — or a bare `Verdict[]` array) into normalized
+// Verdict records. FAIL-CLOSED: a file that yields no rows means the fold never
+// engaged — folding it into a green "0/0 adjudicated ✓" would silently discard
+// the whole adjudication, so it throws instead.
 function parseVerdictFile(verdictsPath: string): Verdict[] {
   const raw = readJson<any>(verdictsPath, `verdicts file`);
-  const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : [];
+  const list: any[] = Array.isArray(raw) ? raw : Array.isArray(raw?.pairs) ? raw.pairs : Array.isArray(raw?.verdicts) ? raw.verdicts : [];
   const verdicts: Verdict[] = [];
   for (const v of list) {
     if (!v || typeof v.claimId !== "string" || typeof v.sourceId !== "string") continue;
@@ -176,6 +180,12 @@ function parseVerdictFile(verdictsPath: string): Verdict[] {
       verdict,
       note: typeof v.note === "string" ? v.note : "",
     });
+  }
+  if (verdicts.length === 0) {
+    throw new Error(
+      `${verdictsPath}: no verdict rows found — expected a bare array, { pairs: [...] } or { verdicts: [...] } ` +
+        `with at least one { claimId, sourceId, verdict, note } row (fail-closed: an empty fold would pass a 0/0 gate).`,
+    );
   }
   return verdicts;
 }

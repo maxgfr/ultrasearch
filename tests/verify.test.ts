@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { main } from "../src/cli.js";
 import { runVerify, applyVerdicts, reduceVerdicts } from "../src/verify.js";
 import { runCheck } from "../src/check.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -411,10 +412,12 @@ describe("check --require-verify (deep exit gate)", () => {
     writeFixtureDossier(dir, 2);
     report(dir, GROUNDED);
     runVerify(dir);
-    // apply an empty verdict set → VERIFY.json exists but adjudicated === 0
-    const empty = join(dir, "verdicts.empty.json");
-    writeFileSync(empty, JSON.stringify({ pairs: [] }));
-    applyVerdicts(dir, empty);
+    // apply a worklist echoed back with every verdict still null → VERIFY.json
+    // exists but adjudicated === 0 (an empty/0-row file now fails closed instead)
+    const todo = JSON.parse(readFileSync(join(dir, "VERIFY.todo.json"), "utf8"));
+    const unadjudicated = join(dir, "verdicts.null.json");
+    writeFileSync(unadjudicated, JSON.stringify({ pairs: todo.pairs }));
+    applyVerdicts(dir, unadjudicated);
     const r = runCheck(dir, { semantic: true, requireVerify: true });
     expect(r.ok).toBe(false);
     expect(r.errors.join(" ")).toMatch(/0 adjudicated/);
@@ -462,6 +465,120 @@ describe("reduceVerdicts — gate folding", () => {
     const r = reduceVerdicts([vd({ claimId: "C1", sourceId: "S1", verdict: "supported" }), vd({ claimId: "C1", sourceId: "S2", verdict: undefined as any })]);
     expect(r.ok).toBe(true);
     expect(r.unadjudicated).toContain("C1");
+  });
+});
+
+// Drive main() in-process, capturing stdout/stderr and the process.exit code
+// (cli-main.test.ts pattern) — for the fold-integration tests below.
+async function cli(argv: string[]): Promise<{ out: string; err: string; exit?: number }> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const o = vi.spyOn(process.stdout, "write").mockImplementation(((c: unknown) => {
+    out.push(String(c));
+    return true;
+  }) as never);
+  const e = vi.spyOn(process.stderr, "write").mockImplementation(((c: unknown) => {
+    err.push(String(c));
+    return true;
+  }) as never);
+  const x = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    throw new Error(`exit:${code ?? 0}`);
+  }) as never);
+  let exit: number | undefined;
+  try {
+    await main(argv);
+  } catch (er) {
+    const m = /^exit:(\d+)$/.exec((er as Error).message);
+    if (!m) {
+      o.mockRestore();
+      e.mockRestore();
+      x.mockRestore();
+      throw er;
+    }
+    exit = Number(m[1]);
+  }
+  o.mockRestore();
+  e.mockRestore();
+  x.mockRestore();
+  return { out: out.join(""), err: err.join(""), exit };
+}
+
+describe("applyVerdicts — orchestrate fragment shape + fail-closed fold (US-1)", () => {
+  function setup(): string {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    runVerify(dir);
+    return dir;
+  }
+
+  // The skeptic fragments the emitted workflow's VERIFY_SCHEMA returns.
+  function writeFragment(dir: string, name: string, map: Record<string, string>): string {
+    const todo = JSON.parse(readFileSync(join(dir, "VERIFY.todo.json"), "utf8"));
+    const verdicts = todo.pairs.map((p: any) => ({
+      claimId: p.claimId,
+      sourceId: p.sourceId,
+      verdict: map[p.sourceId] ?? "supported",
+      note: "grounded note",
+    }));
+    const f = join(dir, name);
+    writeFileSync(f, JSON.stringify({ verdicts }));
+    return f;
+  }
+
+  it("accepts a { verdicts: [...] } fragment (the shape the emitted skeptic schema returns)", () => {
+    const dir = setup();
+    const r = applyVerdicts(dir, writeFragment(dir, "verdicts.0.json", { S1: "supported", S2: "partial" }));
+    expect(r.pairs).toBe(2);
+    expect(r.adjudicated).toBe(2);
+    expect(r.supported).toBe(1);
+    expect(r.partial).toBe(1);
+    expect(r.ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fold integration: a schema-shaped fragment saved as verdicts.0.json folds through the REAL `verify --apply <dir>`", async () => {
+    const dir = setup();
+    writeFragment(dir, "verdicts.0.json", { S1: "supported", S2: "supported" });
+    const ok = await cli(["verify", "--apply", dir, "--run", dir]);
+    expect(ok.exit).toBeUndefined();
+    expect(ok.out).toContain("2/2 pair(s) adjudicated");
+    expect(ok.out).not.toContain("0/0");
+    // ...and a refuting fragment has a NON-ZERO effect: the gate fails (exit ≠ 0).
+    writeFragment(dir, "verdicts.0.json", { S1: "refuted", S2: "supported" });
+    const bad = await cli(["verify", "--apply", dir, "--run", dir]);
+    expect(bad.exit).toBe(1);
+    expect(bad.out).toContain("refuted");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed when a file parses to 0 verdict rows (empty pairs / unrecognized shape)", () => {
+    const dir = setup();
+    const empty = join(dir, "verdicts.empty.json");
+    writeFileSync(empty, JSON.stringify({ pairs: [] }));
+    expect(() => applyVerdicts(dir, empty)).toThrow(/no verdict rows/i);
+    const alien = join(dir, "verdicts.alien.json");
+    writeFileSync(alien, JSON.stringify({ adjudications: [{ claimId: "C1", sourceId: "S1", verdict: "supported" }] }));
+    expect(() => applyVerdicts(dir, alien)).toThrow(/no verdict rows/i);
+    // the fold must not have written a VERIFY.json on the failed applies
+    expect(existsSync(join(dir, "VERIFY.json"))).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed on a 0-row file even when OTHER files in the batch have rows", () => {
+    const dir = setup();
+    const good = writeFragment(dir, "verdicts.0.json", {});
+    const empty = join(dir, "verdicts.1.json");
+    writeFileSync(empty, JSON.stringify({ verdicts: [] }));
+    expect(() => applyVerdicts(dir, [good, empty])).toThrow(/no verdict rows/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("the REAL CLI exits non-zero on a 0-row verdicts file (no silent 0/0 ✓ pass)", async () => {
+    const dir = setup();
+    writeFileSync(join(dir, "verdicts.0.json"), JSON.stringify({ pairs: [] }));
+    await expect(cli(["verify", "--apply", dir, "--run", dir])).rejects.toThrow(/no verdict rows/i);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
