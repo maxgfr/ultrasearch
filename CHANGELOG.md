@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.9.0](https://github.com/maxgfr/ultrasearch/compare/v1.8.0...v1.9.0) (2026-07-09)
+
+
+### Features
+
+* **orchestrate:** standard-depth orchestration by default — gather/verify fan-out (family round) ([#11](https://github.com/maxgfr/ultrasearch/issues/11)) ([7771428](https://github.com/maxgfr/ultrasearch/commit/77714283295cf38f41bca91bdf3ca852281d9f17))
+
 # [1.8.0](https://github.com/maxgfr/ultrasearch/compare/v1.7.2...v1.8.0) (2026-07-08)
 
 
