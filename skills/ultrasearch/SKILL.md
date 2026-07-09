@@ -120,7 +120,7 @@ the question is already specific.
 2. **Gather.** Default on a subagent harness: fan the gather out even at
    standard depth —
    ```
-   node <skill-dir>/scripts/ultrasearch.mjs plan --q "<precise question>" --mode <m> --max-subquestions 3 --run-root <RUN>
+   node <skill-dir>/scripts/ultrasearch.mjs plan --q "<precise question>" --mode <m> --depth standard --max-subquestions 3 --run-root <RUN>
    node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> --phase gather
    ```
    then dispatch the emitted workflow (one gatherer per sub-question, each

@@ -127,6 +127,23 @@ describe("main() — plan", () => {
     expect(sq[0].out).toContain(root);
     rmSync(root, { recursive: true, force: true });
   });
+
+  it("persists depth into PLAN.json ONLY when --depth was explicitly given (deep fallback stays alive)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "us-cli-plan-depth-"));
+    // no --depth → no depth field, on stdout and on disk (byte-compat with
+    // pre-field plans; the gatherer contract's "deep when the plan predates
+    // the field" fallback stays reachable)
+    const bare = await run(["plan", "--q", "how does rate limiting work", "--run-root", join(root, "a")]);
+    expect("depth" in JSON.parse(bare.out)).toBe(false);
+    expect("depth" in JSON.parse(readFileSync(join(root, "a", "PLAN.json"), "utf8"))).toBe(false);
+    // explicit --depth → persisted verbatim
+    const deep = await run(["plan", "--q", "how does rate limiting work", "--depth", "deep", "--run-root", join(root, "b")]);
+    expect(JSON.parse(deep.out).depth).toBe("deep");
+    expect(JSON.parse(readFileSync(join(root, "b", "PLAN.json"), "utf8")).depth).toBe("deep");
+    const std = await run(["plan", "--q", "how does rate limiting work", "--depth", "standard", "--run-root", join(root, "c")]);
+    expect(JSON.parse(std.out).depth).toBe("standard");
+    rmSync(root, { recursive: true, force: true });
+  });
 });
 
 describe("main() — merge (error paths)", () => {

@@ -86,7 +86,9 @@ export function listPhases(runDir: string, engineAbs: string): PhaseInfo[] {
       ids: planIds,
       ...(plan ? { plan } : {}),
       prerequisite: plan
-        ? `node ${shq(engineAbs)} plan --q ${shq(plan.question)} --mode ${plan.mode} --run-root ${shq(run)}`
+        ? // Carry the persisted depth (when present) so re-running the prerequisite
+          // regenerates the SAME plan instead of silently dropping the field.
+          `node ${shq(engineAbs)} plan --q ${shq(plan.question)} --mode ${plan.mode}${plan.depth ? ` --depth ${plan.depth}` : ""} --run-root ${shq(run)}`
         : `node ${shq(engineAbs)} plan --q "<question>" --mode <m> --run-root ${shq(run)}`,
     },
     {

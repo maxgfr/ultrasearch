@@ -105,6 +105,15 @@ describe("orchestrate — listPhases", () => {
     expect(gather!.plan!.mode).toBe("topic");
     expect(gather!.plan!.depth).toBe("standard");
     expect(gather!.prerequisite).toContain("how does HTTP rate limiting work");
+    // re-running the prerequisite must regenerate the SAME plan — including its depth
+    expect(gather!.prerequisite).toContain("--depth standard");
+  });
+
+  it("a plan without a depth field yields a prerequisite without --depth (the deep fallback is the contract's)", () => {
+    const run = mkdtempSync(join(tmpdir(), "us-orch-nodepth-"));
+    runPlan("how does HTTP rate limiting work", "topic", ["angle one", "angle two"], 2, run);
+    const [gather] = listPhases(run, ENGINE);
+    expect(gather!.prerequisite).not.toContain("--depth");
   });
 });
 

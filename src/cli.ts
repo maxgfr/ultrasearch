@@ -482,7 +482,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         : undefined;
       const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : undefined;
       const runRoot = p.values["run-root"] ? resolve(p.values["run-root"]) : undefined;
-      const result = runPlan(options.question, options.mode, override, cap, runRoot, options.depth);
+      // Persist depth into the plan ONLY when --depth was explicitly given: a
+      // bare `plan` stays byte-compatible with pre-field plans, so the gatherer
+      // contract's "deep when the plan predates the field" fallback stays alive
+      // (an unconditional "standard" stamp would silently downgrade deep-habit runs).
+      const depth = p.values.depth !== undefined ? options.depth : undefined;
+      const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       const rootHint = runRoot ? ` — each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(

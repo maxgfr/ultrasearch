@@ -272,7 +272,7 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\`; deep tier: add \`--depth deep\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
 2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q … --queries … --cache --out <its out dir>\`, then enrich a thin sub-dossier (your WebSearch + \`fetch --url … --out <its out dir>\`).
 3. **Merge** — \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
