@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.9.2](https://github.com/maxgfr/ultrasearch/compare/v1.9.1...v1.9.2) (2026-07-10)
+
+
+### Bug Fixes
+
+* **check:** fail closed when a cited claim's verdict is dropped (deep exit gate) ([50383bc](https://github.com/maxgfr/ultrasearch/commit/50383bc9d9ba70ae30550e869b77815b4dd579ee))
+* **plan:** keep auto-generated sub-questions grammatical for clausal question forms ([03feced](https://github.com/maxgfr/ultrasearch/commit/03feced7d5165181e7f957d2861aefafe939e730))
+
 ## [1.9.1](https://github.com/maxgfr/ultrasearch/compare/v1.9.0...v1.9.1) (2026-07-09)
 
 
