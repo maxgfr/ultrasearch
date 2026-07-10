@@ -15,7 +15,7 @@ import {
   SOURCE_RE,
 } from "./claims.js";
 import { readSourceText } from "./dossier.js";
-import { reduceVerdicts } from "./verify.js";
+import { buildWorklist, reduceVerdicts } from "./verify.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -179,6 +179,32 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
   if (!reduced.ok) {
     result.ok = false;
     result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+  }
+  // Deep exit-gate COVERAGE (requireVerify only): `reduceVerdicts` sees ONLY the
+  // pairs present in verdicts[], so a wholly-dropped verdict row — e.g. an agent
+  // deleting the refuted claims before `verify --apply` — is invisible to the
+  // fold and would let the gate pass on an unverified claim. Re-derive REPORT's
+  // claim↔source pairs (same deterministic derivation `verify --run` used) and
+  // fail closed on any pair without an adjudicated verdict. This also catches a
+  // REPORT edited after verification (claim ids shift ⇒ re-verify).
+  if (requireVerify) {
+    let expected: ReturnType<typeof buildWorklist>["worklist"]["pairs"] = [];
+    try {
+      expected = buildWorklist(dir).worklist.pairs;
+    } catch {
+      expected = [];
+    }
+    const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId} ${v.sourceId}`));
+    const uncovered = expected.filter((p) => !adjudicatedKeys.has(`${p.claimId} ${p.sourceId}`));
+    if (uncovered.length) {
+      result.ok = false;
+      const claims = [...new Set(uncovered.map((p) => p.claimId))];
+      result.errors.push(
+        `${flag}: ${uncovered.length} claim↔source pair(s) in REPORT have no verdict in VERIFY.json ` +
+          `(${claims.slice(0, 6).join(", ")}${claims.length > 6 ? ", …" : ""}) — re-run \`verify\` + \`verify --apply\` so ` +
+          `every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).`,
+      );
+    }
   }
   if (reduced.unadjudicated?.length) {
     result.warnings.push(`${reduced.unadjudicated.length} claim(s) not fully adjudicated by verify.`);

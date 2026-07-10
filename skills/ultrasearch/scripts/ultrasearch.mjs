@@ -3517,7 +3517,7 @@ function claimStrings(text) {
   }
   return out;
 }
-function runVerify(dir, opts = {}) {
+function buildWorklist(dir, opts = {}) {
   const sources = readJson(join6(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
@@ -3576,6 +3576,12 @@ function runVerify(dir, opts = {}) {
   const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
   const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
   const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  return { worklist, total: pairs.length, kept: shaped.length };
+}
+function runVerify(dir, opts = {}) {
+  const { worklist, total, kept } = buildWorklist(dir, opts);
+  const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
+  const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
   const todo = {
     run: dir,
     pairs: worklist.pairs.map((p) => ({ ...p, verdict: null, note: "" }))
@@ -3583,7 +3589,7 @@ function runVerify(dir, opts = {}) {
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
   writeFileSync6(join6(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync6(join6(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
+  writeFileSync6(join6(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -3815,6 +3821,23 @@ function applySemantic(dir, result, requireVerify) {
   if (!reduced.ok) {
     result.ok = false;
     result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
+  }
+  if (requireVerify) {
+    let expected = [];
+    try {
+      expected = buildWorklist(dir).worklist.pairs;
+    } catch {
+      expected = [];
+    }
+    const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId}\0${v.sourceId}`));
+    const uncovered = expected.filter((p2) => !adjudicatedKeys.has(`${p2.claimId}\0${p2.sourceId}`));
+    if (uncovered.length) {
+      result.ok = false;
+      const claims = [...new Set(uncovered.map((p2) => p2.claimId))];
+      result.errors.push(
+        `${flag}: ${uncovered.length} claim\u2194source pair(s) in REPORT have no verdict in VERIFY.json (${claims.slice(0, 6).join(", ")}${claims.length > 6 ? ", \u2026" : ""}) \u2014 re-run \`verify\` + \`verify --apply\` so every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).`
+      );
+    }
   }
   if (reduced.unadjudicated?.length) {
     result.warnings.push(`${reduced.unadjudicated.length} claim(s) not fully adjudicated by verify.`);

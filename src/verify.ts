@@ -14,6 +14,12 @@ export interface VerifyWorklist {
   pairs: ClaimEvidencePair[];
 }
 
+export interface BuiltWorklist {
+  worklist: VerifyWorklist;
+  total: number; // pairs derivable from REPORT before the cap
+  kept: number; // pairs in this (possibly capped/sharded) worklist
+}
+
 // Flatten a hard file's claim units into individual claim strings: a text unit
 // is one claim; each list item is its own claim — the same granularity `check`
 // evaluates coverage at, so the worklist and the gate agree on what a claim is.
@@ -31,13 +37,15 @@ function claimStrings(text: string): string[] {
 // claim-focused digest of that source's extract, so a skeptic agent reads the
 // relevant passage rather than the whole page. Deterministic; the JUDGEMENT is
 // the agent's. Capped at maxVerify (highest-trust sources first) to bound the
-// loop. Writes VERIFY.todo.json (machine worklist) + VERIFY.md (human checklist).
+// loop. With { shards, shard } it keeps only this shard's stripe of the worklist,
+// so N skeptic subagents can adjudicate disjoint slices in parallel and
+// `verify --apply` reassembles them. The default (no-shard) path is unchanged.
 //
-// With { shards, shard } it instead writes only this shard's stripe of the
-// worklist (VERIFY.todo.<shard>.json / VERIFY.<shard>.md), so N skeptic
-// subagents can adjudicate disjoint slices in parallel and `verify --apply`
-// reassembles them. The default (no-shard) path is byte-identical to before.
-export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
+// PURE (no file writes): `runVerify` persists the result; the `check
+// --require-verify` coverage gate re-derives it to detect dropped verdicts. Same
+// claim granularity + cap + optional shard as before, so the re-derived pairs
+// line up with what `verify --run` emitted.
+export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): BuiltWorklist {
   const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`);
@@ -116,6 +124,16 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
           .filter((_, i) => i % shards === shard)
       : kept;
   const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  return { worklist, total: pairs.length, kept: shaped.length };
+}
+
+// Phase A — build the claim↔source verification worklist AND persist it
+// (VERIFY.todo.json machine worklist + VERIFY.md human checklist). Thin wrapper
+// over `buildWorklist`; see its comment for the derivation + sharding contract.
+export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
+  const { worklist, total, kept } = buildWorklist(dir, opts);
+  const shards = opts.shards !== undefined ? Math.max(1, Math.floor(opts.shards)) : undefined;
+  const shard = shards !== undefined ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
 
   const todo = {
     run: dir,
@@ -124,7 +142,7 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
   const todoName = shards !== undefined ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== undefined ? `VERIFY.${shard}.md` : "VERIFY.md";
   writeFileSync(join(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync(join(dir, mdName), renderWorklistMd(worklist, pairs.length, shaped.length));
+  writeFileSync(join(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 

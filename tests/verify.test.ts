@@ -435,6 +435,30 @@ describe("check --require-verify (deep exit gate)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("RED: fails closed when a cited claim's verdict is dropped from VERIFY.json (dropped-pair exploit)", () => {
+    // The exit gate must not pass when an adversary/sloppy agent deletes the
+    // verdict rows for inconvenient (e.g. refuted) claims: reduceVerdicts only
+    // sees the pairs PRESENT in verdicts[], so a wholly-dropped claim is invisible
+    // to the fold. Re-derive REPORT's pairs and require each to be adjudicated.
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED); // claim1 cites [S1], claim2 cites [S2]
+    runVerify(dir);
+    // Adversary applies only claim1's (S1) verdict and drops claim2's (S2) row.
+    const todo = JSON.parse(readFileSync(join(dir, "VERIFY.todo.json"), "utf8"));
+    const onlyS1 = todo.pairs.filter((p: any) => p.sourceId === "S1").map((p: any) => ({ ...p, verdict: "supported", note: "" }));
+    const f = join(dir, "verdicts.partial.json");
+    writeFileSync(f, JSON.stringify({ pairs: onlyS1 }));
+    applyVerdicts(dir, f);
+    // VERIFY.json adjudicates C1/S1 only; claim2's C2/S2 pair from REPORT has no verdict.
+    const r = runCheck(dir, { semantic: true, requireVerify: true });
+    expect(r.ok).toBe(false);
+    expect(r.errors.join(" ")).toMatch(/no verdict|unadjudicated|not adjudicated|dropped/i);
+    // Sanity: the mechanical gate alone stays green — this is an additive exit-gate rule.
+    expect(runCheck(dir).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("plain check (no --semantic) never requires VERIFY.json", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
