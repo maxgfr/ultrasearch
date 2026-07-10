@@ -130,6 +130,57 @@ describe("runPlan", () => {
   });
 });
 
+describe("auto-facet fallback stays grammatical for non-noun-phrase question forms (US-1)", () => {
+  // Question forms whose subjectOf residue is still a CLAUSE (a finite verb
+  // survives the interrogative strip: "…compare…", "deploy…"). Injecting such a
+  // clause into a noun frame ("What is <X> and how is it defined?") is broken.
+  const CLAUSAL_FORMS = [
+    "How do modern rate limiting algorithms compare for API gateways?",
+    "How to deploy a Node app to production?",
+  ];
+  // Control: a form that DOES reduce to a clean noun phrase; must keep the
+  // elegant noun-phrase phrasing (regression guard on the good path).
+  const CONTROL = "Why is the sky blue?";
+
+  it("keeps every generated sub-question a real, non-empty, grammatical question", () => {
+    for (const q of [...CLAUSAL_FORMS, CONTROL]) {
+      const facets = runPlan(q, "topic").subQuestions;
+      expect(facets.length).toBeGreaterThan(0);
+      for (const s of facets) {
+        expect(s.question.trim().length).toBeGreaterThan(0);
+        expect(s.question).toMatch(/\?$/);
+        // the concrete broken pattern the spec calls out: a finite verb from the
+        // original clause ("compare for") sitting mid-"What is …".
+        expect(s.question).not.toMatch(/what is[^?]*\bcompare for\b/i);
+        expect(s.question).not.toMatch(/^what is\b[^?]*\bdeploy\b[^?]*\band how is it defined\b/i);
+      }
+    }
+  });
+
+  it("never injects a clausal subject bare into a noun frame (references the quoted question instead)", () => {
+    for (const q of CLAUSAL_FORMS) {
+      const subj = subjectOf(q); // the clausal residue
+      const facets = runPlan(q, "topic").subQuestions;
+      for (const s of facets) {
+        // if the bare clausal subject appears at all, it must be quoted (i.e. it
+        // is the referenced original question, not a clause shoved into a noun
+        // slot like "What is <clause> and how is it defined?").
+        if (s.question.includes(subj)) {
+          expect(s.question).toContain(`"${q.replace(/\?+\s*$/, "")}"`);
+        }
+      }
+    }
+  });
+
+  it("keeps the elegant noun-phrase phrasing when the subject IS a clean noun phrase", () => {
+    const facets = runPlan(CONTROL, "topic").subQuestions.filter((s) => s.facet === "template");
+    // "sky blue" is a noun phrase, so the frames stay in noun form, not the
+    // clause-safe "In the context of …" fallback.
+    expect(facets.some((s) => s.question === "What is sky blue and how is it defined?")).toBe(true);
+    expect(facets.every((s) => !s.question.startsWith("In the context of"))).toBe(true);
+  });
+});
+
 describe("subjectOf", () => {
   it("strips research scaffolding down to the subject", () => {
     expect(subjectOf("deep research on HTTP 429 rate limiting")).toBe("HTTP 429 rate limiting");
