@@ -134,10 +134,7 @@ describe("auto-facet fallback stays grammatical for non-noun-phrase question for
   // Question forms whose subjectOf residue is still a CLAUSE (a finite verb
   // survives the interrogative strip: "…compare…", "deploy…"). Injecting such a
   // clause into a noun frame ("What is <X> and how is it defined?") is broken.
-  const CLAUSAL_FORMS = [
-    "How do modern rate limiting algorithms compare for API gateways?",
-    "How to deploy a Node app to production?",
-  ];
+  const CLAUSAL_FORMS = ["How do modern rate limiting algorithms compare for API gateways?", "How to deploy a Node app to production?"];
   // Control: a form that DOES reduce to a clean noun phrase; must keep the
   // elegant noun-phrase phrasing (regression guard on the good path).
   const CONTROL = "Why is the sky blue?";

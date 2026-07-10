@@ -4038,45 +4038,140 @@ function subjectOf(question) {
 }
 var FACET_PATTERNS = [
   // topic / research
-  { re: /what it is|definition/i, ask: (s) => `What is ${s} and how is it defined?`, angle: "what are the key concepts and how are they defined", terms: ["definition", "overview"] },
-  { re: /how it works|key concepts|mechanism/i, ask: (s) => `How does ${s} work under the hood?`, angle: "how do the underlying mechanisms work", terms: ["how it works", "internals"] },
-  { re: /history|evolution|background|motivation/i, ask: (s) => `What is the history and motivation behind ${s}?`, angle: "what is the history and motivation", terms: ["history", "origin"] },
-  { re: /current state|today/i, ask: (s) => `What is the current state of ${s} today?`, angle: "what is the current state today", terms: ["current", "latest"] },
+  {
+    re: /what it is|definition/i,
+    ask: (s) => `What is ${s} and how is it defined?`,
+    angle: "what are the key concepts and how are they defined",
+    terms: ["definition", "overview"]
+  },
+  {
+    re: /how it works|key concepts|mechanism/i,
+    ask: (s) => `How does ${s} work under the hood?`,
+    angle: "how do the underlying mechanisms work",
+    terms: ["how it works", "internals"]
+  },
+  {
+    re: /history|evolution|background|motivation/i,
+    ask: (s) => `What is the history and motivation behind ${s}?`,
+    angle: "what is the history and motivation",
+    terms: ["history", "origin"]
+  },
+  {
+    re: /current state|today/i,
+    ask: (s) => `What is the current state of ${s} today?`,
+    angle: "what is the current state today",
+    terms: ["current", "latest"]
+  },
   {
     re: /variants|approaches|alternatives|compar|methods/i,
     ask: (s) => `What are the main variants and approaches to ${s}, and how do they compare?`,
     angle: "what are the main approaches and how do they compare",
     terms: ["comparison", "alternatives"]
   },
-  { re: /controvers|debate|gaps|open problem/i, ask: (s) => `What are the open debates, gaps or limitations of ${s}?`, angle: "what are the open debates, gaps or limitations", terms: ["limitations", "criticism"] },
+  {
+    re: /controvers|debate|gaps|open problem/i,
+    ask: (s) => `What are the open debates, gaps or limitations of ${s}?`,
+    angle: "what are the open debates, gaps or limitations",
+    terms: ["limitations", "criticism"]
+  },
   {
     re: /practical|implication|future direction/i,
     ask: (s) => `What are the practical implications and future directions of ${s}?`,
     angle: "what are the practical implications and future directions",
     terms: ["best practices", "use cases"]
   },
-  { re: /key papers|literature/i, ask: (s) => `What are the key papers and prior work on ${s}?`, angle: "what are the key papers and prior work", terms: ["paper", "prior work"] },
-  { re: /findings|consensus|results/i, ask: (s) => `What are the main findings and consensus on ${s}?`, angle: "what are the main findings and consensus", terms: ["findings", "evidence"] },
+  {
+    re: /key papers|literature/i,
+    ask: (s) => `What are the key papers and prior work on ${s}?`,
+    angle: "what are the key papers and prior work",
+    terms: ["paper", "prior work"]
+  },
+  {
+    re: /findings|consensus|results/i,
+    ask: (s) => `What are the main findings and consensus on ${s}?`,
+    angle: "what are the main findings and consensus",
+    terms: ["findings", "evidence"]
+  },
   // bug
-  { re: /symptom|reproduction/i, ask: (s) => `What are the symptoms and how do you reproduce ${s}?`, angle: "what are the symptoms and how is it reproduced", terms: ["error", "reproduce"] },
+  {
+    re: /symptom|reproduction/i,
+    ask: (s) => `What are the symptoms and how do you reproduce ${s}?`,
+    angle: "what are the symptoms and how is it reproduced",
+    terms: ["error", "reproduce"]
+  },
   { re: /root cause/i, ask: (s) => `What is the root cause of ${s}?`, angle: "what is the root cause", terms: ["root cause", "why"] },
-  { re: /candidate fix|fixes|solution/i, ask: (s) => `What are the candidate fixes for ${s}?`, angle: "what are the candidate fixes", terms: ["fix", "resolve"] },
-  { re: /related issues|versions affected/i, ask: (s) => `What related issues or affected versions are known for ${s}?`, angle: "what related issues or affected versions are known", terms: ["issue", "version"] },
+  {
+    re: /candidate fix|fixes|solution/i,
+    ask: (s) => `What are the candidate fixes for ${s}?`,
+    angle: "what are the candidate fixes",
+    terms: ["fix", "resolve"]
+  },
+  {
+    re: /related issues|versions affected/i,
+    ask: (s) => `What related issues or affected versions are known for ${s}?`,
+    angle: "what related issues or affected versions are known",
+    terms: ["issue", "version"]
+  },
   { re: /workaround/i, ask: (s) => `What workarounds exist for ${s}?`, angle: "what workarounds exist", terms: ["workaround", "mitigation"] },
   { re: /diagnostic/i, ask: (s) => `What further diagnostics help when ${s} persists?`, angle: "what further diagnostics help", terms: ["debug", "diagnose"] },
   // learn
-  { re: /learning objective|objectives/i, ask: (s) => `What should someone learn first about ${s}?`, angle: "what should someone learn first", terms: ["basics", "introduction"] },
-  { re: /prerequisite/i, ask: (s) => `What are the prerequisites for learning ${s}?`, angle: "what are the prerequisites", terms: ["prerequisite", "fundamentals"] },
+  {
+    re: /learning objective|objectives/i,
+    ask: (s) => `What should someone learn first about ${s}?`,
+    angle: "what should someone learn first",
+    terms: ["basics", "introduction"]
+  },
+  {
+    re: /prerequisite/i,
+    ask: (s) => `What are the prerequisites for learning ${s}?`,
+    angle: "what are the prerequisites",
+    terms: ["prerequisite", "fundamentals"]
+  },
   { re: /lesson|glossary|concept/i, ask: (s) => `What are the core concepts of ${s}?`, angle: "what are the core concepts", terms: ["concept", "explanation"] },
-  { re: /worked example|example/i, ask: (s) => `What are good worked examples of ${s}?`, angle: "what are good worked examples", terms: ["example", "tutorial"] },
+  {
+    re: /worked example|example/i,
+    ask: (s) => `What are good worked examples of ${s}?`,
+    angle: "what are good worked examples",
+    terms: ["example", "tutorial"]
+  },
   { re: /exercise/i, ask: (s) => `What exercises help practise ${s}?`, angle: "what exercises help build proficiency", terms: ["exercise", "practice"] },
   // startup
-  { re: /problem|customer/i, ask: (s) => `What problem does ${s} solve and for which customers?`, angle: "what problem is solved and for which customers", terms: ["problem", "customer"] },
-  { re: /market siz/i, ask: (s) => `How large is the market for ${s} (TAM/SAM/SOM)?`, angle: "how large is the market (TAM/SAM/SOM)", terms: ["market size", "TAM"] },
-  { re: /competit/i, ask: (s) => `Who are the competitors in ${s} and how are they positioned?`, angle: "who are the competitors and how are they positioned", terms: ["competitor", "alternatives"] },
-  { re: /pricing|business model/i, ask: (s) => `What pricing and business models are used in ${s}?`, angle: "what pricing and business models are used", terms: ["pricing", "business model"] },
-  { re: /go-to-market|channel/i, ask: (s) => `What go-to-market channels work for ${s}?`, angle: "what go-to-market channels work", terms: ["go to market", "acquisition"] },
-  { re: /trends|timing/i, ask: (s) => `What trends and timing favour ${s} now?`, angle: "what trends and timing are favourable now", terms: ["trend", "timing"] },
+  {
+    re: /problem|customer/i,
+    ask: (s) => `What problem does ${s} solve and for which customers?`,
+    angle: "what problem is solved and for which customers",
+    terms: ["problem", "customer"]
+  },
+  {
+    re: /market siz/i,
+    ask: (s) => `How large is the market for ${s} (TAM/SAM/SOM)?`,
+    angle: "how large is the market (TAM/SAM/SOM)",
+    terms: ["market size", "TAM"]
+  },
+  {
+    re: /competit/i,
+    ask: (s) => `Who are the competitors in ${s} and how are they positioned?`,
+    angle: "who are the competitors and how are they positioned",
+    terms: ["competitor", "alternatives"]
+  },
+  {
+    re: /pricing|business model/i,
+    ask: (s) => `What pricing and business models are used in ${s}?`,
+    angle: "what pricing and business models are used",
+    terms: ["pricing", "business model"]
+  },
+  {
+    re: /go-to-market|channel/i,
+    ask: (s) => `What go-to-market channels work for ${s}?`,
+    angle: "what go-to-market channels work",
+    terms: ["go to market", "acquisition"]
+  },
+  {
+    re: /trends|timing/i,
+    ask: (s) => `What trends and timing favour ${s} now?`,
+    angle: "what trends and timing are favourable now",
+    terms: ["trend", "timing"]
+  },
   { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, angle: "what are the risks and moats", terms: ["risk", "moat"] }
 ];
 var CLAUSE_VERB = /\b(is|are|was|were|be|been|being|do|does|did|has|have|had|can|could|should|would|will|shall|may|might|must|compares?|compared|works?|worked|deploys?|deployed|builds?|creates?|uses?|implements?|runs?|configures?|installs?|handles?|manages?|scales?|optimi[sz]es?|chooses?|migrates?|fix(?:es)?|debugs?|prevents?|avoids?|improves?|reduces?|increases?|affects?|causes?|differs?|relates?|applies|integrates?|connects?|stores?|processes?|generates?|renders?|parses?|validates?|measures?|monitors?)\b/i;
