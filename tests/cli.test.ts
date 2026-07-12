@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
+import { gatherReport, parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
 import { helpCoversFlag } from "../scripts/drift-rules.mjs";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can
@@ -214,5 +214,28 @@ describe("resolveApplyPaths (verify --apply file | comma-list | directory)", () 
     writeFileSync(join(dir, "VERIFY.json"), "{}");
     expect(() => resolveApplyPaths(dir)).toThrow(/exit:1/);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("gatherReport (empty-dossier guardrail)", () => {
+  const fakeManifest = { backendsUsed: [], notes: [], sourceCount: 0 } as never;
+  const options = buildGatherOptions(parseArgs(["gather", "--q", "niche commercial query"]));
+
+  it("0 sources → exit 1 + actionable bridge protocol, not the happy next-steps", () => {
+    const r = gatherReport({ dir: "/tmp/run", sources: [], manifest: fakeManifest } as never, options);
+    expect(r.exitCode).toBe(1);
+    const text = r.lines.join("\n");
+    expect(text).toMatch(/EMPTY DOSSIER/i);
+    expect(text).toMatch(/--web-engine/);
+    expect(text).toMatch(/fetch --url/);
+    expect(text).toMatch(/never invent/i);
+    expect(text).not.toMatch(/write SUMMARY\/REPORT/);
+  });
+
+  it(">0 sources → exit 0 with the normal next-steps", () => {
+    const src = { id: "S1", url: "https://x.test", title: "t", backend: "fixture", trust: 3, score: 1, snippet: "s", extract: "e" };
+    const r = gatherReport({ dir: "/tmp/run", sources: [src], manifest: { backendsUsed: ["fixture"], notes: [], sourceCount: 1 } } as never, options);
+    expect(r.exitCode).toBe(0);
+    expect(r.lines.join("\n")).toMatch(/SUMMARY\/REPORT/);
   });
 });

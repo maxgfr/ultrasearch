@@ -7,7 +7,7 @@ import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CA
 // bundle and cross-checks the documented flag surface against these tables.
 export { ALL_WEB_ENGINES };
 import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
-import { runGather } from "./gather.js";
+import { runGather, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
@@ -340,6 +340,39 @@ function num(name: string, raw: string | undefined, fallback: number): number {
   return Math.floor(n);
 }
 
+// Pure report for the gather command: 0 retrieved sources is a FAILED
+// acquisition, not a happy path — an agent must never be told to "write the
+// tiers" over an unusable dossier. Exit 1 + the bridge protocol instead.
+export function gatherReport(r: GatherResult, options: GatherOptions): { lines: string[]; exitCode: 0 | 1 } {
+  const used = r.manifest.backendsUsed.join(", ") || "none";
+  const head = [
+    `ultrasearch: ${r.sources.length} source(s) for "${options.question}"`,
+    `  mode:     ${options.mode} · depth: ${options.depth}`,
+    `  backends: ${used}`,
+    `  dossier:  ${r.dir}`,
+  ];
+  if (r.sources.length === 0) {
+    return {
+      exitCode: 1,
+      lines: [
+        ...head,
+        `  EMPTY DOSSIER — the keyless backends returned nothing usable. Do NOT write tiers over this. Bridge it:`,
+        `    1. retry once with a different engine: ultrasearch gather --q "…" --web-engine mojeek (or searxng, ddg-lite)`,
+        `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
+        `    3. stop after two empty attempts — report the gap; NEVER invent sources.`,
+      ],
+    };
+  }
+  return {
+    exitCode: 0,
+    lines: [
+      ...head,
+      `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
+      `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
+    ],
+  };
+}
+
 export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {}): GatherOptions {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
@@ -389,20 +422,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     case "gather": {
       const options = buildGatherOptions(p);
       const r = await runGather(options);
+      const report = gatherReport(r, options);
       if (options.json) {
         process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest }, null, 2) + "\n");
+        process.exitCode = report.exitCode;
         return;
       }
-      const used = r.manifest.backendsUsed.join(", ") || "none";
-      const lines = [
-        `ultrasearch: ${r.sources.length} source(s) for "${options.question}"`,
-        `  mode:     ${options.mode} · depth: ${options.depth}`,
-        `  backends: ${used}`,
-        `  dossier:  ${r.dir}`,
-        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
-        `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
-      ];
-      process.stderr.write(lines.join("\n") + "\n");
+      process.stderr.write(report.lines.join("\n") + "\n");
+      process.exitCode = report.exitCode;
       return;
     }
 

@@ -5119,6 +5119,35 @@ function num(name, raw, fallback) {
   if (!Number.isFinite(n) || n <= 0) fail(`invalid --${name} "${raw}"`);
   return Math.floor(n);
 }
+function gatherReport(r, options) {
+  const used = r.manifest.backendsUsed.join(", ") || "none";
+  const head = [
+    `ultrasearch: ${r.sources.length} source(s) for "${options.question}"`,
+    `  mode:     ${options.mode} \xB7 depth: ${options.depth}`,
+    `  backends: ${used}`,
+    `  dossier:  ${r.dir}`
+  ];
+  if (r.sources.length === 0) {
+    return {
+      exitCode: 1,
+      lines: [
+        ...head,
+        `  EMPTY DOSSIER \u2014 the keyless backends returned nothing usable. Do NOT write tiers over this. Bridge it:`,
+        `    1. retry once with a different engine: ultrasearch gather --q "\u2026" --web-engine mojeek (or searxng, ddg-lite)`,
+        `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
+        `    3. stop after two empty attempts \u2014 report the gap; NEVER invent sources.`
+      ]
+    };
+  }
+  return {
+    exitCode: 0,
+    lines: [
+      ...head,
+      `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
+      `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`
+    ]
+  };
+}
 function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
@@ -5157,20 +5186,14 @@ async function main(argv = process.argv.slice(2)) {
     case "gather": {
       const options = buildGatherOptions(p);
       const r = await runGather(options);
+      const report = gatherReport(r, options);
       if (options.json) {
         process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest }, null, 2) + "\n");
+        process.exitCode = report.exitCode;
         return;
       }
-      const used = r.manifest.backendsUsed.join(", ") || "none";
-      const lines = [
-        `ultrasearch: ${r.sources.length} source(s) for "${options.question}"`,
-        `  mode:     ${options.mode} \xB7 depth: ${options.depth}`,
-        `  backends: ${used}`,
-        `  dossier:  ${r.dir}`,
-        `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
-        `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`
-      ];
-      process.stderr.write(lines.join("\n") + "\n");
+      process.stderr.write(report.lines.join("\n") + "\n");
+      process.exitCode = report.exitCode;
       return;
     }
     case "search": {
@@ -5439,6 +5462,7 @@ export {
   HELP,
   VALUE_FLAGS,
   buildGatherOptions,
+  gatherReport,
   main,
   parseArgs,
   parseShardArgs,
