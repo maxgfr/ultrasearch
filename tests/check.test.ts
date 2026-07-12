@@ -183,6 +183,18 @@ describe("runCheck", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("C3b: a long table HEADER row (followed by the separator) is structure, not a claim", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(
+      dir,
+      "# X\nA grounded claim about buckets and windows here [S1].\n\n| Approach name | Detailed behavior | Steady rate | Request bursts | Window strategy |\n|---|---|---|---|---|\n| Token bucket | refills at a steady rate and allows controlled bursts [S2] |",
+    );
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true); // header row must not be coverage-checked
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("C2/C3 control: grounded blockquote and table row (with [S#]) pass", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);

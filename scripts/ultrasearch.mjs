@@ -3003,7 +3003,8 @@ function extractUnits(lines, code, hint) {
     }
     if (isTableRow(line)) {
       flush();
-      units.push({ kind: "text", text: tableCells(line) });
+      const next = i + 1 < lines.length && !code[i + 1] ? stripInlineCode(lines[i + 1]) : "";
+      if (!isTableSeparator(next)) units.push({ kind: "text", text: tableCells(line) });
       i++;
       continue;
     }

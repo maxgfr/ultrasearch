@@ -114,7 +114,10 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[]):
     }
     if (isTableRow(line)) {
       flush();
-      units.push({ kind: "text", text: tableCells(line) });
+      // A header row — the row immediately followed by the |---| separator —
+      // is table structure, not a factual claim: never coverage-check it.
+      const next = i + 1 < lines.length && !code[i + 1] ? stripInlineCode(lines[i + 1]!) : "";
+      if (!isTableSeparator(next)) units.push({ kind: "text", text: tableCells(line) });
       i++;
       continue;
     }
