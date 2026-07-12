@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.10.0](https://github.com/maxgfr/ultrasearch/compare/v1.9.3...v1.10.0) (2026-07-12)
+
+
+### Features
+
+* **gather:** fail loudly on an empty dossier instead of the happy next-steps ([043c810](https://github.com/maxgfr/ultrasearch/commit/043c810ffa3403eff763c44f167526d4d8e28936))
+
 ## [1.9.3](https://github.com/maxgfr/ultrasearch/compare/v1.9.2...v1.9.3) (2026-07-12)
 
 
