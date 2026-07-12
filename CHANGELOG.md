@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.9.3](https://github.com/maxgfr/ultrasearch/compare/v1.9.2...v1.9.3) (2026-07-12)
+
+
+### Bug Fixes
+
+* **check:** table header rows are structure, not unsourced claims ([9f850c7](https://github.com/maxgfr/ultrasearch/commit/9f850c7ef70067c849b0990702cf6a397e75440e))
+
 ## [1.9.2](https://github.com/maxgfr/ultrasearch/compare/v1.9.1...v1.9.2) (2026-07-10)
 
 
