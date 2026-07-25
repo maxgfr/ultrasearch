@@ -1,0 +1,128 @@
+# Operations — exit codes, cost, caching, tuning, troubleshooting
+
+Everything about *running* ultrasearch well: what an exit code means, what a run
+costs, which knobs are safe to turn, and how to get unstuck. SKILL.md is the
+decision surface; this is the operations manual.
+
+## Exit codes
+
+| Command | Exit | Meaning |
+|---|---|---|
+| `gather` | 1 | **Empty dossier** — every backend returned nothing usable. The output prints a 3-step bridge protocol. Never write tiers over this. |
+| `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, or a `--semantic`/`--min-sources`/`--strict-numerals` failure. |
+| `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
+| `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
+
+Anything non-zero means *stop and fix*, never *present anyway*.
+
+## What a run costs
+
+| Route | Engine processes | Sources kept | Wall clock |
+|---|---|---|---|
+| lookup (`--depth summary`) | 1 | ≤10 | ~30s |
+| report (`--depth standard`) | 1, or 1 + one gatherer per sub-question | ≤25 | ~2-4 min |
+| deep (`--depth deep`) | 1 plan + N gathers + 1 merge + skeptic batches | ≤60 per sub-run | ~10-20 min |
+
+Per-depth retrieval budget (`src/types.ts`, override with the flags in brackets):
+
+| Depth | max sources `[--max-sources]` | per backend `[--per-source]` | result pages `[--pages]` | engines fused `[--web-breadth]` | recall floor |
+|---|---|---|---|---|---|
+| `summary` | 10 | 4 | 1 | 1 | 3 |
+| `standard` | 25 | 6 | 2 | 2 | 6 |
+| `deep` | 60 | 10 | 3 | 5 | 12 |
+
+The **recall floor** is the "thin dossier" threshold: below it, `gather` flags the
+run, `DOSSIER.md` gets a banner, and `check` warns. `check --min-sources <n>`
+turns that into a hard failure for a high-stakes run.
+
+## The fetch cache
+
+**On by default.** Pass `--no-cache` for an all-live run.
+
+- On disk, shared **across processes** — the deep tier's fan-out fetches an
+  overlapping URL once instead of once per sub-question.
+- Keyed by canonical URL **and** the `Accept-Language` the fetch will send, so a
+  `--lang de` run is never served a body cached by a `--lang en` run.
+- **Only successful extractions are stored.** A failed or empty fetch always
+  retries. A corrupt entry is ignored and overwritten, never thrown.
+- 24h TTL. Discovery is **never** cached — only page bodies. Every search query
+  goes out live on every run, so `--since` and "what's the latest" keep working;
+  only the body of an already-discovered page can be up to a day old.
+- `manifest.cache` records `{ enabled, hits }`, and a note names the hit count,
+  so a dossier is self-describing about how fresh its pages are.
+
+## Concurrency and politeness
+
+These services are free, keyless and unauthenticated. Staying welcome matters
+more than saving ten seconds.
+
+- `--concurrency <n>` (default 6) bounds in-flight page fetches.
+- Rate-limited backends (GitHub, Stack Exchange, Semantic Scholar, PubMed) get a
+  single query variant per run; the polite scholarly APIs (arXiv, Crossref,
+  OpenAlex, Europe PMC, dblp) run their per-variant calls sequentially.
+- Every request retries once on 429/503/502/504, honouring `Retry-After`.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). |
+| `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
+| `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |
+| `ULTRASEARCH_NO_WAYBACK` | unset | Set to disable the Wayback rescue for dead links. |
+| `ULTRASEARCH_UA` | a desktop browser UA | Override the User-Agent scrapers send. |
+| `ULTRASEARCH_MAX_ATTEMPTS` | 2 | Attempts per request (1-5). |
+| `ULTRASEARCH_RETRY_MS` | 600 | Backoff between attempts. |
+| `ULTRASEARCH_PAGE_DELAY_MS` | 350 | Pause between result pages of one engine. |
+| `ULTRASEARCH_POLITE_DELAY_MS` | 400 | Pause between a scholarly API's per-variant calls. |
+
+> **The last four are politeness, not performance.** They exist so tests and CI
+> can run fast offline. Zeroing them against the live web hammers free services
+> and gets the host rate-limited or blocked. **Never lower them on a real run.**
+
+## Offline and deterministic runs
+
+- `--backends fixture` gives a canned 3-source dossier about rate limiting with
+  **no network at all** — the way to rehearse the whole
+  `plan → orchestrate → merge → verify → check` chain, or to test a harness
+  integration, without touching the web.
+- `search --backend generic --url "https://a,https://b"` fetches exact pages,
+  prints them, and writes nothing.
+- `render` output is byte-identical for the same dossier (no timestamps in the
+  body), so rendered reports diff cleanly.
+
+## Machine-readable output
+
+`--json` works on `check`, `modes`, `plan`, `verify`, `brainstorm`, `search` and
+`gather`. Two worth knowing:
+
+- `orchestrate --run <RUN> --list` → per-phase `{ ready, items, ids, worklist,
+  prerequisite }` without emitting anything. The cheap "can I fan out yet?" probe.
+- `check --run <dir> --json` → the full `CheckResult`, including `dangling`,
+  `unmarkedUnsourced`, `numeralIssues` and the semantic verdict summary.
+
+## Retrieval quality signals
+
+`gather` surfaces four deterministic signals. React to each rather than writing
+around them:
+
+| Signal | Where | What to do |
+|---|---|---|
+| **Thin dossier** | `DOSSIER.md` banner, manifest `recallFloor`, `check` warning | Enrich with `fetch --url` before writing. |
+| **Under-covered terms** | `DOSSIER.md` banner, manifest `coverage.under`, the `weak:` line, `check` warning | These question terms are barely in the sources. Search them yourself and ingest, or state the gap under "Open questions". |
+| **`⚠ snippet only`** | per source in `DOSSIER.md` | The page fetch failed; only the search snippet is on file. Re-`fetch` it or find a primary source — don't lean on it. |
+| **Contradiction** | `check --semantic` warning + an HTML panel | Cited sources disagree. Resolve it in the report; don't silently pick a side. |
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own WebSearch + `fetch --url`. Stop after two empty attempts and report the gap. |
+| Thin dossier every time | Query too narrow, or a niche/commercial topic | Add `--queries` variants, raise `--web-breadth`/`--pages`, add `--seed-domains` for hosts you know. |
+| `--seed-domains` / `--rounds` did nothing | `--backends` was also passed — it pins retrieval and voids them | Drop `--backends`. The run now says `IGNORED:` when this happens. |
+| `check`: "No source citations found" | Every `[S#]` sits in the trailing `## Sources` appendix | Cite **in the body**. The appendix is rendered, not counted. |
+| `check`: dangling `[S#]` | Cited a sub-run id after a merge, or invented one | Only MASTER ids resolve after `merge`. Re-cite from the master `DOSSIER.md`. |
+| `check --semantic` always fails | No adjudicated `VERIFY.json` — it fails closed by design | Run `verify`, adjudicate, `verify --apply`. Or drop `--semantic` and use the mechanical gate. |
+| Round-2 verdicts corrupt | `verify` renumbers claim ids; `--apply <dir>` folds **every** `*verdict*.json` | Delete or archive the previous round's verdict files **before** adjudicating a new round. |
+| `index.md` isn't next to `index.html` | `render --run X --out Y` moves only the HTML | Copy it, or render without `--out`. |
+| A cited figure isn't in the source | Numeral asserted but absent from the extract | `fetch` the page that carries it, re-cite, or flag it `[M]`. `check --strict-numerals` makes this fatal. |

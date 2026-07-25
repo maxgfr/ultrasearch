@@ -8,11 +8,19 @@ run the bundle directly with `node` — no install at skill-use time.
 
 ```bash
 pnpm install            # devDeps only (tsup, vitest, typescript, semantic-release)
-pnpm run build          # src/ → scripts/ultrasearch.mjs (tsup)
-pnpm test               # vitest, fully offline (network is mocked)
+pnpm run build          # src/ → scripts/ultrasearch.mjs (tsup) → mirrored into skills/
 pnpm run typecheck      # tsc --noEmit
-pnpm run check:build    # tsup && git diff --exit-code -- scripts/ultrasearch.mjs
+pnpm run lint           # biome ci .
+pnpm test               # vitest, fully offline (network is mocked)
+pnpm run test:coverage  # same, with the coverage ratchet (see vitest.config.ts)
+pnpm run check:build    # the composite gate: rebuild + mirror + both bundles
+                        # committed byte-identical + verify:bundle
+pnpm run eval           # offline eval suite (gates CI)
 ```
+
+`check:build` is the one to run before pushing: it rebuilds, re-mirrors, fails if
+either committed bundle differs, and then runs `verify:bundle` (install shape +
+the doc↔CLI drift gate).
 
 ## The golden rules
 
@@ -36,16 +44,43 @@ push to `main`, semantic-release computes the next version (`feat` → minor,
 `src/types.ts` and `SKILL.md` via `scripts/sync-version.mjs`, rebuilds the
 bundle, tags `v<version>`, and creates the GitHub release.
 
+## The skill bundle's own invariants
+
+The skill ships from `skills/ultrasearch/`, and `scripts/verify-skill-bundle.mjs`
+enforces four things that are easy to trip:
+
+1. **No `SKILL.md` at the repo root** — `skills add` would install it alone,
+   dropping the engine and the references.
+2. **`references/` is bidirectional** — every `references/*.md` on disk must be
+   mentioned in `SKILL.md`, and every mentioned file must exist. Adding a
+   reference without linking it fails CI.
+3. **Docs ⊆ CLI** — every `--flag` appearing in `SKILL.md` or any
+   `references/*.md` must be a real flag, and every CLI flag must appear in
+   `HELP`. (`SKILL.md` promises `--help` is the full surface.)
+4. **One `--web-engine` value list** — the canonical enumeration lives in
+   `references/web-discovery.md` and must match `ALL_WEB_ENGINES` exactly. At
+   least one such list must exist, so reformatting it away also fails.
+
+`skills/ultrasearch/SKILL.md` is additionally pinned by `tests/skill-md.test.ts`:
+the version tracks `src/types.ts`, the description must stay ≤1000 chars, and a
+handful of section headings and sentences are matched literally.
+
 ## Adding a backend
 
 1. Add a file in `src/backends/` exporting a `Backend` handler.
 2. Register it in `src/backends/registry.ts`.
 3. Add it to the relevant mode profiles in `src/modes/`.
 4. Add a fixture in `tests/fixtures/` and a parse test.
-5. Document its endpoint + rate limits in `references/backend-apis.md`.
+5. Document its endpoint + rate limits in
+   `skills/ultrasearch/references/backend-apis.md`.
+6. If it is a web-discovery engine, update the canonical `--web-engine`
+   enumeration in `skills/ultrasearch/references/web-discovery.md` — invariant 4
+   above fails otherwise.
 
 ## Adding a mode
 
 1. Add `src/modes/<mode>.ts` with a `ModeProfile` (backend priority + template).
 2. Register it in `src/modes/registry.ts`.
-3. Document the template in `references/report-templates.md`.
+3. Document the template in
+   `skills/ultrasearch/references/report-templates.md` and the profile in
+   `skills/ultrasearch/references/modes.md`.

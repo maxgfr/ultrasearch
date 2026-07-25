@@ -238,4 +238,47 @@ describe("gatherReport (empty-dossier guardrail)", () => {
     expect(r.exitCode).toBe(0);
     expect(r.lines.join("\n")).toMatch(/SUMMARY\/REPORT/);
   });
+
+  it("reports which engines produced results and which terms stayed weak", () => {
+    const src = { id: "S1", url: "https://x.test", title: "t", backend: "duckduckgo", trust: 3, score: 1, snippet: "s", extract: "e" };
+    const manifest = {
+      backendsUsed: ["duckduckgo"],
+      enginesFused: ["duckduckgo", "mojeek"],
+      notes: [],
+      sourceCount: 1,
+      coverage: { terms: [], under: ["quota"] },
+    };
+    const text = gatherReport({ dir: "/tmp/run", sources: [src], manifest } as never, options).lines.join("\n");
+    expect(text).toMatch(/engines:\s+duckduckgo, mojeek \(fused\)/);
+    expect(text).toMatch(/weak:\s+quota/);
+    expect(text).not.toMatch(/IGNORED/);
+  });
+
+  it("shouts when --backends silently voided other retrieval flags", () => {
+    const pinned = buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", "fixture", "--seed-domains", "a.com", "--rounds", "2"]));
+    const src = { id: "S1", url: "https://x.test", title: "t", backend: "fixture", trust: 3, score: 1, snippet: "s", extract: "e" };
+    const text = gatherReport(
+      { dir: "/tmp/run", sources: [src], manifest: { backendsUsed: ["fixture"], notes: [], sourceCount: 1 } } as never,
+      pinned,
+    ).lines.join("\n");
+    expect(text).toMatch(/IGNORED:\s+--seed-domains, --rounds/);
+  });
+});
+
+describe("the fetch cache is on by default", () => {
+  it("defaults --cache on, so a forgotten flag no longer costs a re-fetch", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).cache).toBe(true);
+  });
+
+  it("--no-cache opts out for an all-live run", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--no-cache"])).cache).toBe(false);
+  });
+
+  it("keeps --cache as an accepted no-op so contracts already in the wild still work", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--cache"])).cache).toBe(true);
+  });
+
+  it("lets --no-cache win when both are passed", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--cache", "--no-cache"])).cache).toBe(false);
+  });
 });

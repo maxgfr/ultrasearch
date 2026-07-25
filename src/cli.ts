@@ -7,7 +7,7 @@ import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CA
 // bundle and cross-checks the documented flag surface against these tables.
 export { ALL_WEB_ENGINES };
 import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
-import { runGather, type GatherResult } from "./gather.js";
+import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
@@ -99,8 +99,10 @@ Options:
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
-  --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
-                       big win is the deep tier's per-sub-question fan-out
+  --cache              (default; kept as an accepted no-op) Reuse the on-disk
+                       fetch cache across runs — 24h TTL, keyed by canonical URL
+                       + Accept-Language, successful extractions only
+  --no-cache           Disable the on-disk fetch cache: fetch every page live
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
   --phase <name>       For 'orchestrate': emit one phase only — gather | verify
@@ -186,7 +188,7 @@ export const VALUE_FLAGS = new Set([
   "min-sources",
   "phase",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "eco", "list"]);
+export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "no-cache", "eco", "list"]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -363,10 +365,19 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
       ],
     };
   }
+  // Which discovery engines actually produced results — the honest, post-hoc
+  // answer to "which keyless backends are up?", at zero extra network cost.
+  const fused = r.manifest.enginesFused ?? [];
+  // --backends silently voids several flags; say so rather than lose recall quietly.
+  const ignored = ignoredByExplicitBackends(options);
+  const under = r.manifest.coverage?.under ?? [];
   return {
     exitCode: 0,
     lines: [
       ...head,
+      ...(fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : []),
+      ...(ignored.length ? [`  IGNORED:  ${ignored.join(", ")} — --backends bypasses the cascade, seed-domain and gap rounds`] : []),
+      ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before writing`] : []),
       `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
       `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
     ],
@@ -405,7 +416,11 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : undefined,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : undefined,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : undefined,
-    cache: p.bools.has("cache"),
+    // Default ON: the on-disk cache is a pure win for the deep tier's fan-out,
+    // for a re-gather after a failed check, and for the `fetch --url` bridge.
+    // `--cache` stays an accepted no-op so every prompt and emitted contract
+    // already in the wild keeps working; `--no-cache` is the escape hatch.
+    cache: !p.bools.has("no-cache"),
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
   };
@@ -558,7 +573,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
-        cache: p.bools.has("cache"),
+        cache: !p.bools.has("no-cache"), // same default-on policy as gather
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");

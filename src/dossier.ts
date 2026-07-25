@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Manifest, RawSource, Source } from "./types.js";
+import { UNDER_COVERED_MIN } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
 import { focusedSnippet, capExtract } from "./backends/fetch.js";
 
@@ -154,6 +155,14 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
       `> ⚠ **Thin dossier** — only ${manifest.recallFloor.count} on-topic source(s) were retrieved ` +
         `(recall floor ${manifest.recallFloor.floor}). Enrich the thin areas with your own WebSearch + ` +
         `\`fetch --url\` BEFORE writing, or the report will rest on too little evidence.`,
+    );
+    out.push("");
+  }
+  if (manifest.coverage?.under.length) {
+    out.push(
+      `> 🔍 **Under-covered** — \`${manifest.coverage.under.join("`, `")}\`: fewer than ${UNDER_COVERED_MIN} of the ` +
+        `top sources mention these terms from your question. Enrich them (your WebSearch + \`fetch --url\`) ` +
+        `before writing, or state the gap explicitly under "Open questions".`,
     );
     out.push("");
   }

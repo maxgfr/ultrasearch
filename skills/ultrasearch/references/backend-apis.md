@@ -55,7 +55,9 @@ honest notes in the dossier.
   once, so a multi-query run never opens N connections to the same host.
 - Every request retries **once** on a transient status (429/503) — honoring
   `Retry-After` (clamped to 5s) — so one throttled call doesn't zero a backend.
-  Tunable via `ULTRASEARCH_MAX_ATTEMPTS` / `ULTRASEARCH_RETRY_MS`.
+  Tunable via `ULTRASEARCH_MAX_ATTEMPTS` / `ULTRASEARCH_RETRY_MS` — but these
+  delays exist to keep free services willing to serve us. Zero them in CI, never
+  on a live run. Full env-var table: `references/operations.md`.
 - The hydrate step (fetching discovered pages) runs with **bounded concurrency**
   (default 6, set with `--concurrency`) so a run stays polite rather than firing
   dozens of fetches at once.

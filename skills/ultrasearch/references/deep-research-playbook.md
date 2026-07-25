@@ -1,7 +1,10 @@
 # Deep research playbook (the agentic tier)
 
-The standard workflow is one `gather` + one report + a mechanical `check` — fast
-(~3 min), reproducible, but a single pass. The **deep tier** grafts a
+The standard route ends at the **mechanical** `check` — fast (~3 min),
+reproducible, but a single pass. `check --semantic --require-verify` is *this*
+tier's exit gate and exists nowhere else: it fails closed without an adjudicated
+`VERIFY.json`, so it is an all-or-nothing upgrade, never a stricter flag you can
+add to a standard run. The **deep tier** grafts a
 deep-research harness onto that same keyless engine: decompose the question →
 fan out a sub-search per facet → merge into one dossier → adversarially verify
 every claim against its source → loop until nothing new surfaces. It is slower
@@ -229,7 +232,17 @@ paths baked in) from the current worklists.
 
 ## Budget
 
-`DEEP_CAPS` bounds the loop so it can't run away: `maxSubQuestions` 6,
-`maxRounds` 3, `maxVerify` 40, `perSubQuestionSources` 60. Tune per run with
-`--max-subquestions` and `--max-verify`. Each sub-question fan-out is itself a
-`--depth deep` gather, so retrieval depth and orchestration depth compose.
+`DEEP_CAPS` has four numbers, and it matters which of them the **engine**
+enforces versus which **you** have to honour:
+
+| Cap | Value | Enforced by |
+|---|---|---|
+| `maxSubQuestions` | 6 | **The engine** — `plan` truncates the decomposition (`--max-subquestions` overrides). |
+| `maxVerify` | 40 | **The engine** — `verify` caps the worklist, highest-trust sources first (`--max-verify` overrides). |
+| `maxRounds` | 3 | **You.** Nothing counts rounds; the loop-until-dry cycle is agent-driven. Stop yourself. |
+| `perSubQuestionSources` | 60 | **Nobody, and it needs nobody** — it equals `DEPTH_CAPS.deep.maxSources`, which a `--depth deep` fan-out gather already resolves to. Passing it as `--max-sources` would be a no-op. |
+
+So the loop cannot run away on *decomposition* or *verification* size, but it
+can run away on *rounds* — that budget is yours to keep. Each sub-question
+fan-out is itself a `--depth deep` gather, so retrieval depth and orchestration
+depth compose.

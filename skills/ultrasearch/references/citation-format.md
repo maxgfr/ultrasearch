@@ -64,6 +64,10 @@ at least one `[S#]` (or a model-hint flag). Known limits you should not lean on:
   comment can't ground a claim). Markdown links are not citations.
 - Section **headings** are treated as structure, not claims — don't smuggle a
   factual assertion into a heading.
+- **Tables are split.** The **header row** — the one immediately followed by the
+  `|---|` separator — is structure and is never coverage-checked. Every **data
+  row** IS a claim unit and needs its own `[S#]` (or a model-hint flag). A
+  comparison table of uncited rows fails `check`.
 - A trailing `## Sources` / `## References` section is the rendered appendix,
   not prose: its lines are never claims and its `[S#]` listing does not count
   as citation coverage (a dangling `[S#]` there still fails). Cite in the body
@@ -83,6 +87,24 @@ prove the cited source *supports* it. The deep tier closes that gap:
 - `verify --apply <verdicts.json>` then `check --semantic` **fail** the report
   when a claim's source refutes it, or when every cited source is unsupported —
   on top of the mechanical gate, never relaxing it.
+
+Three properties make the gate hard to fool, and worth knowing before you try to
+work around it:
+
+- **Fail-closed on a missing file.** Both `--semantic` and `--require-verify`
+  treat a missing, unreadable or unadjudicated `VERIFY.json` as a hard failure.
+  So `--semantic` on a run you never verified can only ever *fail* — it is not a
+  "stricter check" you can bolt onto a standard run for free.
+- **Fail-closed on coverage.** `--require-verify` re-derives REPORT's claim↔source
+  pairs and fails on any pair with **no adjudicated verdict**. Dropping an
+  inconvenient pair from the worklist, or returning a fragment with one quietly
+  omitted, cannot make the gate pass.
+- **A stored `ok` flag is never trusted.** The verdict is re-reduced from
+  `verdicts[]` at check time, so a hand-edited or stale summary can't flip the
+  outcome.
+
+A claim's numeral that no cited extract contains caps its verdict at `partial`,
+and `check --strict-numerals` turns the default warning into a hard failure.
 
 A source's worst verdict tints its citations in the HTML, and a Verification
 section lists every claim's verdict. See `references/deep-research-playbook.md`.
