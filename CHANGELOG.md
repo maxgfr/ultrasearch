@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.11.0](https://github.com/maxgfr/ultrasearch/compare/v1.10.0...v1.11.0) (2026-07-25)
+
+
+### Bug Fixes
+
+* **engine:** replace literal NUL separators with escapes, and guard against them ([8d984d0](https://github.com/maxgfr/ultrasearch/commit/8d984d0f80a9f095fedf074f610c0e79a504d974))
+
+
+### Features
+
+* **gather:** report what retrieval missed, and stop losing recall silently ([c031424](https://github.com/maxgfr/ultrasearch/commit/c031424bb94b8d2e1bba5a8de131b7891dc13c6c))
+* make the ultrasearch skill a reference-grade artifact ([4090b8e](https://github.com/maxgfr/ultrasearch/commit/4090b8eae4d7fc213085e71984953c93321a4edf))
+
 # [1.10.0](https://github.com/maxgfr/ultrasearch/compare/v1.9.3...v1.10.0) (2026-07-12)
 
 
