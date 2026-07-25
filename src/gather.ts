@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH } from "./types.js";
+import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH, UNDER_COVERED_MIN } from "./types.js";
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
@@ -129,6 +129,39 @@ export async function runWebCascade(engines: BackendKind[], ctx: RunContext, bre
   return out;
 }
 
+/**
+ * Flags that `--backends` silently turns into no-ops. Pinning the retrieval set
+ * is a legitimate power-user move, but `explicit` short-circuits FOUR things —
+ * the resilient web cascade, `--seed-domains`, the `--rounds 2` gap round, and
+ * `--web-engine` (resolveBackends returns before applyWebEngine). Naming them is
+ * the difference between a deliberate choice and silent recall loss.
+ */
+export function ignoredByExplicitBackends(options: GatherOptions): string[] {
+  if (!options.backends?.length) return [];
+  const out: string[] = [];
+  if (options.seedDomains?.length) out.push("--seed-domains");
+  if ((options.rounds ?? 1) >= 2) out.push("--rounds");
+  if (options.webEngine !== "auto") out.push("--web-engine");
+  return out;
+}
+
+/**
+ * Per-term coverage of the question's BM25 query terms across the TOP kept
+ * sources: how many of them actually contain each term. Pure and in-memory (the
+ * extracts are already hydrated), so it runs on EVERY gather — not just the
+ * `--rounds 2` gap round that used to be its only consumer and threw the answer
+ * away. This is what turns "enrich the thin areas" from prose into a worklist.
+ */
+export function termCoverage(items: RawSource[], queryTerms: string[], top = 10): { term: string; sources: number }[] {
+  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
+  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+
+/** The enrichment worklist: terms fewer than UNDER_COVERED_MIN of the top sources mention. */
+export function underCovered(cov: { term: string; sources: number }[]): string[] {
+  return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);
+}
+
 // Which backends a run uses: an explicit --backends override, else the mode's
 // profile (plus its deep-only backends at --depth deep), then the --web-engine
 // discovery filter.
@@ -252,7 +285,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
   // re-fetches a page round 1 already hydrated.
-  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string; status: number }>();
+  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string; status: number; cached?: boolean }>();
+  // Pages served from the on-disk cache instead of the network, across every
+  // round of this run. Recorded on the manifest so a dossier is self-describing
+  // about how fresh its page bodies are.
+  let cacheHits = 0;
   // Wayback dead-link rescues are capped per run so a page full of dead links
   // can't fan out into dozens of archive.org round-trips.
   let waybackUsed = 0;
@@ -280,6 +317,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       let res = hydrateCache.get(key);
       if (!res) {
         res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
+        if (res.cached) cacheHits++;
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -298,6 +336,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         let alt = hydrateCache.get(altKey);
         if (!alt) {
           alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          if (alt.cached) cacheHits++;
           hydrateCache.set(altKey, alt);
         }
         if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -404,12 +443,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // tail the first pass missed.
   let gapNote: string | undefined;
   if ((options.rounds ?? 1) >= 2 && webBackends.length > 0 && !explicit) {
-    const top = r.withContent.slice(0, Math.min(10, r.withContent.length));
-    const gaps = r.queryTerms.filter((term) => {
-      let cov = 0;
-      for (const it of top) if (bm25Tokenize(it.text || it.snippet || "").includes(term)) cov++;
-      return cov < 2;
-    });
+    // Same computation the coverage map reports (same top-10 pool, same floor),
+    // so the gap round and the reported worklist can never disagree.
+    const gaps = underCovered(termCoverage(r.withContent, r.queryTerms));
     if (gaps.length) {
       const seenTerm = new Set<string>();
       const gapQuery = [...rankedKeywords(options.question).slice(0, 2), ...gaps]
@@ -445,6 +481,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
   const thin = merged.length < floor;
 
+  // Which of the question's own terms the kept sources barely mention. Free (the
+  // extracts are already in memory) and far more actionable than a bare count:
+  // it tells the agent WHICH angle to enrich, not just that something is missing.
+  const coverageTerms = termCoverage(r.withContent, r.queryTerms);
+  const under = underCovered(coverageTerms);
+  const ignoredFlags = ignoredByExplicitBackends(options);
+
   const notes = [
     ...results.flatMap((res) => res.notes),
     ...r.hydrateNotes,
@@ -453,9 +496,23 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
     ...(seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : []),
     ...(gapNote ? [gapNote] : []),
+    ...(explicit
+      ? [
+          `--backends pinned retrieval to ${backends.join(", ")}: the resilient web cascade is OFF` +
+            (ignoredFlags.length ? `, and ${ignoredFlags.join(" / ")} ${ignoredFlags.length > 1 ? "were" : "was"} ignored` : "") +
+            `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`,
+        ]
+      : []),
+    ...(cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : []),
     ...(thin
       ? [
           `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`,
+        ]
+      : []),
+    ...(under.length
+      ? [
+          `Under-covered term(s): ${under.join(", ")} — fewer than ${UNDER_COVERED_MIN} of the top sources mention them. ` +
+            `Search these yourself and ingest via \`fetch --url\` before writing, or say so under "Open questions".`,
         ]
       : []),
     ENRICH_NUDGE,
@@ -481,6 +538,8 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     notes,
     timings,
     ...(thin ? { recallFloor: { count: merged.length, floor } } : {}),
+    ...(coverageTerms.length ? { coverage: { terms: coverageTerms, under } } : {}),
+    cache: { enabled: !!options.cache, hits: cacheHits },
   };
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);

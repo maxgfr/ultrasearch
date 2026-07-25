@@ -84,6 +84,12 @@ export const RECALL_FLOORS: Record<Depth, number> = {
   deep: 12,
 };
 
+// A question term is "under-covered" when fewer than this many of the top kept
+// sources mention it. Long the private threshold of the `--rounds 2` gap round;
+// hoisted here now that EVERY gather reports its coverage map, so the gap round
+// and the reported worklist can never disagree about what "under-covered" means.
+export const UNDER_COVERED_MIN = 2;
+
 // How many result PAGES each web discovery engine fetches per query (default by
 // depth; override with --pages). Page 1 emits the engine's URL unchanged, so a
 // 1-page run is byte-identical to before; deeper depths paginate further to pull
@@ -114,11 +120,28 @@ export const WEB_BREADTH_PER_DEPTH: Record<Depth, number> = {
 // the long (10–20 min) loop — distinct from Depth, which is a per-`gather`
 // retrieval cap. Each sub-question fan-out is itself a `gather --depth deep`.
 // ---------------------------------------------------------------------------
+// Two of these four are ENFORCED by the engine; two are ADVISORY budget guidance
+// for the agent driving the loop. The distinction is load-bearing — docs used to
+// claim all four "bound the loop so it can't run away", which was false for the
+// advisory pair. Keep the labels honest.
 export interface DeepCaps {
-  maxSubQuestions: number; // sub-questions `plan` emits / the loop fans out on
-  maxRounds: number; // loop-until-dry rounds before a forced stop
-  maxVerify: number; // claim↔source pairs `verify` emits per run
-  perSubQuestionSources: number; // suggested --max-sources for each fan-out gather
+  /** ENFORCED by `plan` (cap on the decomposition; `--max-subquestions` overrides). */
+  maxSubQuestions: number;
+  /** ENFORCED by `verify` (cap on emitted claim↔source pairs; `--max-verify` overrides). */
+  maxVerify: number;
+  /**
+   * ADVISORY. The loop-until-dry cycle is AGENT-driven — no engine step counts
+   * rounds, and refusing a 4th `merge` would block a legitimate re-merge after a
+   * citation fix. Surfaced as budget guidance in the playbook/RUNBOOK only.
+   */
+  maxRounds: number;
+  /**
+   * ADVISORY, and redundant by construction: it equals `DEPTH_CAPS.deep.maxSources`,
+   * which a `--depth deep` fan-out gather already resolves to on its own (the
+   * equality is pinned by tests/caps.test.ts). Passing it as `--max-sources`
+   * would be a no-op.
+   */
+  perSubQuestionSources: number;
 }
 export const DEEP_CAPS: DeepCaps = {
   maxSubQuestions: 6,
@@ -304,6 +327,15 @@ export interface Manifest {
   mergedFrom?: string[]; // (merge dossiers) the sub-dossier run dirs unioned
   subQuestions?: { id: string; question: string }[]; // (merge dossiers) the decomposition
   recallFloor?: { count: number; floor: number }; // set when the dossier is thin (count < floor)
+  // Per-term coverage of the question's distinctive terms across the top kept
+  // sources, plus the under-covered ones — the agent's enrichment worklist.
+  // Computed in-memory from the already-hydrated extracts, so it costs no extra
+  // retrieval. Absent on merge dossiers (a master has no single query basis).
+  coverage?: { terms: { term: string; sources: number }[]; under: string[] };
+  // On-disk fetch cache state for this run. `enabled: false` ⇒ every page was
+  // fetched live. `hits` counts pages served from disk (≤ the TTL old), so a
+  // dossier is self-describing about how fresh its page bodies are.
+  cache?: { enabled: boolean; hits: number };
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on

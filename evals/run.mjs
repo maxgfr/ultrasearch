@@ -81,6 +81,10 @@ function offline() {
   // WARN by default and FAIL under --strict-numerals, end-to-end.
   numeralGateProbe();
 
+  // Retrieval self-awareness: a gather must NAME the question terms its sources
+  // barely cover, and must say out loud when --backends voided other flags.
+  retrievalSignalsProbe();
+
   console.log("");
   if (failures) {
     console.error(`offline evals: ${failures} failure(s)`);
@@ -153,6 +157,34 @@ function numeralGateProbe() {
     pass("[numeral-gate] warns by default, --strict-numerals fails an unattributed figure");
   } catch (e) {
     fail(`[numeral-gate] ${e.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The two retrieval signals an agent acts on, end-to-end through the bundle:
+// (1) under-covered question terms are named on the manifest, in DOSSIER.md and
+// in the gather output, so "enrich the thin areas" is a worklist, not a wish;
+// (2) --backends voiding --seed-domains/--rounds is reported instead of silent.
+function retrievalSignalsProbe() {
+  const dir = mkdtempSync(join(tmpdir(), "us-eval-sig-"));
+  try {
+    // The fixtures are about rate limiting; "kubernetes" appears in none of them.
+    const g = run(["gather", "--q", "rate limiting on kubernetes", "--backends", "fixture", "--seed-domains", "docs.example.com", "--rounds", "2", "--out", dir]);
+    if (g.status !== 0) return fail(`[signals] gather failed: ${g.stderr?.trim()?.split("\n").pop()}`);
+
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    const under = manifest.coverage?.under ?? [];
+    if (!under.some((t) => /kubernete/.test(t))) return fail(`[signals] under-covered terms did not name the missing angle: ${JSON.stringify(under)}`);
+    if (!/Under-covered/.test(readFileSync(join(dir, "DOSSIER.md"), "utf8"))) return fail("[signals] DOSSIER.md carries no under-covered banner");
+    // The human-readable gather report goes to STDERR (stdout is reserved for --json).
+    if (!/IGNORED:/.test(g.stderr || "")) return fail("[signals] --backends voided --seed-domains/--rounds without saying so");
+    if (!/weak:/.test(g.stderr || "")) return fail("[signals] the gather report did not name the weak terms");
+    if (!/--backends pinned retrieval/.test(manifest.notes.join(" "))) return fail("[signals] the manifest does not record the pinned-retrieval note");
+
+    pass("[signals] under-covered terms named, --backends footgun reported");
+  } catch (e) {
+    fail(`[signals] ${e.message}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

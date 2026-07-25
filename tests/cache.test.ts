@@ -6,13 +6,19 @@ import { cachedFetchAndExtract, cachePath } from "../src/cache.js";
 import { installFetchMock } from "./fetchmock.js";
 
 let dir: string;
+// tests/setup.ts pins ULTRASEARCH_CACHE_DIR to a per-run throwaway dir (the
+// fetch cache is on by default now). These cases need their own dir per test,
+// so they override it and RESTORE the setup value afterwards — deleting it would
+// point every later test at the real cache.
+const SETUP_CACHE_DIR = process.env.ULTRASEARCH_CACHE_DIR;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "us-cache-"));
   process.env.ULTRASEARCH_CACHE_DIR = dir;
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-  delete process.env.ULTRASEARCH_CACHE_DIR;
+  if (SETUP_CACHE_DIR === undefined) delete process.env.ULTRASEARCH_CACHE_DIR;
+  else process.env.ULTRASEARCH_CACHE_DIR = SETUP_CACHE_DIR;
   delete process.env.ULTRASEARCH_CACHE_TTL_MS;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -28,6 +34,32 @@ describe("cachedFetchAndExtract (--cache)", () => {
     expect(a.text).toContain("token buckets");
     expect(b.text).toBe(a.text);
     expect(spy).toHaveBeenCalledTimes(1); // second call served from disk
+  });
+
+  it("does not serve one locale's body to another (the key includes Accept-Language)", async () => {
+    // Regression: cachePath used to key on the URL alone, so a `--lang de` run
+    // could be handed the English body an earlier `--lang en` run had cached —
+    // silently breaking the "search the audience's language" contract.
+    const spy = installFetchMock(() => PAGE);
+    await cachedFetchAndExtract(URL, { acceptLanguage: "en-US,en;q=0.9" }, true, 1000);
+    await cachedFetchAndExtract(URL, { acceptLanguage: "de-DE,de;q=0.9" }, true, 1000);
+    expect(spy).toHaveBeenCalledTimes(2); // different locale ⇒ a real fetch, not a hit
+    // …and the same locale still hits.
+    await cachedFetchAndExtract(URL, { acceptLanguage: "de-DE,de;q=0.9" }, true, 1200);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keys a cache path by URL AND locale", () => {
+    expect(cachePath(URL)).not.toBe(cachePath(URL, "de"));
+    expect(cachePath(URL, "de")).toBe(cachePath(URL, "de"));
+  });
+
+  it("marks a disk hit as cached so a run can report its freshness", async () => {
+    installFetchMock(() => PAGE);
+    const miss = await cachedFetchAndExtract(URL, {}, true, 1000);
+    const hit = await cachedFetchAndExtract(URL, {}, true, 1500);
+    expect(miss.cached).toBeUndefined();
+    expect(hit.cached).toBe(true);
   });
 
   it("refetches once the entry is past its TTL", async () => {

@@ -368,6 +368,12 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
         `consider enriching with \`fetch --url\` before relying on it.`,
     );
   }
+  if (manifest?.coverage?.under.length) {
+    warnings.push(
+      `Under-covered question term(s): ${manifest.coverage.under.slice(0, 6).join(", ")} — ` +
+        `the dossier may not support claims about them; enrich with \`fetch --url\` or say so under "Open questions".`,
+    );
+  }
   if (opts.minSources !== undefined && sources.length < opts.minSources) {
     errors.push(
       `Only ${sources.length} source(s) in the dossier (--min-sources ${opts.minSources}). ` +

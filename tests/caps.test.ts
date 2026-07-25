@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { resolveVariants } from "../src/gather.js";
 import { planVariants } from "../src/util.js";
+import { runPlan } from "../src/plan.js";
+import { runVerify } from "../src/verify.js";
 import { DEEP_CAPS, DEPTH_CAPS } from "../src/types.js";
 import type { GatherOptions } from "../src/types.js";
 
@@ -45,6 +50,54 @@ describe("DEEP_CAPS ↔ DEPTH_CAPS coherence", () => {
     // The deep playbook fans out `gather --depth deep` per sub-question and relies
     // on this equality instead of passing --max-sources explicitly. If either
     // number moves, update both (or start passing --max-sources).
+    // This equality is ALSO why perSubQuestionSources is advisory rather than
+    // enforced: passing it as --max-sources would be a literal no-op.
     expect(DEEP_CAPS.perSubQuestionSources).toBe(DEPTH_CAPS.deep.maxSources);
+  });
+});
+
+// The docs used to claim all four DEEP_CAPS "bound the loop so it can't run
+// away". Only two are enforced by the engine; the other two are budget guidance
+// for the agent. Pin the distinction so neither the comments nor the docs rot.
+describe("DEEP_CAPS: which caps the ENGINE actually enforces", () => {
+  it("enforces maxSubQuestions in plan", () => {
+    const p = runPlan("how do distributed rate limiters stay consistent across regions", "topic");
+    expect(p.subQuestions.length).toBeLessThanOrEqual(DEEP_CAPS.maxSubQuestions);
+  });
+
+  it("enforces maxVerify in the verify worklist", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-caps-"));
+    try {
+      const sources = Array.from({ length: 3 }, (_, i) => ({
+        id: `S${i + 1}`,
+        url: `https://ex${i}.test`,
+        title: `t${i}`,
+        backend: "fixture",
+        trust: 0.5,
+        score: 1,
+        snippet: "s",
+        extract: `sources/S${i + 1}.md`,
+      }));
+      mkdirSync(join(dir, "sources"), { recursive: true });
+      for (const s of sources) writeFileSync(join(dir, s.extract), "rate limiting caps request rates in a window");
+      writeFileSync(join(dir, "sources.json"), JSON.stringify(sources));
+      writeFileSync(join(dir, "manifest.json"), JSON.stringify({ question: "q", mode: "topic", depth: "deep" }));
+      // More claim↔source pairs than the cap allows.
+      const claims = Array.from({ length: 30 }, (_, i) => `## C${i}\nClaim number ${i} about rate limiting windows [S1][S2][S3].`).join("\n\n");
+      writeFileSync(join(dir, "REPORT.md"), `# R\n${claims}\n`);
+
+      expect(runVerify(dir, {}).pairs.length).toBeLessThanOrEqual(DEEP_CAPS.maxVerify);
+      expect(runVerify(dir, { maxVerify: 5 }).pairs.length).toBeLessThanOrEqual(5);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT enforce the advisory pair — no engine symbol reads them", () => {
+    // maxRounds is agent-driven (nothing counts rounds) and perSubQuestionSources
+    // is redundant with DEPTH_CAPS.deep.maxSources. Both are numbers the
+    // orchestrator honours, not gates the engine applies.
+    expect(DEEP_CAPS.maxRounds).toBeGreaterThan(0);
+    expect(DEEP_CAPS.perSubQuestionSources).toBeGreaterThan(0);
   });
 });

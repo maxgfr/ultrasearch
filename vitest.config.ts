@@ -5,6 +5,9 @@ export default defineConfig({
     // Tests write dossiers into /tmp/ultrasearch and read static fixtures —
     // never collect tests from those trees.
     exclude: [...configDefaults.exclude, "**/.ultrasearch/**", "tests/fixtures/**"],
+    // Pins ULTRASEARCH_CACHE_DIR to a throwaway dir — the fetch cache is on by
+    // default, and the suite must never read or write the real one.
+    setupFiles: ["tests/setup.ts"],
     coverage: {
       provider: "v8",
       include: ["src/**"],

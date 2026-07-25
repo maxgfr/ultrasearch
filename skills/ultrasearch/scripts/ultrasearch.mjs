@@ -41,6 +41,7 @@ var RECALL_FLOORS = {
   standard: 6,
   deep: 12
 };
+var UNDER_COVERED_MIN = 2;
 var PAGES_PER_DEPTH = {
   summary: 1,
   standard: 2,
@@ -2324,16 +2325,16 @@ var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
   return process.env.ULTRASEARCH_CACHE_DIR || join(tmpdir(), "ultrasearch", "cache");
 }
-function cachePath(url) {
+function cachePath(url, acceptLanguage = "") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  return join(cacheDir(), `${domain}-${fnv1a64(canon).toString(16)}.json`);
+  return join(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}`).toString(16)}.json`);
 }
 function ttlMs() {
   return envInt2("ULTRASEARCH_CACHE_TTL_MS", DEFAULT_TTL_MS);
 }
-function readCache(url, now) {
-  const p = cachePath(url);
+function readCache(url, now, acceptLanguage = "") {
+  const p = cachePath(url, acceptLanguage);
   if (!existsSync(p)) return void 0;
   try {
     const entry = JSON.parse(readFileSync(p, "utf8"));
@@ -2344,20 +2345,21 @@ function readCache(url, now) {
     return void 0;
   }
 }
-function writeCache(url, res, now) {
+function writeCache(url, res, now, acceptLanguage = "") {
   try {
     mkdirSync(cacheDir(), { recursive: true });
     const entry = { ...res, cachedAt: now };
-    writeFileSync(cachePath(url), JSON.stringify(entry));
+    writeFileSync(cachePath(url, acceptLanguage), JSON.stringify(entry));
   } catch {
   }
 }
 async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
   if (!enabled) return fetchAndExtract(url, opts);
-  const hit = readCache(url, now);
-  if (hit) return hit;
+  const lang = opts.acceptLanguage ?? "";
+  const hit = readCache(url, now, lang);
+  if (hit) return { ...hit, cached: true };
   const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now);
+  if (res.text?.trim()) writeCache(url, res, now, lang);
   return res;
 }
 
@@ -2465,6 +2467,12 @@ function renderDossierMarkdown(sources, manifest, template) {
   if (manifest.recallFloor) {
     out.push(
       `> \u26A0 **Thin dossier** \u2014 only ${manifest.recallFloor.count} on-topic source(s) were retrieved (recall floor ${manifest.recallFloor.floor}). Enrich the thin areas with your own WebSearch + \`fetch --url\` BEFORE writing, or the report will rest on too little evidence.`
+    );
+    out.push("");
+  }
+  if (manifest.coverage?.under.length) {
+    out.push(
+      `> \u{1F50D} **Under-covered** \u2014 \`${manifest.coverage.under.join("`, `")}\`: fewer than ${UNDER_COVERED_MIN} of the top sources mention these terms from your question. Enrich them (your WebSearch + \`fetch --url\`) before writing, or state the gap explicitly under "Open questions".`
     );
     out.push("");
   }
@@ -2610,6 +2618,21 @@ async function runWebCascade(engines, ctx, breadth = 1) {
   }
   return out;
 }
+function ignoredByExplicitBackends(options) {
+  if (!options.backends?.length) return [];
+  const out = [];
+  if (options.seedDomains?.length) out.push("--seed-domains");
+  if ((options.rounds ?? 1) >= 2) out.push("--rounds");
+  if (options.webEngine !== "auto") out.push("--web-engine");
+  return out;
+}
+function termCoverage(items, queryTerms, top = 10) {
+  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
+  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+function underCovered(cov) {
+  return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);
+}
 function resolveBackends(options, mode) {
   if (options.backends?.length) return [...new Set(options.backends)];
   const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
@@ -2691,6 +2714,7 @@ async function runGather(options) {
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   const hydrateCache = /* @__PURE__ */ new Map();
+  let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
   async function assemble(rawLists) {
@@ -2709,6 +2733,7 @@ async function runGather(options) {
       let res = hydrateCache.get(key);
       if (!res) {
         res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
+        if (res.cached) cacheHits++;
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
@@ -2721,6 +2746,7 @@ async function runGather(options) {
         let alt = hydrateCache.get(altKey);
         if (!alt) {
           alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          if (alt.cached) cacheHits++;
           hydrateCache.set(altKey, alt);
         }
         if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -2799,12 +2825,7 @@ async function runGather(options) {
   let r = await assemble(lists);
   let gapNote;
   if ((options.rounds ?? 1) >= 2 && webBackends.length > 0 && !explicit) {
-    const top = r.withContent.slice(0, Math.min(10, r.withContent.length));
-    const gaps = r.queryTerms.filter((term) => {
-      let cov = 0;
-      for (const it of top) if (bm25Tokenize(it.text || it.snippet || "").includes(term)) cov++;
-      return cov < 2;
-    });
+    const gaps = underCovered(termCoverage(r.withContent, r.queryTerms));
     if (gaps.length) {
       const seenTerm = /* @__PURE__ */ new Set();
       const gapQuery = [...rankedKeywords(options.question).slice(0, 2), ...gaps].filter((t) => {
@@ -2830,6 +2851,9 @@ async function runGather(options) {
   timings.total = Date.now() - t0;
   const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
   const thin = merged.length < floor;
+  const coverageTerms = termCoverage(r.withContent, r.queryTerms);
+  const under = underCovered(coverageTerms);
+  const ignoredFlags = ignoredByExplicitBackends(options);
   const notes = [
     ...results.flatMap((res) => res.notes),
     ...r.hydrateNotes,
@@ -2838,8 +2862,15 @@ async function runGather(options) {
     ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
     ...seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : [],
     ...gapNote ? [gapNote] : [],
+    ...explicit ? [
+      `--backends pinned retrieval to ${backends.join(", ")}: the resilient web cascade is OFF` + (ignoredFlags.length ? `, and ${ignoredFlags.join(" / ")} ${ignoredFlags.length > 1 ? "were" : "was"} ignored` : "") + `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`
+    ] : [],
+    ...cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : [],
     ...thin ? [
       `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`
+    ] : [],
+    ...under.length ? [
+      `Under-covered term(s): ${under.join(", ")} \u2014 fewer than ${UNDER_COVERED_MIN} of the top sources mention them. Search these yourself and ingest via \`fetch --url\` before writing, or say so under "Open questions".`
     ] : [],
     ENRICH_NUDGE
   ];
@@ -2862,7 +2893,9 @@ async function runGather(options) {
     extras: mode.extras,
     notes,
     timings,
-    ...thin ? { recallFloor: { count: merged.length, floor } } : {}
+    ...thin ? { recallFloor: { count: merged.length, floor } } : {},
+    ...coverageTerms.length ? { coverage: { terms: coverageTerms, under } } : {},
+    cache: { enabled: !!options.cache, hits: cacheHits }
   };
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
@@ -3967,6 +4000,11 @@ function runCheck(dir, opts = {}) {
       `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 consider enriching with \`fetch --url\` before relying on it.`
     );
   }
+  if (manifest?.coverage?.under.length) {
+    warnings.push(
+      `Under-covered question term(s): ${manifest.coverage.under.slice(0, 6).join(", ")} \u2014 the dossier may not support claims about them; enrich with \`fetch --url\` or say so under "Open questions".`
+    );
+  }
   if (opts.minSources !== void 0 && sources.length < opts.minSources) {
     errors.push(
       `Only ${sources.length} source(s) in the dossier (--min-sources ${opts.minSources}). Enrich with \`fetch --url\` or broaden the gather before relying on this report.`
@@ -4912,8 +4950,10 @@ Options:
   --concurrency <n>    In-flight page-fetch concurrency      (default: 6)
   --rounds <n>         Retrieval rounds; 2 adds a gap-driven follow-up web
                        search for under-covered terms          (default: 1)
-  --cache              Reuse an on-disk fetch cache across runs (24h TTL); the
-                       big win is the deep tier's per-sub-question fan-out
+  --cache              (default; kept as an accepted no-op) Reuse the on-disk
+                       fetch cache across runs \u2014 24h TTL, keyed by canonical URL
+                       + Accept-Language, successful extractions only
+  --no-cache           Disable the on-disk fetch cache: fetch every page live
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
   --phase <name>       For 'orchestrate': emit one phase only \u2014 gather | verify
@@ -4998,7 +5038,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "min-sources",
   "phase"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "eco", "list"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "no-cache", "eco", "list"]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
@@ -5139,10 +5179,16 @@ function gatherReport(r, options) {
       ]
     };
   }
+  const fused = r.manifest.enginesFused ?? [];
+  const ignored = ignoredByExplicitBackends(options);
+  const under = r.manifest.coverage?.under ?? [];
   return {
     exitCode: 0,
     lines: [
       ...head,
+      ...fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : [],
+      ...ignored.length ? [`  IGNORED:  ${ignored.join(", ")} \u2014 --backends bypasses the cascade, seed-domain and gap rounds`] : [],
+      ...under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} \u2014 enrich these before writing`] : [],
       `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
       `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`
     ]
@@ -5175,7 +5221,11 @@ function buildGatherOptions(p, opts = {}) {
     seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : void 0,
     concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
     rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
-    cache: p.bools.has("cache"),
+    // Default ON: the on-disk cache is a pure win for the deep tier's fan-out,
+    // for a re-gather after a failed check, and for the `fetch --url` bridge.
+    // `--cache` stays an accepted no-op so every prompt and emitted contract
+    // already in the wild keeps working; `--no-cache` is the escape hatch.
+    cache: !p.bools.has("no-cache"),
     out: p.values.out ? resolve2(p.values.out) : void 0,
     json: p.bools.has("json")
   };
@@ -5307,7 +5357,8 @@ async function main(argv = process.argv.slice(2)) {
       const r = await addSource(resolve2(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
-        cache: p.bools.has("cache")
+        cache: !p.bools.has("no-cache")
+        // same default-on policy as gather
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
