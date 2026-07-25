@@ -63,6 +63,10 @@ and clobber it.) Contents:
 It is assembled deterministically from the same dossier files, so it diffs cleanly.
 Skip it with `--no-md`; skip the HTML with `--no-html`.
 
+> **`--out` moves only the HTML.** `render --run X --out Y` writes
+> `Y/index.html`, but `index.md` is assembled from the dossier in place and stays
+> in `X`. Copy it yourself if you need the pair side by side.
+
 ## Determinism
 
 The rendered body contains no timestamps (the date lives only in the header meta

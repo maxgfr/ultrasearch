@@ -52,9 +52,17 @@ which engines were tried/fused, so you can see where results came from.
 
 `--web-engine auto|searxng|ddg|ddglite|mojeek|marginalia|claude` — `auto`
 (default) runs the fallback cascade above; a named engine pins to exactly that
-one (injected even if the mode profile didn't list it); `claude` drops web
-discovery so you drive it via your own WebSearch. (Backends are also selectable
-directly with `--backends`, e.g. `--backends mojeek,marginalia`.)
+one (injected even if the mode profile didn't list it); `claude` drops keyless
+web discovery entirely, so your own WebSearch + `fetch --url` drives the run.
+
+> **`--backends` is a bigger hammer than it looks.** It replaces the whole mode
+> profile, and in doing so silently turns OFF four things: the resilient web
+> cascade, `--seed-domains`, the `--rounds 2` gap round, **and `--web-engine`
+> itself**. Use it to pin retrieval deliberately (`--backends fixture` for an
+> offline run, `--backends mojeek,marginalia` to probe two indexes) — not as a
+> way to "focus" a normal run. Since v1.11 `gather` says so out loud: the run
+> prints an `IGNORED:` line naming every flag the override voided, and records
+> the same note in the manifest.
 
 ## Language & region
 
@@ -89,6 +97,24 @@ digits with the query), or is a Wikipedia-style disambiguation stub ("… may
 refer to:"). The filter never drops below the depth's recall floor, so a thin
 genuine pool is kept intact; anything dropped is recorded in the dossier notes
 (`Relevance floor dropped N off-topic result(s) …`).
+
+Drop hosts you never want with `--exclude-domains a.com,b.com` — applied both
+before the fetch and again **after redirects**, so a shortener can't smuggle an
+excluded host back in.
+
+## Topping up recall
+
+- `--queries "phrasing one|phrasing two|exact term"` replaces the built-in query
+  planner with your own variants (translate them yourself for a non-English
+  search — the engine never translates).
+- `--rounds 2` adds one gap-driven follow-up search for the question terms the
+  first pass under-covered. Every run now *reports* those terms
+  (`coverage.under` on the manifest, an `Under-covered` banner in `DOSSIER.md`);
+  `--rounds 2` is what makes the engine act on them automatically instead of
+  leaving the enrichment to you.
+- `--pages <n>` (result pages per engine, ≤5) and `--web-breadth <n>` (engines
+  fused, ≤5) both default by depth — raise them before reaching for
+  `--max-sources`, which only widens the cut, not the search.
 
 ## Seeding primary domains
 

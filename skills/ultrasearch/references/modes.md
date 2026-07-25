@@ -28,6 +28,25 @@ All five modes compose with the **deep research tier** (`plan` / `merge` /
 template, so the decomposition is mode-aware. See
 `references/deep-research-playbook.md`.
 
+## Depth — the retrieval budget
+
+`--depth` scales every retrieval cap at once. `--backends` bypasses this table
+entirely (it pins the set itself).
+
+| Depth | max sources | per backend | result pages | engines fused | recall floor | deep-only backends |
+|---|---|---|---|---|---|---|
+| `summary` | 10 | 4 | 1 | 1 (short-circuits) | 3 | no |
+| `standard` | 25 | 6 | 2 | 2 | 6 | no |
+| `deep` | 60 | 10 | 3 | 5 (all) | 12 | yes |
+
+Override any of them individually: `--max-sources`, `--per-source`, `--pages`,
+`--web-breadth`. The **recall floor** is the thin-dossier threshold, not a
+target — falling below it flags the run rather than failing it (use
+`check --min-sources <n>` to make it fatal).
+
+Use `summary` for a single-fact lookup, `standard` for a normal report, `deep`
+when the answer will be acted on. Both report tiers are always written.
+
 ## Recall behavior
 
 - **Query variants** — every run plans a few query variants (the full question,

@@ -38,7 +38,10 @@ memory.
 ### Deep research tier (the agentic loop)
 
 On top of the single pass, an opt-in tier adds a deep-research harness, driven by
-SKILL.md and bounded by `DEEP_CAPS`:
+SKILL.md. `DEEP_CAPS` bounds two of its dimensions in code — `maxSubQuestions`
+(enforced by `plan`) and `maxVerify` (enforced by `verify`) — while `maxRounds`
+and `perSubQuestionSources` are **advisory**: the loop-until-dry cycle is
+agent-driven, and the latter is redundant with `DEPTH_CAPS.deep.maxSources`.
 
 ```
 plan --run-root (decompose into sub-questions, each with a deterministic out dir)
@@ -62,13 +65,16 @@ the sub-run dirs up front (no stdout parsing) and `verify --shards` partitions t
 worklist for parallel skeptics. Three quality signals are surfaced for the agent
 to act on: a **recall floor** (thin-dossier warning + `check --min-sources`),
 **source quality** (`fullText:false` snippet-only marker when a page fetch fails),
-and **contradictions**. See `references/deep-research-playbook.md`.
+and **contradictions**. A fourth, **under-covered terms**, names the question
+terms the kept sources barely mention — computed in-memory from the hydrated
+extracts, so it costs no extra retrieval. See
+`skills/ultrasearch/references/deep-research-playbook.md`.
 
 ## Modules (`src/`)
 
 - `cli.ts` — arg parser (`COMMANDS` / `VALUE_FLAGS` / `BOOL_FLAGS`), `HELP`, and
-  `main()` dispatch for gather / search / fetch / render / check / modes / plan /
-  merge / verify.
+  `main()` dispatch for gather / search / fetch / add-source / render / check /
+  modes / brainstorm / plan / merge / verify / orchestrate.
 - `types.ts` — `VERSION` + every interface (`Source`, `RawSource`, `Manifest`,
   `ModeProfile`, `CheckResult`, `SubQuestion`, `Verdict`, `VerifyResult`, …) and
   the `DEPTH_CAPS` + `DEEP_CAPS` tables.
@@ -85,7 +91,16 @@ and **contradictions**. See `references/deep-research-playbook.md`.
 - `check.ts` — the citation grammar + grounding algorithm (with model-hint
   tolerance and per-claim coverage on REPORT); exports the claim parser
   (`unitsOfFile` / `unitSourceTokens`) for `verify`, and the `--semantic` fold.
+- `claims.ts` — the shared claim parser (`check`, `verify` and `render` all import
+  it, so they can never disagree on what a claim is). Masks code fences, HTML
+  comments, model-hint blockquotes and the trailing Sources appendix.
+- `locale.ts` — pure locale derivation (`Accept-Language`, DuckDuckGo `kl`).
+- `brainstorm.ts` — `runBrainstorm`: the clarity gate's shallow probe, ambiguity
+  signals and candidate angles.
 - `plan.ts` — deterministic sub-question decomposition (`runPlan`) for the deep tier.
+- `orchestrate.ts` + `orchestrate-templates.ts` — `orchestrateRun`: emits the
+  per-phase Workflow scripts, the `agents/<role>.md` dispatch contracts and the
+  sequential `RUNBOOK.md` from the run's current worklists.
 - `merge.ts` — `runMerge`: union sub-dossiers into one master with stable `S#`
   ids, re-fusing + de-duplicating the combined pool and recording provenance.
 - `verify.ts` — `runVerify` (claim↔source worklist) + `applyVerdicts` /

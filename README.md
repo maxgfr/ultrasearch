@@ -125,9 +125,16 @@ Each run plans **query variants** and fans backends out across them, re-ranks
 sources by how well their fetched text covers the question, dedupes the same
 work across scholarly backends by DOI/arXiv id, and retries once on throttling
 — so you get broad, relevant, de-duplicated coverage. A dead link (404/410/…) is
-rescued from the **Wayback Machine** before it's dropped, and `--cache` reuses an
-on-disk fetch cache across runs (the deep tier's per-sub-question fan-out reuses
-the same pages instead of re-fetching them).
+rescued from the **Wayback Machine** before it's dropped, and an on-disk fetch
+cache (**on by default**, `--no-cache` to disable) is shared across processes, so
+the deep tier's per-sub-question fan-out reuses pages instead of re-fetching
+them. It is keyed by canonical URL *and* locale, and only successful extractions
+are stored.
+
+Each run also reports what retrieval could **not** do: a thin-dossier flag, the
+question terms the sources barely cover, per-source `⚠ snippet only` markers, and
+— when `--backends` pins the retrieval set — an explicit note naming the flags
+that override silently voided.
 
 ## Commands
 
@@ -138,8 +145,12 @@ the same pages instead of re-fetching them).
 - `check --run <dir>` — validate citation grounding (`--semantic` folds in the
   verify verdicts + contradictions; `--min-sources N` fails a too-thin dossier).
 - `modes` — list modes and their backend profiles.
+- `brainstorm` — probe a vague ask and propose angles + clarifying questions
+  before committing to a run.
 - `plan` / `merge` / `verify` — the deep-research tier (decompose → merge →
   adversarially verify; `verify --shards` for parallel skeptics).
+- `orchestrate` — emit the run's multi-agent fan-out (one launchable workflow per
+  ready phase, the per-role dispatch contracts, and a sequential `RUNBOOK.md`).
 
 Run `node scripts/ultrasearch.mjs --help` for the full surface, and see
 [`DOCUMENTATION.md`](DOCUMENTATION.md) for the architecture.
