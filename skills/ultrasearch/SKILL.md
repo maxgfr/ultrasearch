@@ -321,7 +321,7 @@ in `references/operations.md`.
 
 | Read it when | File |
 |---|---|
-| Running route S end to end | `references/research-playbook.md` |
+| Running route S end to end | `references/standard-playbook.md` |
 | Running route D: decompose → fan out → merge → verify → loop | `references/deep-research-playbook.md` |
 | You need the exact citation grammar `check` enforces, and its limits | `references/citation-format.md` |
 | You need a mode's report skeleton | `references/report-templates.md` |

@@ -60,9 +60,9 @@ web discovery entirely, so your own WebSearch + `fetch --url` drives the run.
 > cascade, `--seed-domains`, the `--rounds 2` gap round, **and `--web-engine`
 > itself**. Use it to pin retrieval deliberately (`--backends fixture` for an
 > offline run, `--backends mojeek,marginalia` to probe two indexes) — not as a
-> way to "focus" a normal run. Since v1.11 `gather` says so out loud: the run
-> prints an `IGNORED:` line naming every flag the override voided, and records
-> the same note in the manifest.
+> way to "focus" a normal run. `gather` says so out loud: the run prints an
+> `IGNORED:` line naming every flag the override voided, and records the same
+> note in the manifest.
 
 ## Language & region
 

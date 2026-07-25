@@ -215,9 +215,9 @@ Worklist: \`${join(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \
 For EACH of your sub-questions:
 
 1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
-   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --cache --out "<its out dir>"\`
-   (\`--cache\` shares the on-disk fetch cache across the fan-out, so overlapping URLs are fetched once.)
-2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin** (or an angle is missing), enrich with your own WebSearch and, for each good URL:
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --out "<its out dir>"\`
+   (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
+2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, enrich with your own WebSearch and, for each good URL:
    \`node ${engineAbs} fetch --url "<url>" --out "<its out dir>"\`
 3. Do NOT write any report tier.
 
@@ -279,7 +279,7 @@ ${status}
 ## The loop (play every role yourself, one item at a time)
 
 1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q … --queries … --cache --out <its out dir>\`, then enrich a thin sub-dossier (your WebSearch + \`fetch --url … --out <its out dir>\`).
+2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q … --queries … --out <its out dir>\`, then enrich a thin or under-covered sub-dossier (your WebSearch + \`fetch --url … --out <its out dir>\`).
 3. **Merge** — \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** — \`${engine} verify --run ${run}\` writes \`${join(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.

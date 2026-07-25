@@ -17,9 +17,10 @@ plan query variants (full question + keywords + identifiers, by depth)
   │  (web discovery walks engines in concurrent waves up to --web-breadth;
   │   polite scholarly APIs serialize their per-variant calls)
   │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
-  │  hydrate a candidate pool (bounded concurrency, retry on 429/503, optional
-  │   --cache; junk/consent-wall extractions rejected; dead links → Wayback)
+  │  hydrate a candidate pool (bounded concurrency, retry on 429/503, on-disk
+  │   cache; junk/consent-wall extractions rejected; dead links → Wayback)
   │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
+  │  map per-term coverage → the under-covered enrichment worklist
   ▼
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
   │  (research mode also writes refs.bib)
@@ -83,8 +84,9 @@ extracts, so it costs no extra retrieval. See
 - `gather.ts` — the orchestrator: resolve backends → run (web discovery in
   concurrent cascade waves) → fuse → dedupe → cap → hydrate (junk-extraction
   rejection, arXiv/Wayback fallbacks) → write dossier (+ refs.bib for research).
-- `cache.ts` — the opt-in on-disk fetch cache behind `--cache` (canonical-URL
-  key, TTL, successes only), shared across the deep tier's fan-out gathers.
+- `cache.ts` — the on-disk fetch cache (on by default, `--no-cache` disables it):
+  keyed by canonical URL **+ Accept-Language** so locales never share a body,
+  TTL-bounded, successes only, shared across the deep tier's fan-out gathers.
 - `dossier.ts` — `writeDossier` / `readDossier` / `buildSource` / `nextSourceId` /
   `readJson` (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` block.
 - `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.

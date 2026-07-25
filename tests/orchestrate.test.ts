@@ -330,7 +330,10 @@ describe("orchestrate — contracts & runbook", () => {
     expect(md).toMatch(/NEVER touch the parent run dir/i);
     expect(md).toContain("report tier");
     expect(md).toContain("gather --q");
-    expect(md).toContain("--cache");
+    // The fan-out's whole point is sharing fetched pages across sub-questions:
+    // the contract must say the cache is on and warn against turning it off.
+    expect(md).toMatch(/cache is ON by default/i);
+    expect(md).toContain("--no-cache");
     expect(md).toContain("fetch --url");
     // The playbook's return contract: out dir + one-line coverage note + NEW sub-questions.
     expect(md).toContain("coverage");

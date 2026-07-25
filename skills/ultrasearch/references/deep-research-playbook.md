@@ -69,10 +69,11 @@ the verification worklist.
    fan-out (`orchestrate --phase gather`) gathers deep; a standard-tier plan
    omits it and fans out at standard depth.
 
-2. **Fan out** — one `gather --depth deep --cache --out <its out dir>` per
-   sub-question, passing that sub-question's `queries`. `--cache` shares an
-   on-disk fetch cache across the sub-questions, so overlapping URLs are fetched
-   once instead of once per sub-question. Enrich each thin area with your own
+2. **Fan out** — one `gather --depth deep --out <its out dir>` per
+   sub-question, passing that sub-question's `queries`. The on-disk fetch cache
+   is on by default and shared across processes, so a URL two sub-questions both
+   surface is fetched once, not twice (`--no-cache` disables it, which on a
+   fan-out is usually the wrong trade). Enrich each thin area with your own
    WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
    floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
    Parallel when possible (see the contract below), sequential otherwise.

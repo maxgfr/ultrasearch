@@ -194,8 +194,8 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
     } catch {
       expected = [];
     }
-    const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId} ${v.sourceId}`));
-    const uncovered = expected.filter((p) => !adjudicatedKeys.has(`${p.claimId} ${p.sourceId}`));
+    const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId}\u0000${v.sourceId}`));
+    const uncovered = expected.filter((p) => !adjudicatedKeys.has(`${p.claimId}\u0000${p.sourceId}`));
     if (uncovered.length) {
       result.ok = false;
       const claims = [...new Set(uncovered.map((p) => p.claimId))];
