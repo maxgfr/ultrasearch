@@ -66,9 +66,24 @@ Firecrawl's cleaned markdown to come back *with* the hits.
 ## Firecrawl — browser-rendered extraction (optional)
 
 A self-hosted [Firecrawl](https://github.com/firecrawl/firecrawl) turns a page
-into **main-content markdown using a real headless browser**, which beats the
-built-in regex reader on nav/cookie chrome and is the only way a JS-rendered page
-yields any text at all. It is keyless (`USE_DB_AUTHENTICATION=false`).
+into **main-content markdown using a real headless browser**. It is keyless
+(`USE_DB_AUTHENTICATION=false`).
+
+**What it actually buys, measured** — 14 varied documentation pages, self-hosted,
+against the built-in reader: median **235 ms → 693 ms** per page (**≈3× slower**)
+for **~30 % fewer** navigation-chrome markers overall. The average hides the
+shape, and the shape is what matters: 3 of 13 pages improved clearly, 9 were
+unchanged, 1 got slightly worse. Where it wins it wins big — nav preambles of 10,
+13 and 29 lines collapsing to 0 — and it wins on pages the regex reader cannot
+read at all: genuinely client-rendered SPAs, consent walls, anti-bot
+interstitials. Plenty of framework docs sites are server-rendered, and the
+built-in reader already handles those fine.
+
+Read that as: **the payoff is concentrated in the junk-rescue tier below**, not
+spread evenly over every fetch. If wall-clock matters more to you than the tail
+of hard pages, leaving the stack down (or `--firecrawl off`) is a defensible
+default — the built-in reader is not a fallback of last resort, it is adequate
+for most pages.
 
 ```
 docker compose --profile search --profile extract up -d --wait
