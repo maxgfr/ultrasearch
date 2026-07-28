@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.12.0](https://github.com/maxgfr/ultrasearch/compare/v1.11.0...v1.12.0) (2026-07-28)
+
+
+### Features
+
+* **firecrawl:** add self-hosted Firecrawl extraction and search ([dfaa736](https://github.com/maxgfr/ultrasearch/commit/dfaa736864f612db1219664c79d855407dd5ac02))
+
 # [1.11.0](https://github.com/maxgfr/ultrasearch/compare/v1.10.0...v1.11.0) (2026-07-25)
 
 
