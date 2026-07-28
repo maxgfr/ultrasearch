@@ -59,6 +59,10 @@ describe("R6: --web-engine filters the discovery backends", () => {
   it("claude drops both discovery backends (agent drives WebSearch)", () => {
     expect(resolveBackends(ctx("claude"), topic)).toEqual(["wikipedia", "standards"]);
   });
+  it("firecrawl is pinnable but never part of auto (it is not in DISCOVERY)", () => {
+    expect(resolveBackends(ctx("firecrawl"), topic)).toEqual(["wikipedia", "standards", "firecrawl"]);
+    expect(resolveBackends(ctx("auto"), topic)).not.toContain("firecrawl");
+  });
 });
 
 describe("E5: --since is wired into date-capable backends", () => {

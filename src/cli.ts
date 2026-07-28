@@ -86,6 +86,9 @@ Options:
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
+  --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
+                       extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
+                       default http://localhost:3002, skipped when unreachable)
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
@@ -170,6 +173,7 @@ export const VALUE_FLAGS = new Set([
   "lang",
   "region",
   "searxng",
+  "firecrawl",
   "web-engine",
   "url",
   "since",
@@ -407,6 +411,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,
+    firecrawl: p.values.firecrawl,
     webEngine,
     pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : undefined,
     webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : undefined,
@@ -573,6 +578,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
+        firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"), // same default-on policy as gather
       });
       if (p.bools.has("json")) {

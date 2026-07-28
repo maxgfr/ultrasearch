@@ -1,5 +1,9 @@
 import { buildMatcher } from "../util.js";
 import { pdfToText } from "./pdf.js";
+// Cyclic by design: firecrawl.ts is a CLIENT of this HTTP layer, and this layer
+// is where the extraction seam lives. Safe because neither module calls into the
+// other at module-evaluation time — only from inside function bodies.
+import { scrapeViaFirecrawl } from "./firecrawl.js";
 
 // A realistic desktop-browser User-Agent. Several keyless web endpoints (DDG,
 // Mojeek) serve 403/empty to obvious bot UAs, so scrapers default to this.
@@ -103,11 +107,14 @@ export async function httpGet(
 
 // JSON request helper for the keyless search APIs. Returns parsed JSON or an
 // error; never throws; retries once on a transient status / network error.
+// `opts.headers` adds/overrides request headers (lower-cased) — the escape hatch
+// for an endpoint that needs one this signature doesn't model, e.g. the optional
+// `Authorization: Bearer` a Firecrawl Cloud base would want.
 export async function httpJson(
   method: string,
   url: string,
   body?: unknown,
-  opts: { timeoutMs?: number; accept?: string; acceptLanguage?: string; userAgent?: string } = {},
+  opts: { timeoutMs?: number; accept?: string; acceptLanguage?: string; userAgent?: string; headers?: Record<string, string> } = {},
 ): Promise<{ ok: boolean; status: number; data: any; error?: string }> {
   let last: { ok: boolean; status: number; data: any; error?: string } = { ok: false, status: 0, data: undefined };
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -120,6 +127,7 @@ export async function httpJson(
         "user-agent": opts.userAgent ?? BROWSER_UA,
       };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
+      for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
       const res = await fetch(url, {
         method,
         signal: ctrl.signal,
@@ -387,15 +395,52 @@ export function extractMainHtml(html: string): string {
 const PDF_URL_RE = /\.pdf($|[?#])/i;
 const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 } as const;
 
-// Fetch a URL and return its readable text + a title. HTML is narrowed to its
-// main content then stripped to prose; PDFs are run through a best-effort
-// text-layer extractor. Returns a `note` instead of throwing when the page
-// can't be fetched or a PDF yields no text.
-export async function fetchAndExtract(
-  url: string,
-  opts: { acceptLanguage?: string } = {},
-): Promise<{ text: string; title?: string; note?: string; finalUrl: string; status: number }> {
+// Which extractor produced a page's text. `undefined` (absent) means the
+// built-in regex reader — the historical behaviour and still the fallback for
+// every failure path. Part of the on-disk cache key, so a body cleaned by one
+// extractor is never served to a run configured for the other (see src/cache.ts).
+export type ExtractorId = "native" | "firecrawl";
+
+export interface ExtractResult {
+  text: string;
+  title?: string;
+  note?: string;
+  finalUrl: string;
+  status: number;
+  extractor?: ExtractorId;
+}
+
+// Fetch a URL and return its readable text + a title. HTML goes to Firecrawl
+// first when a self-hosted instance is up (a real browser + main-content
+// markdown, so JS-rendered pages and nav/cookie chrome stop costing us text) and
+// falls back to the built-in narrow-then-strip reader on ANY failure. PDFs skip
+// Firecrawl and go straight to the text-layer extractor. Returns a `note`
+// instead of throwing when the page can't be fetched or a PDF yields no text.
+//
+// Note policy: a MISSING Firecrawl is silent — the localhost default not being
+// up is the normal case and a per-URL note about it would drown the dossier.
+// A Firecrawl that is up and still fails, or one the user asked for explicitly
+// and did not get, does emit a note (src/backends/firecrawl.ts decides which).
+export async function fetchAndExtract(url: string, opts: { acceptLanguage?: string; firecrawl?: string } = {}): Promise<ExtractResult> {
   const wantsPdf = PDF_URL_RE.test(url);
+  let firecrawlNote: string | undefined;
+  if (!wantsPdf) {
+    const fc = await scrapeViaFirecrawl(url, opts);
+    // Firecrawl reports success even for an error page, handing back the
+    // origin's 404/403 body as markdown. Accept only a 2xx/3xx: anything else
+    // has to fall through to the built-in path so the caller sees the real
+    // status and the dead-link (Wayback) rescue still fires.
+    if (fc.data && (fc.data.statusCode ?? 200) < 400) {
+      return {
+        text: fc.data.markdown,
+        title: fc.data.title,
+        finalUrl: fc.data.sourceURL || url,
+        status: fc.data.statusCode ?? 200,
+        extractor: "firecrawl",
+      };
+    }
+    firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} — fell back to the built-in extractor.` : fc.why;
+  }
   const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
@@ -410,13 +455,13 @@ export async function fetchAndExtract(
       text,
       finalUrl: res.url,
       status: res.status,
-      note: text ? undefined : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`,
+      note: text ? firecrawlNote : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`,
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
-  return { text, title, finalUrl: res.url, status: res.status };
+  return { text, title, finalUrl: res.url, status: res.status, note: firecrawlNote };
 }
 
 // Statuses where the origin is gone/blocked and a live re-fetch will never
@@ -430,7 +475,7 @@ export const DEAD_LINK_STATUS = new Set([404, 410, 451, 403]);
 // callers record the snapshot in meta + a note. Disable with ULTRASEARCH_NO_WAYBACK.
 export async function rescueViaWayback(
   url: string,
-  opts: { acceptLanguage?: string } = {},
+  opts: { acceptLanguage?: string; firecrawl?: string } = {},
 ): Promise<{ text: string; title?: string; snapshotUrl: string; timestamp: string } | undefined> {
   if (process.env.ULTRASEARCH_NO_WAYBACK) return undefined;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;

@@ -88,6 +88,61 @@ describe("gather hydration fallbacks (P0.4)", () => {
   });
 });
 
+const FIRECRAWL_MD = JSON.stringify({
+  success: true,
+  data: {
+    markdown: `# Token Bucket Scheduling\n\n${"A real browser got past the consent wall and read the token bucket paper. ".repeat(8)}`,
+    metadata: { title: "Token Bucket Scheduling", statusCode: 200 },
+  },
+});
+
+describe("Firecrawl junk rescue", () => {
+  it("re-extracts a consent wall through Firecrawl instead of demoting it to a snippet", async () => {
+    const base = "http://fc-hyd.test";
+    // The first two scrapes fail, so the primary hydrate AND the arXiv absUrl
+    // fallback both land on the built-in reader's consent wall. Only then does
+    // the junk-rescue tier fire — which is exactly what this pins.
+    let scrapes = 0;
+    installFetchMock((url) => {
+      if (url.includes("/scrape")) return scrapes++ < 2 ? { status: 500, body: "boom" } : { body: FIRECRAWL_MD, contentType: "application/json" };
+      if (url === `${base}/`) return { status: 200, body: "{}" };
+      if (url.includes("export.arxiv.org")) return { body: ARXIV_FEED, contentType: "application/atom+xml" };
+      if (url.includes("/html/") || url.includes("/abs/")) return { body: CONSENT_WALL };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-fc-"));
+    await runGather(opts({ backends: ["arxiv"], out: dir, firecrawl: base }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.fullText).not.toBe(false); // rescued → real full text, not a snippet
+    expect(readFileSync(join(dir, sources[0]!.extract), "utf8")).toContain("got past the consent wall");
+    const notes = (JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest).notes.join(" ");
+    expect(notes).toMatch(/re-extracted it with Firecrawl/i);
+    expect(notes).toMatch(/Firecrawl cleaned 1 page/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("still keeps only the snippet when Firecrawl is down", async () => {
+    const base = "http://fc-down.test";
+    installFetchMock((url) => {
+      if (url === `${base}/`) throw new Error("ECONNREFUSED");
+      if (url.includes("export.arxiv.org")) return { body: ARXIV_FEED, contentType: "application/atom+xml" };
+      if (url.includes("/html/") || url.includes("/abs/")) return { body: CONSENT_WALL };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-fc-down-"));
+    await runGather(opts({ backends: ["arxiv"], out: dir, firecrawl: base }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources[0]!.fullText).toBe(false);
+    const notes = (JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest).notes;
+    expect(notes.join(" ")).toMatch(/snippet only/i);
+    // The "not reachable" note is instance-level, so it appears exactly ONCE
+    // however many pages the run hydrated.
+    expect(notes.filter((n) => /not reachable/i.test(n))).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 // A feed with `n` arXiv entries whose html + abs pages are both dead.
 function arxivFeed(n: number): string {
   const entries = Array.from(

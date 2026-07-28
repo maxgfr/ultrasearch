@@ -101,6 +101,12 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
+  // General-web discovery engines (searxng, duckduckgo, ddglite, mojeek,
+  // marginalia, firecrawl) deliberately get NO authority floor: they surface
+  // arbitrary pages, so trust must come from the domain alone. `firecrawl` is
+  // spelled out at 0 (identical to being absent) so the omission reads as a
+  // decision rather than an oversight — its /search proxies the same open web.
+  firecrawl: 0,
   stackexchange: 0.72,
   hackernews: 0.5,
 };

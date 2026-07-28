@@ -110,6 +110,28 @@ disagree. Retrieval flags two more quality signals to act on: a **thin dossier**
 **snippet-only** sources (the page fetch failed, so only the search snippet is on
 file, marked `⚠ snippet only`).
 
+## Optional self-hosted containers
+
+Two things can run locally, both keyless, both optional, both behind a docker
+compose **profile** (a bare `docker compose up -d` starts nothing):
+
+```bash
+docker compose --profile search up -d --wait                    # SearXNG on :8888
+docker compose --profile search --profile extract up -d --wait  # + Firecrawl on :3002
+```
+
+- **SearXNG** (`--profile search`) backs the `searxng` discovery backend —
+  `--searxng http://localhost:8888` or `ULTRASEARCH_SEARXNG`.
+- **Firecrawl** (`--profile extract`) replaces the built-in regex HTML stripper
+  with **browser-rendered main-content markdown**: better on nav/cookie chrome,
+  and the only way a JS-rendered page yields text at all. It also *rescues* the
+  consent-wall / anti-bot pages the junk detector would otherwise reduce to a
+  snippet. No configuration — it is used when it answers on
+  `http://localhost:3002` and silently skipped when it does not, so runs never
+  fail because of it (`--firecrawl <url>` / `ULTRASEARCH_FIRECRAWL`, `off` to
+  disable). Costs ~3 GB of images and ~4 GB of RAM; see
+  [`docker/firecrawl/README.md`](docker/firecrawl/README.md).
+
 ## Keyless, no API keys
 
 Discovery is a layered, free fallback cascade, mirroring ultradoc:

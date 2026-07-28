@@ -4,7 +4,8 @@ import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH, UNDER_C
 import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
-import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
+import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
@@ -66,6 +67,8 @@ const DISCOVERY: BackendKind[] = ["searxng", "duckduckgo", "ddglite", "mojeek", 
 
 const ENGINE_BACKEND: Record<Exclude<GatherOptions["webEngine"], "auto" | "claude">, BackendKind> = {
   searxng: "searxng",
+  // Pinnable, but absent from DISCOVERY above — so `auto` never reaches for it.
+  firecrawl: "firecrawl",
   ddg: "duckduckgo",
   ddglite: "ddglite",
   mojeek: "mojeek",
@@ -285,7 +288,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
   // re-fetches a page round 1 already hydrated.
-  const hydrateCache = new Map<string, { text: string; title?: string; note?: string; finalUrl: string; status: number; cached?: boolean }>();
+  const hydrateCache = new Map<string, ExtractResult & { cached?: boolean }>();
   // Pages served from the on-disk cache instead of the network, across every
   // round of this run. Recorded on the manifest so a dossier is self-describing
   // about how fresh its page bodies are.
@@ -294,6 +297,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // can't fan out into dozens of archive.org round-trips.
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
+  // Pages whose text came from a self-hosted Firecrawl rather than the built-in
+  // reader. Reported as ONE note (like the cache-hit count) instead of one per
+  // page, so a dossier says how it was extracted without drowning in notes.
+  let firecrawlUsed = 0;
+  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
 
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
@@ -316,8 +324,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
+        res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
         if (res.cached) cacheHits++;
+        if (res.extractor === "firecrawl") firecrawlUsed++;
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -335,8 +344,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const altKey = canonicalizeUrl(it.meta.absUrl);
         let alt = hydrateCache.get(altKey);
         if (!alt) {
-          alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          alt = await cachedFetchAndExtract(it.meta.absUrl, extractOpts, !!options.cache);
           if (alt.cached) cacheHits++;
+          if (alt.extractor === "firecrawl") firecrawlUsed++;
           hydrateCache.set(altKey, alt);
         }
         if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -352,13 +362,35 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // to the snippet. Capped per run; the ORIGINAL url stays the source url.
       if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
         waybackUsed++; // reserve the slot synchronously (before any await) so the cap holds under concurrency
-        const wb = await rescueViaWayback(it.url, { acceptLanguage });
+        const wb = await rescueViaWayback(it.url, extractOpts);
         if (wb) {
           text = wb.text;
           junk = undefined;
           title = title || wb.title;
           it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
           hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+        }
+      }
+
+      // Junk rescue via Firecrawl. A consent wall, an "enable JavaScript" shell
+      // or an anti-bot interstitial extracts to boilerplate the regex reader
+      // cannot see past, and those pages currently contribute NOTHING but a
+      // snippet. A real browser can get past most of them, so re-extract through
+      // Firecrawl before settling for the snippet. Skipped when this text ALREADY
+      // came from Firecrawl (re-asking would return the same wall).
+      if (text && junk && res.extractor !== "firecrawl") {
+        const wall = junk;
+        const fc = await scrapeViaFirecrawl(it.url, { firecrawl: options.firecrawl });
+        if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+          text = fc.data.markdown;
+          junk = undefined;
+          title = title || fc.data.title;
+          firecrawlUsed++;
+          // Fold the rescue back into the in-process hydrate cache, so a second
+          // assemble pass (the --rounds 2 gap round) reuses it rather than
+          // re-scraping — and so the run counts this page exactly once.
+          hydrateCache.set(key, { ...res, text: fc.data.markdown, title, extractor: "firecrawl" });
+          hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} — re-extracted it with Firecrawl.`);
         }
       }
 
@@ -490,7 +522,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   const notes = [
     ...results.flatMap((res) => res.notes),
-    ...r.hydrateNotes,
+    // Deduped: every per-page hydrate note names its URL and so is unique, but
+    // the instance-level ones (an explicitly-configured Firecrawl that is down)
+    // would otherwise repeat once per page in the pool.
+    ...new Set(r.hydrateNotes),
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
@@ -504,6 +539,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         ]
       : []),
     ...(cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : []),
+    ...(firecrawlUsed > 0
+      ? [`Firecrawl cleaned ${firecrawlUsed} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`]
+      : []),
     ...(thin
       ? [
           `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`,

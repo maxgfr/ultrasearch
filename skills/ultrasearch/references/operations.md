@@ -41,8 +41,10 @@ turns that into a hard failure for a high-stakes run.
 
 - On disk, shared **across processes** — the deep tier's fan-out fetches an
   overlapping URL once instead of once per sub-question.
-- Keyed by canonical URL **and** the `Accept-Language` the fetch will send, so a
-  `--lang de` run is never served a body cached by a `--lang en` run.
+- Keyed by canonical URL, the `Accept-Language` the fetch will send **and the
+  extractor** that cleaned it — so a `--lang de` run is never served a body
+  cached by a `--lang en` run, and bringing Firecrawl up is not masked for a
+  whole TTL by yesterday's natively-extracted entries.
 - **Only successful extractions are stored.** A failed or empty fetch always
   retries. A corrupt entry is ignored and overwritten, never thrown.
 - 24h TTL. Discovery is **never** cached — only page bodies. Every search query
@@ -66,7 +68,9 @@ more than saving ten seconds.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). |
+| `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). Opt-in: unset ⇒ the backend skips without calling out. |
+| `ULTRASEARCH_FIRECRAWL` | `http://localhost:3002` | Self-hosted Firecrawl base URL (same as `--firecrawl`). `off` disables it. Unreachable ⇒ silently skipped after one 2s probe. |
+| `ULTRASEARCH_FIRECRAWL_KEY` | unset | Optional `Authorization: Bearer` for the Firecrawl API. Not needed self-hosted — only to point the same client at Firecrawl Cloud. |
 | `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
 | `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |
 | `ULTRASEARCH_NO_WAYBACK` | unset | Set to disable the Wayback rescue for dead links. |
@@ -79,6 +83,27 @@ more than saving ten seconds.
 > **The last four are politeness, not performance.** They exist so tests and CI
 > can run fast offline. Zeroing them against the live web hammers free services
 > and gets the host rate-limited or blocked. **Never lower them on a real run.**
+
+## Optional local containers
+
+Everything ultrasearch talks to is keyless; two of them can be **self-hosted**,
+and both live behind a docker compose profile. A bare `docker compose up -d`
+starts **nothing**.
+
+| Profile | Brings up | Cost | What it buys |
+|---|---|---|---|
+| `search` | SearXNG on `:8888` | one small container | The `searxng` discovery backend (`--searxng http://localhost:8888`). |
+| `extract` | Firecrawl + playwright/redis/rabbitmq/postgres on `:3002` | ~3 GB images, ~4 GB RAM | Browser-rendered main-content markdown instead of the built-in HTML stripper, plus the `firecrawl` search backend. |
+
+```bash
+docker compose --profile search up -d --wait                    # discovery only
+docker compose --profile search --profile extract up -d --wait  # + extraction
+```
+
+Firecrawl needs no configuration: the default base is `http://localhost:3002`,
+and a memoised 2s probe decides per process whether it is there. When it is not,
+every extraction uses the built-in reader exactly as before. `docker/firecrawl/README.md`
+has the smoke tests and the tunables.
 
 ## Offline and deterministic runs
 
@@ -118,6 +143,9 @@ around them:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own WebSearch + `fetch --url`. Stop after two empty attempts and report the gap. |
+| `searxng` backend skipped after a `docker compose up` | Every compose service is behind a profile now — a bare `up` starts nothing | `docker compose --profile search up -d --wait` |
+| Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
+| Extracts look truncated since enabling Firecrawl | Its markdown is richer, so it reaches the 4k/8k `--depth` cap sooner | Use `--depth deep` (uncapped extracts), or read `sources/S#.md` directly. |
 | Thin dossier every time | Query too narrow, or a niche/commercial topic | Add `--queries` variants, raise `--web-breadth`/`--pages`, add `--seed-domains` for hosts you know. |
 | `--seed-domains` / `--rounds` did nothing | `--backends` was also passed — it pins retrieval and voids them | Drop `--backends`. The run now says `IGNORED:` when this happens. |
 | `check`: "No source citations found" | Every `[S#]` sits in the trailing `## Sources` appendix | Cite **in the body**. The appendix is rendered, not counted. |

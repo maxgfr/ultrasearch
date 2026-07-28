@@ -2,6 +2,7 @@ import type { Backend, BackendKind, BackendResult, RawSource, RunContext } from 
 import { rrf, canonicalizeUrl } from "../util.js";
 import { sleep, POLITE_DELAY_MS } from "./fetch.js";
 import { searxngBackend } from "./searxng.js";
+import { firecrawlBackend } from "./firecrawl.js";
 import { duckduckgoBackend } from "./duckduckgo.js";
 import { ddgliteBackend } from "./ddglite.js";
 import { mojeekBackend } from "./mojeek.js";
@@ -27,6 +28,7 @@ import { standardsBackend } from "./standards.js";
 // source the agent ingested via `fetch`, so it has no handler here.
 const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   searxng: searxngBackend,
+  firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
   ddglite: ddgliteBackend,
   mojeek: mojeekBackend,

@@ -8,8 +8,11 @@ export const VERSION = "1.11.0";
 // content backends (wikipedia, the keyless APIs) yield items that already carry
 // text. "generic" fetches an explicit URL; "fixture" is the offline CI backend;
 // "claude" is the provenance label for a source the agent added via `fetch`.
+// "firecrawl" is a self-hosted Firecrawl instance's keyless /search — an
+// EXPLICIT choice only, never part of the `auto` discovery cascade.
 export type BackendKind =
   | "searxng"
+  | "firecrawl"
   | "duckduckgo"
   | "ddglite"
   | "mojeek"
@@ -32,6 +35,7 @@ export type BackendKind =
 
 export const ALL_BACKENDS: readonly BackendKind[] = [
   "searxng",
+  "firecrawl",
   "duckduckgo",
   "ddglite",
   "mojeek",
@@ -182,8 +186,11 @@ export interface Provenance {
 // fallback cascade (searxng → duckduckgo → ddglite → mojeek → marginalia),
 // short-circuiting once one yields enough results; the named engines pin to that
 // one; "claude" drops web discovery so the agent drives it via its own WebSearch.
+// "firecrawl" is pinnable but deliberately absent from the `auto` cascade — it
+// needs a local container stack, and its upstream is the same SearXNG the
+// `searxng` engine already queries directly.
 // Single source of truth: the CLI validator and --help both derive from this list.
-export const ALL_WEB_ENGINES = ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"] as const;
+export const ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"] as const;
 export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 
 // Optional, backend-specific metadata carried on a source.
@@ -278,6 +285,7 @@ export interface GatherOptions {
   lang: string;
   region?: string; // region/country for locale-aware web search (else derived from lang)
   searxng?: string; // SearXNG base URL (else env / default)
+  firecrawl?: string; // Firecrawl base URL (else env / http://localhost:3002); "off" disables it
   webEngine: WebEngine;
   pages?: number; // result pages each web engine fetches per query (else per depth)
   webBreadth?: number; // engines the auto cascade fuses before stopping (else per depth)

@@ -6,7 +6,8 @@ honest notes in the dossier.
 
 | Backend | Endpoint | Notes / limits |
 |---------|----------|----------------|
-| `searxng` | `GET {base}/search?q=…&format=json` | base = `--searxng` / `ULTRASEARCH_SEARXNG` / `http://localhost:8888`. **Public instances usually disable `format=json`** (returns 403/HTML) — run your own (`docker-compose up`). Skips silently when unreachable. |
+| `searxng` | `GET {base}/search?q=…&format=json` | base = `--searxng` / `ULTRASEARCH_SEARXNG` / `http://localhost:8888`. **Public instances usually disable `format=json`** (returns 403/HTML) — run your own (`docker compose --profile search up -d`; a bare `docker compose up` starts nothing). Skips silently when unreachable. |
+| `firecrawl` | `POST {base}/v2/search` (falls back to `/v1` on 404) | Self-hosted Firecrawl, keyless (`USE_DB_AUTHENTICATION=false`); base = `--firecrawl` / `ULTRASEARCH_FIRECRAWL` / `http://localhost:3002`, `off` disables. Its own cascade is Fire-Engine → SearXNG → DuckDuckGo. **Explicit only** — never in the `auto` cascade. Gated by a memoised 2s probe of `GET /`. |
 | `duckduckgo` | `GET https://html.duckduckgo.com/html/?q=…` | HTML scrape; decodes the real URL from the `uddg` redirector param. Fragile if DDG changes markup and can rate-limit — the WebSearch bridge is the real workhorse. |
 | `ddglite` | `GET https://lite.duckduckgo.com/lite/?q=…` | HTML scrape of DDG's flat "lite" results table; simpler/sturdier markup than the main endpoint. First cascade fallback for `duckduckgo`. |
 | `mojeek` | `GET https://www.mojeek.com/search?q=…` | HTML scrape of an independent crawler/index (not a Bing/Google reseller). Direct result URLs (no redirector). Widens recall; cascade fallback. |
@@ -36,9 +37,20 @@ honest notes in the dossier.
   operators). Scanned/image-only or encrypted PDFs may yield little — that's
   reported as a note. This lets `research` papers (and any PDF you `fetch`) be
   read beyond their abstract.
+- When a self-hosted **Firecrawl** answers (`docker compose --profile search
+  --profile extract up -d`), HTML pages are extracted through it FIRST — a real
+  headless browser returning main-content markdown via `POST {base}/v2/scrape`
+  (`formats:["markdown"], onlyMainContent, blockAds, removeBase64Images`, plus a
+  24h `maxAge` so Firecrawl can serve its own cached copy). One page per call;
+  the async `/batch/scrape` job API is deliberately unused. **Any** failure —
+  disabled, unreachable, non-2xx, empty markdown — falls back to the built-in
+  reader below. PDFs skip Firecrawl entirely. Firecrawl markdown is richer than
+  the stripped text, so it hits the `--depth` extract caps sooner.
 - A short extraction dominated by **consent / anti-bot / "enable JavaScript"**
   boilerplate is rejected (it can't masquerade as full text): the source keeps
-  only its search snippet and is marked `⚠ snippet only`.
+  only its search snippet and is marked `⚠ snippet only`. When Firecrawl is up,
+  the page is **re-extracted through it first** — a browser gets past most walls
+  — and only demoted to snippet-only if that also comes back as boilerplate.
 - A **dead link** (404/410/451/403) is retried against the **Wayback Machine**'s
   closest snapshot before it's dropped; the recovered text is used, the original
   URL is kept, and a note records the snapshot (disable with

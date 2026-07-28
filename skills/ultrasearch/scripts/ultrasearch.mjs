@@ -9,6 +9,7 @@ import { realpathSync, existsSync as existsSync7, statSync, readdirSync } from "
 var VERSION = "1.11.0";
 var ALL_BACKENDS = [
   "searxng",
+  "firecrawl",
   "duckduckgo",
   "ddglite",
   "mojeek",
@@ -58,7 +59,7 @@ var DEEP_CAPS = {
   maxVerify: 40,
   perSubQuestionSources: 60
 };
-var ALL_WEB_ENGINES = ["auto", "searxng", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
+var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
 
 // src/gather.ts
 import { join as join3 } from "path";
@@ -240,6 +241,12 @@ var BACKEND_TRUST = {
   standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
+  // General-web discovery engines (searxng, duckduckgo, ddglite, mojeek,
+  // marginalia, firecrawl) deliberately get NO authority floor: they surface
+  // arbitrary pages, so trust must come from the domain alone. `firecrawl` is
+  // spelled out at 0 (identical to being absent) so the omission reads as a
+  // decision rather than an oversight — its /search proxies the same open web.
+  firecrawl: 0,
   stackexchange: 0.72,
   hackernews: 0.5
 };
@@ -922,6 +929,154 @@ function pdfToText(buf) {
   return out.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+// src/backends/firecrawl.ts
+var FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
+var PROBE_TIMEOUT_MS = 2e3;
+var SCRAPE_TIMEOUT_MS = 45e3;
+var SEARCH_TIMEOUT_MS = 3e4;
+var SCRAPE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+function firecrawlBase(opts = {}) {
+  const raw = (opts.firecrawl ?? process.env.ULTRASEARCH_FIRECRAWL ?? FIRECRAWL_DEFAULT_BASE).trim();
+  if (!raw || raw.toLowerCase() === "off") return null;
+  return raw.replace(/\/+$/, "");
+}
+function firecrawlIsExplicit(opts = {}) {
+  return !!(opts.firecrawl ?? process.env.ULTRASEARCH_FIRECRAWL);
+}
+function authHeaders() {
+  const key = process.env.ULTRASEARCH_FIRECRAWL_KEY?.trim();
+  return key ? { authorization: `Bearer ${key}` } : void 0;
+}
+var probeCache = /* @__PURE__ */ new Map();
+function probeFirecrawl(base) {
+  let p = probeCache.get(base);
+  if (!p) {
+    p = (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${base}/`, { signal: ctrl.signal });
+        await res.text().catch(() => "");
+        return true;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+    probeCache.set(base, p);
+  }
+  return p;
+}
+var prefixCache = /* @__PURE__ */ new Map();
+function apiPrefix(base) {
+  return prefixCache.get(base) ?? "/v2";
+}
+async function postJson(base, path, body, timeoutMs) {
+  const headers = authHeaders();
+  const first = await httpJson("POST", `${base}${apiPrefix(base)}${path}`, body, { timeoutMs, headers });
+  if (first.status !== 404 || apiPrefix(base) !== "/v2") return first;
+  prefixCache.set(base, "/v1");
+  return httpJson("POST", `${base}/v1${path}`, body, { timeoutMs, headers });
+}
+function mapScrapeResponse(json) {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+  if (json.success === false) return null;
+  const data = json.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const markdown = typeof data.markdown === "string" ? data.markdown.trim() : "";
+  if (!markdown) return null;
+  const meta = data.metadata && typeof data.metadata === "object" ? data.metadata : {};
+  const rawTitle = typeof meta.title === "string" ? cleanInline(meta.title) : "";
+  const src = typeof meta.sourceURL === "string" ? meta.sourceURL : typeof meta.url === "string" ? meta.url : void 0;
+  const status = typeof meta.statusCode === "number" ? meta.statusCode : void 0;
+  return {
+    markdown,
+    ...rawTitle ? { title: rawTitle } : {},
+    ...src ? { sourceURL: src } : {},
+    ...status !== void 0 ? { statusCode: status } : {}
+  };
+}
+function mapSearchResponse(json) {
+  if (!json || typeof json !== "object") return [];
+  if (json.success === false) return [];
+  const data = json.data;
+  const web = Array.isArray(data) ? data : Array.isArray(data?.web) ? data.web : Array.isArray(data?.results) ? data.results : [];
+  const out = [];
+  for (const x of web) {
+    if (!x || typeof x.url !== "string" || !x.url) continue;
+    out.push({
+      url: x.url,
+      // `||` (not `??`): an empty title degrades to the URL, never blank.
+      title: cleanInline(String(x.title || x.url)),
+      description: cleanInline(String(x.description ?? x.snippet ?? "")).slice(0, 360),
+      ...typeof x.markdown === "string" && x.markdown.trim() ? { markdown: x.markdown } : {}
+    });
+  }
+  return out;
+}
+async function scrapeViaFirecrawl(url, opts = {}) {
+  const base = firecrawlBase(opts);
+  if (!base) return {};
+  if (!await probeFirecrawl(base)) {
+    return firecrawlIsExplicit(opts) ? { why: `Firecrawl not reachable at ${base} \u2014 used the built-in extractor.` } : {};
+  }
+  const r = await postJson(
+    base,
+    "/scrape",
+    {
+      url,
+      formats: ["markdown"],
+      onlyMainContent: true,
+      blockAds: true,
+      removeBase64Images: true,
+      maxAge: SCRAPE_MAX_AGE_MS,
+      timeout: SCRAPE_TIMEOUT_MS
+    },
+    SCRAPE_TIMEOUT_MS
+  );
+  if (!r.ok) {
+    const why = r.status ? `status ${r.status}` : r.error ?? "no response";
+    return { why: `Firecrawl could not scrape ${url} (${why}) \u2014 fell back to the built-in extractor.` };
+  }
+  const data = mapScrapeResponse(r.data);
+  if (!data) return { why: `Firecrawl returned no markdown for ${url} \u2014 fell back to the built-in extractor.` };
+  return { data };
+}
+async function searchViaFirecrawl(query, limit, opts = {}) {
+  const base = firecrawlBase(opts);
+  if (!base) return { why: `Firecrawl disabled (--firecrawl off / ULTRASEARCH_FIRECRAWL=off). Skipping.` };
+  if (!await probeFirecrawl(base)) {
+    return { why: `Firecrawl not reachable at ${base} (bring it up with \`docker compose --profile search --profile extract up -d --wait\`). Skipping.` };
+  }
+  const r = await postJson(base, "/search", { query, limit, sources: ["web"] }, SEARCH_TIMEOUT_MS);
+  if (!r.ok) {
+    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `unreachable (status ${r.status || 0})`;
+    return { why: `Firecrawl search ${why} at ${base}.` };
+  }
+  return { hits: mapSearchResponse(r.data) };
+}
+var firecrawlBackend = async (ctx) => {
+  const { hits, why } = await searchViaFirecrawl(ctx.question, ctx.options.perSource * 2, ctx.options);
+  if (!hits) return { backend: "firecrawl", items: [], notes: [why ?? "Firecrawl search returned nothing."] };
+  const items = hits.slice(0, ctx.options.perSource * 2).map((h, i) => ({
+    url: h.url,
+    title: h.title,
+    backend: "firecrawl",
+    score: hits.length - i,
+    snippet: h.description,
+    // Firecrawl only returns page markdown with a search hit when asked to
+    // scrape each result; when it does, the gatherer skips re-fetching the page.
+    ...h.markdown ? { text: h.markdown } : {},
+    lang: ctx.options.lang
+  }));
+  return {
+    backend: "firecrawl",
+    items,
+    notes: items.length ? [`Firecrawl search returned ${items.length} result(s).`] : [`Firecrawl search returned no results.`]
+  };
+};
+
 // src/backends/fetch.ts
 var BROWSER_UA = process.env.ULTRASEARCH_UA || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 var CONTACT_UA = "ultrasearch/1.x (+https://github.com/maxgfr/ultrasearch)";
@@ -995,6 +1150,7 @@ async function httpJson(method, url, body, opts = {}) {
         "user-agent": opts.userAgent ?? BROWSER_UA
       };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
+      for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
       const res = await fetch(url, {
         method,
         signal: ctrl.signal,
@@ -1215,6 +1371,20 @@ var PDF_URL_RE = /\.pdf($|[?#])/i;
 var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
 async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = PDF_URL_RE.test(url);
+  let firecrawlNote;
+  if (!wantsPdf) {
+    const fc = await scrapeViaFirecrawl(url, opts);
+    if (fc.data && (fc.data.statusCode ?? 200) < 400) {
+      return {
+        text: fc.data.markdown,
+        title: fc.data.title,
+        finalUrl: fc.data.sourceURL || url,
+        status: fc.data.statusCode ?? 200,
+        extractor: "firecrawl"
+      };
+    }
+    firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} \u2014 fell back to the built-in extractor.` : fc.why;
+  }
   const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
@@ -1227,13 +1397,13 @@ async function fetchAndExtract(url, opts = {}) {
       text: text2,
       finalUrl: res.url,
       status: res.status,
-      note: text2 ? void 0 : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`
+      note: text2 ? firecrawlNote : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
-  return { text, title, finalUrl: res.url, status: res.status };
+  return { text, title, finalUrl: res.url, status: res.status, note: firecrawlNote };
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
@@ -1371,7 +1541,9 @@ var searxngBackend = async (ctx) => {
     return {
       backend: "searxng",
       items: [],
-      notes: ["SearXNG not configured \u2014 set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker-compose up` for a local instance). Skipping."]
+      notes: [
+        "SearXNG not configured \u2014 set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker compose --profile search up -d` for a local instance). Skipping."
+      ]
     };
   }
   const pages = Math.max(1, ctx.options.pages ?? 1);
@@ -2238,6 +2410,7 @@ var standardsBackend = async (ctx) => {
 // src/backends/registry.ts
 var HANDLERS = {
   searxng: searxngBackend,
+  firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
   ddglite: ddgliteBackend,
   mojeek: mojeekBackend,
@@ -2325,16 +2498,20 @@ var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
   return process.env.ULTRASEARCH_CACHE_DIR || join(tmpdir(), "ultrasearch", "cache");
 }
-function cachePath(url, acceptLanguage = "") {
+function cachePath(url, acceptLanguage = "", extractor = "native") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  return join(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}`).toString(16)}.json`);
+  return join(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
+}
+async function currentExtractor(opts) {
+  const base = firecrawlBase(opts);
+  return base && await probeFirecrawl(base) ? "firecrawl" : "native";
 }
 function ttlMs() {
   return envInt2("ULTRASEARCH_CACHE_TTL_MS", DEFAULT_TTL_MS);
 }
-function readCache(url, now, acceptLanguage = "") {
-  const p = cachePath(url, acceptLanguage);
+function readCache(url, now, acceptLanguage = "", extractor = "native") {
+  const p = cachePath(url, acceptLanguage, extractor);
   if (!existsSync(p)) return void 0;
   try {
     const entry = JSON.parse(readFileSync(p, "utf8"));
@@ -2345,21 +2522,22 @@ function readCache(url, now, acceptLanguage = "") {
     return void 0;
   }
 }
-function writeCache(url, res, now, acceptLanguage = "") {
+function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   try {
     mkdirSync(cacheDir(), { recursive: true });
     const entry = { ...res, cachedAt: now };
-    writeFileSync(cachePath(url, acceptLanguage), JSON.stringify(entry));
+    writeFileSync(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
   } catch {
   }
 }
 async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
   if (!enabled) return fetchAndExtract(url, opts);
   const lang = opts.acceptLanguage ?? "";
-  const hit = readCache(url, now, lang);
+  const extractor = await currentExtractor(opts);
+  const hit = readCache(url, now, lang, extractor);
   if (hit) return { ...hit, cached: true };
   const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now, lang);
+  if (res.text?.trim()) writeCache(url, res, now, lang, res.extractor ?? "native");
   return res;
 }
 
@@ -2581,6 +2759,8 @@ function defaultRunDir(mode, question, d) {
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
   searxng: "searxng",
+  // Pinnable, but absent from DISCOVERY above — so `auto` never reaches for it.
+  firecrawl: "firecrawl",
   ddg: "duckduckgo",
   ddglite: "ddglite",
   mojeek: "mojeek",
@@ -2717,6 +2897,8 @@ async function runGather(options) {
   let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
+  let firecrawlUsed = 0;
+  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
   async function assemble(rawLists) {
     let merged2 = fuse(rawLists);
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
@@ -2732,8 +2914,9 @@ async function runGather(options) {
       const key = canonicalizeUrl(it.url);
       let res = hydrateCache.get(key);
       if (!res) {
-        res = await cachedFetchAndExtract(it.url, { acceptLanguage }, !!options.cache);
+        res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
         if (res.cached) cacheHits++;
+        if (res.extractor === "firecrawl") firecrawlUsed++;
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
@@ -2745,8 +2928,9 @@ async function runGather(options) {
         const altKey = canonicalizeUrl(it.meta.absUrl);
         let alt = hydrateCache.get(altKey);
         if (!alt) {
-          alt = await cachedFetchAndExtract(it.meta.absUrl, { acceptLanguage }, !!options.cache);
+          alt = await cachedFetchAndExtract(it.meta.absUrl, extractOpts, !!options.cache);
           if (alt.cached) cacheHits++;
+          if (alt.extractor === "firecrawl") firecrawlUsed++;
           hydrateCache.set(altKey, alt);
         }
         if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -2758,13 +2942,25 @@ async function runGather(options) {
       }
       if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
         waybackUsed++;
-        const wb = await rescueViaWayback(it.url, { acceptLanguage });
+        const wb = await rescueViaWayback(it.url, extractOpts);
         if (wb) {
           text = wb.text;
           junk = void 0;
           title = title || wb.title;
           it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
           hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+        }
+      }
+      if (text && junk && res.extractor !== "firecrawl") {
+        const wall = junk;
+        const fc = await scrapeViaFirecrawl(it.url, { firecrawl: options.firecrawl });
+        if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+          text = fc.data.markdown;
+          junk = void 0;
+          title = title || fc.data.title;
+          firecrawlUsed++;
+          hydrateCache.set(key, { ...res, text: fc.data.markdown, title, extractor: "firecrawl" });
+          hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} \u2014 re-extracted it with Firecrawl.`);
         }
       }
       if (text && !junk) {
@@ -2856,7 +3052,10 @@ async function runGather(options) {
   const ignoredFlags = ignoredByExplicitBackends(options);
   const notes = [
     ...results.flatMap((res) => res.notes),
-    ...r.hydrateNotes,
+    // Deduped: every per-page hydrate note names its URL and so is unique, but
+    // the instance-level ones (an explicitly-configured Firecrawl that is down)
+    // would otherwise repeat once per page in the pool.
+    ...new Set(r.hydrateNotes),
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
     ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
@@ -2866,6 +3065,7 @@ async function runGather(options) {
       `--backends pinned retrieval to ${backends.join(", ")}: the resilient web cascade is OFF` + (ignoredFlags.length ? `, and ${ignoredFlags.join(" / ")} ${ignoredFlags.length > 1 ? "were" : "was"} ignored` : "") + `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`
     ] : [],
     ...cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : [],
+    ...firecrawlUsed > 0 ? [`Firecrawl cleaned ${firecrawlUsed} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`] : [],
     ...thin ? [
       `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`
     ] : [],
@@ -2916,11 +3116,11 @@ async function addSource(dir, url, opts = {}) {
   if (existing) {
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
-  const fetched = await cachedFetchAndExtract(url, {}, !!opts.cache);
+  const fetched = await cachedFetchAndExtract(url, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
   let waybackSnapshot;
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(url);
+    const wb = await rescueViaWayback(url, { firecrawl: opts.firecrawl });
     if (wb) {
       text = wb.text;
       title = title || wb.title;
@@ -4937,6 +5137,9 @@ Options:
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
   --searxng <url>      SearXNG base URL                  (env ULTRASEARCH_SEARXNG)
+  --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
+                       extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
+                       default http://localhost:3002, skipped when unreachable)
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
@@ -5020,6 +5223,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "lang",
   "region",
   "searxng",
+  "firecrawl",
   "web-engine",
   "url",
   "since",
@@ -5212,6 +5416,7 @@ function buildGatherOptions(p, opts = {}) {
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,
+    firecrawl: p.values.firecrawl,
     webEngine,
     pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : void 0,
     webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : void 0,
@@ -5357,6 +5562,7 @@ async function main(argv = process.argv.slice(2)) {
       const r = await addSource(resolve2(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
+        firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache")
         // same default-on policy as gather
       });

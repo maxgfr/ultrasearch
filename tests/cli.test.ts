@@ -102,6 +102,12 @@ describe("buildGatherOptions", () => {
     expect(o.backends).toEqual(["github", "arxiv"]);
   });
 
+  it("parses --firecrawl (undefined when absent, so the env/default applies)", () => {
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--firecrawl", "http://fc.test:3002"])).firecrawl).toBe("http://fc.test:3002");
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--firecrawl", "off"])).firecrawl).toBe("off");
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x"])).firecrawl).toBeUndefined();
+  });
+
   it("parses --seed-domains into a list (undefined when absent)", () => {
     const o = buildGatherOptions(parseArgs(["gather", "--q", "x", "--seed-domains", "docs.aws.amazon.com, developer.mozilla.org"]));
     expect(o.seedDomains).toEqual(["docs.aws.amazon.com", "developer.mozilla.org"]);

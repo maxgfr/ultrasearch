@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "data": {
+    "markdown": "# Upgrade to Express v5\n\nExpress 5 removes a number of deprecated APIs and changes the default behaviour of several others. The most disruptive change is that path route matching no longer accepts bare `*` — use a named wildcard such as `/*splat` instead.\n\n## Changed defaults\n\n`res.status()` now rejects out-of-range codes, and rejected promises returned from a middleware are forwarded to the error handler automatically.",
+    "metadata": {
+      "title": "Upgrade to Express v5",
+      "description": "What changed between Express 4 and Express 5, and how to migrate.",
+      "language": "en",
+      "sourceURL": "https://expressjs.com/en/guide/migrating-5.html",
+      "url": "https://expressjs.com/en/guide/migrating-5.html",
+      "statusCode": 200,
+      "contentType": "text/html"
+    }
+  }
+}

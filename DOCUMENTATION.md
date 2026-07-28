@@ -18,7 +18,9 @@ plan query variants (full question + keywords + identifiers, by depth)
   │   polite scholarly APIs serialize their per-variant calls)
   │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
   │  hydrate a candidate pool (bounded concurrency, retry on 429/503, on-disk
-  │   cache; junk/consent-wall extractions rejected; dead links → Wayback)
+  │   cache; HTML via a self-hosted Firecrawl when one answers, else the
+  │   built-in reader; junk/consent-wall extractions re-tried through Firecrawl
+  │   then rejected; dead links → Wayback)
   │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
   │  map per-term coverage → the under-covered enrichment worklist
   ▼
@@ -85,8 +87,9 @@ extracts, so it costs no extra retrieval. See
   concurrent cascade waves) → fuse → dedupe → cap → hydrate (junk-extraction
   rejection, arXiv/Wayback fallbacks) → write dossier (+ refs.bib for research).
 - `cache.ts` — the on-disk fetch cache (on by default, `--no-cache` disables it):
-  keyed by canonical URL **+ Accept-Language** so locales never share a body,
-  TTL-bounded, successes only, shared across the deep tier's fan-out gathers.
+  keyed by canonical URL **+ Accept-Language + extractor identity** so neither a
+  locale nor an extractor is ever served the other's body, TTL-bounded,
+  successes only, shared across the deep tier's fan-out gathers.
 - `dossier.ts` — `writeDossier` / `readDossier` / `buildSource` / `nextSourceId` /
   `readJson` (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` block.
 - `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.
@@ -111,9 +114,32 @@ extracts, so it costs no extra retrieval. See
   (verdict badges + sub-question tree in deep mode).
 - `bibtex.ts` — `toBibtex` for research mode's `refs.bib`.
 - `modes/` — the five `ModeProfile`s + their registry.
-- `backends/` — `fetch.ts` (HTTP + HTML→text + excerpting + junk detection +
-  Wayback rescue), the `registry.ts` runner (with the polite-sequential fan-out),
-  and one file per backend (web discovery, scholarly incl. `dblp`, community).
+- `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
+  + junk detection + Wayback rescue), the `registry.ts` runner (with the
+  polite-sequential fan-out), and one file per backend (web discovery, scholarly
+  incl. `dblp`, community).
+- `backends/firecrawl.ts` — the self-hosted Firecrawl client: base resolution
+  (`--firecrawl` > `ULTRASEARCH_FIRECRAWL` > `http://localhost:3002`, `off`
+  disables), a memoised 2s availability probe, the `/v2`→`/v1` prefix fallback,
+  `/scrape` + `/search`, and the pure `mapScrapeResponse` / `mapSearchResponse`
+  mappers. Every failure degrades to a note and the built-in extractor.
+
+## Optional self-hosted stack
+
+`docker-compose.yml` carries two **profiles**; a bare `docker compose up -d`
+starts nothing:
+
+- `search` → SearXNG on `:8888` (JSON output enabled in
+  `docker/searxng/settings.yml`, `limiter: false` because the bot-detection
+  middleware answers 403 to `format=json`), backing the `searxng` backend.
+- `extract` → the Firecrawl stack on `:3002` (api + playwright + redis +
+  rabbitmq + nuq-postgres), keyless via `USE_DB_AUTHENTICATION=false`. Kept out
+  of `all` because it is ~3 GB of images. Firecrawl's own `/search` is pointed at
+  the SearXNG container, so that path stays keyless too.
+
+The engine treats Firecrawl as strictly optional: one memoised probe decides
+availability per process, and every failure path falls back to the built-in
+extractor with a note.
 
 ## Build & release
 

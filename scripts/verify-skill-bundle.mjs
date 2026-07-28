@@ -96,7 +96,9 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     cli = null;
   }
   if (cli) {
-    const ALLOWED_FOREIGN_FLAGS = new Set([]); // flags belonging to other tools that the docs quote
+    // Flags belonging to OTHER tools that the docs legitimately quote. `--profile`
+    // and `--wait` are docker compose's, in the SearXNG/Firecrawl bring-up lines.
+    const ALLOWED_FOREIGN_FLAGS = new Set(["profile", "wait"]);
     const cliFlags = new Set([...cli.VALUE_FLAGS, ...cli.BOOL_FLAGS]);
     const universe = new Set([...cliFlags, "help", "version", "h", "v", ...ALLOWED_FOREIGN_FLAGS]);
     const refs = join(skillDir, "references");

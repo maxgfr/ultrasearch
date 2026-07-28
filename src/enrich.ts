@@ -20,7 +20,7 @@ export interface EnrichResult {
 export async function addSource(
   dir: string,
   url: string,
-  opts: { question?: string; title?: string; backend?: BackendKind; cache?: boolean } = {},
+  opts: { question?: string; title?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
 ): Promise<EnrichResult> {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
@@ -31,14 +31,14 @@ export async function addSource(
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
 
-  const fetched = await cachedFetchAndExtract(url, {}, !!opts.cache);
+  const fetched = await cachedFetchAndExtract(url, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
   let waybackSnapshot: string | undefined;
   // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(url);
+    const wb = await rescueViaWayback(url, { firecrawl: opts.firecrawl });
     if (wb) {
       text = wb.text;
       title = title || wb.title;

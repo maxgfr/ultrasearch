@@ -22,7 +22,9 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
     return {
       backend: "searxng",
       items: [],
-      notes: ["SearXNG not configured — set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker-compose up` for a local instance). Skipping."],
+      notes: [
+        "SearXNG not configured — set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker compose --profile search up -d` for a local instance). Skipping.",
+      ],
     };
   }
   const pages = Math.max(1, ctx.options.pages ?? 1);

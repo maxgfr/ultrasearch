@@ -49,9 +49,42 @@ describe("cachedFetchAndExtract (--cache)", () => {
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it("keys a cache path by URL AND locale", () => {
+  it("keys a cache path by URL AND locale AND extractor", () => {
     expect(cachePath(URL)).not.toBe(cachePath(URL, "de"));
     expect(cachePath(URL, "de")).toBe(cachePath(URL, "de"));
+    // Without the extractor in the key, bringing Firecrawl up would be a no-op
+    // for a whole TTL: every natively-extracted entry would shadow it.
+    expect(cachePath(URL, "de")).not.toBe(cachePath(URL, "de", "firecrawl"));
+    expect(cachePath(URL, "de", "native")).toBe(cachePath(URL, "de"));
+  });
+
+  it("does not serve a natively-extracted body to a Firecrawl-enabled run", async () => {
+    const FIRECRAWL_MD = JSON.stringify({
+      success: true,
+      data: { markdown: "# Cached\n\nfirecrawl markdown about token buckets", metadata: { title: "Cached", statusCode: 200 } },
+    });
+    const base = "http://fc-cache.test";
+    const spy = installFetchMock((url) => {
+      if (url.includes("/scrape")) return { body: FIRECRAWL_MD, contentType: "application/json" };
+      if (url === `${base}/`) return { status: 200, body: "{}" };
+      return PAGE;
+    });
+    // 1. a run with Firecrawl OFF caches the built-in extraction…
+    await cachedFetchAndExtract(URL, { firecrawl: "off" }, true, 1000);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // 2. …which the same run still hits.
+    const nativeHit = await cachedFetchAndExtract(URL, { firecrawl: "off" }, true, 1100);
+    expect(nativeHit.cached).toBe(true);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // 3. Bringing Firecrawl up must NOT be shadowed by that entry.
+    const fc = await cachedFetchAndExtract(URL, { firecrawl: base }, true, 1200);
+    expect(fc.cached).toBeUndefined();
+    expect(fc.extractor).toBe("firecrawl");
+    expect(fc.text).toContain("firecrawl markdown");
+    // 4. …and the Firecrawl body is cached under its own key.
+    const fcHit = await cachedFetchAndExtract(URL, { firecrawl: base }, true, 1300);
+    expect(fcHit.cached).toBe(true);
+    expect(fcHit.text).toContain("firecrawl markdown");
   });
 
   it("marks a disk hit as cached so a run can report its freshness", async () => {

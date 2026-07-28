@@ -120,7 +120,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 
 | Command | Writes | Flags that matter |
 |---|---|---|
-| `gather` | the dossier | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--backends` (⚠ Tuning) |
+| `gather` | the dossier | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
 | `fetch` (alias `add-source`) | one new `S#` in an existing dossier | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. |
 | `render` | `index.html` + `index.md` in the run dir | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
@@ -145,8 +145,9 @@ not hand control back mid-retrieval.
    node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d>
    ```
    It prints the dossier path. If a local SearXNG is up, add `--searxng <url>`.
-   The keyless backends are best-effort — some may be rate-limited or empty, and
-   the engine records that honestly in the notes.
+   A local Firecrawl (`http://localhost:3002`) is picked up automatically and
+   needs no flag. The keyless backends are best-effort — some may be
+   rate-limited or empty, and the engine records that honestly in the notes.
 
    With ≥2 facets, fan out instead — `plan` writes `<RUN>` and its sub-dirs,
    `orchestrate` emits the workflow, and you run the fold:
@@ -284,6 +285,13 @@ in `references/operations.md`.
   → `--seed-domains` (hosts you know are authoritative) → `--pages` /
   `--web-breadth` (search wider) → `--rounds 2` (one automatic follow-up for the
   under-covered terms) → your own WebSearch + `fetch`.
+- **Extraction quality**: an optional self-hosted Firecrawl
+  (`docker compose --profile search --profile extract up -d --wait`) extracts
+  HTML with a real browser instead of the built-in stripper, and re-reads the
+  consent-wall / anti-bot pages that would otherwise land as `⚠ snippet only`.
+  Zero config — it is used when it answers on `http://localhost:3002` and
+  silently skipped when it does not (`--firecrawl <url>`, or `off` to disable).
+  Its markdown is richer, so extracts hit the depth cap sooner.
 - **Cost**: `--depth` sets every retrieval cap at once (`references/modes.md`).
   The on-disk fetch cache is **on by default** — `--no-cache` forces an all-live
   run. `--concurrency <n>` (default 6) bounds in-flight fetches; leave it alone

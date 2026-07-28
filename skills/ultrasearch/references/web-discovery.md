@@ -26,7 +26,9 @@ which engines were tried/fused, so you can see where results came from.
 1. **SearXNG (local).** If reachable (default `http://localhost:8888`, override
    with `--searxng` or `ULTRASEARCH_SEARXNG`), queried over its JSON API
    (`/search?format=json`). Self-hosted metasearch, no key. Bring one up with the
-   repo's `docker-compose up`. Public instances usually disable JSON output.
+   repo's `docker compose --profile search up -d` (a bare `docker compose up`
+   starts nothing — every service is behind a profile). Public instances usually
+   disable JSON output.
 2. **DuckDuckGo HTML.** Scrapes `html.duckduckgo.com/html` and decodes the real
    URLs from DDG's redirector. Autonomous and keyless; fragile if DDG changes
    markup, and can rate-limit.
@@ -50,10 +52,47 @@ which engines were tried/fused, so you can see where results came from.
 
 ## Pinning an engine
 
-`--web-engine auto|searxng|ddg|ddglite|mojeek|marginalia|claude` — `auto`
-(default) runs the fallback cascade above; a named engine pins to exactly that
-one (injected even if the mode profile didn't list it); `claude` drops keyless
-web discovery entirely, so your own WebSearch + `fetch --url` drives the run.
+`--web-engine auto|searxng|firecrawl|ddg|ddglite|mojeek|marginalia|claude` —
+`auto` (default) runs the fallback cascade above; a named engine pins to exactly
+that one (injected even if the mode profile didn't list it); `claude` drops
+keyless web discovery entirely, so your own WebSearch + `fetch --url` drives the
+run.
+
+`firecrawl` is **not** in the `auto` cascade and never will be: it needs a local
+container stack, and its `/search` proxies the same SearXNG the `searxng` engine
+already queries directly. Pin it (or `--backends firecrawl`) only when you want
+Firecrawl's cleaned markdown to come back *with* the hits.
+
+## Firecrawl — browser-rendered extraction (optional)
+
+A self-hosted [Firecrawl](https://github.com/firecrawl/firecrawl) turns a page
+into **main-content markdown using a real headless browser**, which beats the
+built-in regex reader on nav/cookie chrome and is the only way a JS-rendered page
+yields any text at all. It is keyless (`USE_DB_AUTHENTICATION=false`).
+
+```
+docker compose --profile search --profile extract up -d --wait
+```
+
+Once it answers on `http://localhost:3002` (override with `--firecrawl <url>` or
+`ULTRASEARCH_FIRECRAWL`; `off` disables it), it is used automatically:
+
+- **Primary extraction.** Every HTML page goes to Firecrawl first; any failure
+  falls back to the built-in reader. PDFs skip it entirely.
+- **Junk rescue.** When an extraction trips the consent-wall / "enable
+  JavaScript" / anti-bot detector, the page is re-extracted through Firecrawl
+  before it is demoted to `⚠ snippet only`. This is the highest-value case —
+  those pages contribute nothing today.
+- **Silent when absent.** Availability is one memoised 2s probe per process. A
+  missing default instance costs one refused connection and produces no note; an
+  instance you configured explicitly and did not get produces exactly one.
+- The dossier records how many pages it cleaned (`Firecrawl cleaned N page(s)…`),
+  and the fetch cache keys on extractor identity, so bringing Firecrawl up is not
+  masked by yesterday's natively-extracted entries.
+
+> Firecrawl's markdown is **richer** than the stripped text, so it reaches the
+> `--depth` extract caps (4k `summary` / 8k `standard`, uncapped on `deep`)
+> sooner. If a long page reads as truncated, that is why — use `--depth deep`.
 
 > **`--backends` is a bigger hammer than it looks.** It replaces the whole mode
 > profile, and in doing so silently turns OFF four things: the resilient web

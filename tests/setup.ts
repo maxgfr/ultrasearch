@@ -11,3 +11,10 @@ import { tmpdir } from "node:os";
 const dir = mkdtempSync(join(tmpdir(), "us-test-cache-"));
 process.env.ULTRASEARCH_CACHE_DIR = dir;
 process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+
+// Firecrawl defaults to http://localhost:3002 and is gated by an availability
+// probe. Under a stubbed global fetch that probe would SUCCEED (the mock answers
+// every URL), so every test would silently route its extraction through a fake
+// Firecrawl. Disable it globally; the tests that exercise Firecrawl pass an
+// explicit base (`{ firecrawl: "http://fc.test" }`), which overrides this.
+process.env.ULTRASEARCH_FIRECRAWL = "off";
