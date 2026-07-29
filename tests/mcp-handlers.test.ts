@@ -76,6 +76,45 @@ describe("lifecycle methods", () => {
     expect((await call("ultrasearch_nope", {})).error).toMatchObject({ code: -32602 });
     expect((await call("ultrasearch_gather", {})).error).toMatchObject({ code: -32602 });
   });
+
+  it("serves resources and prompts alongside tools", async () => {
+    const resources = ((await rpc({ id: 1, method: "resources/list" }))!.result as { resources: { uri: string }[] }).resources;
+    expect(resources.map((r) => r.uri)).toContain("skill://SKILL.md");
+
+    const contents = ((await rpc({ id: 2, method: "resources/read", params: { uri: "skill://SKILL.md" } }))!.result as { contents: { text: string }[] })
+      .contents;
+    expect(contents[0]!.text).toContain("ultrasearch");
+
+    const prompts = ((await rpc({ id: 3, method: "prompts/list" }))!.result as { prompts: { name: string }[] }).prompts;
+    expect(prompts.map((p) => p.name)).toContain("research_topic");
+
+    const got = await rpc({ id: 4, method: "prompts/get", params: { name: "research_topic", arguments: { question: "why?" } } });
+    expect((got!.result as { messages: { content: { text: string } }[] }).messages[0]!.content.text).toContain("why?");
+  });
+
+  it("reports a bad resource uri, a missing uri and a bad prompt name as invalid params", async () => {
+    // A client naming something wrong is a client bug — the same class as an
+    // unknown tool, and never a failed read.
+    expect((await rpc({ id: 1, method: "resources/read", params: {} }))!.error).toMatchObject({ code: -32602 });
+    expect((await rpc({ id: 2, method: "resources/read", params: { uri: "skill://../../package.json" } }))!.error).toMatchObject({ code: -32602 });
+    expect((await rpc({ id: 3, method: "resources/read", params: { uri: "file:///etc/passwd" } }))!.error).toMatchObject({ code: -32602 });
+    expect((await rpc({ id: 4, method: "prompts/get", params: { name: "nope" } }))!.error).toMatchObject({ code: -32602 });
+    expect((await rpc({ id: 5, method: "prompts/get", params: { name: "research_topic", arguments: {} } }))!.error).toMatchObject({ code: -32602 });
+  });
+
+  it("drops a request the client cancelled, and answers the next one", async () => {
+    expect(await rpc({ method: "notifications/cancelled", params: { requestId: 7 } })).toBeUndefined();
+    expect(await rpc({ id: 7, method: "ping" })).toBeUndefined();
+    expect((await rpc({ id: 8, method: "ping" }))!.result).toEqual({});
+  });
+
+  it("rejects a frame that is not a JSON-RPC object", async () => {
+    let out: JsonRpcMessage | undefined;
+    await server.handle(null as unknown as JsonRpcMessage, (m) => {
+      out = m;
+    });
+    expect(out!.error).toMatchObject({ code: -32600 });
+  });
 });
 
 describe("gather", () => {
