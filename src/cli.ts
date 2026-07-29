@@ -19,6 +19,8 @@ import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
+import { runStdioServer } from "./mcp/stdio.js";
+import { startHttpServer } from "./mcp/http.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -32,6 +34,8 @@ Usage:
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
+  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
+                     [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
@@ -153,6 +157,7 @@ export const COMMANDS = new Set([
   "merge",
   "verify",
   "orchestrate",
+  "mcp",
 ]);
 export const VALUE_FLAGS = new Set([
   "q",
@@ -191,8 +196,27 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
   "phase",
+  // `mcp` only. The flag sets are global, so these are accepted (and ignored)
+  // on every command — the same as --phase and --list already are.
+  "transport",
+  "port",
+  "bind",
+  "allow-origin",
+  "max-response-bytes",
 ]);
-export const BOOL_FLAGS = new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "no-cache", "eco", "list"]);
+export const BOOL_FLAGS = new Set([
+  "json",
+  "no-html",
+  "no-md",
+  "semantic",
+  "require-verify",
+  "strict-numerals",
+  "cache",
+  "no-cache",
+  "eco",
+  "list",
+  "allow-remote",
+]);
 
 function fail(message: string): never {
   process.stderr.write(`ultrasearch: ${message}\n`);
@@ -691,6 +715,54 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (p.values.phase === undefined && workflows.length === 0 && !p.bools.has("eco")) {
         process.stderr.write(`ultrasearch orchestrate: no ready phase — phases are ${PHASES.join(", ")} (see --list).\n`);
       }
+      return;
+    }
+
+    case "mcp": {
+      const transport = oneOf("transport", p.values.transport ?? "stdio", ["stdio", "http"]);
+      const maxResponseBytes = p.values["max-response-bytes"] ? Number(p.values["max-response-bytes"]) : undefined;
+      if (maxResponseBytes !== undefined && (!Number.isFinite(maxResponseBytes) || maxResponseBytes <= 0)) fail("invalid --max-response-bytes");
+      const options = {
+        // A default dossier makes `run` optional on every tool, for a server
+        // dedicated to one piece of research.
+        defaultRun: p.values.run,
+        maxResponseBytes,
+      };
+
+      if (transport === "stdio") {
+        // Nothing is written to stdout here: from this point stdout carries
+        // JSON-RPC frames only, and runStdioServer guards that.
+        await runStdioServer(options);
+        return;
+      }
+
+      const port = p.values.port ? Number(p.values.port) : 7339;
+      if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
+      const allowOrigin = p.values["allow-origin"]
+        ? p.values["allow-origin"]
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : undefined;
+      let running: Awaited<ReturnType<typeof startHttpServer>>;
+      try {
+        running = await startHttpServer({ ...options, port, bind: p.values.bind, allowOrigin, allowRemote: p.bools.has("allow-remote") });
+      } catch (e) {
+        fail((e as Error).message);
+      }
+      // stderr, not stdout: an HTTP server's stdout is not a protocol stream,
+      // but keeping the two transports identical here means no one has to
+      // remember which is which.
+      process.stderr.write(`ultrasearch: MCP server listening on ${running.url}\n`);
+      process.stderr.write(`  client: claude mcp add --transport http ultrasearch ${running.url}\n`);
+      for (const sig of ["SIGINT", "SIGTERM"] as const) {
+        process.once(sig, () => {
+          void running.close().then(() => process.exit(0));
+        });
+      }
+      // Resolve only when the server stops, so `run()` doesn't return while it
+      // is still listening.
+      await new Promise<void>((resolve) => running.server.once("close", resolve));
       return;
     }
 

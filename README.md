@@ -173,9 +173,86 @@ that override silently voided.
   adversarially verify; `verify --shards` for parallel skeptics).
 - `orchestrate` — emit the run's multi-agent fan-out (one launchable workflow per
   ready phase, the per-role dispatch contracts, and a sequential `RUNBOOK.md`).
+- `mcp` — serve all of the above over the Model Context Protocol (below).
 
 Run `node scripts/ultrasearch.mjs --help` for the full surface, and see
 [`DOCUMENTATION.md`](DOCUMENTATION.md) for the architecture.
+
+## Use it as an MCP server
+
+The skill shells out to the CLI and parses its output. An MCP server skips both:
+your agent calls ultrasearch as typed tools, with JSON schemas in and structured
+results out. Same engine, same cache, no wrapper.
+
+```bash
+# stdio — the default, and what Claude Code / Claude Desktop / Cursor expect
+claude mcp add ultrasearch -- node /abs/path/to/scripts/ultrasearch.mjs mcp
+
+# or over HTTP, on loopback
+node scripts/ultrasearch.mjs mcp --transport http --port 7339
+claude mcp add --transport http ultrasearch http://127.0.0.1:7339/mcp
+```
+
+```jsonc
+// Claude Desktop takes stdio servers only — a remote URL here will not work.
+{ "mcpServers": { "ultrasearch": { "command": "node", "args": ["/abs/path/to/scripts/ultrasearch.mjs", "mcp"] } } }
+// Cursor, HTTP:
+{ "mcpServers": { "ultrasearch": { "url": "http://127.0.0.1:7339/mcp" } } }
+```
+
+It serves all three MCP primitives, because a skill is three things: the engine
+(**tools**), the method (**prompts**), and the documentation the method refers
+to (**resources**). A client given only the tools has to invent the rest.
+
+### Tools
+
+Eleven tools. `ultrasearch_gather` is the one to reach for first:
+
+| Tool | What it does |
+|------|--------------|
+| `ultrasearch_gather` | Fan out, fetch, dedupe → a dossier on disk; returns its directory |
+| `ultrasearch_search` | One backend, ranked results, **writes nothing** — the cheap probe |
+| `ultrasearch_fetch` | Ingest a URL you found yourself into a dossier as a citable `[S#]` |
+| `ultrasearch_check` | The grounding gate: every `[S#]` must resolve |
+| `ultrasearch_verify` | Claim↔source worklist for adversarial support-checking |
+| `ultrasearch_render` | Dossier + report → self-contained `index.html` and `index.md` |
+| `ultrasearch_plan` | Decompose a broad question into sub-questions |
+| `ultrasearch_merge` | Union sub-dossiers, re-assigning `[S#]` ids to stay unique |
+| `ultrasearch_brainstorm` | Probe a vague ask before committing to a run |
+| `ultrasearch_modes` | What each mode is for and which backends it searches |
+| `ultrasearch_read` | A file, or a line range, from a dossier |
+
+Pass `--run <dir>` at startup to dedicate the server to one dossier — `run` then
+becomes optional on every tool. There is no `--allow-write`: nothing here
+deletes a dossier, and every write lands in a directory the caller named.
+
+### Prompts — the workflow, not just the tools
+
+| Prompt | Arguments | What it drives |
+|--------|-----------|----------------|
+| `research_topic` | `question`, `depth?` | gather → read every source → cited report → `ultrasearch_check` → render |
+| `debug_error` | `error`, `context?` | `mode: bug` against StackOverflow/GitHub/HN, with the version caveat spelled out |
+| `literature_review` | `question` | plan → gather per sub-question → merge → one review against the merged ids |
+
+Each carries the invariant the skill exists for: the report says what the
+**fetched sources** say, not what the model remembers.
+
+### Resources — the skill's own documentation
+
+`SKILL.md` and all nine `references/*.md` are served under `skill://`, read off
+disk at request time — so a documentation fix reaches every client without a
+rebuild.
+
+Two things worth knowing:
+
+- **`gather` defaults to `depth: standard` here, not `deep`.** A deep run is
+  10-20 minutes and an MCP client will time out long before it returns, losing
+  the run. Ask for `deep` explicitly when you mean it — the tool description
+  states the wall-clock for each tier.
+- **The HTTP transport binds `127.0.0.1` and refuses anything else** unless you
+  pass `--allow-remote`. This server fetches arbitrary URLs; an exposed port is
+  a fetch-anything primitive for whoever finds it. Browser `Origin`s are checked
+  for the same reason.
 
 ## Security & trust boundary
 

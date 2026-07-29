@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { join as join13, resolve as resolve2 } from "path";
-import { pathToFileURL, fileURLToPath } from "url";
-import { realpathSync, existsSync as existsSync7, statSync, readdirSync } from "fs";
+import { join as join15, resolve as resolve4 } from "path";
+import { pathToFileURL, fileURLToPath as fileURLToPath2 } from "url";
+import { realpathSync as realpathSync3, existsSync as existsSync9, statSync as statSync3, readdirSync as readdirSync2 } from "fs";
 
 // src/types.ts
 var VERSION = "1.12.0";
@@ -3445,13 +3445,13 @@ function mdToHtml(md, idPrefix, opts = {}) {
     }
     if (/\|/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && /-/.test(lines[i + 1])) {
       const rows = [];
-      const header = splitRow(line);
+      const header2 = splitRow(line);
       i += 2;
       while (i < lines.length && /\|/.test(lines[i]) && lines[i].trim() !== "") {
         rows.push(lines[i]);
         i++;
       }
-      const thead = `<thead><tr>${header.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
+      const thead = `<thead><tr>${header2.map((c) => `<th>${inline(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
       const tbody = rows.map(
         (r) => `<tr>${splitRow(r).map((c) => `<td>${inline(escapeHtml(c))}</td>`).join("")}</tr>`
       ).join("");
@@ -5070,6 +5070,1204 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 
+// src/mcp/stdio.ts
+import { createInterface } from "readline";
+
+// src/mcp/handlers.ts
+import { existsSync as existsSync7, readFileSync as readFileSync7, realpathSync, statSync } from "fs";
+import { isAbsolute, join as join13, resolve as resolve2, sep } from "path";
+
+// src/run-lock.ts
+var chains = /* @__PURE__ */ new Map();
+function withRunLock(slug, fn) {
+  const prev = chains.get(slug) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.then(noop, noop);
+  chains.set(slug, tail);
+  tail.then(() => {
+    if (chains.get(slug) === tail) chains.delete(slug);
+  }, noop);
+  return next;
+}
+function noop() {
+}
+
+// src/mcp/handlers.ts
+var ToolError = class extends Error {
+};
+var MAX_READ_LINES = 2e3;
+var MAX_READ_BYTES = 8 * 1024 * 1024;
+var DEFAULT_DEPTH = "standard";
+function str(v) {
+  return typeof v === "string" && v.trim() !== "" ? v : void 0;
+}
+function num(v) {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : void 0;
+}
+function bool(v) {
+  return v === true || v === "true";
+}
+function strArray(v) {
+  return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
+}
+function positive(v, key) {
+  const n = num(v);
+  if (n === void 0) return void 0;
+  if (n <= 0) throw new ToolError(`\`${key}\` must be greater than 0.`);
+  return n;
+}
+function requiredStr(args, key, hint) {
+  const v = str(args[key]);
+  if (!v) throw new ToolError(`\`${key}\` is required \u2014 ${hint}`);
+  return v;
+}
+function oneOf(value, allowed, key, fallback) {
+  if (value === void 0) return fallback;
+  if (!allowed.includes(value)) {
+    throw new ToolError(`\`${key}\` must be one of: ${allowed.join(", ")} (got "${value}")`);
+  }
+  return value;
+}
+function requiredRun(args, defaults) {
+  const run = str(args.run) ?? defaults.defaultRun;
+  if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
+  if (!isAbsolute(run)) throw new ToolError("`run` must be an absolute path.");
+  const abs = resolve2(run);
+  if (!existsSync7(join13(abs, "manifest.json"))) {
+    throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
+  }
+  return abs;
+}
+function gatherOptions(args) {
+  const backends = strArray(args.backends);
+  if (backends) {
+    for (const b of backends) {
+      if (!ALL_BACKENDS.includes(b)) throw new ToolError(`unknown backend "${b}" \u2014 one of: ${[...ALL_BACKENDS].join(", ")}`);
+    }
+  }
+  const out = str(args.out);
+  if (out !== void 0 && !isAbsolute(out)) throw new ToolError("`out` must be an absolute path.");
+  const depth = oneOf(str(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
+  const caps = DEPTH_CAPS[depth];
+  return {
+    question: requiredStr(args, "question", "the topic or question to research."),
+    mode: oneOf(str(args.mode), ALL_MODES, "mode", "topic"),
+    depth,
+    backends,
+    queries: strArray(args.queries),
+    maxSources: positive(args.max_sources, "max_sources") ?? caps.maxSources,
+    perSource: positive(args.per_source, "per_source") ?? caps.perSource,
+    lang: str(args.lang) ?? "en",
+    region: str(args.region),
+    webEngine: "auto",
+    since: str(args.since),
+    excludeDomains: strArray(args.exclude_domains) ?? [],
+    seedDomains: strArray(args.seed_domains),
+    out,
+    json: true
+  };
+}
+async function callTool(name, args, defaults = {}) {
+  const result = await dispatch(name, args, defaults);
+  return outcome(name, result);
+}
+async function dispatch(name, args, defaults) {
+  switch (name) {
+    // These three touch no dossier at all.
+    case "ultrasearch_modes":
+      return { modes: listModes() };
+    case "ultrasearch_search":
+      return await handleSearch(args);
+    case "ultrasearch_plan":
+      return handlePlan(args);
+    // A gather creates its dossier, so there is nothing yet to lock against.
+    case "ultrasearch_gather":
+      return await handleGather(args);
+    case "ultrasearch_brainstorm":
+      return await handleBrainstorm(args);
+    case "ultrasearch_merge":
+      return handleMerge(args);
+    // Everything below mutates or reads ONE existing dossier, and is
+    // serialized against other calls on the same one.
+    default: {
+      const run = requiredRun(args, defaults);
+      return await withRunLock(run, async () => {
+        switch (name) {
+          case "ultrasearch_fetch":
+            return await handleFetch(args, run);
+          case "ultrasearch_check":
+            return handleCheck(args, run);
+          case "ultrasearch_verify":
+            return handleVerify(args, run);
+          case "ultrasearch_render":
+            return handleRender(args, run);
+          case "ultrasearch_read":
+            return handleRead(args, run);
+          default:
+            throw new ToolError(`unknown tool: ${name}`);
+        }
+      });
+    }
+  }
+}
+function outcome(name, result) {
+  return { text: JSON.stringify(result, null, 2) + "\n", artifact: artifactFor(name, result) };
+}
+function artifactFor(name, result) {
+  if (typeof result !== "object" || result === null) return void 0;
+  const r = result;
+  if (name === "ultrasearch_gather" || name === "ultrasearch_merge") return typeof r.dossier_md === "string" ? r.dossier_md : void 0;
+  if (name === "ultrasearch_brainstorm") return typeof r.path === "string" ? r.path : void 0;
+  return void 0;
+}
+async function handleSearch(args) {
+  const query = requiredStr(args, "query", "the search query.");
+  const chosen = requiredStr(args, "backend", `which backend to query, one of: ${[...ALL_BACKENDS].join(", ")}`);
+  const backend = oneOf(chosen, ALL_BACKENDS, "backend", ALL_BACKENDS[0]);
+  const options = gatherOptions({ ...args, question: query, depth: "summary" });
+  const results = await runBackends([backend], { question: query, mode: getMode(options.mode), options, variants: [query] });
+  const max = positive(args.max_sources, "max_sources") ?? 10;
+  const items = results.flatMap((r) => r.items).slice(0, max);
+  const notes = results.flatMap((r) => r.notes);
+  return {
+    query,
+    backend,
+    count: items.length,
+    // A backend that degraded is information, not a failure: it bounds what
+    // the caller may conclude from an empty result.
+    ...notes.length ? { notes } : {},
+    results: items.map((i) => ({ url: i.url, title: i.title, snippet: i.snippet })),
+    next: "Nothing was written. To cite any of this, ingest the URL with ultrasearch_fetch into a dossier, or run ultrasearch_gather."
+  };
+}
+async function handleGather(args) {
+  const options = gatherOptions(args);
+  const res = await runGather(options);
+  return {
+    run: res.dir,
+    dossier_md: join13(res.dir, "DOSSIER.md"),
+    question: options.question,
+    mode: options.mode,
+    depth: options.depth,
+    sources: res.sources.length,
+    ...res.manifest.notes?.length ? { notes: res.manifest.notes } : {},
+    next: `Read ${join13(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+  };
+}
+async function handleBrainstorm(args) {
+  const options = gatherOptions(args);
+  const res = await runBrainstorm(options);
+  return { ...res, next: "Pick an angle, then run ultrasearch_gather on the sharpened question." };
+}
+function handlePlan(args) {
+  const question = requiredStr(args, "question", "the umbrella question to decompose.");
+  const mode = oneOf(str(args.mode), ALL_MODES, "mode", "topic");
+  const runRoot = str(args.run_root);
+  if (runRoot !== void 0 && !isAbsolute(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
+  const res = runPlan(question, mode, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
+  return {
+    ...res,
+    next: "Run ultrasearch_gather on each sub-question into its own dir, then ultrasearch_merge them into one dossier before writing anything."
+  };
+}
+function handleMerge(args) {
+  const runs = strArray(args.runs);
+  if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
+  for (const r of runs) {
+    if (!isAbsolute(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
+    if (!existsSync7(join13(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+  }
+  const master = str(args.master);
+  if (master !== void 0 && !isAbsolute(master)) throw new ToolError("`master` must be an absolute path.");
+  const res = runMerge({ runs, master, question: str(args.question), mode: str(args.mode) });
+  return {
+    run: res.dir,
+    dossier_md: join13(res.dir, "DOSSIER.md"),
+    sources: res.sources.length,
+    merged_from: runs.length,
+    next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
+  };
+}
+async function handleFetch(args, run) {
+  const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
+  if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
+  const res = await addSource(run, url, { question: str(args.question), title: str(args.title) });
+  return { run, url, ...res };
+}
+function handleCheck(args, run) {
+  const res = runCheck(run, {
+    semantic: bool(args.semantic),
+    requireVerify: bool(args.require_verify),
+    strictNumerals: bool(args.strict_numerals),
+    minSources: positive(args.min_sources, "min_sources")
+  });
+  return { run, ...res };
+}
+function handleVerify(args, run) {
+  const shards = positive(args.shards, "shards");
+  const shard = num(args.shard);
+  if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
+    throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
+  }
+  const res = runVerify(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  return {
+    ...res,
+    run,
+    next: "For each pair, read the cited source and judge it supported / partial / refuted / unsupported. Rewrite any claim its source does not carry."
+  };
+}
+function handleRender(args, run) {
+  const written = [];
+  if (!bool(args.no_html)) written.push(writeHtml(run));
+  if (!bool(args.no_md)) written.push(writeReportMarkdown(run));
+  if (!written.length) throw new ToolError("both `no_html` and `no_md` were set \u2014 there is nothing left to render.");
+  return { run, written };
+}
+function handleRead(args, run) {
+  const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
+  const target = isAbsolute(raw) ? raw : join13(run, raw);
+  let real;
+  try {
+    real = realpathSync(target);
+  } catch {
+    throw new ToolError(`no such file: ${raw}`);
+  }
+  const root = realpathSync(run);
+  if (real !== root && !real.startsWith(root + sep)) {
+    throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
+  }
+  const st = statSync(real);
+  if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
+  if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
+  const lines = readFileSync7(real, "utf8").split("\n");
+  const total = lines.length;
+  const start = Math.max(1, Math.floor(num(args.start_line) ?? 1));
+  if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
+  const requestedEnd = Math.floor(num(args.end_line) ?? total);
+  const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
+  return {
+    path: isAbsolute(raw) ? real : raw,
+    start_line: start,
+    end_line: end,
+    total_lines: total,
+    truncated: end < Math.min(total, requestedEnd),
+    content: lines.slice(start - 1, end).join("\n")
+  };
+}
+
+// src/mcp/protocol.ts
+var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+var LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+var ASSUMED_HTTP_PROTOCOL = "2025-03-26";
+var ANNOTATIONS_SINCE = "2025-03-26";
+var RICH_TOOLS_SINCE = "2025-06-18";
+var DEFAULT_MAX_RESPONSE_BYTES = 1e6;
+function isProtocolVersion(v) {
+  return typeof v === "string" && PROTOCOL_VERSIONS.includes(v);
+}
+function negotiateProtocol(requested) {
+  return isProtocolVersion(requested) ? requested : LATEST_PROTOCOL;
+}
+function validateArgs(schema, args) {
+  for (const key of schema.required) {
+    const v = args[key];
+    if (v === void 0 || v === null || v === "") return `\`${key}\` is required`;
+  }
+  for (const [key, value] of Object.entries(args)) {
+    if (value === void 0 || value === null) continue;
+    const spec = schema.properties[key];
+    if (!spec?.type) continue;
+    const actual = Array.isArray(value) ? "array" : typeof value;
+    if (spec.type === "number") {
+      if (actual === "number") continue;
+      if (actual === "string" && value.trim() !== "" && Number.isFinite(Number(value))) continue;
+      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+    }
+    if (spec.type === "array") {
+      if (actual !== "array") return `\`${key}\` must be an array, got ${actual}`;
+      const arr = value;
+      if (spec.items?.type === "string" && !arr.every((x) => typeof x === "string")) {
+        return `\`${key}\` must be an array of strings`;
+      }
+      if (spec.enum) {
+        const bad = arr.find((x) => typeof x === "string" && !spec.enum.includes(x));
+        if (bad !== void 0) return `\`${key}\` contains "${String(bad)}" \u2014 allowed: ${spec.enum.join(", ")}`;
+      }
+      continue;
+    }
+    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+    if (spec.enum && typeof value === "string" && !spec.enum.includes(value)) {
+      return `\`${key}\` must be one of: ${spec.enum.join(", ")}`;
+    }
+  }
+  return void 0;
+}
+var NARROWER = {
+  ultrasearch_gather: 'lower `max_sources` or `per_source`, or drop to `depth: "summary"`',
+  ultrasearch_search: "lower `max_sources`",
+  ultrasearch_merge: "merge fewer `runs`, or read the merged DOSSIER.md instead of inlining it",
+  ultrasearch_verify: "lower `max_verify`, or split the worklist with `shards`/`shard`",
+  ultrasearch_check: "the report is very large; check it in pieces",
+  ultrasearch_read: "pass `start_line`/`end_line` to read a window instead of the whole file"
+};
+function capResponse(text, tool, maxBytes, artifact) {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return text;
+  return JSON.stringify(
+    {
+      truncated: true,
+      tool,
+      bytes,
+      maxBytes,
+      reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
+      narrower: NARROWER[tool] ?? "narrow the request and call again",
+      ...artifact ? { artifact, artifactNote: "The full result is on disk here \u2014 read it directly if you need all of it." } : {}
+    },
+    null,
+    2
+  ) + "\n";
+}
+function structuredContentFor(text, capped, hasSchema) {
+  if (capped || !hasSchema) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+  return parsed;
+}
+var LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+function isOriginAllowed(origin, allowed = []) {
+  if (origin === void 0) return true;
+  const o = origin.trim();
+  if (o === "" || o === "null") return true;
+  if (LOOPBACK_ORIGIN.test(o)) return true;
+  return allowed.some((a) => a === "*" || a.toLowerCase() === o.toLowerCase());
+}
+
+// src/mcp/tools.ts
+var MODE_ENUM = [...ALL_MODES].sort();
+var DEPTH_ENUM = [...ALL_DEPTHS].sort();
+var BACKEND_ENUM = [...ALL_BACKENDS].sort();
+var runProp = { type: "string", description: "The dossier directory returned by ultrasearch_gather." };
+var questionProp = { type: "string", description: "The topic or question, in natural language." };
+var modeProp = {
+  type: "string",
+  enum: MODE_ENUM,
+  description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors). Default: topic."
+};
+var langProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
+var GROUNDING_NOTE = "Returns SOURCES, not an answer \u2014 you write the report from them, citing [S#], and prove it with ultrasearch_check.";
+var TOOLS = [
+  {
+    name: "ultrasearch_search",
+    title: "Search one backend, write nothing",
+    description: "Run one query against ONE search backend and get ranked results back. Writes nothing and keeps no dossier \u2014 this is the cheap lookup for a single fact, or a probe to see what a backend knows before committing to a full gather. For anything you intend to cite, use ultrasearch_gather.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "The search query." },
+        backend: {
+          type: "string",
+          enum: BACKEND_ENUM,
+          description: "Which backend to query. There is no default: a general web sweep is what ultrasearch_gather does, and picking one here is the point of this tool. Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web."
+        },
+        lang: langProp,
+        max_sources: { type: "number", description: "Cap on results returned (default 10)." }
+      },
+      required: ["query", "backend"]
+    }
+  },
+  {
+    name: "ultrasearch_gather",
+    title: "Build a cited dossier from the web",
+    description: "Fan out across keyless search backends, fetch and dedupe the pages, and WRITE a dossier to disk: sources.json, one file per source, DOSSIER.md and manifest.json. Returns the dossier directory. SLOW and network-bound: depth 'summary' is about 30s, 'standard' 2-4 minutes, 'deep' 10-20 minutes \u2014 'standard' is the default here because a client that times out mid-gather loses the run. " + GROUNDING_NOTE,
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        depth: {
+          type: "string",
+          enum: DEPTH_ENUM,
+          description: "How hard to look: summary (~30s, \u226410 sources), standard (2-4 min, \u226425), deep (10-20 min, \u226460). Default: standard."
+        },
+        backends: { type: "array", items: { type: "string" }, enum: BACKEND_ENUM, description: "Override the mode's backend profile." },
+        queries: { type: "array", items: { type: "string" }, description: "Your own query variants, instead of the planner's." },
+        max_sources: { type: "number", description: "Cap on sources kept (default: per depth)." },
+        per_source: { type: "number", description: "Max excerpts kept per source (default: per depth)." },
+        lang: langProp,
+        region: { type: "string", description: "Region/country for locale-aware search (else derived from lang)." },
+        since: { type: "string", description: "Recency filter, where the backend supports it (e.g. 2024)." },
+        seed_domains: { type: "array", items: { type: "string" }, description: "Primary hosts to also search with site: and rank as primary." },
+        exclude_domains: { type: "array", items: { type: "string" }, description: "Hosts to drop from results." },
+        out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." }
+      },
+      required: ["question"]
+    }
+  },
+  {
+    name: "ultrasearch_fetch",
+    title: "Ingest one URL into a dossier",
+    description: "Fetch a specific URL, extract and rank its text, and add it to an existing dossier as a new [S#] you can cite. This is how you fold in a page you found yourself \u2014 including via your own web search \u2014 so that it becomes citable evidence rather than an uncited assertion.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        url: { type: "string", description: "Absolute http(s) URL to fetch." },
+        question: { type: "string", description: "What you're looking for on the page \u2014 ranks the excerpts kept. Defaults to the dossier's question." },
+        title: { type: "string", description: "Override the extracted title." }
+      },
+      required: ["run", "url"]
+    }
+  },
+  {
+    name: "ultrasearch_check",
+    title: "Validate a report's citations",
+    description: "The grounding gate. Prove every [S#] in your report resolves to a real source in the dossier, and that enough of the prose is cited at all. A result with ok:false is a real verdict, not a tool failure \u2014 read the errors, fix the report, and check again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        semantic: { type: "boolean", description: "Also fold in recorded verify verdicts, failing on a refuted or unsupported claim." },
+        require_verify: { type: "boolean", description: "Fail when no verdicts have been recorded yet." },
+        strict_numerals: { type: "boolean", description: "Every number in the prose must appear in a cited source." },
+        min_sources: { type: "number", description: "Fail when the dossier holds fewer on-topic sources than this." }
+      },
+      required: ["run"]
+    }
+  },
+  {
+    name: "ultrasearch_verify",
+    title: "Build a claim-support worklist",
+    description: "Go past 'the citation resolves' to 'the source actually supports the claim'. Emits a deterministic claim-by-source worklist from the dossier and its report, for you to adjudicate each pair as supported / partial / refuted / unsupported.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        max_verify: { type: "number", description: "Cap on the number of claim/source pairs emitted." },
+        shards: { type: "number", description: "Split the worklist into this many shards, to adjudicate in parallel." },
+        shard: { type: "number", description: "Which shard to emit, 0-based." }
+      },
+      required: ["run"]
+    }
+  },
+  {
+    name: "ultrasearch_render",
+    title: "Render the dossier to HTML and Markdown",
+    description: "Turn a dossier plus the report you wrote into a self-contained index.html and index.md, with citations linked to their sources. Run it after ultrasearch_check passes \u2014 rendering an unvalidated report just makes an ungrounded document look finished.",
+    inputSchema: {
+      type: "object",
+      properties: { run: runProp, no_html: { type: "boolean", description: "Skip index.html." }, no_md: { type: "boolean", description: "Skip index.md." } },
+      required: ["run"]
+    }
+  },
+  {
+    name: "ultrasearch_plan",
+    title: "Decompose a question into sub-questions",
+    description: "Split a broad question into independent sub-questions, each with its own deterministic dossier directory. This is the front half of deep research: gather each sub-question separately, then ultrasearch_merge them into one dossier with stable [S#] ids.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        subquestions: { type: "array", items: { type: "string" }, description: "Your own sub-questions, instead of the planner's." },
+        max_subquestions: { type: "number", description: "Cap on how many are emitted." },
+        run_root: { type: "string", description: "Absolute directory to root the per-sub-question dossier paths at." }
+      },
+      required: ["question"]
+    }
+  },
+  {
+    name: "ultrasearch_merge",
+    title: "Merge sub-dossiers into one",
+    description: "Union several dossiers into a master one, re-assigning [S#] ids so they stay stable and unique across the merge. The back half of deep research: you write ONE report against the merged dossier, not one per sub-question.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        runs: { type: "array", items: { type: "string" }, description: "The sub-dossier directories to union." },
+        master: { type: "string", description: "Absolute output directory (default: derived from mode and question)." },
+        question: { type: "string", description: "The original umbrella question." },
+        mode: modeProp
+      },
+      required: ["runs"]
+    }
+  },
+  {
+    name: "ultrasearch_brainstorm",
+    title: "Probe a vague question before researching it",
+    description: "Turn a question too vague to research into angles worth taking and the clarifying questions worth asking first. Use it when the ask is broad enough that a gather would return a shallow dossier about the wrong thing.",
+    inputSchema: {
+      type: "object",
+      properties: { question: questionProp, mode: modeProp, out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." } },
+      required: ["question"]
+    }
+  },
+  {
+    name: "ultrasearch_modes",
+    title: "List the research modes",
+    description: "What each mode is for and which backends it searches. Read this when unsure which mode a question belongs to. Writes nothing.",
+    inputSchema: { type: "object", properties: {}, required: [] }
+  },
+  {
+    name: "ultrasearch_read",
+    title: "Read a file from a dossier",
+    description: "Read a file, or a line range of one, from a dossier \u2014 DOSSIER.md, a source file, manifest.json, VERIFY.todo.json. Reads are confined to the dossier directory; anything else is your own file tool's job.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        path: { type: "string", description: "Path relative to the dossier (e.g. 'DOSSIER.md', 'sources/S1.md'), or an absolute path inside it." },
+        start_line: { type: "number", description: "First line to return, 1-based (default 1)." },
+        end_line: { type: "number", description: "Last line to return, inclusive (default: end of file, capped)." }
+      },
+      required: ["run", "path"]
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "number" },
+        end_line: { type: "number" },
+        total_lines: { type: "number" },
+        truncated: { type: "boolean" },
+        content: { type: "string" }
+      },
+      required: ["path", "start_line", "end_line", "total_lines", "truncated", "content"]
+    }
+  }
+];
+var WRITE_TOOLS = [];
+var TOOL_META = {
+  ultrasearch_search: { openWorld: true },
+  ultrasearch_gather: { write: true, destructive: false, idempotent: false, openWorld: true },
+  ultrasearch_fetch: { write: true, destructive: false, idempotent: true, openWorld: true },
+  ultrasearch_check: { openWorld: false },
+  ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_render: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_plan: { openWorld: false },
+  ultrasearch_merge: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_brainstorm: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_modes: { openWorld: false },
+  ultrasearch_read: { openWorld: false }
+};
+function annotationsFor(name) {
+  const meta = TOOL_META[name];
+  if (!meta) return void 0;
+  return {
+    readOnlyHint: !meta.write,
+    ...meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {},
+    openWorldHint: meta.openWorld === true
+  };
+}
+function toolsFor(protocolVersion, opts = {}) {
+  const base = opts.allowWrite ? [...TOOLS, ...WRITE_TOOLS] : TOOLS;
+  const withAnnotations = protocolVersion >= ANNOTATIONS_SINCE;
+  const withRich = protocolVersion >= RICH_TOOLS_SINCE;
+  return base.map((t) => {
+    const decl = {
+      name: t.name,
+      description: t.description,
+      inputSchema: applyDefaultRun(t.inputSchema, opts.defaultRun)
+    };
+    if (withRich && t.title) decl.title = t.title;
+    if (withRich && t.outputSchema) decl.outputSchema = t.outputSchema;
+    if (withAnnotations) {
+      const a = annotationsFor(t.name);
+      if (a) decl.annotations = a;
+    }
+    return decl;
+  });
+}
+function applyDefaultRun(schema, defaultRun) {
+  const existing = schema.properties.run;
+  if (!defaultRun || !existing) return schema;
+  return {
+    type: "object",
+    properties: {
+      ...schema.properties,
+      run: { ...existing, description: `${existing.description} Optional \u2014 defaults to ${defaultRun}.` }
+    },
+    required: schema.required.filter((r) => r !== "run")
+  };
+}
+
+// src/mcp/prompts.ts
+var PromptError = class extends Error {
+};
+var PROMPTS = [
+  {
+    name: "research_topic",
+    title: "Research a topic from the real web",
+    description: "The grounded-report workflow: gather a dossier from live sources, write a report that cites every claim, and prove it with the citation gate. Use for any 'what does the web say about X' question.",
+    arguments: [
+      { name: "question", description: "The topic or question to research.", required: true },
+      { name: "depth", description: "summary (~30s), standard (2-4 min), deep (10-20 min). Default: standard.", required: false }
+    ]
+  },
+  {
+    name: "debug_error",
+    title: "Debug an error against real reports of it",
+    description: "The bug workflow: search StackOverflow, GitHub issues and HN for this exact failure, read what actually fixed it for other people, and answer with the fix and its evidence rather than a plausible guess.",
+    arguments: [
+      { name: "error", description: "The error message or failing behaviour, verbatim.", required: true },
+      { name: "context", description: "Library, version, runtime \u2014 anything that narrows which report applies.", required: false }
+    ]
+  },
+  {
+    name: "literature_review",
+    title: "Review the literature on a question",
+    description: "The research workflow: search the scholarly APIs, decompose a broad question into sub-questions, merge the sub-dossiers, and write a review whose every claim is traceable to a paper.",
+    arguments: [{ name: "question", description: "The research question.", required: true }]
+  }
+];
+function getPrompt(name, args = {}) {
+  const decl = PROMPTS.find((p) => p.name === name);
+  if (!decl) throw new PromptError(`unknown prompt: ${name || "(none given)"}`);
+  for (const arg of decl.arguments) {
+    if (arg.required && !str2(args[arg.name])) throw new PromptError(`\`${arg.name}\` is required for prompt "${name}"`);
+  }
+  const text = name === "research_topic" ? researchTopic(args) : name === "debug_error" ? debugError(args) : literatureReview(args);
+  return { description: decl.description, messages: [{ role: "user", content: { type: "text", text } }] };
+}
+var CORE_RULE = `Answer only from the sources this dossier actually fetched. Your training data is stale, and on a fast-moving topic it is confidently wrong. If the dossier does not cover something, say so and gather more \u2014 never fill the gap from memory and decorate it with a nearby citation.`;
+var GATE = `\`ultrasearch_check\` returning \`ok: false\` is a VERDICT, not a tool failure. Read the errors, fix the report, and check again. Do not report a document that has not passed.`;
+var THIN = `**If the dossier comes back thin**, do not write around it. Either gather again with different wording \u2014 the topic's own vocabulary, not yours \u2014 or find pages yourself and ingest each one with \`ultrasearch_fetch\` so it becomes a citable [S#]. A thin dossier honestly reported beats a full-looking report resting on four sources.`;
+function researchTopic(args) {
+  const question = str2(args.question);
+  const depth = str2(args.depth);
+  return `Research this and write a cited report:
+
+> ${question}
+
+${CORE_RULE}
+
+**Sequence:**
+
+1. If the question is too vague to search well, \`ultrasearch_brainstorm\` first and sharpen it. A broad gather returns a shallow dossier about the wrong thing.
+2. \`ultrasearch_gather\` with \`mode: "topic"\`${depth ? ` and \`depth: "${depth}"\`` : ""}. It returns the dossier directory.
+3. \`ultrasearch_read\` its \`DOSSIER.md\`. Read every source before writing anything.
+4. Write the report: one claim per sentence, each carrying the \`[S#]\` it rests on. Quote figures, dates and names verbatim from the source \u2014 never reconstructed.
+5. \`ultrasearch_check\` on the dossier. Then \`ultrasearch_render\` once it passes.
+
+${THIN}
+
+**Where sources disagree, say so and cite both.** A synthesis that silently picks a side is the failure this whole pipeline is built to prevent.
+
+${GATE}`;
+}
+function debugError(args) {
+  const error = str2(args.error);
+  const context = str2(args.context);
+  return `Find out what actually causes this error and what fixes it:
+
+> ${error}
+${context ? `
+Context: ${context}
+` : ""}
+${CORE_RULE}
+
+**Sequence:**
+
+1. \`ultrasearch_gather\` with \`mode: "bug"\` and the error message as the question${context ? `, adding "${context}" to narrow it` : ""}. That mode searches StackOverflow, GitHub issues and HN \u2014 where this failure is actually reported.
+2. \`ultrasearch_read\` the dossier. Read the accepted answers AND the comments under them: the top-voted fix is often superseded further down.
+3. \`ultrasearch_search\` with \`backend: "github"\` if the dossier is thin \u2014 an open issue on the library itself settles "is this me or is this a bug" faster than anything else.
+4. Answer with: the cause, the fix, and what to check to confirm it is the same failure and not a lookalike. Each cited \`[S#]\`.
+5. \`ultrasearch_check\` on the dossier.
+
+**Check the version.** A fix from a 2019 answer for a library now on v5 is not evidence about v5. If the sources do not say which version they apply to, say so \u2014 that is a real limit on the answer, not a detail to smooth over.
+
+${GATE}`;
+}
+function literatureReview(args) {
+  const question = str2(args.question);
+  return `Write a literature review on:
+
+> ${question}
+
+${CORE_RULE}
+
+**Sequence:**
+
+1. \`ultrasearch_plan\` with \`mode: "research"\` \u2014 a broad question decomposes into sub-questions, each with its own dossier directory.
+2. \`ultrasearch_gather\` on each sub-question, into the directory the plan named.
+3. \`ultrasearch_merge\` the sub-dossiers into one. The \`[S#]\` ids are re-assigned to stay unique \u2014 cite the MERGED ids, not the ones you saw per sub-question.
+4. \`ultrasearch_read\` the merged dossier, then write ONE review against it \u2014 not one section per sub-question stapled together.
+5. \`ultrasearch_check\` on the merged dossier, then \`ultrasearch_render\`.
+
+${THIN}
+
+**Attribute findings to specific papers, with their limits.** "Studies show X" citing four papers is weaker than one sentence naming what one study measured, in what population, and what it did not establish. Where the literature disagrees, that disagreement IS the finding.
+
+${GATE}`;
+}
+function str2(v) {
+  return typeof v === "string" && v.trim() !== "" ? v : void 0;
+}
+var DECLARED = new Set([...TOOLS, ...WRITE_TOOLS].map((t) => t.name));
+
+// src/mcp/resources.ts
+import { existsSync as existsSync8, readdirSync, readFileSync as readFileSync8, realpathSync as realpathSync2, statSync as statSync2 } from "fs";
+import { basename, dirname, join as join14, resolve as resolve3, sep as sep2 } from "path";
+import { fileURLToPath } from "url";
+var SKILL_NAME = "ultrasearch";
+var URI_SCHEME = "skill://";
+function resolveSkillRoot(moduleDir) {
+  const here = moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  const candidates = [resolve3(here, ".."), resolve3(here, "..", "skills", SKILL_NAME), resolve3(here, "..", "..", "skills", SKILL_NAME)];
+  return candidates.find((dir) => existsSync8(join14(dir, "SKILL.md")));
+}
+function listResources(moduleDir) {
+  const root = resolveSkillRoot(moduleDir);
+  if (!root) return [];
+  const out = [describe(root, "SKILL.md", `${SKILL_NAME}: the skill`)];
+  const refDir = join14(root, "references");
+  if (!existsSync8(refDir)) return out;
+  for (const file of readdirSync(refDir).sort()) {
+    if (!file.endsWith(".md")) continue;
+    out.push(describe(root, join14("references", file), `${SKILL_NAME} reference: ${basename(file, ".md")}`));
+  }
+  return out;
+}
+function readResource(uri, moduleDir) {
+  if (!uri.startsWith(URI_SCHEME)) {
+    throw new ResourceError(`unknown resource scheme in "${uri}" (expected ${URI_SCHEME}\u2026)`);
+  }
+  const root = resolveSkillRoot(moduleDir);
+  if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
+  const rel = uri.slice(URI_SCHEME.length);
+  if (!rel) throw new ResourceError("empty resource path");
+  const target = resolve3(root, rel);
+  const rootReal = realpathSync2(root);
+  let targetReal;
+  try {
+    targetReal = realpathSync2(target);
+  } catch {
+    throw new ResourceError(`no such resource: ${uri}`);
+  }
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
+    throw new ResourceError(`resource path escapes the skill root: ${uri}`);
+  }
+  if (!statSync2(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync8(targetReal, "utf8") };
+}
+var ResourceError = class extends Error {
+};
+function describe(root, rel, fallbackTitle) {
+  const decl = {
+    uri: `${URI_SCHEME}${rel.split(sep2).join("/")}`,
+    name: rel.split(sep2).join("/"),
+    title: fallbackTitle,
+    mimeType: "text/markdown"
+  };
+  const summary = firstProse(join14(root, rel));
+  if (summary) decl.description = summary;
+  return decl;
+}
+function firstProse(file) {
+  let text;
+  try {
+    text = readFileSync8(file, "utf8");
+  } catch {
+    return void 0;
+  }
+  const body = text.startsWith("---\n") ? text.slice(text.indexOf("\n---", 3) + 4) : text;
+  for (const block of body.split(/\n\s*\n/)) {
+    const line = block.trim();
+    if (!line || line.startsWith("#") || line.startsWith(">") || line.startsWith("|") || line.startsWith("```")) continue;
+    const flat = line.replace(/\s+/g, " ").replace(/[*`]/g, "");
+    return flat.length > 300 ? `${flat.slice(0, 297)}\u2026` : flat;
+  }
+  return void 0;
+}
+
+// src/mcp/server.ts
+var ERR_INVALID_REQUEST = -32600;
+var ERR_METHOD_NOT_FOUND = -32601;
+var ERR_INVALID_PARAMS = -32602;
+var ERR_INTERNAL = -32603;
+function createServer(opts = {}) {
+  const serverInfo = { name: opts.serverName ?? "ultrasearch", version: VERSION };
+  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  let protocol = LATEST_PROTOCOL;
+  const cancelled = /* @__PURE__ */ new Set();
+  const CANCELLED_MAX = 1024;
+  const listTools = () => toolsFor(protocol, { defaultRun: opts.defaultRun, allowWrite: opts.allowWrite });
+  async function handle(msg, send) {
+    if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+      send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
+      return;
+    }
+    if (msg.id === void 0 || msg.id === null) {
+      if (msg.method === "notifications/cancelled") {
+        const target = msg.params?.requestId;
+        if (typeof target === "string" || typeof target === "number") {
+          if (cancelled.size >= CANCELLED_MAX) cancelled.delete(cancelled.values().next().value);
+          cancelled.add(String(target));
+        }
+      }
+      return;
+    }
+    const id = msg.id;
+    const reply = (out) => {
+      if (cancelled.delete(String(id))) return;
+      send({ jsonrpc: "2.0", id, ...out });
+    };
+    try {
+      switch (msg.method) {
+        case "initialize": {
+          protocol = negotiateProtocol(msg.params?.protocolVersion);
+          reply({
+            result: {
+              protocolVersion: protocol,
+              // Three primitives, because a skill is three things: the engine
+              // (tools), the method (prompts) and the documentation the method
+              // refers to (resources). A client given only the first has to
+              // invent the other two.
+              capabilities: {
+                tools: { listChanged: false },
+                resources: { subscribe: false, listChanged: false },
+                prompts: { listChanged: false }
+              },
+              serverInfo
+            }
+          });
+          return;
+        }
+        case "ping":
+          reply({ result: {} });
+          return;
+        case "tools/list":
+          reply({ result: { tools: listTools() } });
+          return;
+        case "tools/call":
+          await handleToolCall(msg, reply);
+          return;
+        case "resources/list":
+          reply({ result: { resources: listResources(opts.skillDir) } });
+          return;
+        case "resources/read": {
+          const uri = typeof msg.params?.uri === "string" ? msg.params.uri : "";
+          if (!uri) {
+            reply({ error: { code: ERR_INVALID_PARAMS, message: "`uri` is required" } });
+            return;
+          }
+          try {
+            reply({ result: { contents: [readResource(uri, opts.skillDir)] } });
+          } catch (e) {
+            if (e instanceof ResourceError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
+            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+          }
+          return;
+        }
+        case "prompts/list":
+          reply({ result: { prompts: PROMPTS } });
+          return;
+        case "prompts/get": {
+          const name = typeof msg.params?.name === "string" ? msg.params.name : "";
+          const args = msg.params?.arguments ?? {};
+          try {
+            reply({ result: getPrompt(name, args) });
+          } catch (e) {
+            if (e instanceof PromptError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
+            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+          }
+          return;
+        }
+        default:
+          reply({ error: { code: ERR_METHOD_NOT_FOUND, message: `method not found: ${String(msg.method)}` } });
+          return;
+      }
+    } catch (e) {
+      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+    }
+  }
+  async function handleToolCall(msg, reply) {
+    const params = msg.params ?? {};
+    const name = typeof params.name === "string" ? params.name : "";
+    const args = params.arguments ?? {};
+    const decl = listTools().find((t) => t.name === name);
+    if (!decl) {
+      reply({ error: { code: ERR_INVALID_PARAMS, message: `unknown tool: ${name || "(none given)"}` } });
+      return;
+    }
+    const invalid = validateArgs(decl.inputSchema, args);
+    if (invalid) {
+      reply({ error: { code: ERR_INVALID_PARAMS, message: invalid } });
+      return;
+    }
+    try {
+      const { text: raw, artifact } = await callTool(name, args, { defaultRun: opts.defaultRun, allowWrite: opts.allowWrite });
+      const text = capResponse(raw, name, maxBytes, artifact);
+      const capped = text !== raw;
+      const structured = protocol >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, decl.outputSchema !== void 0) : void 0;
+      reply({ result: { content: [{ type: "text", text }], ...structured ? { structuredContent: structured } : {} } });
+    } catch (e) {
+      if (e instanceof ToolError) {
+        reply({ result: { content: [{ type: "text", text: e.message }], isError: true } });
+        return;
+      }
+      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+    }
+  }
+  return {
+    handle,
+    protocolVersion: () => protocol,
+    setProtocolVersion: (v) => {
+      protocol = v;
+    },
+    tools: listTools
+  };
+}
+function errMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// src/mcp/stdio.ts
+var MAX_IN_FLIGHT = 4;
+async function runStdioServer(opts = {}) {
+  const input = opts.input ?? process.stdin;
+  const output = opts.output ?? process.stdout;
+  const emit = output.write.bind(output);
+  let restore;
+  if (!opts.captureStdout && output === process.stdout) {
+    const original = process.stdout.write;
+    process.stdout.write = ((chunk, ...rest) => process.stderr.write(chunk, ...rest));
+    restore = () => {
+      process.stdout.write = original;
+    };
+  }
+  const server = createServer(opts);
+  const send = (msg) => {
+    emit(JSON.stringify(msg) + "\n");
+  };
+  const inFlight = /* @__PURE__ */ new Set();
+  const track = (p) => {
+    inFlight.add(p);
+    void p.finally(() => inFlight.delete(p));
+    return p;
+  };
+  const drainToLimit = async () => {
+    while (inFlight.size >= MAX_IN_FLIGHT) await Promise.race(inFlight);
+  };
+  const rl = createInterface({ input, terminal: false });
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+        continue;
+      }
+      await drainToLimit();
+      if (Array.isArray(parsed)) {
+        track(
+          (async () => {
+            const out = [];
+            await Promise.all(parsed.map((m) => server.handle(m, (r) => void out.push(r))));
+            if (out.length) emit(JSON.stringify(out) + "\n");
+          })().catch(reportInternal(send))
+        );
+        continue;
+      }
+      if (parsed === null || typeof parsed !== "object") {
+        send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
+        continue;
+      }
+      track(server.handle(parsed, send).catch(reportInternal(send)));
+    }
+    await Promise.all(inFlight);
+  } finally {
+    rl.close();
+    restore?.();
+  }
+}
+function reportInternal(send) {
+  return (e) => {
+    send({ jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+  };
+}
+
+// src/mcp/http.ts
+import { createServer as createHttpServer } from "http";
+var MCP_PATH = "/mcp";
+var MAX_BODY_BYTES = 4 * 1024 * 1024;
+var CORS_HEADERS = "content-type, accept, mcp-protocol-version, mcp-session-id, authorization, last-event-id";
+var LOOPBACK_BIND = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+function startHttpServer(opts = {}) {
+  const bind = opts.bind ?? "127.0.0.1";
+  if (!LOOPBACK_BIND.has(bind) && !opts.allowRemote) {
+    return Promise.reject(
+      new Error(
+        `refusing to bind ${bind}: ultrasearch's MCP server clones arbitrary git URLs and reads local files. Pass --allow-remote if that is really what you want.`
+      )
+    );
+  }
+  const server = createHttpServer((req, res) => {
+    void route(req, res, opts).catch((e) => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      sendJson(res, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+    });
+  });
+  server.requestTimeout = 0;
+  server.headersTimeout = 6e4;
+  server.keepAliveTimeout = 12e4;
+  return new Promise((resolve5, reject) => {
+    server.once("error", reject);
+    server.listen(opts.port ?? 0, bind, () => {
+      server.removeListener("error", reject);
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
+      const host = bind.includes(":") ? `[${bind}]` : bind;
+      resolve5({
+        server,
+        port,
+        url: `http://${host}:${port}${MCP_PATH}`,
+        close: () => new Promise((done) => {
+          server.closeAllConnections?.();
+          server.close(() => done());
+        })
+      });
+    });
+  });
+}
+async function route(req, res, opts) {
+  const path = (req.url ?? "").split("?")[0];
+  const origin = header(req, "origin");
+  if (!isOriginAllowed(origin, opts.allowOrigin)) {
+    sendJson(res, 403, { error: "origin not allowed", origin });
+    return;
+  }
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      ...corsHeaders(origin),
+      "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
+      "access-control-allow-headers": CORS_HEADERS,
+      "access-control-max-age": "86400"
+    });
+    res.end();
+    return;
+  }
+  if (path !== MCP_PATH) {
+    sendJson(res, 404, { error: `not found: ${path} (the MCP endpoint is ${MCP_PATH})` }, origin);
+    return;
+  }
+  if (req.method === "GET" || req.method === "DELETE") {
+    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
+    res.end(JSON.stringify({ error: `${req.method} is not supported: this server is stateless and offers no server-initiated stream` }));
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
+    res.end(JSON.stringify({ error: `${req.method} is not supported` }));
+    return;
+  }
+  const contentType = (header(req, "content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (contentType && contentType !== "application/json") {
+    sendJson(res, 415, { error: `unsupported content-type "${contentType}" \u2014 send application/json` }, origin);
+    return;
+  }
+  const accept = (header(req, "accept") ?? "").toLowerCase();
+  if (accept && !/application\/json|text\/event-stream|\*\/\*/.test(accept)) {
+    sendJson(res, 406, { error: "this endpoint replies with application/json" }, origin);
+    return;
+  }
+  const declared = header(req, "mcp-protocol-version");
+  if (declared !== void 0 && !isProtocolVersion(declared)) {
+    sendJson(res, 400, { error: `unsupported MCP-Protocol-Version: ${declared}` }, origin);
+    return;
+  }
+  const protocol = declared ?? ASSUMED_HTTP_PROTOCOL;
+  let raw;
+  try {
+    raw = await readBody(req);
+  } catch (e) {
+    if (e.message === "too large") {
+      sendJson(res, 413, { error: `request body exceeds ${MAX_BODY_BYTES} bytes` }, origin);
+      return;
+    }
+    sendJson(res, 400, { error: `could not read request body: ${e.message}` }, origin);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    sendJson(res, 200, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, origin);
+    return;
+  }
+  const mcp = createServer(opts);
+  mcp.setProtocolVersion(protocol);
+  const out = [];
+  const collect = (m) => void out.push(m);
+  const messages = Array.isArray(parsed) ? parsed : [parsed];
+  for (const m of messages) await mcp.handle(m, collect);
+  if (out.length === 0) {
+    res.writeHead(202, corsHeaders(origin));
+    res.end();
+    return;
+  }
+  sendJson(res, 200, Array.isArray(parsed) ? out : out[0], origin);
+}
+function header(req, name) {
+  const v = req.headers[name];
+  return Array.isArray(v) ? v[0] : v;
+}
+function corsHeaders(origin) {
+  return origin ? { "access-control-allow-origin": origin, vary: "origin" } : {};
+}
+function sendJson(res, status, body, origin, extra = {}) {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": String(Buffer.byteLength(text, "utf8")),
+    ...corsHeaders(origin),
+    ...extra
+  });
+  res.end(text);
+}
+var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
+function readBody(req) {
+  return new Promise((resolve5, reject) => {
+    const chunks = [];
+    let size = 0;
+    let over = false;
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) over = true;
+    req.on("data", (c) => {
+      size += c.length;
+      if (over) {
+        if (size > DRAIN_LIMIT) {
+          req.destroy();
+          reject(new Error("too large"));
+        }
+        return;
+      }
+      if (size > MAX_BODY_BYTES) {
+        over = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (over) reject(new Error("too large"));
+      else resolve5(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+    req.on("aborted", () => reject(new Error("client aborted the request")));
+  });
+}
+
 // src/cli.ts
 var HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic \u2014 fan out keyless web search,
@@ -5083,6 +6281,8 @@ Usage:
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch modes  [--json]
+  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
+                     [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
@@ -5202,7 +6402,8 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "plan",
   "merge",
   "verify",
-  "orchestrate"
+  "orchestrate",
+  "mcp"
 ]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
@@ -5240,15 +6441,34 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shards",
   "shard",
   "min-sources",
-  "phase"
+  "phase",
+  // `mcp` only. The flag sets are global, so these are accepted (and ignored)
+  // on every command — the same as --phase and --list already are.
+  "transport",
+  "port",
+  "bind",
+  "allow-origin",
+  "max-response-bytes"
 ]);
-var BOOL_FLAGS = /* @__PURE__ */ new Set(["json", "no-html", "no-md", "semantic", "require-verify", "strict-numerals", "cache", "no-cache", "eco", "list"]);
+var BOOL_FLAGS = /* @__PURE__ */ new Set([
+  "json",
+  "no-html",
+  "no-md",
+  "semantic",
+  "require-verify",
+  "strict-numerals",
+  "cache",
+  "no-cache",
+  "eco",
+  "list",
+  "allow-remote"
+]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
 `);
   process.exit(1);
 }
-function oneOf(name, value, allowed) {
+function oneOf2(name, value, allowed) {
   if (!allowed.includes(value)) {
     fail(`invalid --${name} "${value}" (expected: ${allowed.join(", ")})`);
   }
@@ -5317,10 +6537,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve2(x));
-  const abs = resolve2(spec);
-  if (existsSync7(abs) && statSync(abs).isDirectory()) {
-    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve2(abs, f));
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve4(x));
+  const abs = resolve4(spec);
+  if (existsSync9(abs) && statSync3(abs).isDirectory()) {
+    const files = readdirSync2(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve4(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -5357,7 +6577,7 @@ function parseBackends(s) {
   if (out.length === 0) fail("--backends resolved to nothing");
   return out;
 }
-function num(name, raw, fallback) {
+function num2(name, raw, fallback) {
   if (raw === void 0) return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) fail(`invalid --${name} "${raw}"`);
@@ -5401,37 +6621,37 @@ function gatherReport(r, options) {
 function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
-  const mode = oneOf("mode", p.values.mode ?? "topic", ALL_MODES);
-  const depth = oneOf("depth", p.values.depth ?? "standard", ALL_DEPTHS);
+  const mode = oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
+  const depth = oneOf2("depth", p.values.depth ?? "standard", ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
+  const webEngine = oneOf2("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
   return {
     question,
     mode,
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : void 0,
     queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : void 0,
-    maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
-    perSource: num("per-source", p.values["per-source"], caps.perSource),
+    maxSources: num2("max-sources", p.values["max-sources"], caps.maxSources),
+    perSource: num2("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,
     firecrawl: p.values.firecrawl,
     webEngine,
-    pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : void 0,
-    webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : void 0,
+    pages: p.values.pages ? Math.min(5, num2("pages", p.values.pages, 1)) : void 0,
+    webBreadth: p.values["web-breadth"] ? Math.min(5, num2("web-breadth", p.values["web-breadth"], 1)) : void 0,
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
     seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : void 0,
-    concurrency: p.values.concurrency ? num("concurrency", p.values.concurrency, 6) : void 0,
-    rounds: p.values.rounds ? num("rounds", p.values.rounds, 1) : void 0,
+    concurrency: p.values.concurrency ? num2("concurrency", p.values.concurrency, 6) : void 0,
+    rounds: p.values.rounds ? num2("rounds", p.values.rounds, 1) : void 0,
     // Default ON: the on-disk cache is a pure win for the deep tier's fan-out,
     // for a re-gather after a failed check, and for the `fetch --url` bridge.
     // `--cache` stays an accepted no-op so every prompt and emitted contract
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
-    out: p.values.out ? resolve2(p.values.out) : void 0,
+    out: p.values.out ? resolve4(p.values.out) : void 0,
     json: p.bools.has("json")
   };
 }
@@ -5510,15 +6730,15 @@ async function main(argv = process.argv.slice(2)) {
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve2(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve4(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
     case "plan": {
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
-      const cap = p.values["max-subquestions"] ? num("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve2(p.values["run-root"]) : void 0;
+      const cap = p.values["max-subquestions"] ? num2("max-subquestions", p.values["max-subquestions"], 6) : void 0;
+      const runRoot = p.values["run-root"] ? resolve4(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -5530,13 +6750,13 @@ async function main(argv = process.argv.slice(2)) {
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve2(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve4(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync7(d)) fail(`run dir not found: ${d}`);
-      const mode = p.values.mode ? oneOf("mode", p.values.mode, ALL_MODES) : void 0;
+      for (const d of runs) if (!existsSync9(d)) fail(`run dir not found: ${d}`);
+      const mode = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve2(p.values.master) : void 0,
+        master: p.values.master ? resolve4(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode
       });
@@ -5559,7 +6779,7 @@ async function main(argv = process.argv.slice(2)) {
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve2(dir), url, {
+      const r = await addSource(resolve4(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         firecrawl: p.values.firecrawl,
@@ -5585,10 +6805,10 @@ async function main(argv = process.argv.slice(2)) {
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve2(dir);
+      const rdir = resolve4(dir);
       const written = {};
       if (!p.bools.has("no-html")) {
-        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve2(p.values.out) : void 0);
+        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve4(p.values.out) : void 0);
         process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
       }
@@ -5603,7 +6823,7 @@ async function main(argv = process.argv.slice(2)) {
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve2(dir);
+      const rdir = resolve4(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -5611,7 +6831,7 @@ async function main(argv = process.argv.slice(2)) {
         if (!result.ok) process.exit(1);
         return;
       }
-      const maxVerify = p.values["max-verify"] ? num("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
+      const maxVerify = p.values["max-verify"] ? num2("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
       const sh = parseShardArgs(p.values.shards, p.values.shard);
       if (!sh.ok) fail(sh.error);
       const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
@@ -5641,10 +6861,10 @@ async function main(argv = process.argv.slice(2)) {
         process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
         process.exit(2);
       }
-      const engineAbs = realpathSync(fileURLToPath(import.meta.url));
+      const engineAbs = realpathSync3(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync7(resolve2(dir))) {
-          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve2(dir)}
+        if (!existsSync9(resolve4(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve4(dir)}
 `);
           process.exit(2);
         }
@@ -5668,7 +6888,7 @@ async function main(argv = process.argv.slice(2)) {
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join13(resolve2(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join15(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -5679,11 +6899,46 @@ async function main(argv = process.argv.slice(2)) {
       }
       return;
     }
+    case "mcp": {
+      const transport = oneOf2("transport", p.values.transport ?? "stdio", ["stdio", "http"]);
+      const maxResponseBytes = p.values["max-response-bytes"] ? Number(p.values["max-response-bytes"]) : void 0;
+      if (maxResponseBytes !== void 0 && (!Number.isFinite(maxResponseBytes) || maxResponseBytes <= 0)) fail("invalid --max-response-bytes");
+      const options = {
+        // A default dossier makes `run` optional on every tool, for a server
+        // dedicated to one piece of research.
+        defaultRun: p.values.run,
+        maxResponseBytes
+      };
+      if (transport === "stdio") {
+        await runStdioServer(options);
+        return;
+      }
+      const port = p.values.port ? Number(p.values.port) : 7339;
+      if (!Number.isInteger(port) || port < 0 || port > 65535) fail("invalid --port");
+      const allowOrigin = p.values["allow-origin"] ? p.values["allow-origin"].split(",").map((s) => s.trim()).filter(Boolean) : void 0;
+      let running;
+      try {
+        running = await startHttpServer({ ...options, port, bind: p.values.bind, allowOrigin, allowRemote: p.bools.has("allow-remote") });
+      } catch (e) {
+        fail(e.message);
+      }
+      process.stderr.write(`ultrasearch: MCP server listening on ${running.url}
+`);
+      process.stderr.write(`  client: claude mcp add --transport http ultrasearch ${running.url}
+`);
+      for (const sig of ["SIGINT", "SIGTERM"]) {
+        process.once(sig, () => {
+          void running.close().then(() => process.exit(0));
+        });
+      }
+      await new Promise((resolve5) => running.server.once("close", resolve5));
+      return;
+    }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const minSources = p.values["min-sources"] ? num("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve2(dir), {
+      const minSources = p.values["min-sources"] ? num2("min-sources", p.values["min-sources"], 1) : void 0;
+      const res = runCheck(resolve4(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -5692,7 +6947,7 @@ async function main(argv = process.argv.slice(2)) {
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve2(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve4(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;
@@ -5702,9 +6957,9 @@ async function main(argv = process.argv.slice(2)) {
 function isInvokedDirectly() {
   const argv1 = process.argv[1];
   if (argv1 === void 0) return false;
-  const modulePath = fileURLToPath(import.meta.url);
+  const modulePath = fileURLToPath2(import.meta.url);
   try {
-    if (realpathSync(argv1) === realpathSync(modulePath)) return true;
+    if (realpathSync3(argv1) === realpathSync3(modulePath)) return true;
   } catch {
   }
   return import.meta.url === pathToFileURL(argv1).href;
