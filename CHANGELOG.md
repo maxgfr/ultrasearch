@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.13.0](https://github.com/maxgfr/ultrasearch/compare/v1.12.0...v1.13.0) (2026-07-29)
+
+
+### Features
+
+* **mcp:** serve ultrasearch over the Model Context Protocol ([be0d4ce](https://github.com/maxgfr/ultrasearch/commit/be0d4ceb40c2d5cf915ba278342ed8e041fcb9f8))
+
 # [1.12.0](https://github.com/maxgfr/ultrasearch/compare/v1.11.0...v1.12.0) (2026-07-28)
 
 
