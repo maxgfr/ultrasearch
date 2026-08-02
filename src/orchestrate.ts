@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { ensureDir, writeArtifact } from "./no-write.js";
 import { join, resolve } from "node:path";
 import { agentContracts, phaseSpec, phaseWorkflowScript, runbookMd } from "./orchestrate-templates.js";
 import type { ClaimEvidencePair, PlanResult } from "./types.js";
@@ -150,8 +151,8 @@ export function orchestrateRun(runDir: string, engineAbs: string, opts: Orchestr
 
   const orchDir = join(run, "orchestration");
   const agentsDir = join(orchDir, "agents");
-  mkdirSync(join(orchDir, "out"), { recursive: true });
-  mkdirSync(agentsDir, { recursive: true });
+  ensureDir(join(orchDir, "out"));
+  ensureDir(agentsDir);
 
   const written: string[] = [];
   const notices: string[] = [];
@@ -160,7 +161,7 @@ export function orchestrateRun(runDir: string, engineAbs: string, opts: Orchestr
   // RUNBOOK's self-pass checklists, so eco mode needs them too.
   for (const [name, content] of Object.entries(agentContracts(run, engineAbs))) {
     const p = join(agentsDir, `${name}.md`);
-    writeFileSync(p, content);
+    writeArtifact(p, content);
     written.push(p);
   }
 
@@ -174,13 +175,13 @@ export function orchestrateRun(runDir: string, engineAbs: string, opts: Orchestr
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) — the sequential --eco path is equivalent and cheaper.`);
       }
       const p = join(orchDir, `${ph.name}.workflow.mjs`);
-      writeFileSync(p, phaseWorkflowScript(ph, run, engineAbs, SMALL_WORKLIST));
+      writeArtifact(p, phaseWorkflowScript(ph, run, engineAbs, SMALL_WORKLIST));
       written.push(p);
     }
   }
 
   const rb = join(orchDir, "RUNBOOK.md");
-  writeFileSync(rb, runbookMd(phases, run, engineAbs));
+  writeArtifact(rb, runbookMd(phases, run, engineAbs));
   written.push(rb);
 
   return { exitCode: 0, written, notices, errors: [], phases };

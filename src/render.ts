@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { Manifest, Source, VerdictKind, VerifyResult } from "./types.js";
 import { readDossier } from "./dossier.js";
@@ -447,8 +448,7 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
 export function writeHtml(dir: string, out?: string): string {
   const html = renderHtml(dir);
   const path = out ?? join(dir, "index.html");
-  writeFileSync(path, html);
-  return path;
+  return writeArtifact(path, html);
 }
 
 // Plain-text safe link label for markdown (brackets would break [text](url)).
@@ -534,6 +534,5 @@ export function buildReportMarkdown(dir: string): string {
 export function writeReportMarkdown(dir: string, out?: string): string {
   const md = buildReportMarkdown(dir);
   const path = out ?? join(dir, "index.md");
-  writeFileSync(path, md);
-  return path;
+  return writeArtifact(path, md);
 }

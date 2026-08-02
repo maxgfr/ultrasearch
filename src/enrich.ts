@@ -1,7 +1,5 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { BackendKind, RawSource } from "./types.js";
-import { readDossier, buildSource, renderSourceExtract, renderDossierMarkdown, nextSourceId } from "./dossier.js";
+import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, nextSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { bestExcerpt, rescueViaWayback, DEAD_LINK_STATUS } from "./backends/fetch.js";
 import { cachedFetchAndExtract } from "./cache.js";
@@ -61,14 +59,12 @@ export async function addSource(
     ...(waybackSnapshot ? { meta: { waybackSnapshot } } : {}),
   };
   const s = buildSource(raw, id, new Date().toISOString(), question);
-  writeFileSync(join(dir, s.extract), renderSourceExtract(s, text, manifest.depth));
+  writeSourceExtract(dir, s, text, manifest.depth);
 
   const nextSources = [...sources, s];
   const backendsUsed = [...new Set([...manifest.backendsUsed, backend])];
   const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
-  writeFileSync(join(dir, "sources.json"), JSON.stringify(nextSources, null, 2));
-  writeFileSync(join(dir, "manifest.json"), JSON.stringify(nextManifest, null, 2));
-  writeFileSync(join(dir, "DOSSIER.md"), renderDossierMarkdown(nextSources, nextManifest, getMode(nextManifest.mode).template));
+  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
 
   return { id, added: true };
 }

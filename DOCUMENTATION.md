@@ -90,8 +90,16 @@ extracts, so it costs no extra retrieval. See
   keyed by canonical URL **+ Accept-Language + extractor identity** so neither a
   locale nor an extractor is ever served the other's body, TTL-bounded,
   successes only, shared across the deep tier's fan-out gathers.
-- `dossier.ts` — `writeDossier` / `readDossier` / `buildSource` / `nextSourceId` /
-  `readJson` (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` block.
+- `dossier.ts` — `writeDossier` / `writeDossierIndex` / `writeSourceExtract` /
+  `writeBibtex` / `readDossier` / `buildSource` / `nextSourceId` / `readJson`
+  (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` blocks (one
+  for a normal run, one for a run that wrote nothing and therefore has no
+  `check` gate to invoke).
+- `no-write.ts` — the `--stdout` / `ULTRASEARCH_NO_WRITE` gate. Every `mkdirSync`
+  and `writeFileSync` in `src/` goes through its `ensureDir` / `writeArtifact`,
+  which collect artifacts in memory instead of writing when the gate is on, so
+  "nothing was written" is a property of one module rather than a promise each
+  command keeps. `cli.ts` streams the collected artifacts to stdout.
 - `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.
 - `check.ts` — the citation grammar + grounding algorithm (with model-hint
   tolerance and per-claim coverage on REPORT); exports the claim parser

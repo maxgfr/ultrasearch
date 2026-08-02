@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Manifest, RawSource, Source } from "./types.js";
 import { UNDER_COVERED_MIN } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
+import { ensureDir, isNoWrite, writeArtifact } from "./no-write.js";
+import { toBibtex } from "./bibtex.js";
 import { focusedSnippet, capExtract } from "./backends/fetch.js";
 
 // The grounding contract, inlined into DOSSIER.md so the model writing the
@@ -16,6 +18,23 @@ export const CITATION_RULES = [
   "`[M]`, or put the passage in a `> [model-hint] …` blockquote. `ultrasearch check`",
   "tolerates flagged hints but FAILS on any *unmarked* unsourced claim, and on any",
   "`[S#]` that does not resolve to a real source.",
+].join("\n");
+
+// The same contract for a run that wrote nothing: there is no sources.json to
+// point at, and no `check` to enforce it. Saying so is the honest move — a brief
+// that threatens a gate which cannot run teaches the reader the gate is bluffing.
+export const CITATION_RULES_NO_WRITE = [
+  "**Cite every factual claim** with the id of the source it rests on, e.g. `[S1]`",
+  "(multiple sources: `[S1][S4]`). The ids are listed below, and each source's full",
+  "extract is streamed after this brief.",
+  "",
+  "If you state something from your **own background knowledge** that no fetched",
+  "source backs, you must FLAG it as unverified — either end the sentence with",
+  "`[M]`, or put the passage in a `> [model-hint] …` blockquote.",
+  "",
+  "**Nothing was written, so `ultrasearch check` cannot run here.** The mechanical",
+  "gate that normally catches a dangling `[S#]` or an unsourced sentence is absent:",
+  "the discipline is entirely yours. Never state anything the extracts do not say.",
 ].join("\n");
 
 // Read + JSON.parse a file, rethrowing a message that names WHAT was being read
@@ -112,34 +131,61 @@ export interface WriteDossierResult {
   paths: DossierPaths;
 }
 
-// Persist a run's dossier: sources.json (what `check` validates against),
-// sources/S#.md (cleaned extracts), manifest.json, and DOSSIER.md (the
-// model-facing brief). The tiered reports (SUMMARY/REPORT.md) are written
-// by the model afterward, then `render` + `check` run.
+// Persist one source's cleaned extract as sources/S#.md.
+export function writeSourceExtract(dir: string, s: Source, text: string, depth: Manifest["depth"]): void {
+  writeArtifact(join(dir, s.extract), renderSourceExtract(s, text, depth));
+}
+
+// Persist the three index files every reader of a dossier depends on:
+// sources.json (what `check` validates against), manifest.json, and DOSSIER.md
+// (the model-facing brief). Shared by writeDossier and the `fetch`/enrich path,
+// which used to hand-roll its own copy of these three writes and could drift.
+export function writeDossierIndex(dir: string, sources: Source[], manifest: Manifest, template: string): DossierPaths {
+  const sourcesJson = join(dir, "sources.json");
+  const dossierMd = join(dir, "DOSSIER.md");
+  const manifestJson = join(dir, "manifest.json");
+  writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
+  writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
+  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
+  return { dir, sourcesJson, dossierMd, manifestJson };
+}
+
+// The research mode's extra: a BibTeX file built from the scholarly sources.
+// Called by both producers of a dossier (`gather` and `merge`) — it lived
+// duplicated verbatim in each before.
+export function writeBibtex(dir: string, sources: Source[], extras: readonly string[]): void {
+  if (!extras.includes("bibtex")) return;
+  writeArtifact(join(dir, "refs.bib"), toBibtex(sources));
+}
+
+// Persist a run's dossier: sources/S#.md (cleaned extracts) plus the three index
+// files. The tiered reports (SUMMARY/REPORT.md) are written by the model
+// afterward, then `render` + `check` run.
 export function writeDossier(dir: string, rawSources: RawSource[], manifest: Manifest, template: string): WriteDossierResult {
-  mkdirSync(join(dir, "sources"), { recursive: true });
+  ensureDir(join(dir, "sources"));
 
   const sources: Source[] = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeFileSync(join(dir, s.extract), renderSourceExtract(s, rs.text ?? rs.snippet ?? "", manifest.depth));
+    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth);
     return s;
   });
 
   const m: Manifest = { ...manifest, sourceCount: sources.length };
-  const sourcesJson = join(dir, "sources.json");
-  const dossierMd = join(dir, "DOSSIER.md");
-  const manifestJson = join(dir, "manifest.json");
-  writeFileSync(sourcesJson, JSON.stringify(sources, null, 2));
-  writeFileSync(manifestJson, JSON.stringify(m, null, 2));
-  writeFileSync(dossierMd, renderDossierMarkdown(sources, m, template));
-
-  return { dir, sources, paths: { dir, sourcesJson, dossierMd, manifestJson } };
+  return { dir, sources, paths: writeDossierIndex(dir, sources, m, template) };
 }
 
 // The model-facing dossier digest: the run's facts, the template to fill, the
 // grounding rules, and every source with its id/snippet to cite.
+//
+// It consults the no-write gate rather than taking a flag, because all four
+// callers would otherwise have to thread one. Under it the brief must not tell
+// the reader to write REPORT.md, run `check`, or `fetch --url` a gap: none of
+// those exist in a read-only phase, and a brief that prescribes impossible steps
+// is worse than one that prescribes none.
 export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string): string {
+  const noWrite = isNoWrite();
+  const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Enrich them (your WebSearch + `fetch --url`)";
   const out: string[] = [];
   out.push(`# Search dossier`);
   out.push("");
@@ -153,29 +199,34 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   if (manifest.recallFloor) {
     out.push(
       `> ⚠ **Thin dossier** — only ${manifest.recallFloor.count} on-topic source(s) were retrieved ` +
-        `(recall floor ${manifest.recallFloor.floor}). Enrich the thin areas with your own WebSearch + ` +
-        `\`fetch --url\` BEFORE writing, or the report will rest on too little evidence.`,
+        `(recall floor ${manifest.recallFloor.floor}). ${enrich} BEFORE answering, ` +
+        `or the answer will rest on too little evidence.`,
     );
     out.push("");
   }
   if (manifest.coverage?.under.length) {
     out.push(
       `> 🔍 **Under-covered** — \`${manifest.coverage.under.join("`, `")}\`: fewer than ${UNDER_COVERED_MIN} of the ` +
-        `top sources mention these terms from your question. Enrich them (your WebSearch + \`fetch --url\`) ` +
-        `before writing, or state the gap explicitly under "Open questions".`,
+        `top sources mention these terms from your question. ${enrich} before answering, ` +
+        `or state the gap explicitly under "Open questions".`,
     );
     out.push("");
   }
   out.push(
-    `> Write two tiers from these sources: \`SUMMARY.md\` (TL;DR) and \`REPORT.md\` ` +
-      `(the full template below, filled exhaustively — use every relevant source and end ` +
-      `with an "Open questions / contradictions" section). ` +
-      `Then run \`render\` and \`check\`. Do not answer from memory.`,
+    noWrite
+      ? `> Nothing was written — every source's full extract follows this brief on stdout. ` +
+          `Answer the question directly from them, in the shape of the template below ` +
+          `(use every relevant source and end with an "Open questions / contradictions" ` +
+          `section). Do not answer from memory.`
+      : `> Write two tiers from these sources: \`SUMMARY.md\` (TL;DR) and \`REPORT.md\` ` +
+          `(the full template below, filled exhaustively — use every relevant source and end ` +
+          `with an "Open questions / contradictions" section). ` +
+          `Then run \`render\` and \`check\`. Do not answer from memory.`,
   );
   out.push("");
   out.push(`## Grounding rules`);
   out.push("");
-  out.push(CITATION_RULES);
+  out.push(noWrite ? CITATION_RULES_NO_WRITE : CITATION_RULES);
   out.push("");
   out.push(`## Report template (${manifest.mode})`);
   out.push("");
@@ -198,12 +249,18 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   out.push(`## Sources`);
   out.push("");
   if (sources.length === 0) {
-    out.push(`_No sources were retrieved. Broaden the query, add backends, or enrich with your own WebSearch via \`fetch --url\`._`);
+    out.push(
+      noWrite
+        ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._`
+        : `_No sources were retrieved. Broaden the query, add backends, or enrich with your own WebSearch via \`fetch --url\`._`,
+    );
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
     const quality = s.fullText === false ? " · ⚠ snippet only (page fetch failed)" : "";
-    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · extract: \`${s.extract}\`${quality}`);
+    // Under no-write `sources/S#.md` is a stream label, not a path on disk.
+    const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
+    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}`);
     out.push("");
     out.push(s.snippet);
     out.push("");

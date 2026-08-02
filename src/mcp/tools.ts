@@ -1,5 +1,6 @@
 import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES } from "../types.js";
 import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "./protocol.js";
+import { isNoWrite } from "../no-write.js";
 
 // What the server advertises. Pure data — nothing here imports the retrieval
 // pipeline, so the declarations can be asserted in a test without reaching the
@@ -268,6 +269,11 @@ export const TOOL_META: Record<string, { write?: boolean; destructive?: boolean;
 export function annotationsFor(name: string): Record<string, boolean> | undefined {
   const meta = TOOL_META[name];
   if (!meta) return undefined;
+  // Under ULTRASEARCH_NO_WRITE nothing reaches the filesystem, so every tool is
+  // genuinely read-only w.r.t. the user's environment and a client should stop
+  // prompting for confirmation. The annotation would otherwise describe a
+  // capability the server has been stripped of.
+  if (isNoWrite()) return { readOnlyHint: true, openWorldHint: meta.openWorld === true };
   return {
     readOnlyHint: !meta.write,
     ...(meta.write ? { destructiveHint: meta.destructive === true, idempotentHint: meta.idempotent === true } : {}),

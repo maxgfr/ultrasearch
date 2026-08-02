@@ -51,6 +51,24 @@ A run writes an output folder:
 > `render` writes **both** `index.html` and `index.md` by default (`--no-html` /
 > `--no-md` skip either).
 
+### …or nothing at all
+
+For a planning phase, a read-only sandbox, or any harness that forbids writes,
+add `--stdout` (or set `ULTRASEARCH_NO_WRITE=1`). Nothing reaches the disk — not
+the dossier, not the fetch cache — and what would have been written is streamed
+instead:
+
+```bash
+ultrasearch gather --q "what is rate limiting" --stdout   # DOSSIER.md + every source extract
+```
+
+`brainstorm`, `plan` and `render` stream their own artifacts the same way;
+`--json` gives the parse-safe `{ dir: null, manifest, artifacts }` form. Commands
+whose product **is** a file for a later process — `merge`, `fetch`, `verify`,
+`orchestrate` — exit 2 rather than pretend. Note the trade: `check` validates a
+`REPORT.md` against a `sources.json`, so with no files there is no mechanical
+grounding gate. See `skills/ultrasearch/references/operations.md`.
+
 ## Five modes
 
 Each mode is a **report template** + a **backend-priority profile**:
@@ -249,6 +267,11 @@ Two things worth knowing:
   10-20 minutes and an MCP client will time out long before it returns, losing
   the run. Ask for `deep` explicitly when you mean it — the tool description
   states the wall-clock for each tier.
+- **`ULTRASEARCH_NO_WRITE=1` applies here too.** `ultrasearch_gather`,
+  `_brainstorm`, `_plan` and `_render` return their artifacts inline (`run` comes
+  back `null`); `_fetch`, `_merge` and `_verify` return an error, since their
+  product is a file a later call would read. Every tool then advertises
+  `readOnlyHint: true`.
 - **The HTTP transport binds `127.0.0.1` and refuses anything else** unless you
   pass `--allow-remote`. This server fetches arbitrary URLs; an exposed port is
   a fetch-anything primitive for whoever finds it. Browser `Origin`s are checked
@@ -261,7 +284,8 @@ agent (search-engine results and pages it elects to fetch), following redirects
 — so a fetch can land on an internal/private address post-redirect. Treat the
 host running it as able to reach the network it sits on. Parsing is size-capped
 (responses are truncated before extraction) to bound memory, and the tool only
-writes inside the `--out` directory. Run it where reaching arbitrary URLs,
+writes inside the `--out` directory — or, under `--stdout` /
+`ULTRASEARCH_NO_WRITE=1`, nowhere at all. Run it where reaching arbitrary URLs,
 including internal ones, is acceptable. Fetched page text is **untrusted input**:
 the agent is instructed to quote and cite it, never to obey instructions embedded
 inside a page (prompt injection).

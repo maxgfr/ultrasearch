@@ -1,4 +1,4 @@
-import { join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { realpathSync, existsSync, statSync, readdirSync } from "node:fs";
 import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
@@ -21,6 +21,7 @@ import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
 import { runStdioServer } from "./mcp/stdio.js";
 import { startHttpServer } from "./mcp/http.js";
+import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -123,6 +124,13 @@ Options:
   --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
                        is absent from every cited source extract
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
+  --stdout             Write NOTHING to disk; stream what would have been written
+                       (env ULTRASEARCH_NO_WRITE=1 does the same globally). For a
+                       read-only phase. gather → DOSSIER.md + every source
+                       extract · brainstorm → BRAINSTORM.md · plan → PLAN.json ·
+                       render → index.md (no HTML). merge / fetch / verify /
+                       orchestrate exit 2: they exist to leave files behind.
+                       No 'check' gate is possible without files — cite carefully.
   --json               Machine-readable output
   -h, --help           Show this help
   -v, --version        Show version
@@ -206,6 +214,7 @@ export const VALUE_FLAGS = new Set([
 ]);
 export const BOOL_FLAGS = new Set([
   "json",
+  "stdout",
   "no-html",
   "no-md",
   "semantic",
@@ -363,6 +372,59 @@ function parseBackends(s: string): BackendKind[] {
   return out;
 }
 
+// --- no-write (--stdout) ---------------------------------------------------
+
+// Commands whose whole purpose is to leave something on disk for a LATER process
+// to read: a master dossier, a new [S#] in an existing one, a worklist skeptic
+// subagents open, a workflow script the harness launches BY PATH. Streaming
+// those to stdout would produce output nobody can act on, so they refuse instead
+// of pretending to work. This is policy, not safety — the gate in no-write.ts
+// already guarantees nothing is written either way.
+export const NO_WRITE_REFUSED: Record<string, string> = {
+  merge: "it unions the sub-dossiers into a master dossier on disk",
+  fetch: "it adds a new [S#] to a dossier on disk",
+  "add-source": "it adds a new [S#] to a dossier on disk",
+  verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
+  orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
+};
+
+// The brief each command leads with, in the order a reader wants them. Only one
+// is ever present per run; the source extracts slot in after it.
+const STDOUT_BRIEF = ["DOSSIER.md", "BRAINSTORM.md", "PLAN.json", "index.md"];
+
+function sourceNum(rel: string): number {
+  return Number(/^sources\/S(\d+)\.md$/.exec(rel)?.[1] ?? 0);
+}
+
+// Stream the artifacts the run would have written. Text form prints a CURATED
+// set — sources.json and manifest.json only restate DOSSIER.md for a reading
+// agent, at real token cost — while --json carries every artifact losslessly.
+//
+// The `===== path =====` delimiter is for READING, not parsing: fetched page
+// text is untrusted (invariant I2) and could itself contain such a line. --json
+// is the form to parse.
+function emitArtifacts(dir: string, asJson: boolean, extra: Record<string, unknown> = {}): void {
+  const artifacts = takeArtifacts().map((a) => ({ rel: relative(dir, a.path) || basename(a.path), content: a.content }));
+
+  if (asJson) {
+    const files: Record<string, string> = {};
+    for (const a of artifacts) files[a.rel] = a.content;
+    // `dir` is null on purpose: naming a path that was never created is a trap.
+    process.stdout.write(JSON.stringify({ dir: null, ...extra, artifacts: files }, null, 2) + "\n");
+    return;
+  }
+
+  const at = (rel: string) => artifacts.find((a) => a.rel === rel);
+  const shown = [
+    ...STDOUT_BRIEF.map(at),
+    ...artifacts.filter((a) => sourceNum(a.rel) > 0).sort((a, b) => sourceNum(a.rel) - sourceNum(b.rel)),
+    at("refs.bib"),
+  ].filter((a): a is { rel: string; content: string } => a !== undefined);
+
+  const out = shown.map((a) => `===== ${a.rel} =====\n${a.content.endsWith("\n") ? a.content : a.content + "\n"}`);
+  if (out.length) process.stdout.write(out.join(""));
+}
+
 function num(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
   const n = Number(raw);
@@ -379,7 +441,8 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
     `ultrasearch: ${r.sources.length} source(s) for "${options.question}"`,
     `  mode:     ${options.mode} · depth: ${options.depth}`,
     `  backends: ${used}`,
-    `  dossier:  ${r.dir}`,
+    // Never advertise a directory that --stdout deliberately did not create.
+    options.stdout ? `  dossier:  --stdout — nothing written; the dossier is on stdout` : `  dossier:  ${r.dir}`,
   ];
   if (r.sources.length === 0) {
     return {
@@ -388,7 +451,9 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
         ...head,
         `  EMPTY DOSSIER — the keyless backends returned nothing usable. Do NOT write tiers over this. Bridge it:`,
         `    1. retry once with a different engine: ultrasearch gather --q "…" --web-engine mojeek (or searxng, ddg-lite)`,
-        `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
+        options.stdout
+          ? `    2. or search yourself (your own WebSearch) and read those pages directly — \`fetch\` needs a dossier on disk.`
+          : `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
         `    3. stop after two empty attempts — report the gap; NEVER invent sources.`,
       ],
     };
@@ -405,9 +470,16 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
       ...head,
       ...(fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : []),
       ...(ignored.length ? [`  IGNORED:  ${ignored.join(", ")} — --backends bypasses the cascade, seed-domain and gap rounds`] : []),
-      ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before writing`] : []),
-      `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
-      `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
+      ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before ${options.stdout ? "answering" : "writing"}`] : []),
+      ...(options.stdout
+        ? [
+            `  next:     the dossier and every source extract are on stdout — answer inline, citing [S#].`,
+            `            NO 'check' gate exists without files: never state anything the extracts do not say.`,
+          ]
+        : [
+            `  next:     read ${r.dir}/DOSSIER.md, write SUMMARY/REPORT.md (cite [S#]), then:`,
+            `            ultrasearch render --run ${r.dir} && ultrasearch check --run ${r.dir}`,
+          ]),
     ],
   };
 }
@@ -452,6 +524,9 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     cache: !p.bools.has("no-cache"),
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
+    // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
+    // reshapes the guidance. main() calls setNoWrite before this runs.
+    stdout: isNoWrite(),
   };
 }
 
@@ -461,12 +536,35 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
 // isInvokedDirectly() gate below still controls auto-run from the CLI.
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   const p = parseArgs(argv);
+  // Before anything else: every write in src/ consults this. `search`, `modes`
+  // and `check` accept --stdout as a no-op (they already write nothing), so a
+  // host can append the flag blanket-style — exactly like --cache today.
+  // Assigned unconditionally, not just when the flag is present: main() is
+  // re-entrant in tests and in-process hosts, and a --stdout run must not leave
+  // the gate latched for the next invocation. The env var is ORed in by
+  // isNoWrite(), so clearing the flag never overrides it.
+  setNoWrite(p.bools.has("stdout"));
+  const refused = NO_WRITE_REFUSED[p.command];
+  if (refused && isNoWrite()) {
+    process.stderr.write(
+      `ultrasearch: \`${p.command}\` cannot run without writing — ${refused}.\n` +
+        `             Drop --stdout / ULTRASEARCH_NO_WRITE=1, or run it outside the read-only phase.\n`,
+    );
+    process.exitCode = 2;
+    return;
+  }
 
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
       const r = await runGather(options);
       const report = gatherReport(r, options);
+      if (options.stdout) {
+        emitArtifacts(r.dir, options.json, { manifest: r.manifest });
+        process.stderr.write(report.lines.join("\n") + "\n");
+        process.exitCode = report.exitCode;
+        return;
+      }
       if (options.json) {
         process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest }, null, 2) + "\n");
         process.exitCode = report.exitCode;
@@ -521,6 +619,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     case "brainstorm": {
       const options = buildGatherOptions(p);
       const result = await runBrainstorm(options);
+      if (options.stdout) {
+        emitArtifacts(result.dir, options.json);
+        process.stderr.write(`ultrasearch brainstorm: "${result.question}" — nothing written (--stdout).\n`);
+        return;
+      }
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(result, null, 2) + "\n");
         return;
@@ -559,6 +662,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // (an unconditional "standard" stamp would silently downgrade deep-habit runs).
       const depth = p.values.depth !== undefined ? options.depth : undefined;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
+      // `plan` already streams its payload to stdout, so --stdout only has to
+      // drop the PLAN.json copy the gate collected — printing it twice helps
+      // nobody. The `out` dirs stay in the JSON: they are hints for a later run
+      // that CAN write, not claims that anything exists now.
+      if (options.stdout) takeArtifacts();
       process.stdout.write(JSON.stringify(result, null, 2) + "\n");
       const rootHint = runRoot ? ` — each carries an \`out\` dir under ${runRoot} to gather into` : "";
       process.stderr.write(
@@ -622,6 +730,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const rdir = resolve(dir);
+      // index.html is a ~100 KB self-contained blob whose entire value is being
+      // a file you open in a browser; streaming it into a model's context is
+      // waste. So --stdout emits index.md only, and never pays to build the HTML.
+      if (isNoWrite()) {
+        if (p.bools.has("no-md")) {
+          process.stderr.write("ultrasearch render: --stdout --no-md leaves nothing to emit (--stdout never produces HTML).\n");
+          process.exitCode = 2;
+          return;
+        }
+        writeReportMarkdown(rdir);
+        emitArtifacts(rdir, p.bools.has("json"));
+        process.stderr.write("ultrasearch: --stdout — index.md above; index.html skipped (it is only useful as a file).\n");
+        return;
+      }
       // By default render writes BOTH a self-contained index.html and a portable
       // consolidated index.md. --no-html / --no-md opt out of either.
       const written: { html?: string; md?: string } = {};

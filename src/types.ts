@@ -299,6 +299,7 @@ export interface GatherOptions {
   cache?: boolean; // --cache: reuse an on-disk fetch cache across runs (deep fan-out)
   out?: string;
   json: boolean;
+  stdout?: boolean; // --stdout / ULTRASEARCH_NO_WRITE: nothing is written, so the guidance changes
 }
 
 // Context handed to every backend for a run. `question` is the active query (a

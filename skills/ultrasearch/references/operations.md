@@ -12,6 +12,8 @@ decision surface; this is the operations manual.
 | `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, or a `--semantic`/`--min-sources`/`--strict-numerals` failure. |
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
+| `merge` · `fetch` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
+| `render` | 2 | `--stdout --no-md` — that combination leaves nothing to emit, because `--stdout` never produces HTML. |
 
 Anything non-zero means *stop and fix*, never *present anyway*.
 
@@ -52,6 +54,8 @@ turns that into a hard failure for a high-stakes run.
   only the body of an already-discovered page can be up to a day old.
 - `manifest.cache` records `{ enabled, hits }`, and a note names the hit count,
   so a dossier is self-describing about how fresh its pages are.
+- Under `--stdout` the cache degrades to **read-only**: a run is still served
+  by whatever an earlier normal run left there, but leaves nothing of its own.
 
 ## Concurrency and politeness
 
@@ -71,6 +75,7 @@ more than saving ten seconds.
 | `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). Opt-in: unset ⇒ the backend skips without calling out. |
 | `ULTRASEARCH_FIRECRAWL` | `http://localhost:3002` | Self-hosted Firecrawl base URL (same as `--firecrawl`). `off` disables it. Unreachable ⇒ silently skipped after one 2s probe. |
 | `ULTRASEARCH_FIRECRAWL_KEY` | unset | Optional `Authorization: Bearer` for the Firecrawl API. Not needed self-hosted — only to point the same client at Firecrawl Cloud. |
+| `ULTRASEARCH_NO_WRITE` | unset | `1` makes every command write nothing, exactly as `--stdout` does — globally, and for the MCP server, which parses no CLI flags. See "Running without writing". |
 | `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
 | `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |
 | `ULTRASEARCH_NO_WAYBACK` | unset | Set to disable the Wayback rescue for dead links. |
@@ -83,6 +88,35 @@ more than saving ten seconds.
 > **The last four are politeness, not performance.** They exist so tests and CI
 > can run fast offline. Zeroing them against the live web hammers free services
 > and gets the host rate-limited or blocked. **Never lower them on a real run.**
+
+## Running without writing (`--stdout`)
+
+For a planning phase, a read-only sandbox, or any harness that forbids writes.
+`--stdout` on any command — or `ULTRASEARCH_NO_WRITE=1` in the environment —
+makes the engine write **nothing at all**: not the dossier, not the report
+files, not the fetch cache. What it would have written goes to stdout instead.
+
+| Command | Under `--stdout` |
+|---|---|
+| `gather` | `DOSSIER.md`, then every source's full extract, delimited by `===== <path> =====` |
+| `brainstorm` | `BRAINSTORM.md` |
+| `plan` | its JSON payload, unchanged; the `<RUN>/q#` dirs stay in it as hints but are not created |
+| `render` | `index.md` only — `index.html` is never built, since its value is being a file you open |
+| `search` · `modes` · `check` | nothing changes; they already wrote nothing |
+| `merge` · `fetch` · `verify` · `orchestrate` | **exit 2** — see Exit codes |
+
+Add `--json` for the parse-safe form: `{ dir: null, manifest, artifacts: { "<path>": "<content>" } }`,
+carrying every artifact including `sources.json` and `manifest.json`. The plain
+`=====` delimiter is for reading, not parsing — fetched page text is untrusted
+(SKILL.md I2) and can contain any line at all.
+
+**What you lose: the `check` gate.** `check` validates a `REPORT.md` against a
+`sources.json`, and neither can exist here. `DOSSIER.md` says so in its own
+grounding-rules section rather than threatening a gate that cannot run. Cite
+`[S#]` inline from the streamed extracts and claim nothing beyond them.
+
+This is not a sandbox. It stops the writes ultrasearch performs; it cannot stop
+a caller from redirecting stdout into a file.
 
 ## Optional local containers
 

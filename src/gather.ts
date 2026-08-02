@@ -8,8 +8,7 @@ import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATU
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { acceptLanguageHeader } from "./locale.js";
-import { writeDossier } from "./dossier.js";
-import { toBibtex } from "./bibtex.js";
+import { writeBibtex, writeDossier } from "./dossier.js";
 import {
   domainOf,
   rrf,
@@ -30,7 +29,6 @@ import {
   mapLimit,
 } from "./util.js";
 import type { Bm25Doc } from "./util.js";
-import { writeFileSync } from "node:fs";
 
 // How many candidates beyond maxSources to hydrate so content-aware re-ranking
 // can promote a deeply-relevant page a backend ranked low.
@@ -54,6 +52,9 @@ export interface GatherResult {
 
 const ENRICH_NUDGE =
   "agent: enrich thin areas with your own WebSearch, then ingest each good URL via " + "`ultrasearch fetch --url <u> --out <dir>` before writing the report.";
+// `fetch` needs a dossier on disk, so under --stdout the bridge is the agent's
+// own reading rather than an ingest command it cannot run.
+const ENRICH_NUDGE_NO_WRITE = "agent: enrich thin areas with your own WebSearch and read those pages directly before answering.";
 
 // Default dossier directory under the OS temp dir, keyed by mode + question.
 export function defaultRunDir(mode: string, question: string, d?: Date): string {
@@ -520,6 +521,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const under = underCovered(coverageTerms);
   const ignoredFlags = ignoredByExplicitBackends(options);
 
+  // `fetch --url` needs a dossier on disk, so under --stdout the bridge back
+  // into the evidence is the agent reading the pages itself.
+  const bridge = options.stdout ? "and read those pages directly before answering" : "via `fetch --url` before writing";
   const notes = [
     ...results.flatMap((res) => res.notes),
     // Deduped: every per-page hydrate note names its URL and so is unique, but
@@ -543,17 +547,15 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       ? [`Firecrawl cleaned ${firecrawlUsed} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`]
       : []),
     ...(thin
-      ? [
-          `Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch via \`fetch --url\` before writing.`,
-        ]
+      ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch ${bridge}.`]
       : []),
     ...(under.length
       ? [
           `Under-covered term(s): ${under.join(", ")} — fewer than ${UNDER_COVERED_MIN} of the top sources mention them. ` +
-            `Search these yourself and ingest via \`fetch --url\` before writing, or say so under "Open questions".`,
+            `Search these yourself ${bridge}, or say so under "Open questions".`,
         ]
       : []),
-    ENRICH_NUDGE,
+    options.stdout ? ENRICH_NUDGE_NO_WRITE : ENRICH_NUDGE,
   ];
 
   const manifest: Manifest = {
@@ -582,9 +584,6 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  // Research mode ships a BibTeX file built from the scholarly sources.
-  if (mode.extras.includes("bibtex")) {
-    writeFileSync(join(dir, "refs.bib"), toBibtex(sources));
-  }
+  writeBibtex(dir, sources, mode.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

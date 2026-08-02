@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runBackends } from "../backends/registry.js";
 import { runBrainstorm } from "../brainstorm.js";
 import { runCheck } from "../check.js";
@@ -13,6 +13,7 @@ import { writeHtml, writeReportMarkdown } from "../render.js";
 import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, DEPTH_CAPS, type BackendKind, type Depth, type GatherOptions, type ModeName } from "../types.js";
 import { runVerify } from "../verify.js";
 import { withRunLock } from "../run-lock.js";
+import { isNoWrite, takeArtifacts } from "../no-write.js";
 
 // Where a tool name becomes work. Every handler calls the same library
 // functions the CLI does — nothing here shells out to `ultrasearch`, and
@@ -144,7 +145,25 @@ export async function callTool(name: string, args: Record<string, unknown>, defa
   return outcome(name, result);
 }
 
+// The MCP twin of the CLI's exit-2 refusals (NO_WRITE_REFUSED in src/cli.ts).
+// These tools exist to leave something on disk for a LATER call to read, so
+// under ULTRASEARCH_NO_WRITE they cannot do their job — and a tool that quietly
+// returns a plausible result having changed nothing is worse than one that says
+// no. `render` is absent on purpose: it streams index.md instead.
+const NO_WRITE_REFUSED_TOOLS: Record<string, string> = {
+  ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
+  ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
+  ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
+};
+
 async function dispatch(name: string, args: Record<string, unknown>, defaults: HandlerDefaults): Promise<unknown> {
+  const refused = NO_WRITE_REFUSED_TOOLS[name];
+  if (refused && isNoWrite()) {
+    throw new ToolError(
+      `\`${name}\` cannot run while ULTRASEARCH_NO_WRITE is set — ${refused}. Unset it, or use ultrasearch_gather, which streams its dossier back inline.`,
+    );
+  }
+
   switch (name) {
     // These three touch no dossier at all.
     case "ultrasearch_modes":
@@ -192,8 +211,12 @@ function outcome(name: string, result: unknown): ToolOutcome {
 }
 
 // Where an oversized result already exists on disk, so an over-cap refusal can
-// point at it instead of just saying no.
+// point at it instead of just saying no. Under no-write there is no such place —
+// returning undefined makes capResponse fall back to its plain refusal, which
+// tells the caller to narrow the request (--depth summary, fewer max_sources)
+// rather than to open a file that was never created.
 function artifactFor(name: string, result: unknown): string | undefined {
+  if (isNoWrite()) return undefined;
   if (typeof result !== "object" || result === null) return undefined;
   const r = result as Record<string, unknown>;
   if (name === "ultrasearch_gather" || name === "ultrasearch_merge") return typeof r.dossier_md === "string" ? r.dossier_md : undefined;
@@ -233,14 +256,28 @@ async function handleSearch(args: Record<string, unknown>): Promise<unknown> {
 async function handleGather(args: Record<string, unknown>): Promise<unknown> {
   const options = gatherOptions(args);
   const res = await runGather(options);
-  return {
-    run: res.dir,
-    dossier_md: join(res.dir, "DOSSIER.md"),
+  const head = {
     question: options.question,
     mode: options.mode,
     depth: options.depth,
     sources: res.sources.length,
     ...(res.manifest.notes?.length ? { notes: res.manifest.notes } : {}),
+  };
+  // Under no-write there is no dossier to point ultrasearch_read at, so the
+  // dossier IS the result: the brief plus every source extract, keyed by the
+  // path each would have had.
+  if (isNoWrite()) {
+    return {
+      run: null,
+      ...head,
+      artifacts: artifactMap(res.dir),
+      next: "Nothing was written. Answer from the artifacts above, citing [S#]. ultrasearch_check cannot run without files — the grounding discipline is yours.",
+    };
+  }
+  return {
+    run: res.dir,
+    dossier_md: join(res.dir, "DOSSIER.md"),
+    ...head,
     next: `Read ${join(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`,
   };
 }
@@ -248,7 +285,23 @@ async function handleGather(args: Record<string, unknown>): Promise<unknown> {
 async function handleBrainstorm(args: Record<string, unknown>): Promise<unknown> {
   const options = gatherOptions(args);
   const res = await runBrainstorm(options);
+  if (isNoWrite()) {
+    return {
+      ...res,
+      dir: null,
+      artifacts: artifactMap(res.dir),
+      next: "Nothing was written. Pick an angle, then run ultrasearch_gather on the sharpened question.",
+    };
+  }
   return { ...res, next: "Pick an angle, then run ultrasearch_gather on the sharpened question." };
+}
+
+// Drain the gate's collected artifacts into {relative path: content}. Empty when
+// writes went to disk, so a caller can always read it the same way.
+function artifactMap(dir: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  for (const a of takeArtifacts()) files[relative(dir, a.path) || a.path] = a.content;
+  return files;
 }
 
 function handlePlan(args: Record<string, unknown>): unknown {
@@ -257,6 +310,10 @@ function handlePlan(args: Record<string, unknown>): unknown {
   const runRoot = str(args.run_root);
   if (runRoot !== undefined && !isAbsolute(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
   const res = runPlan(question, mode, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
+  // The plan itself is the payload; a collected PLAN.json copy would only
+  // repeat it. The sub-question `out` dirs stay: they are hints for a later
+  // call that can write, not claims that anything exists now.
+  if (isNoWrite()) takeArtifacts();
   return {
     ...res,
     next: "Run ultrasearch_gather on each sub-question into its own dir, then ultrasearch_merge them into one dossier before writing anything.",
@@ -318,6 +375,18 @@ function handleVerify(args: Record<string, unknown>, run: string): unknown {
 }
 
 function handleRender(args: Record<string, unknown>, run: string): unknown {
+  // index.html's whole value is being a file you open in a browser, so under
+  // no-write it is never even built — only the portable index.md comes back.
+  if (isNoWrite()) {
+    if (bool(args.no_md)) throw new ToolError("`no_md` with ULTRASEARCH_NO_WRITE leaves nothing to render — no HTML is produced in that mode.");
+    writeReportMarkdown(run);
+    return {
+      run,
+      written: [],
+      artifacts: artifactMap(run),
+      next: "Nothing was written; index.md is above. index.html is skipped — it is only useful as a file.",
+    };
+  }
   const written: string[] = [];
   if (!bool(args.no_html)) written.push(writeHtml(run));
   if (!bool(args.no_md)) written.push(writeReportMarkdown(run));

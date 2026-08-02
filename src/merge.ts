@@ -1,12 +1,9 @@
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
 import { ALL_DEPTHS, VERSION } from "./types.js";
-import { readDossier, readSourceText, writeDossier } from "./dossier.js";
+import { readDossier, readSourceText, writeBibtex, writeDossier } from "./dossier.js";
 import { fuse, defaultRunDir } from "./gather.js";
 import { dedupeNearDuplicates, identityKey, slugify } from "./util.js";
 import { getMode } from "./modes/registry.js";
-import { toBibtex } from "./bibtex.js";
 
 export interface MergeOptions {
   runs: string[]; // sub-dossier run dirs (one per sub-question fan-out)
@@ -128,8 +125,6 @@ export function runMerge(options: MergeOptions): MergeResult {
 
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  if (mode.extras.includes("bibtex")) {
-    writeFileSync(join(dir, "refs.bib"), toBibtex(sources));
-  }
+  writeBibtex(dir, sources, mode.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

@@ -16,7 +16,7 @@ REPORT is unsourced and unflagged.
 
 ## Invariants
 
-Five rules hold on every run, at every depth. Later sections cite them by number
+Six rules hold on every run, at every depth. Later sections cite them by number
 instead of restating them.
 
 - **I1 — Answer only from retrieved sources.** Never from your own knowledge of
@@ -35,6 +35,16 @@ instead of restating them.
   in every subagent prompt**.
 - **I5 — You are the only writer of shared state.** Subagents return text. The
   folds (`merge`, `verify --apply`) always stay with you, the orchestrator.
+- **I6 — When you cannot write, pass `--stdout`.** In a planning phase, a
+  read-only sandbox, or any harness that forbids writes, add `--stdout` (or set
+  `ULTRASEARCH_NO_WRITE=1`): the engine writes **nothing** and streams what it
+  would have written instead — `gather` gives you `DOSSIER.md` followed by every
+  source's full extract, `brainstorm` gives `BRAINSTORM.md`, `plan` its JSON,
+  `render` `index.md`. `merge`, `fetch`, `verify` and `orchestrate` exit **2**:
+  they exist to leave files behind for a later process. **There is no `check`
+  gate in this mode** — the mechanical grounding check needs a `REPORT.md` on
+  disk, so I1 and I2 rest entirely on you. Cite `[S#]` inline from the streamed
+  extracts and never state anything they do not say.
 
 ## Run it
 
@@ -99,7 +109,8 @@ plus a two-line `SUMMARY.md`, then `check`. `check` requires a `REPORT.md` even
 when it is six lines — that is the grounding contract. Skip `plan`,
 `orchestrate`, `verify` and `--semantic` entirely; `render` only if the user
 wants a file. If the dossier comes back **⚠ Thin**, or the answer simply isn't in
-it, upgrade to route S rather than padding.
+it, upgrade to route S rather than padding. In a read-only phase, this is the
+route to take: `gather --depth summary --stdout` and answer inline (I6).
 
 **Route S** — the standard route below. **Route D** — the deep tier below.
 
@@ -108,7 +119,8 @@ it, upgrade to route S rather than padding.
 `gather` / `merge` write a **dossier** (`sources.json`, `sources/S#.md`,
 `DOSSIER.md`, `manifest.json`). `plan` / `verify` / `orchestrate` write
 **worklists**. `render` / `check` / `search` / `modes` / `brainstorm` write no
-dossier. Canonical invocations (I4):
+dossier. Every "Writes" below is what happens **without** `--stdout` (I6).
+Canonical invocations (I4):
 
 ```
 node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --mode <m> --depth <d> [--out <dir>]
@@ -120,17 +132,17 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 
 | Command | Writes | Flags that matter |
 |---|---|---|
-| `gather` | the dossier | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
+| `gather` | the dossier (`--stdout`: streams it, writes nothing) | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. |
-| `render` | `index.html` + `index.md` in the run dir | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. |
+| `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
-| `brainstorm` | `BRAINSTORM.md` + `.json` | `--q` · `--mode` · `--out` · `--json`. Route C only. |
-| `plan` | `PLAN.json` + the `<RUN>/q#` dirs | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
-| `merge` | the master dossier, stable `[S#]` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
-| `verify` | `VERIFY.todo.json` → `VERIFY.json` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
-| `orchestrate` | `<run>/orchestration/` | `--run` · `--phase` · `--eco` · `--list` |
+| `brainstorm` | `BRAINSTORM.md` + `.json` (`--stdout`: streams the `.md`) | `--q` · `--mode` · `--out` · `--json`. Route C only. |
+| `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
+| `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
+| `verify` | `VERIFY.todo.json` → `VERIFY.json` — exit 2 under `--stdout` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
+| `orchestrate` | `<run>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` |
 
 ## The standard route (route S)
 
@@ -320,6 +332,8 @@ in `references/operations.md`.
 - Leaving table data rows uncited — the header is structure, the rows are claims.
 - Presenting before the route's gate passes — `check` for L and S,
   `check --semantic --require-verify` for D.
+- Letting a read-only phase fail the run: if the harness forbids writes, that
+  is what `--stdout` is for (I6) — not a reason to answer from memory.
 - Leaning on a `⚠ snippet only` source — re-`fetch` it or find a primary source.
 - Reporting in the search language — the report is in the user's (I3).
 - Skipping the mode extras — `research` must reference `refs.bib`; `learn` must

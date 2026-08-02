@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { ensureDir, writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { BackendKind, GatherOptions, ModeName, RunContext } from "./types.js";
 import { getMode } from "./modes/registry.js";
@@ -191,9 +191,9 @@ export async function runBrainstorm(options: GatherOptions): Promise<BrainstormR
     candidateQuestions,
     userQuestions,
   };
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeFileSync(join(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  ensureDir(dir);
+  writeArtifact(join(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 

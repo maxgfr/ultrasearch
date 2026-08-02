@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
@@ -141,8 +142,8 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
   };
   const todoName = shards !== undefined ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== undefined ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeFileSync(join(dir, todoName), JSON.stringify(todo, null, 2));
-  writeFileSync(join(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 
@@ -229,7 +230,7 @@ export function applyVerdicts(dir: string, verdictsPath: string | string[]): Ver
   const result = reduceVerdicts(verdicts);
   // Persist the gate result + the full adjudicated list (the latter only for
   // `render`'s per-claim verdict table / badges; `check --semantic` ignores it).
-  writeFileSync(join(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 

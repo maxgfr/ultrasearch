@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { ensureDir, writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { Depth, ModeName, PlanResult, SubQuestion } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
@@ -320,8 +320,8 @@ export function runPlan(
   });
   const result: PlanResult = { question: q, mode, ...(depth ? { depth } : {}), subQuestions: uniq };
   if (runRoot) {
-    mkdirSync(runRoot, { recursive: true });
-    writeFileSync(join(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    ensureDir(runRoot);
+    writeArtifact(join(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }

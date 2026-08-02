@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { fetchAndExtract, type ExtractorId } from "./backends/fetch.js";
 import { firecrawlBase, probeFirecrawl } from "./backends/firecrawl.js";
 import { canonicalizeUrl, domainOf, fnv1a64 } from "./util.js";
+import { isNoWrite } from "./no-write.js";
 
 // Opt-in on-disk fetch cache (--cache). The in-process hydrate cache only spans
 // ONE gather; the deep tier fans out N separate `gather` processes (one per
@@ -82,6 +83,12 @@ function readCache(url: string, now: number, acceptLanguage = "", extractor: Ext
 }
 
 function writeCache(url: string, res: Extract, now: number, acceptLanguage = "", extractor: ExtractorId = "native"): void {
+  // Under no-write the cache degrades to READ-only rather than being disabled:
+  // a plan-phase run is still served by whatever an earlier normal run left
+  // here, it just never leaves a trace of its own. Deliberately not routed
+  // through writeArtifact — a cache entry is not an artifact anyone wants
+  // streamed back to them.
+  if (isNoWrite()) return;
   try {
     mkdirSync(cacheDir(), { recursive: true });
     const entry: CacheEntry = { ...res, cachedAt: now };
