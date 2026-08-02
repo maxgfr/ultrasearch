@@ -40,8 +40,11 @@ export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
       backend: "pubmed",
       score: ids.length - i,
       snippet: `${title} — ${d.source ?? ""} ${year ?? ""}`.trim().slice(0, 360),
-      // no text → the gatherer hydrates the landing page for the abstract
-      meta: { doi, authors, year, venue: d.source },
+      // no text → the gatherer hydrates the landing page for the abstract.
+      // `absUrl` gives it somewhere to go when the DOI resolves to a paywalled
+      // publisher page; from there the provider table finds the E-utilities
+      // abstract if PubMed's own HTML is throttling.
+      meta: { doi, authors, year, venue: d.source, ...(doi ? { absUrl: `https://pubmed.ncbi.nlm.nih.gov/${uid}/` } : {}) },
     };
   });
   return { backend: "pubmed", items, notes: [`PubMed returned ${items.length} record(s).`] };

@@ -319,6 +319,21 @@ export function htmlTitle(html: string): string | undefined {
   return t || undefined;
 }
 
+// The URL a page declares for ITSELF — `<link rel="canonical">`, else the
+// OpenGraph `og:url`. Only meaningful when the URL we fetched is not itself
+// citable (an API endpoint, a redirector): the page names its own address, so
+// we don't have to guess one. Extraction strips <head>, hence reading it here.
+export function htmlCanonicalUrl(html: string): string | undefined {
+  const head = html.slice(0, 60_000); // <head> is at the top; don't scan a megabyte of body
+  const canonical = /<link\b[^>]*\brel=["']?canonical["']?[^>]*>/i.exec(head)?.[0];
+  const og = /<meta\b[^>]*\bproperty=["']?og:url["']?[^>]*>/i.exec(head)?.[0];
+  for (const tag of [canonical, og]) {
+    const href = tag && /\b(?:href|content)=["']([^"']+)["']/i.exec(tag)?.[1];
+    if (href?.trim()) return decodeEntities(href.trim());
+  }
+  return undefined;
+}
+
 // Readability-lite: isolate the main content region of an HTML page so the
 // blunt htmlToText strip isn't diluted by nav/sidebar/footer boilerplate.
 // Dependency-free and CONSERVATIVE — when it can't confidently find a main
@@ -408,6 +423,7 @@ export interface ExtractResult {
   finalUrl: string;
   status: number;
   extractor?: ExtractorId;
+  canonical?: string; // the url the page declares for itself (rel=canonical / og:url)
 }
 
 // Fetch a URL and return its readable text + a title. HTML goes to Firecrawl
@@ -461,7 +477,8 @@ export async function fetchAndExtract(url: string, opts: { acceptLanguage?: stri
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : undefined;
-  return { text, title, finalUrl: res.url, status: res.status, note: firecrawlNote };
+  const canonical = isHtml ? htmlCanonicalUrl(res.body) : undefined;
+  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote };
 }
 
 // Statuses where the origin is gone/blocked and a live re-fetch will never

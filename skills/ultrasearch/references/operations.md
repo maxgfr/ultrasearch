@@ -12,7 +12,7 @@ decision surface; this is the operations manual.
 | `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, or a `--semantic`/`--min-sources`/`--strict-numerals` failure. |
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
-| `merge` · `fetch` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
+| `merge` · `fetch` · `relink` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
 | `render` | 2 | `--stdout --no-md` — that combination leaves nothing to emit, because `--stdout` never produces HTML. |
 
 Anything non-zero means *stop and fix*, never *present anyway*.
@@ -103,7 +103,7 @@ files, not the fetch cache. What it would have written goes to stdout instead.
 | `plan` | its JSON payload, unchanged; the `<RUN>/q#` dirs stay in it as hints but are not created |
 | `render` | `index.md` only — `index.html` is never built, since its value is being a file you open |
 | `search` · `modes` · `check` | nothing changes; they already wrote nothing |
-| `merge` · `fetch` · `verify` · `orchestrate` | **exit 2** — see Exit codes |
+| `merge` · `fetch` · `relink` · `verify` · `orchestrate` | **exit 2** — see Exit codes |
 
 Add `--json` for the parse-safe form: `{ dir: null, manifest, artifacts: { "<path>": "<content>" } }`,
 carrying every artifact including `sources.json` and `manifest.json`. The plain
@@ -188,3 +188,8 @@ around them:
 | Round-2 verdicts corrupt | `verify` renumbers claim ids; `--apply <dir>` folds **every** `*verdict*.json` | Delete or archive the previous round's verdict files **before** adjudicating a new round. |
 | `index.md` isn't next to `index.html` | `render --run X --out Y` moves only the HTML | Copy it, or render without `--out`. |
 | A cited figure isn't in the source | Numeral asserted but absent from the extract | `fetch` the page that carries it, re-cite, or flag it `[M]`. `check --strict-numerals` makes this fatal. |
+| `fetch --url` refuses: "extracted to a … wall" | The host is throttling you (some serve a consent wall or a reCAPTCHA page as HTTP **200**) | Working as intended — a wall is not content. Retry later, pace the run, or pass an endpoint that carries the same document: the text comes from there, a **page** is still what gets cited. |
+| `fetch --url` refuses: "batches N ids" / "is a … query" | One URL listing many ids, or a search, is not one document | Pass the ids one at a time — one `S#` per document is what citation checking rests on. |
+| `fetch --url` refuses: "names no document" | An endpoint whose payload carries no canonical link, DOI, arXiv id or PMID | Nothing citable can be derived from it. Pass the page URL yourself. |
+| `check` warns: cited source points at an API endpoint | A raw endpoint got pinned as a source (a dossier gathered before this gate) | Run `relink --run <dir>`: it repairs every source whose stored text names its own document, and prints the rest. Then find each remaining page and `relink --id S# --url "<page>"`. |
+| `check` warns: cited source extracted to a wall | The host was throttling when it was fetched | `relink` lists these too but cannot fix them — the text is missing, not just the link. Re-`fetch --url` them, or drop the claims resting on them. |

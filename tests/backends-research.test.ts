@@ -205,6 +205,11 @@ describe("research backends", () => {
     expect(r.items[0]!.text).toBeUndefined(); // metadata-only; gather hydrates the landing page
     expect(r.items[0]!.meta?.year).toBe(2020);
     expect(r.items[1]!.url).toContain("pubmed.ncbi.nlm.nih.gov/222");
+    // A DOI url resolves to the publisher (often paywalled), so the PubMed
+    // record is carried as the hydration fallback. When the url ALREADY is the
+    // PubMed page there is nothing to fall back to.
+    expect(r.items[0]!.meta?.absUrl).toBe("https://pubmed.ncbi.nlm.nih.gov/111/");
+    expect(r.items[1]!.meta?.absUrl).toBeUndefined();
   });
 
   it("dblp parses hits, normalizes a single-author object, and picks the ee URL", async () => {

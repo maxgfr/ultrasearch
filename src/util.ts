@@ -1,6 +1,25 @@
 import type { BackendKind, Depth, RawSource, SourceMeta } from "./types.js";
 
 // Escape a string for safe inclusion as a literal inside a RegExp.
+// A plain-text payload (an E-utilities abstract, a .txt spec) has no <title>,
+// and the endpoint URL is a useless stand-in for one. Take the document's first
+// real paragraph — skipping the bibliographic line a record often opens with
+// ("1. Ophthalmology. 2020 Sep;127(9):1234-58. doi: …").
+export function titleFromText(text: string): string {
+  // A leading markdown heading (Firecrawl's output, a rendered extract) is
+  // already the document's own name — take it verbatim.
+  const heading = /^\s*#{1,6}\s+(.+?)\s*#*\s*$/m.exec(text.split(/\n\s*\n/)[0] ?? "");
+  if (heading) return heading[1]!.trim().slice(0, 200);
+  const paras = text
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const lead = paras[0] ?? "";
+  const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
+  const pick = (bibliographic ? paras[1] : lead) || lead;
+  return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
+}
+
 export function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

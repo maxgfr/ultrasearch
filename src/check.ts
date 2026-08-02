@@ -15,6 +15,8 @@ import {
   SOURCE_RE,
 } from "./claims.js";
 import { readSourceText } from "./dossier.js";
+import { looksLikeJunkExtraction } from "./backends/fetch.js";
+import { isApiEndpoint } from "./citable.js";
 import { buildWorklist, reduceVerdicts } from "./verify.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
@@ -304,6 +306,41 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   }
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
+  }
+
+  // Source hygiene, on the CITED sources only — an uncited dud costs the report
+  // nothing. Two failure modes the citation graph alone cannot see:
+  //   • the extract is a consent/anti-bot wall, so the claim rests on
+  //     boilerplate ("Checking your browser…") rather than on the document;
+  //   • the URL is a machine endpoint, so a reader who clicks the citation gets
+  //     JSON/XML instead of the page — the tell that a rescue path leaked its
+  //     fetch URL into the citation.
+  // Both warn rather than fail: they describe sources already on disk, and a
+  // dossier gathered before this check existed must still be checkable.
+  const walled: string[] = [];
+  const apiCited: string[] = [];
+  for (const s of sources) {
+    if (!citedIds.has(s.id)) continue;
+    if (isApiEndpoint(s.url)) apiCited.push(s.id);
+    try {
+      if (!existsSync(join(dir, s.extract))) continue;
+      const wall = looksLikeJunkExtraction(readSourceText(dir, s));
+      if (wall) walled.push(`${s.id} (${wall})`);
+    } catch {
+      // an unreadable extract is UNKNOWN, not a wall
+    }
+  }
+  if (walled.length) {
+    warnings.push(
+      `${walled.length} cited source(s) extracted to a wall, not content: ${walled.slice(0, 5).join(", ")}. ` +
+        `Re-\`fetch --url\` them (the page may have been throttling) or drop the claims that rest on them.`,
+    );
+  }
+  if (apiCited.length) {
+    warnings.push(
+      `${apiCited.length} cited source(s) point at an API endpoint, not a page a reader can open: ${apiCited.slice(0, 5).join(", ")}. ` +
+        `Re-\`fetch --url\` them — the endpoint is where the text lives, the landing page is what gets cited.`,
+    );
   }
 
   // Numeral grounding (advisory; `--strict-numerals` fails): a specific figure

@@ -185,6 +185,15 @@ function listModes() {
 }
 
 // src/util.ts
+function titleFromText(text) {
+  const heading = /^\s*#{1,6}\s+(.+?)\s*#*\s*$/m.exec(text.split(/\n\s*\n/)[0] ?? "");
+  if (heading) return heading[1].trim().slice(0, 200);
+  const paras = text.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const lead = paras[0] ?? "";
+  const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
+  const pick = (bibliographic ? paras[1] : lead) || lead;
+  return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
+}
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1318,6 +1327,16 @@ function htmlTitle(html) {
   const t = decodeEntities(m[1].replace(/\s+/g, " ").trim());
   return t || void 0;
 }
+function htmlCanonicalUrl(html) {
+  const head = html.slice(0, 6e4);
+  const canonical = /<link\b[^>]*\brel=["']?canonical["']?[^>]*>/i.exec(head)?.[0];
+  const og = /<meta\b[^>]*\bproperty=["']?og:url["']?[^>]*>/i.exec(head)?.[0];
+  for (const tag2 of [canonical, og]) {
+    const href = tag2 && /\b(?:href|content)=["']([^"']+)["']/i.exec(tag2)?.[1];
+    if (href?.trim()) return decodeEntities(href.trim());
+  }
+  return void 0;
+}
 function sliceToMatchingClose(html, start, tag2) {
   const re = new RegExp(`<${tag2}\\b|</${tag2}\\s*>`, "gi");
   re.lastIndex = start;
@@ -1403,7 +1422,8 @@ async function fetchAndExtract(url, opts = {}) {
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
-  return { text, title, finalUrl: res.url, status: res.status, note: firecrawlNote };
+  const canonical = isHtml ? htmlCanonicalUrl(res.body) : void 0;
+  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote };
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
@@ -2273,8 +2293,11 @@ var pubmedBackend = async (ctx) => {
       backend: "pubmed",
       score: ids.length - i,
       snippet: `${title} \u2014 ${d.source ?? ""} ${year ?? ""}`.trim().slice(0, 360),
-      // no text → the gatherer hydrates the landing page for the abstract
-      meta: { doi, authors, year, venue: d.source }
+      // no text → the gatherer hydrates the landing page for the abstract.
+      // `absUrl` gives it somewhere to go when the DOI resolves to a paywalled
+      // publisher page; from there the provider table finds the E-utilities
+      // abstract if PubMed's own HTML is throttling.
+      meta: { doi, authors, year, venue: d.source, ...doi ? { absUrl: `https://pubmed.ncbi.nlm.nih.gov/${uid}/` } : {} }
     };
   });
   return { backend: "pubmed", items, notes: [`PubMed returned ${items.length} record(s).`] };
@@ -2570,6 +2593,56 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   const res = await fetchAndExtract(url, opts);
   if (res.text?.trim()) writeCache(url, res, now, lang, res.extractor ?? "native");
   return res;
+}
+
+// src/providers.ts
+var PUBMED_LANDING = /^https?:\/\/(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov\/(\d{4,9})\/?$/i;
+var PMC_LANDING = /^https?:\/\/(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov\/articles\/(PMC\d+)\/?$/i;
+var EUTILS = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/([a-z]+)\.fcgi/i;
+var ARXIV_PDF = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/pdf\/([^?#]+?)(?:\.pdf)?\/?$/i;
+function eutilsIds(raw) {
+  return (raw ?? "").split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
+}
+function pubmedAbstractUrl(pmid) {
+  return `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&rettype=abstract&retmode=text`;
+}
+function resolveProvider(url) {
+  const raw = url.trim();
+  const pubmed = raw.match(PUBMED_LANDING);
+  if (pubmed) {
+    const pmid = pubmed[1];
+    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, textUrl: pubmedAbstractUrl(pmid) };
+  }
+  const pmc = raw.match(PMC_LANDING);
+  if (pmc) return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmc[1].toUpperCase()}/` };
+  const eutils = raw.match(EUTILS);
+  if (eutils) return resolveEutils(raw, eutils[1].toLowerCase());
+  const arxiv = raw.match(ARXIV_PDF);
+  if (arxiv) return { citeUrl: `https://arxiv.org/abs/${arxiv[1]}`, textUrl: raw };
+  return { citeUrl: raw };
+}
+function resolveEutils(raw, op) {
+  let params;
+  try {
+    params = new URL(raw).searchParams;
+  } catch {
+    return { citeUrl: raw };
+  }
+  if (op === "esearch" || op === "egquery" || op === "espell") {
+    return { citeUrl: raw, reject: `${raw} is an E-utilities ${op} query, not a document \u2014 fetch the record it points at instead.` };
+  }
+  const db = (params.get("db") ?? "").toLowerCase();
+  const ids = eutilsIds(params.get("id"));
+  const id = ids[0];
+  if (!id) return { citeUrl: raw };
+  if (db === "pubmed" && /^\d+$/.test(id)) {
+    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: pubmedAbstractUrl(id) };
+  }
+  if (db === "pmc") {
+    const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
+    return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/` };
+  }
+  return { citeUrl: raw };
 }
 
 // src/dossier.ts
@@ -2984,21 +3057,28 @@ async function runGather(options) {
       if (res.note) hydrateNotes.push(res.note);
       let text = res.text?.trim() ? res.text : "";
       let junk = text ? looksLikeJunkExtraction(text) : void 0;
-      let title = res.title;
-      if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
-        const altKey = canonicalizeUrl(it.meta.absUrl);
-        let alt = hydrateCache.get(altKey);
-        if (!alt) {
-          alt = await cachedFetchAndExtract(it.meta.absUrl, extractOpts, !!options.cache);
-          if (alt.cached) cacheHits++;
-          if (alt.extractor === "firecrawl") firecrawlUsed++;
-          hydrateCache.set(altKey, alt);
-        }
-        if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
-          text = alt.text;
-          junk = void 0;
-          title = title || alt.title;
-          hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${it.meta.absUrl} instead.`);
+      let title = junk ? void 0 : res.title;
+      if (!text || junk) {
+        const absUrl = typeof it.meta?.absUrl === "string" ? it.meta.absUrl : void 0;
+        const candidates = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : void 0];
+        for (const cand of [...new Set(candidates)]) {
+          if (!cand || cand === it.url) continue;
+          const altKey = canonicalizeUrl(cand);
+          let alt = hydrateCache.get(altKey);
+          if (!alt) {
+            alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
+            if (alt.cached) cacheHits++;
+            if (alt.extractor === "firecrawl") firecrawlUsed++;
+            hydrateCache.set(altKey, alt);
+          }
+          if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+            text = alt.text;
+            junk = void 0;
+            title = title || alt.title;
+            it.meta = { ...it.meta, textVia: cand };
+            hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${cand} instead.`);
+            break;
+          }
         }
       }
       if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
@@ -3163,39 +3243,143 @@ async function runGather(options) {
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
+// src/citable.ts
+var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
+var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
+var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
+function isApiEndpoint(url) {
+  try {
+    const u = new URL(url);
+    if (API_HOSTS.has(u.hostname.toLowerCase().replace(/^www\./, ""))) return true;
+    if (API_PATHS.some((re) => re.test(u.pathname))) return true;
+    return API_FORMATS.test(u.search);
+  } catch {
+    return false;
+  }
+}
+var ID_PARAMS = ["id", "ids", "uid", "uids", "pmid", "doi", "identifier"];
+function addressedIdCount(url) {
+  try {
+    const params = new URL(url).searchParams;
+    for (const name of ID_PARAMS) {
+      const raw = params.get(name);
+      if (!raw) continue;
+      const ids = raw.split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
+      if (ids.length) return ids.length;
+    }
+  } catch {
+  }
+  return 0;
+}
+function isCitableUrl(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") && !isApiEndpoint(url);
+  } catch {
+    return false;
+  }
+}
+var DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
+var ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
+var PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
+function deriveCitableUrl(text, canonical) {
+  if (canonical && isCitableUrl(canonical)) return canonical;
+  const head = text.slice(0, 4e3);
+  const doi = head.match(DOI_RE)?.[1];
+  if (doi) return `https://doi.org/${doi.replace(/[.,;:)\]]+$/, "")}`;
+  const arxiv = head.match(ARXIV_RE)?.[1];
+  if (arxiv) return `https://arxiv.org/abs/${arxiv}`;
+  const pmid = head.match(PMID_RE)?.[1];
+  if (pmid) return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
+  return void 0;
+}
+
 // src/enrich.ts
 async function addSource(dir, url, opts = {}) {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
-  const canon = canonicalizeUrl(url);
+  const addressed = addressedIdCount(url);
+  if (addressed > 1) {
+    return { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` };
+  }
+  const provider = resolveProvider(url);
+  if (provider.reject) return { id: "", added: false, note: provider.reject };
+  let citeUrl = provider.citeUrl;
+  const canon = canonicalizeUrl(citeUrl);
   const existing = sources.find((s2) => s2.canonicalUrl === canon);
   if (existing) {
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
-  const fetched = await cachedFetchAndExtract(url, { firecrawl: opts.firecrawl }, !!opts.cache);
+  const fetched = await cachedFetchAndExtract(citeUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
-  let waybackSnapshot;
+  let wall = text?.trim() ? looksLikeJunkExtraction(text) : void 0;
+  if (wall) title = void 0;
+  const meta = {};
+  let via;
+  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== citeUrl) {
+    const alt = await cachedFetchAndExtract(provider.textUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+    if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+      text = alt.text;
+      title = title || alt.title;
+      wall = void 0;
+      via = provider.textUrl;
+      meta.textVia = provider.textUrl;
+    }
+  }
+  if (text?.trim() && wall && fetched.extractor !== "firecrawl") {
+    const fc = await scrapeViaFirecrawl(citeUrl, { firecrawl: opts.firecrawl });
+    if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+      text = fc.data.markdown;
+      title = title || fc.data.title;
+      wall = void 0;
+    }
+  }
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(url, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(citeUrl, { firecrawl: opts.firecrawl });
     if (wb) {
       text = wb.text;
       title = title || wb.title;
-      waybackSnapshot = wb.timestamp;
+      wall = void 0;
+      meta.waybackSnapshot = wb.timestamp;
     }
   }
+  if (text?.trim() && wall) {
+    return {
+      id: "",
+      added: false,
+      note: `${citeUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
+    };
+  }
   if (!text?.trim()) {
-    return { id: "", added: false, note: fetched.note ?? `no readable content at ${url}` };
+    return { id: "", added: false, note: fetched.note ?? `no readable content at ${citeUrl}` };
+  }
+  if (!isCitableUrl(citeUrl)) {
+    const derived = deriveCitableUrl(text, fetched.canonical);
+    if (!derived) {
+      return {
+        id: "",
+        added: false,
+        note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID) \u2014 pass the page URL instead.`
+      };
+    }
+    meta.textVia = citeUrl;
+    via = citeUrl;
+    citeUrl = derived;
+    const dup = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(citeUrl));
+    if (dup) return { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` };
   }
   const id = nextSourceId(sources);
   const backend = opts.backend ?? "claude";
   const raw = {
-    url,
-    title: opts.title || title || url,
+    url: citeUrl,
+    // Never fall back to the URL as a title when the text came from an API
+    // endpoint — a bare endpoint string is unreadable in a source list.
+    title: opts.title || title || (via ? titleFromText(text) : citeUrl),
     backend,
     score: 0,
     snippet: bestExcerpt(text, question),
     text,
-    ...waybackSnapshot ? { meta: { waybackSnapshot } } : {}
+    ...Object.keys(meta).length ? { meta } : {}
   };
   const s = buildSource(raw, id, (/* @__PURE__ */ new Date()).toISOString(), question);
   writeSourceExtract(dir, s, text, manifest.depth);
@@ -4206,6 +4390,28 @@ function runCheck(dir, opts = {}) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
+  const walled = [];
+  const apiCited = [];
+  for (const s of sources) {
+    if (!citedIds.has(s.id)) continue;
+    if (isApiEndpoint(s.url)) apiCited.push(s.id);
+    try {
+      if (!existsSync5(join6(dir, s.extract))) continue;
+      const wall = looksLikeJunkExtraction(readSourceText(dir, s));
+      if (wall) walled.push(`${s.id} (${wall})`);
+    } catch {
+    }
+  }
+  if (walled.length) {
+    warnings.push(
+      `${walled.length} cited source(s) extracted to a wall, not content: ${walled.slice(0, 5).join(", ")}. Re-\`fetch --url\` them (the page may have been throttling) or drop the claims that rest on them.`
+    );
+  }
+  if (apiCited.length) {
+    warnings.push(
+      `${apiCited.length} cited source(s) point at an API endpoint, not a page a reader can open: ${apiCited.slice(0, 5).join(", ")}. Re-\`fetch --url\` them \u2014 the endpoint is where the text lives, the landing page is what gets cited.`
+    );
+  }
   const numeralIssues = [];
   const bySourceId = new Map(sources.map((s) => [s.id, s]));
   const normCache = /* @__PURE__ */ new Map();
@@ -4309,6 +4515,94 @@ function formatCheckReport(r, dir) {
   for (const w of r.warnings) lines.push(`  \u26A0 ${w}`);
   lines.push(r.ok ? `  \u2713 report is grounded \u2014 every claim cites a source or is a flagged hint` : `  \u2717 report is NOT grounded`);
   return lines.join("\n");
+}
+
+// src/relink.ts
+function listIssues(dir) {
+  const { sources } = readDossier(dir);
+  const issues = [];
+  for (const s of sources) {
+    const text = safeText(dir, s);
+    if (!isCitableUrl(s.url)) {
+      const derived = text ? deriveCitableUrl(text) : void 0;
+      const twin = derived ? sources.find((o) => o.id !== s.id && o.canonicalUrl === canonicalizeUrl(derived)) : void 0;
+      issues.push({
+        id: s.id,
+        url: s.url,
+        reason: twin ? "duplicate" : "not-citable",
+        detail: twin ? `the url is a machine endpoint, and the document it names is already in the dossier as ${twin.id}` : "the url is a machine endpoint \u2014 a reader who clicks it gets a payload, not the document",
+        ...derived ? { derived } : {},
+        fix: twin ? `cite ${twin.id} instead and drop ${s.id}'s citations, or relink ${s.id} to a different page` : derived ? `its own text names ${derived} \u2014 \`relink --run <dir>\` applies that for you` : `its text names no document; find the page and run: relink --run <dir> --id ${s.id} --url "<page>"`
+      });
+      continue;
+    }
+    const wall = text ? looksLikeJunkExtraction(text) : void 0;
+    if (wall) {
+      issues.push({
+        id: s.id,
+        url: s.url,
+        reason: "wall",
+        detail: `the extract is a ${wall}, not the document \u2014 the host was throttling when it was fetched`,
+        fix: `the text is missing, not just the link: re-run \`fetch --url "${s.url}"\` into a dossier, or drop the claims resting on it`
+      });
+    }
+  }
+  return issues;
+}
+function autoRelink(dir) {
+  const repaired = [];
+  const tried = /* @__PURE__ */ new Set();
+  for (; ; ) {
+    const next = listIssues(dir).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
+    if (!next) break;
+    tried.add(next.id);
+    const r = relink(dir, next.id, next.derived);
+    if (r.relinked) repaired.push(r);
+  }
+  return { repaired, remaining: listIssues(dir) };
+}
+function safeText(dir, s) {
+  try {
+    return readSourceText(dir, s);
+  } catch {
+    return "";
+  }
+}
+function relink(dir, id, url, opts = {}) {
+  const { sources, manifest } = readDossier(dir);
+  const idx = sources.findIndex((s) => s.id === id);
+  if (idx < 0) return { id, relinked: false, note: `${id} is not in this dossier` };
+  const target = sources[idx];
+  const next = url.trim();
+  if (!isCitableUrl(next)) {
+    return { id, relinked: false, note: `${next} is not a citable page url \u2014 a citation must open in a browser` };
+  }
+  const canon = canonicalizeUrl(next);
+  if (canon === target.canonicalUrl) return { id, relinked: false, note: `${id} already points at ${next}` };
+  const clash = sources.find((s) => s.id !== id && s.canonicalUrl === canon);
+  if (clash) return { id, relinked: false, note: `${clash.id} already cites ${next} \u2014 merge the claims onto it instead of duplicating the source` };
+  const from = target.url;
+  const text = safeText(dir, target);
+  const titled = target.title && target.title !== from ? target.title : titleFromText(text) || next;
+  const relinked = {
+    ...target,
+    url: next,
+    canonicalUrl: canon,
+    domain: domainOf(next),
+    trust: trustScore(next, target.backend),
+    title: opts.title || titled,
+    // Where the text came from stays on the record: the claim is grounded in
+    // that payload, and a reader auditing the source deserves to know.
+    meta: { ...target.meta, textVia: target.meta?.textVia ?? from }
+  };
+  const nextSources = [...sources];
+  nextSources[idx] = relinked;
+  writeSourceExtract(dir, relinked, text, manifest.depth);
+  writeDossierIndex(dir, nextSources, refreshed(manifest, nextSources), getMode(manifest.mode).template);
+  return { id, relinked: true, from, to: next };
+}
+function refreshed(manifest, sources) {
+  return { ...manifest, sourceCount: sources.length };
 }
 
 // src/plan.ts
@@ -4938,6 +5232,7 @@ For EACH of your sub-questions:
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
 2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, enrich with your own WebSearch and, for each good URL:
    \`node ${engineAbs} fetch --url "<url>" --out "<its out dir>"\`
+   Pin a URL a reader can OPEN \u2014 a landing page, never a raw API endpoint or a batch/search URL (the engine rewrites the endpoints it knows and refuses the rest). If it answers that the page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
 3. Do NOT write any report tier.
 
 Return (structured output): \`{ "gathered": [{ "id", "out", "coverage", "newSubQuestions" }] }\` \u2014 for each of your ITEMS: its \`out\` dir, a one-line coverage note, and any NEW sub-questions you discovered (an empty array for none).
@@ -6374,6 +6669,7 @@ Usage:
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+  ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
@@ -6396,6 +6692,10 @@ Commands:
            also folds in the verify verdicts: fails on unsupported claims;
            --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
+  relink   Repair source CITATIONS in place (no re-fetch, no network). Bare, it
+           rewrites every source whose own text names where it lives (canonical
+           link, DOI, arXiv id, PMID) and then prints what it could not prove.
+           --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
@@ -6438,8 +6738,9 @@ Options:
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
-  --url <u,...>        URLs for the 'generic' backend / 'fetch'
-  --title <s>          For 'fetch': override the ingested page's title
+  --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --id <S#>            For 'relink': the source to repoint
+  --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
   --seed-domains <list>     Also run a targeted site: search for these primary
@@ -6498,6 +6799,7 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "add-source",
   "render",
   "check",
+  "relink",
   "modes",
   "brainstorm",
   "plan",
@@ -6528,6 +6830,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "firecrawl",
   "web-engine",
   "url",
+  "id",
   "since",
   "exclude-domains",
   "seed-domains",
@@ -6683,6 +6986,7 @@ var NO_WRITE_REFUSED = {
   merge: "it unions the sub-dossiers into a master dossier on disk",
   fetch: "it adds a new [S#] to a dossier on disk",
   "add-source": "it adds a new [S#] to a dossier on disk",
+  relink: "it rewrites a source's url in a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path"
 };
@@ -7125,6 +7429,58 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write(formatCheckReport(res, resolve4(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
+      return;
+    }
+    case "relink": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve4(dir);
+      if (p.bools.has("list")) {
+        const issues = listIssues(rdir);
+        if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");
+        else if (!issues.length) process.stdout.write("ultrasearch relink: nothing to repair \u2014 every source cites a page and reads as a document.\n");
+        else for (const i of issues) process.stdout.write(`${i.id}  ${i.reason}  ${i.url}
+    ${i.detail}
+    \u2192 ${i.fix}
+`);
+        return;
+      }
+      if (!p.values.id && !p.values.url) {
+        const { repaired, remaining } = autoRelink(rdir);
+        if (p.bools.has("json")) {
+          process.stdout.write(JSON.stringify({ repaired, remaining }, null, 2) + "\n");
+          return;
+        }
+        for (const r2 of repaired) process.stderr.write(`ultrasearch: ${r2.id} now cites ${r2.to} (was ${r2.from})
+`);
+        if (!remaining.length) {
+          process.stdout.write(`ultrasearch relink: repaired ${repaired.length} source(s); nothing left to fix.
+`);
+          return;
+        }
+        process.stdout.write(`ultrasearch relink: repaired ${repaired.length}, ${remaining.length} need you:
+`);
+        for (const i of remaining) process.stdout.write(`${i.id}  ${i.reason}  ${i.url}
+    ${i.detail}
+    \u2192 ${i.fix}
+`);
+        return;
+      }
+      const id = p.values.id;
+      const url = p.values.url;
+      if (!id) fail("missing --id <S#> (or pass --list)");
+      if (!url) fail("missing --url <page>");
+      const r = relink(rdir, id, url, { title: p.values.title });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      } else if (r.relinked) {
+        process.stderr.write(`ultrasearch: ${r.id} now cites ${r.to} (was ${r.from})
+`);
+      } else {
+        process.stderr.write(`ultrasearch: ${r.note ?? "not relinked"}
+`);
+      }
+      if (!r.relinked) process.exit(1);
       return;
     }
   }

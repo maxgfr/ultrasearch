@@ -88,6 +88,60 @@ describe("gather hydration fallbacks (P0.4)", () => {
   });
 });
 
+// PubMed's HTML throttles to a reCAPTCHA interstitial served as HTTP 200, while
+// E-utilities keeps handing back the abstract. The provider table turns that
+// into a hydration fallback — WITHOUT the endpoint becoming the source url.
+const PUBMED_CAPTCHA = `<html><head><title>Checking your browser - reCAPTCHA</title></head><body>
+  <p>Checking your browser before accessing pubmed.ncbi.nlm.nih.gov.</p></body></html>`;
+const PUBMED_ABSTRACT = [
+  "1. Science. 2012 Aug 17;337(6096):816-821. doi: 10.1126/science.aad5227.",
+  "",
+  "A programmable dual-RNA-guided DNA endonuclease in adaptive bacterial immunity.",
+  "",
+  "Jinek M, Doudna JA.",
+  "",
+  `${"Cas9 is a DNA endonuclease guided to its target by a dual-RNA structure. ".repeat(6)}`,
+].join("\n");
+
+describe("gather hydration — PubMed behind its anti-bot wall", () => {
+  it("hydrates from E-utilities but keeps the citable url, and never cites the endpoint", async () => {
+    installFetchMock((url) => {
+      if (url.includes("esearch.fcgi")) return { body: JSON.stringify({ esearchresult: { idlist: ["28495875"] } }), contentType: "application/json" };
+      if (url.includes("esummary.fcgi")) {
+        return {
+          body: JSON.stringify({
+            result: {
+              uids: ["28495875"],
+              "28495875": {
+                title: "A programmable dual-RNA-guided DNA endonuclease.",
+                pubdate: "2012",
+                source: "Science",
+                articleids: [{ idtype: "doi", value: "10.1126/science.aad5227" }],
+              },
+            },
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (url.includes("efetch.fcgi")) return { body: PUBMED_ABSTRACT, contentType: "text/plain" };
+      if (url.includes("doi.org")) return { status: 403, body: "paywall" };
+      if (url.includes("pubmed.ncbi.nlm.nih.gov")) return { body: PUBMED_CAPTCHA };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-pm-"));
+    process.env.ULTRASEARCH_NO_WAYBACK = "1";
+    await runGather(opts({ backends: ["pubmed"], out: dir }));
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    expect(sources).toHaveLength(1);
+    expect(sources[0]!.url).toBe("https://doi.org/10.1126/science.aad5227"); // the citable url, untouched
+    expect(sources[0]!.title).not.toMatch(/reCAPTCHA/); // the wall never names the source
+    expect(sources[0]!.fullText).not.toBe(false);
+    expect(sources[0]!.meta?.textVia).toContain("efetch.fcgi");
+    expect(readFileSync(join(dir, sources[0]!.extract), "utf8")).toContain("dual-RNA structure");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 const FIRECRAWL_MD = JSON.stringify({
   success: true,
   data: {

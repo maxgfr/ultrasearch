@@ -14,6 +14,7 @@ import { buildSource } from "./dossier.js";
 import { addSource } from "./enrich.js";
 import { writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
+import { autoRelink, listIssues, relink } from "./relink.js";
 import { runPlan } from "./plan.js";
 import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
@@ -34,6 +35,7 @@ Usage:
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+  ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
@@ -56,6 +58,10 @@ Commands:
            also folds in the verify verdicts: fails on unsupported claims;
            --require-verify makes a missing/empty VERIFY.json a hard failure —
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
+  relink   Repair source CITATIONS in place (no re-fetch, no network). Bare, it
+           rewrites every source whose own text names where it lives (canonical
+           link, DOI, arXiv id, PMID) and then prints what it could not prove.
+           --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
@@ -98,8 +104,9 @@ Options:
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
-  --url <u,...>        URLs for the 'generic' backend / 'fetch'
-  --title <s>          For 'fetch': override the ingested page's title
+  --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --id <S#>            For 'relink': the source to repoint
+  --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
   --seed-domains <list>     Also run a targeted site: search for these primary
@@ -159,6 +166,7 @@ export const COMMANDS = new Set([
   "add-source",
   "render",
   "check",
+  "relink",
   "modes",
   "brainstorm",
   "plan",
@@ -189,6 +197,7 @@ export const VALUE_FLAGS = new Set([
   "firecrawl",
   "web-engine",
   "url",
+  "id",
   "since",
   "exclude-domains",
   "seed-domains",
@@ -384,6 +393,7 @@ export const NO_WRITE_REFUSED: Record<string, string> = {
   merge: "it unions the sub-dossiers into a master dossier on disk",
   fetch: "it adds a new [S#] to a dossier on disk",
   "add-source": "it adds a new [S#] to a dossier on disk",
+  relink: "it rewrites a source's url in a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
 };
@@ -904,6 +914,50 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         process.stdout.write(formatCheckReport(res, resolve(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
+      return;
+    }
+
+    case "relink": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve(dir);
+      // `--list` is the dry run: report, change nothing. Bare `relink --run`
+      // repairs what the sources' own text proves, then reports what is left.
+      if (p.bools.has("list")) {
+        const issues = listIssues(rdir);
+        if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");
+        else if (!issues.length) process.stdout.write("ultrasearch relink: nothing to repair — every source cites a page and reads as a document.\n");
+        else for (const i of issues) process.stdout.write(`${i.id}  ${i.reason}  ${i.url}\n    ${i.detail}\n    → ${i.fix}\n`);
+        return;
+      }
+      if (!p.values.id && !p.values.url) {
+        const { repaired, remaining } = autoRelink(rdir);
+        if (p.bools.has("json")) {
+          process.stdout.write(JSON.stringify({ repaired, remaining }, null, 2) + "\n");
+          return;
+        }
+        for (const r of repaired) process.stderr.write(`ultrasearch: ${r.id} now cites ${r.to} (was ${r.from})\n`);
+        if (!remaining.length) {
+          process.stdout.write(`ultrasearch relink: repaired ${repaired.length} source(s); nothing left to fix.\n`);
+          return;
+        }
+        process.stdout.write(`ultrasearch relink: repaired ${repaired.length}, ${remaining.length} need you:\n`);
+        for (const i of remaining) process.stdout.write(`${i.id}  ${i.reason}  ${i.url}\n    ${i.detail}\n    → ${i.fix}\n`);
+        return;
+      }
+      const id = p.values.id;
+      const url = p.values.url;
+      if (!id) fail("missing --id <S#> (or pass --list)");
+      if (!url) fail("missing --url <page>");
+      const r = relink(rdir, id, url, { title: p.values.title });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      } else if (r.relinked) {
+        process.stderr.write(`ultrasearch: ${r.id} now cites ${r.to} (was ${r.from})\n`);
+      } else {
+        process.stderr.write(`ultrasearch: ${r.note ?? "not relinked"}\n`);
+      }
+      if (!r.relinked) process.exit(1);
       return;
     }
   }

@@ -207,6 +207,7 @@ export interface SourceMeta {
   htmlUrl?: string; // arxiv: the /html/<id> full-text URL
   absUrl?: string; // arxiv: the /abs/<id> abstract page (hydration fallback)
   waybackSnapshot?: string; // timestamp of the Wayback snapshot a dead link was recovered from
+  textVia?: string; // API endpoint the text was hydrated from when the landing page was walled (the source url stays the page)
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   [k: string]: unknown;
 }

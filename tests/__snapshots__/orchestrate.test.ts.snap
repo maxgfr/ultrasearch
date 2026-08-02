@@ -83,6 +83,7 @@ For EACH of your sub-questions:
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
 2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, enrich with your own WebSearch and, for each good URL:
    \`node <ENGINE> fetch --url "<url>" --out "<its out dir>"\`
+   Pin a URL a reader can OPEN — a landing page, never a raw API endpoint or a batch/search URL (the engine rewrites the endpoints it knows and refuses the rest). If it answers that the page "extracted to a … wall", the host is throttling you: that is a refusal, not a setback to work around — take another source, or pass the provider's text endpoint and let the engine record the page.
 3. Do NOT write any report tier.
 
 Return (structured output): \`{ "gathered": [{ "id", "out", "coverage", "newSubQuestions" }] }\` — for each of your ITEMS: its \`out\` dir, a one-line coverage note, and any NEW sub-questions you discovered (an empty array for none).

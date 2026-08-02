@@ -21,7 +21,7 @@ honest notes in the dossier.
 | `openalex` | `GET https://api.openalex.org/works?search=…` | Abstract is an inverted index → reconstructed to text. |
 | `semanticscholar` | `GET https://api.semanticscholar.org/graph/v1/paper/search` | Unauthenticated; can rate-limit. Carries DOI + arXiv id in `externalIds`. |
 | `europepmc` | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core` | Biomedical/life-sciences. `resultType=core` returns the abstract inline (content backend). Carries DOI + journal + year. |
-| `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract. |
+| `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract, falling back to `efetch.fcgi` when that page walls (see below). |
 | `dblp` | `GET https://dblp.org/search/publ/api?q=…&format=json` | Computer-science bibliography (research deep). Metadata-only → the gatherer hydrates the `ee`/DOI landing page; DOI/author metadata dedupes it against Crossref/OpenAlex and feeds `refs.bib`. |
 | `standards` | `GET https://datatracker.ietf.org/api/v1/doc/document/?format=json&name=rfc<n>` (or `&title__icontains=…`) + `GET https://developer.mozilla.org/api/v1/search?q=…&locale=en-US` | Defining specs for standards-backed topics (topic/bug standard, learn deep). An explicit "RFC 6585" resolves directly; else a title search kept to real RFC numbers with a word-boundary relevance re-check (drops the "RFC 2429 shares digits" false friend). RFC abstract is the text; the source URL is `rfc-editor.org/rfc/rfc<n>` (clean full text on hydration). MDN hits are discovery (url + summary). |
 
@@ -55,6 +55,46 @@ honest notes in the dossier.
   closest snapshot before it's dropped; the recovered text is used, the original
   URL is kept, and a note records the snapshot (disable with
   `ULTRASEARCH_NO_WAYBACK`; capped per run).
+
+## Citable URLs — fetch anywhere, cite a page
+
+A source's URL is a promise to the reader: click it, get the document. A machine
+endpoint breaks that promise. But endpoints are often exactly where the text is
+— a page rate-limits or walls while a keyless API next door keeps serving the
+same record (PubMed answers `pubmed.ncbi.nlm.nih.gov/<pmid>/` with a reCAPTCHA
+interstitial **under HTTP 200**, while E-utilities hands back the abstract).
+
+So the two roles are kept apart, by rules that are **provider-agnostic**:
+
+1. **Is this URL citable?** Shape alone decides: a known API host, an `/api/`,
+   `.fcgi`, `webservices/` path, or a `format=json` / `retmode=text`-style
+   parameter. No allow-list of services to maintain.
+2. **If it isn't, what document is this?** The payload is asked to name itself,
+   in descending order of authority: the `<link rel="canonical">` / `og:url` the
+   page declares → a **DOI** → an **arXiv id** → a **PMID**. Whatever answers
+   first becomes the recorded URL; the endpoint is kept in `meta.textVia`.
+3. **If nothing answers**, the source is refused rather than cited as an
+   endpoint. Guessing a landing page would be worse than saying so.
+
+Two things need the URL's shape *before* a request is spent, and those are the
+only per-provider entries — a short, optional table (an unlisted URL just falls
+through to the generic path):
+
+| Shape | Effect |
+|---|---|
+| `…/efetch.fcgi?db=pubmed&id=<pmid>` (one id) | recorded as `https://pubmed.ncbi.nlm.nih.gov/<pmid>/` |
+| `pubmed.ncbi.nlm.nih.gov/<pmid>/` | text falls back to `efetch.fcgi?…&rettype=abstract&retmode=text` when the page walls |
+| `…?id=<a,b,c>` (several ids) | **refused** — a source is ONE document; pass the ids one at a time |
+| `…/esearch.fcgi?term=…` | **refused** — a query points at a result list, not a document |
+| `pmc.ncbi.nlm.nih.gov/articles/PMC<n>/` ↔ `…?db=pmc&id=PMC<n>` | recorded as the PMC page |
+| `arxiv.org/pdf/<id>` | recorded as `arxiv.org/abs/<id>`, text still read from the PDF |
+
+The same three rules run again as a repair pass over a finished dossier:
+`relink --run <dir>` re-reads each stored extract, rewrites every source whose
+own text proves where it lives, and hands you the rest as a worklist —
+`--id S# --url "<page>"` folds your answer back in. `check` warns about what is
+left, so a dossier gathered before any of this can still be brought up to
+standard.
 
 ## Rate-limit etiquette
 

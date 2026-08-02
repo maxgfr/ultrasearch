@@ -7,6 +7,7 @@ import { runBackends } from "./backends/registry.js";
 import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { cachedFetchAndExtract } from "./cache.js";
+import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeBibtex, writeDossier } from "./dossier.js";
 import {
@@ -335,26 +336,38 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
       let text = res.text?.trim() ? res.text : "";
       let junk = text ? looksLikeJunkExtraction(text) : undefined;
-      let title = res.title;
+      // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA")
+      // — drop it with the body so a rescued page isn't labelled by the wall.
+      let title = junk ? undefined : res.title;
 
       // The page gave us nothing usable (failed, empty, or a consent/anti-bot
-      // wall). Try a backend-provided fallback URL — e.g. arXiv points `url` at
-      // /html/<id>, which 404s for many papers, but carries meta.absUrl (the
-      // abstract page) — before giving up on full text.
-      if ((!text || junk) && typeof it.meta?.absUrl === "string" && it.meta.absUrl !== it.url) {
-        const altKey = canonicalizeUrl(it.meta.absUrl);
-        let alt = hydrateCache.get(altKey);
-        if (!alt) {
-          alt = await cachedFetchAndExtract(it.meta.absUrl, extractOpts, !!options.cache);
-          if (alt.cached) cacheHits++;
-          if (alt.extractor === "firecrawl") firecrawlUsed++;
-          hydrateCache.set(altKey, alt);
-        }
-        if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
-          text = alt.text;
-          junk = undefined;
-          title = title || alt.title;
-          hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${it.meta.absUrl} instead.`);
+      // wall). Try same-document alternates before giving up on full text: the
+      // backend's own fallback URL — e.g. arXiv points `url` at /html/<id>,
+      // which 404s for many papers, but carries meta.absUrl (the abstract page)
+      // — then the provider's text endpoint (PubMed's HTML throttles to a
+      // reCAPTCHA; E-utilities keeps serving the abstract). `it.url` never
+      // changes: only where the TEXT came from does.
+      if (!text || junk) {
+        const absUrl = typeof it.meta?.absUrl === "string" ? it.meta.absUrl : undefined;
+        const candidates = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : undefined];
+        for (const cand of [...new Set(candidates)]) {
+          if (!cand || cand === it.url) continue;
+          const altKey = canonicalizeUrl(cand);
+          let alt = hydrateCache.get(altKey);
+          if (!alt) {
+            alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
+            if (alt.cached) cacheHits++;
+            if (alt.extractor === "firecrawl") firecrawlUsed++;
+            hydrateCache.set(altKey, alt);
+          }
+          if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+            text = alt.text;
+            junk = undefined;
+            title = title || alt.title;
+            it.meta = { ...it.meta, textVia: cand };
+            hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${cand} instead.`);
+            break;
+          }
         }
       }
 

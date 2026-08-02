@@ -293,3 +293,40 @@ describe("runCheck — Sources/References appendix mask", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// Source hygiene: the citation graph can be perfectly valid while the sources
+// themselves are not documents. Both warn — they describe what is already on
+// disk, and a dossier gathered before these checks existed must stay checkable.
+describe("runCheck — source hygiene", () => {
+  it("warns when a cited source's extract is an anti-bot wall, not content", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(join(dir, "sources/S1.md"), "# S1\nChecking your browser before accessing pubmed.ncbi.nlm.nih.gov.\n");
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true); // advisory, never fatal
+    expect(r.warnings.join(" ")).toMatch(/S1 \(anti-bot interstitial\)/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("warns when a cited source points at an API endpoint instead of a page", () => {
+    const dir = scratch();
+    const sources = writeFixtureDossier(dir, 2);
+    sources[1]!.url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=34397876&rettype=abstract&retmode=text";
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(true);
+    expect(r.warnings.join(" ")).toMatch(/API endpoint, not a page a reader can open: S2/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stays quiet on a clean dossier", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.warnings.join(" ")).not.toMatch(/wall|API endpoint/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

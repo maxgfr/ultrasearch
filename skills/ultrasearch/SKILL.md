@@ -40,7 +40,7 @@ instead of restating them.
   `ULTRASEARCH_NO_WRITE=1`): the engine writes **nothing** and streams what it
   would have written instead — `gather` gives you `DOSSIER.md` followed by every
   source's full extract, `brainstorm` gives `BRAINSTORM.md`, `plan` its JSON,
-  `render` `index.md`. `merge`, `fetch`, `verify` and `orchestrate` exit **2**:
+  `render` `index.md`. `merge`, `fetch`, `relink`, `verify` and `orchestrate` exit **2**:
   they exist to leave files behind for a later process. **There is no `check`
   gate in this mode** — the mechanical grounding check needs a `REPORT.md` on
   disk, so I1 and I2 rest entirely on you. Cite `[S#]` inline from the streamed
@@ -127,6 +127,7 @@ node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --mode <m> --de
 node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
 node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>
 node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+node <skill-dir>/scripts/ultrasearch.mjs relink --run <dir> [--id <S#> --url "<page>"]
 node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
 ```
 
@@ -134,7 +135,8 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 |---|---|---|
 | `gather` | the dossier (`--stdout`: streams it, writes nothing) | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. Records the **landing page**, not the endpoint it read; refuses a wall, a batch URL and a search query. |
+| `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
@@ -297,6 +299,15 @@ in `references/operations.md`.
   → `--seed-domains` (hosts you know are authoritative) → `--pages` /
   `--web-breadth` (search wider) → `--rounds 2` (one automatic follow-up for the
   under-covered terms) → your own WebSearch + `fetch`.
+- **A walled page** (a host throttling you — some answer with a consent wall or
+  a reCAPTCHA page under HTTP **200**) is never banked as text. The ladder runs
+  itself: same-document alternate → Firecrawl → Wayback → `⚠ snippet only`, and
+  `fetch` refuses outright rather than store boilerplate.
+- **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine: it
+  records the URL the payload names for itself (canonical link → DOI → arXiv id
+  → PMID) and keeps the endpoint in `meta.textVia`. It refuses what is not one
+  document — a batch URL, a search query, a payload that names nothing
+  (`references/backend-apis.md`).
 - **Extraction quality**: an optional self-hosted Firecrawl
   (`docker compose --profile search --profile extract up -d --wait`) extracts
   HTML with a real browser instead of the built-in stripper, and re-reads the
@@ -335,6 +346,8 @@ in `references/operations.md`.
 - Letting a read-only phase fail the run: if the harness forbids writes, that
   is what `--stdout` is for (I6) — not a reason to answer from memory.
 - Leaning on a `⚠ snippet only` source — re-`fetch` it or find a primary source.
+- Citing a URL a reader can't open — a source's URL must be a **page**, never a
+  raw API endpoint. Read the text wherever it lives; cite the landing page.
 - Reporting in the search language — the report is in the user's (I3).
 - Skipping the mode extras — `research` must reference `refs.bib`; `learn` must
   also write `glossary.md`.
