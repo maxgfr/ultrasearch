@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.15.0](https://github.com/maxgfr/ultrasearch/compare/v1.14.0...v1.15.0) (2026-08-02)
+
+
+### Features
+
+* **sources:** cite pages, never API endpoints, and refuse anti-bot walls ([9dc4fe4](https://github.com/maxgfr/ultrasearch/commit/9dc4fe45bb6f5311e8b4bac2971848d1ec1885a6))
+
 # [1.14.0](https://github.com/maxgfr/ultrasearch/compare/v1.13.0...v1.14.0) (2026-08-02)
 
 
