@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.16.0](https://github.com/maxgfr/ultrasearch/compare/v1.15.0...v1.16.0) (2026-08-02)
+
+
+### Features
+
+* **relink:** expose it over MCP, and let the agent reconstruct a page ([261ffb6](https://github.com/maxgfr/ultrasearch/commit/261ffb62e7f3675456e909c2f46548bb87047197))
+
 # [1.15.0](https://github.com/maxgfr/ultrasearch/compare/v1.14.0...v1.15.0) (2026-08-02)
 
 
