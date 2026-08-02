@@ -26,6 +26,8 @@ export interface RelinkIssue {
   detail: string;
   /** The url the source's own text names, when it names one. Applied automatically. */
   derived?: string;
+  /** What to search WITH when the engine can't derive it: the source's title and the head of its text. */
+  evidence?: { title: string; excerpt: string };
   fix: string;
 }
 
@@ -54,6 +56,11 @@ export function listIssues(dir: string): RelinkIssue[] {
         id: s.id,
         url: s.url,
         reason: twin ? "duplicate" : "not-citable",
+        // No derivation means the payload named nothing — so hand over what a
+        // SEARCH can start from instead of a dead end. Reconstructing the page
+        // from a title and an opening paragraph is the agent's job, not a
+        // regex's.
+        ...(derived ? {} : { evidence: { title: s.title === s.url ? titleFromText(text) : s.title, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 400) } }),
         detail: twin
           ? `the url is a machine endpoint, and the document it names is already in the dossier as ${twin.id}`
           : "the url is a machine endpoint — a reader who clicks it gets a payload, not the document",
@@ -62,7 +69,7 @@ export function listIssues(dir: string): RelinkIssue[] {
           ? `cite ${twin.id} instead and drop ${s.id}'s citations, or relink ${s.id} to a different page`
           : derived
             ? `its own text names ${derived} — \`relink --run <dir>\` applies that for you`
-            : `its text names no document; find the page and run: relink --run <dir> --id ${s.id} --url "<page>"`,
+            : `its text names no document — search for it with the evidence below, then: relink --run <dir> --id ${s.id} --url "<page>"`,
       });
       continue;
     }

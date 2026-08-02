@@ -105,6 +105,10 @@ export const TOOLS: ToolDecl[] = [
         url: { type: "string", description: "Absolute http(s) URL to fetch." },
         question: { type: "string", description: "What you're looking for on the page — ranks the excerpts kept. Defaults to the dossier's question." },
         title: { type: "string", description: "Override the extracted title." },
+        cite_url: {
+          type: "string",
+          description: "Read the text from `url` but record THIS page as the citation. For when `url` is an API endpoint whose document you already know.",
+        },
       },
       required: ["run", "url"],
     },
@@ -123,6 +127,24 @@ export const TOOLS: ToolDecl[] = [
         require_verify: { type: "boolean", description: "Fail when no verdicts have been recorded yet." },
         strict_numerals: { type: "boolean", description: "Every number in the prose must appear in a cited source." },
         min_sources: { type: "number", description: "Fail when the dossier holds fewer on-topic sources than this." },
+      },
+      required: ["run"],
+    },
+  },
+  {
+    name: "ultrasearch_relink",
+    title: "Repair source citations in a dossier",
+    description:
+      "Fix sources that cite something a reader cannot open — a machine endpoint rather than the document's page — and list the ones only you can settle. " +
+      "Called bare it repairs every source whose stored text names its own document (no network); pass id + url to point one at a page you found.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        list: { type: "boolean", description: "Dry run: report what needs repair and change nothing." },
+        id: { type: "string", description: 'The source to repoint, e.g. "S12". Requires url.' },
+        url: { type: "string", description: "The page that source should cite. Requires id." },
+        title: { type: "string", description: "Override the repaired source's title." },
       },
       required: ["run"],
     },
@@ -257,6 +279,7 @@ export const TOOL_META: Record<string, { write?: boolean; destructive?: boolean;
   ultrasearch_gather: { write: true, destructive: false, idempotent: false, openWorld: true },
   ultrasearch_fetch: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
+  ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_render: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_plan: { openWorld: false },

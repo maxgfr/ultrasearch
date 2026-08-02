@@ -83,6 +83,8 @@ describe("autoRelink", () => {
     expect(repaired).toEqual([]);
     expect(remaining).toHaveLength(1);
     expect(remaining[0]!.fix).toContain("--id S2 --url");
+    // What a SEARCH can start from — the engine hands over evidence, not a dead end.
+    expect(remaining[0]!.evidence?.excerpt).toContain("count");
     rmSync(dir, { recursive: true, force: true });
   });
 

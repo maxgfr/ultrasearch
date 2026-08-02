@@ -135,7 +135,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 |---|---|---|
 | `gather` | the dossier (`--stdout`: streams it, writes nothing) | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title`. The bridge from your own WebSearch into the dossier. Records the **landing page**, not the endpoint it read; refuses a wall, a batch URL and a search query. |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--cite-url <page>` (read the text from `--url`, cite this instead). The bridge from your own WebSearch into the dossier. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
@@ -303,11 +303,14 @@ in `references/operations.md`.
   a reCAPTCHA page under HTTP **200**) is never banked as text. The ladder runs
   itself: same-document alternate → Firecrawl → Wayback → `⚠ snippet only`, and
   `fetch` refuses outright rather than store boilerplate.
-- **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine: it
-  records the URL the payload names for itself (canonical link → DOI → arXiv id
-  → PMID) and keeps the endpoint in `meta.textVia`. It refuses what is not one
-  document — a batch URL, a search query, a payload that names nothing
-  (`references/backend-apis.md`).
+- **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine —
+  going through an API to get past a wall is the smart move. It records the URL
+  the payload names for itself (canonical link → DOI → arXiv id → PMID) and
+  keeps the endpoint in `meta.textVia`. When the payload names nothing, **you**
+  reconstruct the page — search for the record's title, then
+  `fetch --url "<endpoint>" --cite-url "<page>"`, or repair it later with
+  `relink` (`references/backend-apis.md`). It still refuses what is not one
+  document: a batch URL, a search query.
 - **Extraction quality**: an optional self-hosted Firecrawl
   (`docker compose --profile search --profile extract up -d --wait`) extracts
   HTML with a real browser instead of the built-in stripper, and re-reads the

@@ -3302,21 +3302,26 @@ async function addSource(dir, url, opts = {}) {
   if (addressed > 1) {
     return { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` };
   }
+  const supplied = opts.citeUrl?.trim();
+  if (supplied && !isCitableUrl(supplied)) {
+    return { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open \u2014 pass the document's own page.` };
+  }
   const provider = resolveProvider(url);
-  if (provider.reject) return { id: "", added: false, note: provider.reject };
-  let citeUrl = provider.citeUrl;
+  if (provider.reject && !supplied) return { id: "", added: false, note: provider.reject };
+  let citeUrl = supplied || provider.citeUrl;
   const canon = canonicalizeUrl(citeUrl);
   const existing = sources.find((s2) => s2.canonicalUrl === canon);
   if (existing) {
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
-  const fetched = await cachedFetchAndExtract(citeUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+  const readUrl = supplied ? url : citeUrl;
+  const fetched = await cachedFetchAndExtract(readUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
   let wall = text?.trim() ? looksLikeJunkExtraction(text) : void 0;
   if (wall) title = void 0;
   const meta = {};
   let via;
-  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== citeUrl) {
+  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== readUrl) {
     const alt = await cachedFetchAndExtract(provider.textUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
     if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
       text = alt.text;
@@ -3327,7 +3332,7 @@ async function addSource(dir, url, opts = {}) {
     }
   }
   if (text?.trim() && wall && fetched.extractor !== "firecrawl") {
-    const fc = await scrapeViaFirecrawl(citeUrl, { firecrawl: opts.firecrawl });
+    const fc = await scrapeViaFirecrawl(readUrl, { firecrawl: opts.firecrawl });
     if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
       text = fc.data.markdown;
       title = title || fc.data.title;
@@ -3335,7 +3340,7 @@ async function addSource(dir, url, opts = {}) {
     }
   }
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(citeUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
     if (wb) {
       text = wb.text;
       title = title || wb.title;
@@ -3347,19 +3352,22 @@ async function addSource(dir, url, opts = {}) {
     return {
       id: "",
       added: false,
-      note: `${citeUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
+      note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
     };
   }
   if (!text?.trim()) {
-    return { id: "", added: false, note: fetched.note ?? `no readable content at ${citeUrl}` };
+    return { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` };
   }
-  if (!isCitableUrl(citeUrl)) {
+  if (supplied && supplied !== url) {
+    meta.textVia = url;
+    via = url;
+  } else if (!isCitableUrl(citeUrl)) {
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {
         id: "",
         added: false,
-        note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID) \u2014 pass the page URL instead.`
+        note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). Find the page this record describes and pass it as citeUrl \u2014 the text still comes from the endpoint.`
       };
     }
     meta.textVia = citeUrl;
@@ -4530,9 +4538,14 @@ function listIssues(dir) {
         id: s.id,
         url: s.url,
         reason: twin ? "duplicate" : "not-citable",
+        // No derivation means the payload named nothing — so hand over what a
+        // SEARCH can start from instead of a dead end. Reconstructing the page
+        // from a title and an opening paragraph is the agent's job, not a
+        // regex's.
+        ...derived ? {} : { evidence: { title: s.title === s.url ? titleFromText(text) : s.title, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 400) } },
         detail: twin ? `the url is a machine endpoint, and the document it names is already in the dossier as ${twin.id}` : "the url is a machine endpoint \u2014 a reader who clicks it gets a payload, not the document",
         ...derived ? { derived } : {},
-        fix: twin ? `cite ${twin.id} instead and drop ${s.id}'s citations, or relink ${s.id} to a different page` : derived ? `its own text names ${derived} \u2014 \`relink --run <dir>\` applies that for you` : `its text names no document; find the page and run: relink --run <dir> --id ${s.id} --url "<page>"`
+        fix: twin ? `cite ${twin.id} instead and drop ${s.id}'s citations, or relink ${s.id} to a different page` : derived ? `its own text names ${derived} \u2014 \`relink --run <dir>\` applies that for you` : `its text names no document \u2014 search for it with the evidence below, then: relink --run <dir> --id ${s.id} --url "<page>"`
       });
       continue;
     }
@@ -5550,6 +5563,8 @@ async function dispatch(name, args, defaults) {
             return await handleFetch(args, run);
           case "ultrasearch_check":
             return handleCheck(args, run);
+          case "ultrasearch_relink":
+            return handleRelink(args, run);
           case "ultrasearch_verify":
             return handleVerify(args, run);
           case "ultrasearch_render":
@@ -5670,7 +5685,7 @@ function handleMerge(args) {
 async function handleFetch(args, run) {
   const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
-  const res = await addSource(run, url, { question: str(args.question), title: str(args.title) });
+  const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url) });
   return { run, url, ...res };
 }
 function handleCheck(args, run) {
@@ -5681,6 +5696,24 @@ function handleCheck(args, run) {
     minSources: positive(args.min_sources, "min_sources")
   });
   return { run, ...res };
+}
+function handleRelink(args, run) {
+  const id = str(args.id);
+  const url = str(args.url);
+  if (bool(args.list)) return { run, issues: listIssues(run) };
+  if (id || url) {
+    if (!id || !url) throw new ToolError("`id` and `url` go together \u2014 pass both to repoint one source, or neither to run the automatic pass.");
+    const res = relink(run, id, url, { title: str(args.title) });
+    if (!res.relinked) throw new ToolError(res.note ?? `${id} was not relinked.`);
+    return { run, ...res };
+  }
+  const { repaired, remaining } = autoRelink(run);
+  return {
+    run,
+    repaired,
+    remaining,
+    next: remaining.length ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url." : "Every source cites a page a reader can open."
+  };
 }
 function handleVerify(args, run) {
   const shards = positive(args.shards, "shards");
@@ -5907,7 +5940,11 @@ var TOOLS = [
         run: runProp,
         url: { type: "string", description: "Absolute http(s) URL to fetch." },
         question: { type: "string", description: "What you're looking for on the page \u2014 ranks the excerpts kept. Defaults to the dossier's question." },
-        title: { type: "string", description: "Override the extracted title." }
+        title: { type: "string", description: "Override the extracted title." },
+        cite_url: {
+          type: "string",
+          description: "Read the text from `url` but record THIS page as the citation. For when `url` is an API endpoint whose document you already know."
+        }
       },
       required: ["run", "url"]
     }
@@ -5924,6 +5961,22 @@ var TOOLS = [
         require_verify: { type: "boolean", description: "Fail when no verdicts have been recorded yet." },
         strict_numerals: { type: "boolean", description: "Every number in the prose must appear in a cited source." },
         min_sources: { type: "number", description: "Fail when the dossier holds fewer on-topic sources than this." }
+      },
+      required: ["run"]
+    }
+  },
+  {
+    name: "ultrasearch_relink",
+    title: "Repair source citations in a dossier",
+    description: "Fix sources that cite something a reader cannot open \u2014 a machine endpoint rather than the document's page \u2014 and list the ones only you can settle. Called bare it repairs every source whose stored text names its own document (no network); pass id + url to point one at a page you found.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        list: { type: "boolean", description: "Dry run: report what needs repair and change nothing." },
+        id: { type: "string", description: 'The source to repoint, e.g. "S12". Requires url.' },
+        url: { type: "string", description: "The page that source should cite. Requires id." },
+        title: { type: "string", description: "Override the repaired source's title." }
       },
       required: ["run"]
     }
@@ -6034,6 +6087,7 @@ var TOOL_META = {
   ultrasearch_gather: { write: true, destructive: false, idempotent: false, openWorld: true },
   ultrasearch_fetch: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
+  ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_render: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_plan: { openWorld: false },
@@ -6666,7 +6720,7 @@ report (with self-contained HTML). The web-facing sibling of ultradoc.
 Usage:
   ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
   ultrasearch search --backend <kind> --q "<query>" [options]
-  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
+  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -6739,6 +6793,8 @@ Options:
   --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
+                       when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
   --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
@@ -6830,6 +6886,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "firecrawl",
   "web-engine",
   "url",
+  "cite-url",
   "id",
   "since",
   "exclude-domains",
@@ -7250,6 +7307,7 @@ async function main(argv = process.argv.slice(2)) {
       const r = await addSource(resolve4(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
+        citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache")
         // same default-on policy as gather

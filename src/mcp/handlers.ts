@@ -9,6 +9,7 @@ import { runGather } from "../gather.js";
 import { runMerge } from "../merge.js";
 import { getMode, listModes } from "../modes/registry.js";
 import { runPlan } from "../plan.js";
+import { autoRelink, listIssues, relink } from "../relink.js";
 import { writeHtml, writeReportMarkdown } from "../render.js";
 import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, DEPTH_CAPS, type BackendKind, type Depth, type GatherOptions, type ModeName } from "../types.js";
 import { runVerify } from "../verify.js";
@@ -191,6 +192,8 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
             return await handleFetch(args, run);
           case "ultrasearch_check":
             return handleCheck(args, run);
+          case "ultrasearch_relink":
+            return handleRelink(args, run);
           case "ultrasearch_verify":
             return handleVerify(args, run);
           case "ultrasearch_render":
@@ -343,7 +346,7 @@ function handleMerge(args: Record<string, unknown>): unknown {
 async function handleFetch(args: Record<string, unknown>, run: string): Promise<unknown> {
   const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
-  const res = await addSource(run, url, { question: str(args.question), title: str(args.title) });
+  const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url) });
   return { run, url, ...res };
 }
 
@@ -358,6 +361,27 @@ function handleCheck(args: Record<string, unknown>, run: string): unknown {
   // did not pass. Reporting it as an error would tell the model the gate is
   // broken instead of that its report is.
   return { run, ...res };
+}
+
+function handleRelink(args: Record<string, unknown>, run: string): unknown {
+  const id = str(args.id);
+  const url = str(args.url);
+  if (bool(args.list)) return { run, issues: listIssues(run) };
+  if (id || url) {
+    if (!id || !url) throw new ToolError("`id` and `url` go together — pass both to repoint one source, or neither to run the automatic pass.");
+    const res = relink(run, id, url, { title: str(args.title) });
+    if (!res.relinked) throw new ToolError(res.note ?? `${id} was not relinked.`);
+    return { run, ...res };
+  }
+  const { repaired, remaining } = autoRelink(run);
+  return {
+    run,
+    repaired,
+    remaining,
+    next: remaining.length
+      ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url."
+      : "Every source cites a page a reader can open.",
+  };
 }
 
 function handleVerify(args: Record<string, unknown>, run: string): unknown {

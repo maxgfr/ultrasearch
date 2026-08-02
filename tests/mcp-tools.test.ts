@@ -70,6 +70,7 @@ describe("annotations", () => {
     ultrasearch_gather: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     ultrasearch_fetch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     ultrasearch_check: { readOnlyHint: true, openWorldHint: false },
+    ultrasearch_relink: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_verify: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_render: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_plan: { readOnlyHint: true, openWorldHint: false },
@@ -135,8 +136,9 @@ describe("declared schemas accept what the handlers expect", () => {
     const sample: Record<string, Record<string, unknown>> = {
       ultrasearch_search: { query: "rust async", backend: "duckduckgo", max_sources: 5 },
       ultrasearch_gather: { question: "rust async", mode: "topic", depth: "summary", backends: ["duckduckgo"] },
-      ultrasearch_fetch: { run: "/tmp/d", url: "https://example.com" },
+      ultrasearch_fetch: { run: "/tmp/d", url: "https://example.com", cite_url: "https://example.com/page" },
       ultrasearch_check: { run: "/tmp/d", semantic: true, min_sources: 3 },
+      ultrasearch_relink: { run: "/tmp/d", id: "S12", url: "https://example.com/a" },
       ultrasearch_verify: { run: "/tmp/d", max_verify: 10, shards: 2, shard: 0 },
       ultrasearch_render: { run: "/tmp/d", no_html: true },
       ultrasearch_plan: { question: "rust async", mode: "research", subquestions: ["a", "b"] },

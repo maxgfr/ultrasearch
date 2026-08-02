@@ -32,7 +32,7 @@ report (with self-contained HTML). The web-facing sibling of ultradoc.
 Usage:
   ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
   ultrasearch search --backend <kind> --q "<query>" [options]
-  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>]
+  ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -105,6 +105,8 @@ Options:
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
+                       when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
   --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
@@ -197,6 +199,7 @@ export const VALUE_FLAGS = new Set([
   "firecrawl",
   "web-engine",
   "url",
+  "cite-url",
   "id",
   "since",
   "exclude-domains",
@@ -720,6 +723,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
+        citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"), // same default-on policy as gather
       });

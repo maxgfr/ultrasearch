@@ -172,6 +172,45 @@ describe("addSource — walls and API endpoints", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("reads the text from an endpoint but cites the page you reconstructed", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    // A payload that names no document at all — the engine cannot derive
+    // anything, but the agent searched and knows where this record lives.
+    installFetchMock(
+      routes([["records.test", { contentType: "text/plain", body: `An internal record with no identifier of any kind. ${"Body text. ".repeat(40)}` }]]),
+    );
+    const r = await addSource(dir, "https://records.test/v1/item/77?format=json", { citeUrl: "https://journal.test/articles/scleral-fixation" });
+    expect(r.added).toBe(true);
+    const added = (JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[])[1]!;
+    expect(added.url).toBe("https://journal.test/articles/scleral-fixation");
+    expect(added.domain).toBe("journal.test");
+    expect(added.meta?.textVia).toBe("https://records.test/v1/item/77?format=json");
+    expect(readFileSync(join(dir, added.extract), "utf8")).toContain("no identifier of any kind");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a reconstructed url that is itself not citable", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    const spy = installFetchMock(routes([["records.test", { body: "<p>x</p>" }]]));
+    const r = await addSource(dir, "https://records.test/v1/item/77?format=json", { citeUrl: "https://api.crossref.org/works/10.1/x" });
+    expect(r).toMatchObject({ id: "", added: false });
+    expect(r.note).toMatch(/not a page a reader can open/);
+    expect(spy).not.toHaveBeenCalled();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("tells you to reconstruct the page when the payload names nothing", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    installFetchMock(routes([["records.test", { contentType: "text/plain", body: `No identifier here at all. ${"Body. ".repeat(60)}` }]]));
+    const r = await addSource(dir, "https://records.test/v1/item/77?format=json", {});
+    expect(r.added).toBe(false);
+    expect(r.note).toMatch(/pass it as citeUrl/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("rescues a consent wall through Firecrawl when no provider endpoint exists", async () => {
     const dir = scratch();
     writeFixtureDossier(dir, 1);

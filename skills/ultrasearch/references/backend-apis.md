@@ -73,8 +73,11 @@ So the two roles are kept apart, by rules that are **provider-agnostic**:
    in descending order of authority: the `<link rel="canonical">` / `og:url` the
    page declares → a **DOI** → an **arXiv id** → a **PMID**. Whatever answers
    first becomes the recorded URL; the endpoint is kept in `meta.textVia`.
-3. **If nothing answers**, the source is refused rather than cited as an
-   endpoint. Guessing a landing page would be worse than saying so.
+3. **If nothing answers**, the engine refuses rather than cite an endpoint —
+   and hands the job back to you, because reconstructing a page from a title is
+   a search, not a regex. Two ways in: `fetch --url "<endpoint>" --cite-url
+   "<page>"` at ingest time, or `relink --id S# --url "<page>"` afterwards. Both
+   keep the endpoint in `meta.textVia`.
 
 Two things need the URL's shape *before* a request is spent, and those are the
 only per-provider entries — a short, optional table (an unlisted URL just falls
@@ -91,10 +94,11 @@ through to the generic path):
 
 The same three rules run again as a repair pass over a finished dossier:
 `relink --run <dir>` re-reads each stored extract, rewrites every source whose
-own text proves where it lives, and hands you the rest as a worklist —
-`--id S# --url "<page>"` folds your answer back in. `check` warns about what is
-left, so a dossier gathered before any of this can still be brought up to
-standard.
+own text proves where it lives, and hands you the rest as a worklist. Each
+remaining entry carries `evidence` — the record's title and the head of its
+text — because that is what a search needs; `--id S# --url "<page>"` folds your
+answer back in. `check` warns about what is left, so a dossier gathered before
+any of this can still be brought up to standard.
 
 ## Rate-limit etiquette
 

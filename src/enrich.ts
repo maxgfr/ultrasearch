@@ -26,7 +26,7 @@ export interface EnrichResult {
 export async function addSource(
   dir: string,
   url: string,
-  opts: { question?: string; title?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
+  opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
 ): Promise<EnrichResult> {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
@@ -40,9 +40,17 @@ export async function addSource(
   if (addressed > 1) {
     return { id: "", added: false, note: `${url} addresses ${addressed} records — a source is ONE document. Fetch them one at a time.` };
   }
+  // An endpoint is a legitimate way to READ a walled document; it is never a
+  // legitimate thing to cite. When you already know the page — you searched for
+  // it, or reconstructed it from the record — hand it over and the engine reads
+  // the text from `url` while recording yours.
+  const supplied = opts.citeUrl?.trim();
+  if (supplied && !isCitableUrl(supplied)) {
+    return { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open — pass the document's own page.` };
+  }
   const provider = resolveProvider(url);
-  if (provider.reject) return { id: "", added: false, note: provider.reject };
-  let citeUrl = provider.citeUrl;
+  if (provider.reject && !supplied) return { id: "", added: false, note: provider.reject };
+  let citeUrl = supplied || provider.citeUrl;
 
   // Dedupe on the CITE url so the same paper can't enter twice — once as its
   // page and once as the endpoint that carries its text.
@@ -52,7 +60,8 @@ export async function addSource(
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
 
-  const fetched = await cachedFetchAndExtract(citeUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+  const readUrl = supplied ? url : citeUrl;
+  const fetched = await cachedFetchAndExtract(readUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
   let wall = text?.trim() ? looksLikeJunkExtraction(text) : undefined;
   // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA") —
@@ -64,7 +73,7 @@ export async function addSource(
   // The page gave us nothing usable (empty, or a wall the regex reader can't see
   // past). Try the provider's text endpoint — same document, machine-readable,
   // usually not rate-limited the way the HTML is.
-  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== citeUrl) {
+  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== readUrl) {
     const alt = await cachedFetchAndExtract(provider.textUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
     if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
       text = alt.text;
@@ -78,7 +87,7 @@ export async function addSource(
   // Skipped when this text ALREADY came from Firecrawl — re-asking returns the
   // same wall.
   if (text?.trim() && wall && fetched.extractor !== "firecrawl") {
-    const fc = await scrapeViaFirecrawl(citeUrl, { firecrawl: opts.firecrawl });
+    const fc = await scrapeViaFirecrawl(readUrl, { firecrawl: opts.firecrawl });
     if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
       text = fc.data.markdown;
       title = title || fc.data.title;
@@ -89,7 +98,7 @@ export async function addSource(
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(citeUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
     if (wb) {
       text = wb.text;
       title = title || wb.title;
@@ -101,11 +110,11 @@ export async function addSource(
     return {
       id: "",
       added: false,
-      note: `${citeUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.`,
+      note: `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.`,
     };
   }
   if (!text?.trim()) {
-    return { id: "", added: false, note: fetched.note ?? `no readable content at ${citeUrl}` };
+    return { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` };
   }
 
   // We have the text; now settle what gets CITED. If the url we read is a
@@ -113,13 +122,18 @@ export async function addSource(
   // DOI, arXiv id, PMID) rather than pinning a URL no reader can open. When the
   // payload names no document, refuse — guessing a landing page would be worse
   // than saying so.
-  if (!isCitableUrl(citeUrl)) {
+  if (supplied && supplied !== url) {
+    meta.textVia = url;
+    via = url;
+  } else if (!isCitableUrl(citeUrl)) {
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {
         id: "",
         added: false,
-        note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID) — pass the page URL instead.`,
+        note:
+          `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). ` +
+          `Find the page this record describes and pass it as citeUrl — the text still comes from the endpoint.`,
       };
     }
     meta.textVia = citeUrl;
