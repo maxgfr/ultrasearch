@@ -118,6 +118,18 @@ describe("extractPdf", () => {
     expect(r.text).toBe("");
   });
 
+  // The two rungs that shell out, exercised without network and without caring
+  // what the machine has installed: an empty PATH makes both binaries ENOENT, so
+  // the spawn path runs and each rung reports itself unavailable. Covers the
+  // real invocations (npx -y --prefer-offline …, pdftotext -layout - -) that the
+  // suite otherwise never reaches, since setup.ts pins the ladder to `native`.
+  it("falls through when neither external extractor can be launched", async () => {
+    vi.stubEnv("PATH", "/nonexistent-ultrasearch-test");
+    const r = await extractPdf(TEXTUAL, { engines: ["pdf-inspector", "pdftotext"] });
+    expect(r.via).toBeUndefined();
+    expect(r.text).toBe("");
+  });
+
   // Without this, a 40-source run would re-pay a 90s npx discovery per PDF.
   it("remembers an unavailable rung instead of retrying it for every PDF", async () => {
     const firecrawl = vi.fn(async () => undefined);
