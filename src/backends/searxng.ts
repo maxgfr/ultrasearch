@@ -3,13 +3,71 @@ import { httpGet, sleep, PAGE_DELAY_MS } from "./fetch.js";
 import { canonicalizeUrl } from "../util.js";
 import { acceptLanguageHeader } from "../locale.js";
 
-// Resolve a configured SearXNG base: an explicit --searxng wins, else the
-// ULTRASEARCH_SEARXNG env var. Returns null when neither is set — SearXNG is
-// OPT-IN so a fresh install doesn't pay an 8s dead-localhost timeout on every
-// default topic/learn/startup run.
+// The docker-compose stack publishes SearXNG on this port. It gets a DEFAULT
+// base — like Firecrawl and unlike the historical opt-in — because the probe
+// below caps the cost of an absent instance at one refused connection per
+// process. Without a default, `docker compose --profile search up -d` brought
+// the container up and nothing ever queried it: the flag was mandatory and
+// silent about it.
+export const SEARXNG_DEFAULT_BASE = "http://localhost:8888";
+
+// Same hard ceiling as Firecrawl's probe: a dead localhost costs milliseconds
+// (connection refused), a blackholed host at most this.
+const PROBE_TIMEOUT_MS = 2000;
+
+/**
+ * Resolve the SearXNG base: an explicit `--searxng` wins, else
+ * `ULTRASEARCH_SEARXNG`, else the localhost default. The literal value `off`
+ * (either source) disables SearXNG entirely and returns null.
+ */
 export function resolveSearxngBase(ctx: { options: { searxng?: string } }): string | null {
-  const base = ctx.options.searxng || process.env.ULTRASEARCH_SEARXNG;
-  return base ? base.replace(/\/$/, "") : null;
+  const raw = (ctx.options.searxng ?? process.env.ULTRASEARCH_SEARXNG ?? SEARXNG_DEFAULT_BASE).trim();
+  if (!raw || raw.toLowerCase() === "off") return null;
+  return raw.replace(/\/+$/, "");
+}
+
+/** True when the base came from the user (flag or env) rather than the default. */
+export function searxngIsExplicit(ctx: { options: { searxng?: string } }): boolean {
+  return !!(ctx.options.searxng ?? process.env.ULTRASEARCH_SEARXNG);
+}
+
+// One probe per base per process, keyed by base so a test (or a run pointed at
+// two instances) is never served another base's verdict.
+const probeCache = new Map<string, Promise<boolean>>();
+
+/**
+ * Is a SearXNG instance answering at `base`? `GET {base}/healthz` with a hard
+ * 2s ceiling; ANY HTTP response counts as up (a 404 from a proxy in front of it
+ * still proves something is listening). Connection refused / timeout ⇒ down.
+ * Memoised for the process. Never throws.
+ *
+ * Deliberately bypasses `httpGet`, whose retry-with-backoff would turn a 2s
+ * ceiling into ~4.6s on a blackholed host. A probe wants a single shot.
+ */
+export function probeSearxng(base: string): Promise<boolean> {
+  let p = probeCache.get(base);
+  if (!p) {
+    p = (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${base}/healthz`, { signal: ctrl.signal });
+        await res.text().catch(() => ""); // drain so the socket is released
+        return true;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+    probeCache.set(base, p);
+  }
+  return p;
+}
+
+/** Test seam: forget memoised probe verdicts. */
+export function resetSearxngProbeCache(): void {
+  probeCache.clear();
 }
 
 // Discovery via a SearXNG instance's JSON API (keyless, self-hosted). Returns
@@ -22,8 +80,19 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
     return {
       backend: "searxng",
       items: [],
+      notes: ["SearXNG disabled (--searxng off / ULTRASEARCH_SEARXNG=off). Skipping."],
+    };
+  }
+  // Cheap gate before the real query: an absent instance costs one refused
+  // connection instead of a full 8s request timeout per page.
+  if (!(await probeSearxng(base))) {
+    return {
+      backend: "searxng",
+      items: [],
       notes: [
-        "SearXNG not configured — set --searxng <url> or ULTRASEARCH_SEARXNG (run `docker compose --profile search up -d` for a local instance). Skipping.",
+        searxngIsExplicit(ctx)
+          ? `SearXNG not reachable at ${base}. Skipping; consider your own WebSearch.`
+          : `SearXNG not running at ${base} — start it with \`ultrasearch searxng up\` (or \`docker compose --profile search up -d\`) for a local, keyless discovery backend. Skipping.`,
       ],
     };
   }

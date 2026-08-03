@@ -32,11 +32,32 @@ honest notes in the dossier.
   strip, so nav/sidebar/footer boilerplate doesn't dilute the text or the
   relevance score. It falls back to the full document when no main region is
   confidently found, so it never extracts *less* than a blunt strip.
-- **PDFs** (`.pdf` URL or `application/pdf`) are run through a best-effort,
-  dependency-free text-layer extractor (`zlib`-inflated content streams → text
-  operators). Scanned/image-only or encrypted PDFs may yield little — that's
-  reported as a note. This lets `research` papers (and any PDF you `fetch`) be
-  read beyond their abstract.
+- **PDFs** (`.pdf` URL or `application/pdf`) go through an **extractor ladder**,
+  stopping at the first rung whose output passes a quality gate:
+  1. **pdf-inspector** — `npx -y --prefer-offline @firecrawl/pdf-inspector -`,
+     the PDF bytes on stdin. Real Markdown with reading order and tables, and
+     always the latest version. Costs one ~6 MB npx download the first time it
+     is ever used, in a child process (so it can never take a run down).
+     `ULTRASEARCH_NO_NPX=1` skips this rung.
+  2. **Firecrawl** — the already-running container, which covers the platforms
+     npm has no prebuilt binary for (Mac Intel, Linux ARM, Alpine: Docker runs
+     the linux-x64 image there anyway) and hosts without npm.
+  3. **pdftotext** — poppler, if installed. Fast, no network.
+  4. the **built-in** dependency-free reader (`zlib`-inflated content streams →
+     text operators). Frequently wrong on CID fonts and ligatures, so it is a
+     last resort, kept only for a machine with no tools at all.
+
+  The gate (`assessPdfText`) rejects output laced with C0/C1 control bytes or
+  U+FFFD, whatever its LENGTH — the built-in reader can emit 16 MB of
+  image-stream garbage for a 12 MB paper, which every length-limited check waves
+  through. When every rung fails, the source is REFUSED with a reason rather
+  than cited: a scanned PDF says so instead of quietly contributing nothing.
+  `ULTRASEARCH_PDF_ENGINE=<rung>` forces one rung; `ultrasearch doctor` shows
+  which are available.
+
+  arXiv PDFs are cited as `/abs/<id>` but READ as the PDF (`preferText` in
+  providers.ts): the abstract page always fetches successfully, so treating the
+  PDF as a mere fallback meant papers were only ever grounded on their abstract.
 - When a self-hosted **Firecrawl** answers (`docker compose --profile search
   --profile extract up -d`), HTML pages are extracted through it FIRST — a real
   headless browser returning main-content markdown via `POST {base}/v2/scrape`
@@ -44,7 +65,9 @@ honest notes in the dossier.
   24h `maxAge` so Firecrawl can serve its own cached copy). One page per call;
   the async `/batch/scrape` job API is deliberately unused. **Any** failure —
   disabled, unreachable, non-2xx, empty markdown — falls back to the built-in
-  reader below. PDFs skip Firecrawl entirely. Firecrawl markdown is richer than
+  reader below. PDFs never take this HTML path — they reach Firecrawl only as
+  rung 2 of the ladder above, after the bytes are already in hand. Firecrawl
+  markdown is richer than
   the stripped text, so it hits the `--depth` extract caps sooner.
 - A short extraction dominated by **consent / anti-bot / "enable JavaScript"**
   boilerplate is rejected (it can't masquerade as full text): the source keeps

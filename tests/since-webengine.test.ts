@@ -33,8 +33,10 @@ describe("lang/region is wired into the web backends", () => {
   it("SearXNG adds &language=de", async () => {
     const spy = installFetchMock(() => ({ body: JSON.stringify({ results: [] }), contentType: "application/json" }));
     await searxngBackend(makeCtx("startup", { lang: "de", searxng: "http://localhost:8888" }));
-    expect(String(spy.mock.calls[0]![0])).toContain("language=de");
-    expect(headerOf(spy.mock.calls[0]!)["accept-language"]).toContain("de");
+    // calls[0] is the availability probe; the search request is the next one.
+    const query = spy.mock.calls.find((c) => String(c[0]).includes("format=json"))!;
+    expect(String(query[0])).toContain("language=de");
+    expect(headerOf(query)["accept-language"]).toContain("de");
   });
 
   it("Wikipedia uses the de.wikipedia.org subdomain", async () => {

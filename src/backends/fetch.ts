@@ -1,5 +1,5 @@
 import { buildMatcher } from "../util.js";
-import { pdfToText } from "./pdf.js";
+import { extractPdf } from "./pdf.js";
 // Cyclic by design: firecrawl.ts is a CLIENT of this HTTP layer, and this layer
 // is where the extraction seam lives. Safe because neither module calls into the
 // other at module-evaluation time — only from inside function bodies.
@@ -407,14 +407,18 @@ export function extractMainHtml(html: string): string {
   return best;
 }
 
-const PDF_URL_RE = /\.pdf($|[?#])/i;
+export const PDF_URL_RE = /\.pdf($|[?#])/i;
 const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 } as const;
 
 // Which extractor produced a page's text. `undefined` (absent) means the
 // built-in regex reader — the historical behaviour and still the fallback for
 // every failure path. Part of the on-disk cache key, so a body cleaned by one
 // extractor is never served to a run configured for the other (see src/cache.ts).
-export type ExtractorId = "native" | "firecrawl";
+//
+// `pdf-inspector` and `pdftotext` are PDF-only rungs (see backends/pdf/ladder.ts).
+// They are reported so a dossier can say which tool read a paper, but PDFs share
+// a single cache namespace — see the note on currentExtractor in src/cache.ts.
+export type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext";
 
 export interface ExtractResult {
   text: string;
@@ -466,12 +470,26 @@ export async function fetchAndExtract(url: string, opts: { acceptLanguage?: stri
     // A content-type-only PDF (no .pdf in the URL) was fetched as text — refetch
     // the raw bytes so the extractor sees an intact binary.
     const bytes = res.bytes ?? (await httpGet(url, PDF_FETCH_OPTS)).bytes;
-    const text = bytes ? pdfToText(bytes) : "";
+    // The ladder tries pdf-inspector, then an already-running Firecrawl, then
+    // pdftotext, then the built-in reader — and refuses rather than hand back
+    // text no extractor could vouch for. Firecrawl is injected as a callback so
+    // backends/pdf/ stays free of the client (and testable without a container).
+    const got = bytes
+      ? await extractPdf(bytes, {
+          firecrawl: async () => {
+            const fc = await scrapeViaFirecrawl(url, opts);
+            return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : undefined;
+          },
+        })
+      : { text: "", reason: "empty response body" };
     return {
-      text,
+      text: got.text,
       finalUrl: res.url,
       status: res.status,
-      note: text ? firecrawlNote : `Fetched ${url} but could not extract text (scanned/encrypted PDF?).`,
+      // `native` keeps reporting as absent, which is what the cache key and every
+      // existing dossier already assume.
+      extractor: got.via && got.via !== "native" ? got.via : undefined,
+      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text — ${got.reason}.`,
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);

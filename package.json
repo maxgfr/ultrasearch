@@ -1,7 +1,7 @@
 {
   "name": "ultrasearch",
   "version": "1.16.0",
-  "description": "Recap everything the web says about a topic — fan out keyless web search across many backends, fetch + dedupe sources into an evidence dossier, and write a citation-checked, tiered report (with self-contained HTML) in five research modes, plus an agentic deep-research tier (decompose, merge, adversarially verify). A skills.sh agent skill.",
+  "description": "Recap everything the web says about a topic \u2014 fan out keyless web search across many backends, fetch + dedupe sources into an evidence dossier, and write a citation-checked, tiered report (with self-contained HTML) in five research modes, plus an agentic deep-research tier (decompose, merge, adversarially verify). A skills.sh agent skill.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "bin": {
@@ -32,6 +32,7 @@
     "demo": "node scripts/ultrasearch.mjs gather --q \"what is rate limiting\" --mode topic --backends fixture --out /tmp/ultrasearch-demo",
     "eval": "node evals/run.mjs --suite offline",
     "eval:network": "node evals/run.mjs --suite network",
+    "bench:pdf": "ULTRASEARCH_BENCH=1 vitest run tests/bench-pdf.test.ts",
     "release": "semantic-release"
   },
   "keywords": [

@@ -49,6 +49,16 @@ describe("resolveProvider", () => {
     expect(resolveProvider("https://arxiv.org/pdf/2401.01234").citeUrl).toBe("https://arxiv.org/abs/2401.01234");
   });
 
+  // arXiv's /abs/ page always fetches successfully, so treating the PDF as a
+  // mere fallback meant the PDF was never read and research dossiers were
+  // grounded on abstracts. PubMed is the opposite case and must stay a fallback:
+  // its landing page IS the content, and the E-utilities endpoint exists only to
+  // get past the reCAPTCHA.
+  it("marks the arXiv PDF as the preferred text, but not PubMed's E-utilities endpoint", () => {
+    expect(resolveProvider("https://arxiv.org/pdf/2401.01234").preferText).toBe(true);
+    expect(resolveProvider("https://pubmed.ncbi.nlm.nih.gov/34567890/").preferText).toBeUndefined();
+  });
+
   it("leaves an E-utilities db it knows nothing about untouched", () => {
     const url = `${EFETCH}?db=nuccore&id=U49845&rettype=gb`;
     expect(resolveProvider(url)).toEqual({ citeUrl: url });

@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searxngBackend } from "../src/backends/searxng.js";
+import { searxngBackend, resetSearxngProbeCache, SEARXNG_DEFAULT_BASE } from "../src/backends/searxng.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
-afterEach(() => vi.unstubAllGlobals());
+// The availability probe is memoised per base for the whole process, so without
+// this every test after the first would be served the first one's verdict.
+afterEach(() => {
+  vi.unstubAllGlobals();
+  resetSearxngProbeCache();
+});
 
 const SEARX_JSON = JSON.stringify({
   results: [
@@ -22,11 +27,37 @@ describe("searxngBackend", () => {
     expect(r.items[0]!.score).toBeGreaterThan(r.items[1]!.score);
   });
 
-  it("is opt-in: skips without calling fetch when no instance is configured", async () => {
-    const spy = installFetchMock(() => ({ status: 200, body: "{}" }));
-    const r = await searxngBackend(makeCtx("x")); // no --searxng, no env
+  // SearXNG used to be opt-in: with no flag and no env it skipped outright, so
+  // `docker compose --profile search up -d` brought the container up and nothing
+  // ever queried it. It now defaults to localhost, gated by a probe.
+  it("defaults to localhost:8888 when nothing is configured", async () => {
+    vi.stubEnv("ULTRASEARCH_SEARXNG", undefined); // tests/setup.ts pins it to "off"
+    const spy = installFetchMock(routes([["format=json", { body: SEARX_JSON, contentType: "application/json" }]]));
+    const r = await searxngBackend(makeCtx("rate limiting"));
+    expect(r.items).toHaveLength(2);
+    expect(spy.mock.calls.some((c) => String(c[0]).startsWith(SEARXNG_DEFAULT_BASE))).toBe(true);
+  });
+
+  it("skips with a start-it hint when nothing is configured and no instance answers", async () => {
+    vi.stubEnv("ULTRASEARCH_SEARXNG", undefined);
+    // The router can't model a refused connection, so throw like the real thing.
+    const spy = vi.fn(async (_url: string) => {
+      throw new Error("ECONNREFUSED");
+    });
+    vi.stubGlobal("fetch", spy);
+    const r = await searxngBackend(makeCtx("x"));
     expect(r.items).toHaveLength(0);
-    expect(r.notes.join(" ")).toMatch(/not configured/i);
+    expect(r.notes.join(" ")).toMatch(/not running/i);
+    // Only the probe ran — the paginated query never started.
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(String(spy.mock.calls[0]![0])).toContain("/healthz");
+  });
+
+  it("is disabled by `off` without touching the network", async () => {
+    const spy = installFetchMock(() => ({ status: 200, body: "{}" }));
+    const r = await searxngBackend(makeCtx("x", { searxng: "off" }));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes.join(" ")).toMatch(/disabled/i);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -56,8 +87,10 @@ describe("searxngBackend", () => {
       contentType: "application/json",
     }));
     const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888", pages: 2 }));
-    expect(spy.mock.calls).toHaveLength(2);
-    expect(String(spy.mock.calls[1]![0])).toContain("pageno=2");
+    // Count the SEARCH calls only — the availability probe also goes through fetch.
+    const queries = spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("format=json"));
+    expect(queries).toHaveLength(2);
+    expect(queries[1]).toContain("pageno=2");
     expect(r.items.map((i) => i.url)).toEqual(["https://a.test/1", "https://b.test/2", "https://c.test/3", "https://d.test/4"]);
   });
 });

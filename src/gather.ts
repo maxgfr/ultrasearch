@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH, UNDER_COVERED_MIN } from "./types.js";
-import type { BackendKind, BackendResult, GatherOptions, Manifest, ModeProfile, RawSource, RunContext, Source } from "./types.js";
+import type { BackendKind, BackendResult, GatherOptions, Manifest, ManifestServices, ModeProfile, RawSource, RunContext, Source } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
 import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
@@ -10,6 +10,7 @@ import { cachedFetchAndExtract } from "./cache.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeBibtex, writeDossier } from "./dossier.js";
+import { describeServices } from "./services.js";
 import {
   domainOf,
   rrf,
@@ -302,7 +303,15 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // Pages whose text came from a self-hosted Firecrawl rather than the built-in
   // reader. Reported as ONE note (like the cache-hit count) instead of one per
   // page, so a dossier says how it was extracted without drowning in notes.
-  let firecrawlUsed = 0;
+  // Which extractor actually read each page, tallied so the run can REPORT what the
+  // optional helpers did. Everything here is skipped in silence when absent, and
+  // that silence is why a container can sit up for weeks without being noticed as
+  // unused — see the `services` block on the manifest.
+  const extractorUse = new Map<string, number>();
+  const tallyExtractor = (res: { extractor?: string }) => {
+    const k = res.extractor ?? "native";
+    extractorUse.set(k, (extractorUse.get(k) ?? 0) + 1);
+  };
   const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
 
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
@@ -328,7 +337,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (!res) {
         res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
         if (res.cached) cacheHits++;
-        if (res.extractor === "firecrawl") firecrawlUsed++;
+        tallyExtractor(res);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -357,7 +366,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           if (!alt) {
             alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
             if (alt.cached) cacheHits++;
-            if (alt.extractor === "firecrawl") firecrawlUsed++;
+            tallyExtractor(alt);
             hydrateCache.set(altKey, alt);
           }
           if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -399,7 +408,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           text = fc.data.markdown;
           junk = undefined;
           title = title || fc.data.title;
-          firecrawlUsed++;
+          tallyExtractor({ extractor: "firecrawl" });
           // Fold the rescue back into the in-process hydrate cache, so a second
           // assemble pass (the --rounds 2 gap round) reuses it rather than
           // re-scraping — and so the run counts this page exactly once.
@@ -537,6 +546,15 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // `fetch --url` needs a dossier on disk, so under --stdout the bridge back
   // into the evidence is the agent reading the pages itself.
   const bridge = options.stdout ? "and read those pages directly before answering" : "via `fetch --url` before writing";
+
+  // What the optional helpers actually contributed this run — the answer to
+  // "the container is up, is anything using it?".
+  const searxngResult = results.find((res) => res.backend === "searxng");
+  const services: ManifestServices = {
+    searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
+    firecrawl: { pages: extractorUse.get("firecrawl") ?? 0 },
+    pdf: Object.fromEntries([...extractorUse].filter(([k]) => k === "pdf-inspector" || k === "pdftotext")),
+  };
   const notes = [
     ...results.flatMap((res) => res.notes),
     // Deduped: every per-page hydrate note names its URL and so is unique, but
@@ -556,9 +574,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         ]
       : []),
     ...(cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : []),
-    ...(firecrawlUsed > 0
-      ? [`Firecrawl cleaned ${firecrawlUsed} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`]
+    ...(services.firecrawl.pages > 0
+      ? [`Firecrawl cleaned ${services.firecrawl.pages} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`]
       : []),
+    // The optional helpers are silent by design when absent, so ONE line per run
+    // says what they actually did. Without it a container can be up for weeks,
+    // never be queried, and leave no trace of the fact anywhere.
+    `Helpers: ${describeServices(services)}`,
     ...(thin
       ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch ${bridge}.`]
       : []),
@@ -593,6 +615,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(thin ? { recallFloor: { count: merged.length, floor } } : {}),
     ...(coverageTerms.length ? { coverage: { terms: coverageTerms, under } } : {}),
     cache: { enabled: !!options.cache, hits: cacheHits },
+    services,
   };
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);

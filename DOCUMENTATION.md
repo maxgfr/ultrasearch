@@ -121,6 +121,19 @@ extracts, so it costs no extra retrieval. See
 - `render.ts` — the zero-dependency markdown→HTML renderer + page assembly
   (verdict badges + sub-question tree in deep mode).
 - `bibtex.ts` — `toBibtex` for research mode's `refs.bib`.
+- `services.ts` — the optional helpers as one surface: `probeServices` (what is
+  reachable right now, behind `doctor`), `describeServices` (the one-line
+  `Helpers:` run summary) and `compose` (`searxng|firecrawl up|down`). Exists
+  because every helper is skipped in SILENCE when absent, which is right per URL
+  and wrong once per run: a container could sit up for weeks, never be queried,
+  and nothing anywhere would say so.
+- `backends/pdf.ts` + `backends/pdf/` — the PDF extractor ladder.
+  `ladder.ts` tries pdf-inspector (`npx`, PDF on stdin, child process so a crash
+  can't take the run down) → Firecrawl → `pdftotext` → `native.ts`, stopping at
+  the first rung whose output passes `quality.ts`. That gate rejects C0/C1 and
+  U+FFFD-laced text at ANY length — the built-in reader can emit 16 MB of
+  image-stream garbage for a 12 MB paper, which every length-limited check waves
+  through. Nothing readable ⇒ the source is refused with a reason, not cited.
 - `modes/` — the five `ModeProfile`s + their registry.
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the

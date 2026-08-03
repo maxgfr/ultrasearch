@@ -23,6 +23,7 @@ import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
 import { runStdioServer } from "./mcp/stdio.js";
 import { startHttpServer } from "./mcp/http.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
+import { probeServices, formatServices, compose } from "./services.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -63,6 +64,11 @@ Commands:
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
            --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
+  doctor   Report which optional helpers are actually available: the SearXNG and
+           Firecrawl containers, and the PDF extractor ladder. Everything here is
+           skipped in SILENCE when absent, so this is how you find out a
+           container is up but unused, or a stronger PDF reader is missing.
+  searxng  | firecrawl   Manage the optional container: up | down | status.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
            (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
@@ -176,6 +182,9 @@ export const COMMANDS = new Set([
   "verify",
   "orchestrate",
   "mcp",
+  "doctor",
+  "searxng",
+  "firecrawl",
 ]);
 export const VALUE_FLAGS = new Set([
   "q",
@@ -626,6 +635,41 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (m.extras.length) out.push(`            extras:   ${m.extras.join(", ")}`);
       }
       process.stdout.write(out.join("\n") + "\n");
+      return;
+    }
+
+    // Which optional helpers are actually live. Exists because every one of them
+    // is skipped in silence when absent: without this, a SearXNG container can
+    // sit up for weeks, never be queried, and nothing anywhere says so.
+    case "doctor": {
+      const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
+        return;
+      }
+      process.stdout.write(`ultrasearch ${VERSION} — optional helpers\n\n${formatServices(rows)}\n`);
+      return;
+    }
+
+    case "searxng":
+    case "firecrawl": {
+      const action = p.positional[0] ?? "status";
+      if (action === "status") {
+        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        process.stdout.write(formatServices(rows) + "\n");
+        return;
+      }
+      if (action !== "up" && action !== "down") {
+        fail(`${p.command}: unknown action '${action}' (expected up | down | status)`);
+      }
+      const code = await compose(p.command, action);
+      if (code !== 0) process.exit(code);
+      // `up --wait` returns as soon as the healthchecks pass; report what the
+      // engine will actually see, which is the only thing that matters here.
+      if (action === "up") {
+        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        process.stdout.write("\n" + formatServices(rows) + "\n");
+      }
       return;
     }
 

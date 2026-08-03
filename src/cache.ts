@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fetchAndExtract, type ExtractorId } from "./backends/fetch.js";
+import { fetchAndExtract, PDF_URL_RE, type ExtractorId } from "./backends/fetch.js";
 import { firecrawlBase, probeFirecrawl } from "./backends/firecrawl.js";
 import { canonicalizeUrl, domainOf, fnv1a64 } from "./util.js";
 import { isNoWrite } from "./no-write.js";
@@ -47,19 +47,29 @@ export function cacheDir(): string {
 //
 // Entries written under an older key simply miss and get overwritten — no
 // migration needed.
-export function cachePath(url: string, acceptLanguage = "", extractor: ExtractorId = "native"): string {
+export function cachePath(url: string, acceptLanguage = "", extractor: CacheNamespace = "native"): string {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
   return join(cacheDir(), `${domain}-${fnv1a64(`${canon}\u0000${acceptLanguage}\u0000${extractor}`).toString(16)}.json`);
 }
 
-// Which extractor a fetch made RIGHT NOW would use: Firecrawl when one is
-// configured AND answering (the probe is memoised per process, so this costs a
-// single refused connection at worst), else the built-in reader. Resolved before
-// the cache is consulted so the lookup and the write that follows it agree on
-// the key — and so bringing Firecrawl up or down immediately switches namespace
-// instead of being masked by yesterday's entries.
-async function currentExtractor(opts: { firecrawl?: string }): Promise<ExtractorId> {
+// The cache-key namespace a fetch made RIGHT NOW would use: Firecrawl when one
+// is configured AND answering (the probe is memoised per process, so this costs
+// a single refused connection at worst), else the built-in reader. Resolved
+// before the cache is consulted so the lookup and the write that follows it
+// agree on the key — and so bringing Firecrawl up or down immediately switches
+// namespace instead of being masked by yesterday's entries.
+//
+// PDFs are the exception and share one namespace. They go through the extractor
+// ladder, whose winning rung depends on which tools happen to be installed and
+// is only known AFTER extraction — a pre-fetch prediction cannot name it, so
+// filing PDFs under the rung that won would miss the cache on every single run.
+// The rung is still reported on the source itself; it just isn't part of the key.
+const PDF_CACHE_NS = "pdf" as const;
+type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS;
+
+async function currentExtractor(opts: { firecrawl?: string }, url: string): Promise<CacheNamespace> {
+  if (PDF_URL_RE.test(url)) return PDF_CACHE_NS;
   const base = firecrawlBase(opts);
   return base && (await probeFirecrawl(base)) ? "firecrawl" : "native";
 }
@@ -69,7 +79,7 @@ function ttlMs(): number {
 }
 
 // Read a fresh cache entry, or undefined when missing / expired / unreadable.
-function readCache(url: string, now: number, acceptLanguage = "", extractor: ExtractorId = "native"): Extract | undefined {
+function readCache(url: string, now: number, acceptLanguage = "", extractor: CacheNamespace = "native"): Extract | undefined {
   const p = cachePath(url, acceptLanguage, extractor);
   if (!existsSync(p)) return undefined;
   try {
@@ -82,7 +92,7 @@ function readCache(url: string, now: number, acceptLanguage = "", extractor: Ext
   }
 }
 
-function writeCache(url: string, res: Extract, now: number, acceptLanguage = "", extractor: ExtractorId = "native"): void {
+function writeCache(url: string, res: Extract, now: number, acceptLanguage = "", extractor: CacheNamespace = "native"): void {
   // Under no-write the cache degrades to READ-only rather than being disabled:
   // a plan-phase run is still served by whatever an earlier normal run left
   // here, it just never leaves a trace of its own. Deliberately not routed
@@ -110,13 +120,14 @@ export async function cachedFetchAndExtract(
 ): Promise<Extract & { cached?: boolean }> {
   if (!enabled) return fetchAndExtract(url, opts);
   const lang = opts.acceptLanguage ?? "";
-  const extractor = await currentExtractor(opts);
-  const hit = readCache(url, now, lang, extractor);
+  const ns = await currentExtractor(opts, url);
+  const hit = readCache(url, now, lang, ns);
   if (hit) return { ...hit, cached: true };
   const res = await fetchAndExtract(url, opts);
   // Cache successes only, filed under the extractor that ACTUALLY produced the
   // text — a Firecrawl run that fell back to the built-in reader for one page
-  // must not leave that page sitting in Firecrawl's namespace.
-  if (res.text?.trim()) writeCache(url, res, now, lang, res.extractor ?? "native");
+  // must not leave that page sitting in Firecrawl's namespace. PDFs keep the
+  // shared namespace resolved above, for the reason documented there.
+  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS ? PDF_CACHE_NS : (res.extractor ?? "native"));
   return res;
 }

@@ -346,6 +346,21 @@ export interface Manifest {
   // fetched live. `hits` counts pages served from disk (≤ the TTL old), so a
   // dossier is self-describing about how fresh its page bodies are.
   cache?: { enabled: boolean; hits: number };
+  // What the OPTIONAL helpers contributed this run. They are all skipped in
+  // silence when absent — right for a per-URL note, wrong once per run, because
+  // it lets a container sit up for weeks without ever being queried and without
+  // anything saying so. `sources: 0` on a requested SearXNG, or an empty `pdf`
+  // on a run full of papers, is the signal that something is not wired up.
+  services?: ManifestServices;
+}
+
+export interface ManifestServices {
+  /** `requested` = the backend ran at all; `sources` = results it contributed. */
+  searxng: { requested: boolean; sources: number };
+  /** Pages whose text came from the self-hosted Firecrawl rather than the built-in reader. */
+  firecrawl: { pages: number };
+  /** PDF ladder rung → pages read by it. Absent rungs simply never won. */
+  pdf: Record<string, number>;
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on

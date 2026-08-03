@@ -253,11 +253,32 @@ describe("fetchAndExtract — the extraction seam", () => {
     expect(r.text).toBe("");
   });
 
-  it("never sends a PDF to Firecrawl", async () => {
+  // A PDF must not take the HTML path (browser-render the URL, then treat the
+  // markdown as the page). It reaches Firecrawl only as a rung of the PDF
+  // ladder, after the bytes have been fetched and a stronger extractor failed.
+  it("never sends a PDF down the HTML Firecrawl path", async () => {
     const base = nextBase();
     const spy = installFetchMock(() => ({ body: "%PDF-1.4", contentType: "application/pdf" }));
     await fetchAndExtract("https://ex.test/paper.pdf", { firecrawl: base });
     expect(spy.mock.calls.some((c) => String(c[0]).includes("/scrape"))).toBe(false);
+  });
+
+  it("uses Firecrawl as a PDF ladder rung when it is the enabled extractor", async () => {
+    const base = nextBase();
+    vi.stubEnv("ULTRASEARCH_PDF_ENGINE", "firecrawl"); // tests/setup.ts pins it to "native"
+    const markdown = "# Paper\n\nA clean paragraph of extracted prose from the PDF.";
+    const spy = installFetchMock((url) =>
+      url.includes("/scrape")
+        ? {
+            body: JSON.stringify({ success: true, data: { markdown, metadata: { statusCode: 200, sourceURL: "https://ex.test/paper.pdf" } } }),
+            contentType: "application/json",
+          }
+        : { body: "%PDF-1.4 no text operators here", contentType: "application/pdf" },
+    );
+    const r = await fetchAndExtract("https://ex.test/paper.pdf", { firecrawl: base });
+    expect(spy.mock.calls.some((c) => String(c[0]).includes("/scrape"))).toBe(true);
+    expect(r.text).toContain("clean paragraph");
+    expect(r.extractor).toBe("firecrawl");
   });
 });
 

@@ -140,6 +140,8 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
+| `doctor` | nothing (prints) | `--json`. Which optional helpers are live: the SearXNG / Firecrawl containers and the PDF ladder. They are skipped in SILENCE when absent, so this is how you learn a container is up but unused, or that a stronger PDF reader is missing. |
+| `searxng` · `firecrawl` | containers | `up` · `down` · `status`. Both are auto-detected on localhost, so a plain `gather` uses them with no flag once they are up. |
 | `brainstorm` | `BRAINSTORM.md` + `.json` (`--stdout`: streams the `.md`) | `--q` · `--mode` · `--out` · `--json`. Route C only. |
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |

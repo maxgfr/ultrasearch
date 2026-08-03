@@ -60,7 +60,12 @@ export async function addSource(
     return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   }
 
-  const readUrl = supplied ? url : citeUrl;
+  // Where the TEXT comes from. Normally the citation page, but a provider that
+  // marks its textUrl as the real content (arXiv: /abs/ is an abstract, the PDF
+  // is the paper) is read there first — otherwise the landing page always
+  // "succeeds" and the full text is never fetched at all.
+  const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
+  const readUrl = supplied ? url : preferred;
   const fetched = await cachedFetchAndExtract(readUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
   let { text, title } = fetched;
   let wall = text?.trim() ? looksLikeJunkExtraction(text) : undefined;
@@ -69,18 +74,27 @@ export async function addSource(
   if (wall) title = undefined;
   const meta: SourceMeta = {};
   let via: string | undefined;
+  // Reading somewhere other than the citation page is provenance worth keeping,
+  // whether it was the preferred text URL or a fallback below.
+  if (readUrl !== citeUrl) {
+    via = readUrl;
+    meta.textVia = readUrl;
+  }
 
-  // The page gave us nothing usable (empty, or a wall the regex reader can't see
-  // past). Try the provider's text endpoint — same document, machine-readable,
-  // usually not rate-limited the way the HTML is.
-  if ((!text?.trim() || wall) && provider.textUrl && provider.textUrl !== readUrl) {
-    const alt = await cachedFetchAndExtract(provider.textUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+  // Nothing usable (empty, or a wall the regex reader can't see past). Try the
+  // OTHER url of the pair: the provider's text endpoint when we read the landing
+  // page, or the landing page when we already preferred the text endpoint and it
+  // came back empty (a paywalled or image-only PDF).
+  const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
+  if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
+    const alt = await cachedFetchAndExtract(fallbackUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
     if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
       text = alt.text;
       title = title || alt.title;
       wall = undefined;
-      via = provider.textUrl;
-      meta.textVia = provider.textUrl;
+      via = fallbackUrl === citeUrl ? undefined : fallbackUrl;
+      if (via) meta.textVia = via;
+      else delete meta.textVia;
     }
   }
   // A real browser gets past most consent walls and JS shells the stripper can't.

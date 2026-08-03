@@ -134,12 +134,26 @@ Two things can run locally, both keyless, both optional, both behind a docker
 compose **profile** (a bare `docker compose up -d` starts nothing):
 
 ```bash
-docker compose --profile search up -d --wait                    # SearXNG on :8888
-docker compose --profile search --profile extract up -d --wait  # + Firecrawl on :3002
+ultrasearch searxng up      # SearXNG on :8888          (compose profile `search`)
+ultrasearch firecrawl up    # + Firecrawl on :3002      (+ profile `extract`)
+ultrasearch doctor          # what is actually available right now
 ```
 
-- **SearXNG** (`--profile search`) backs the `searxng` discovery backend —
-  `--searxng http://localhost:8888` or `ULTRASEARCH_SEARXNG`.
+Both are **auto-detected on localhost** and used without any flag, each behind a
+2s availability probe so an absent one costs a single refused connection. Because
+they are skipped in *silence*, every run ends with a `Helpers:` line saying what
+they actually did — a container that is up but contributing nothing is exactly
+the case worth seeing, and `ultrasearch doctor` says why.
+
+- **SearXNG** (`--profile search`) backs the `searxng` discovery backend. Used on
+  `http://localhost:8888` with no flag at all (`--searxng <url>` /
+  `ULTRASEARCH_SEARXNG` to point elsewhere, `off` to disable).
+- **PDFs** get their own extractor ladder — `npx @firecrawl/pdf-inspector`, then
+  Firecrawl, then `pdftotext`, then the built-in reader — stopping at the first
+  whose output passes a quality gate, and REFUSING rather than citing a PDF none
+  of them could read. `ULTRASEARCH_NO_NPX=1` drops the npx rung;
+  `ULTRASEARCH_PDF_ENGINE=<rung>` pins one. See
+  [`references/backend-apis.md`](skills/ultrasearch/references/backend-apis.md).
 - **Firecrawl** (`--profile extract`) replaces the built-in regex HTML stripper
   with **browser-rendered main-content markdown**: better on nav/cookie chrome,
   and the only way a JS-rendered page yields text at all. It also *rescues* the

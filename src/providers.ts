@@ -30,6 +30,12 @@ export interface ResolvedProvider {
   // Set when the URL cannot become a source at all (a batch/query endpoint that
   // is not one document). The message says what to do instead.
   reject?: string;
+  // `textUrl` carries the REAL content and should be read first, with citeUrl
+  // kept only for the citation. Without this the landing page wins by default,
+  // which is right for PubMed (a full landing page, with the E-utilities
+  // endpoint as the un-walled fallback) and wrong for arXiv, whose /abs/ page is
+  // an abstract while the PDF is the paper.
+  preferText?: true;
 }
 
 const PUBMED_LANDING = /^https?:\/\/(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov\/(\d{4,9})\/?$/i;
@@ -71,7 +77,7 @@ export function resolveProvider(url: string): ResolvedProvider {
   if (eutils) return resolveEutils(raw, eutils[1]!.toLowerCase());
 
   const arxiv = raw.match(ARXIV_PDF);
-  if (arxiv) return { citeUrl: `https://arxiv.org/abs/${arxiv[1]!}`, textUrl: raw };
+  if (arxiv) return { citeUrl: `https://arxiv.org/abs/${arxiv[1]!}`, textUrl: raw, preferText: true };
 
   return { citeUrl: raw };
 }

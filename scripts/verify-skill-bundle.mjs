@@ -96,9 +96,11 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
     cli = null;
   }
   if (cli) {
-    // Flags belonging to OTHER tools that the docs legitimately quote. `--profile`
-    // and `--wait` are docker compose's, in the SearXNG/Firecrawl bring-up lines.
-    const ALLOWED_FOREIGN_FLAGS = new Set(["profile", "wait"]);
+    // Flags belonging to OTHER tools that the docs legitimately quote.
+    // `--profile` / `--wait` are docker compose's, in the SearXNG/Firecrawl
+    // bring-up lines; `--prefer-offline` is npx's, in the PDF ladder's
+    // pdf-inspector invocation; `--layout` is poppler's pdftotext.
+    const ALLOWED_FOREIGN_FLAGS = new Set(["profile", "wait", "prefer-offline", "layout"]);
     const cliFlags = new Set([...cli.VALUE_FLAGS, ...cli.BOOL_FLAGS]);
     const universe = new Set([...cliFlags, "help", "version", "h", "v", ...ALLOWED_FOREIGN_FLAGS]);
     const refs = join(skillDir, "references");
