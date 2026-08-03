@@ -93,4 +93,40 @@ describe("searxngBackend", () => {
     expect(queries[1]).toContain("pageno=2");
     expect(r.items.map((i) => i.url)).toEqual(["https://a.test/1", "https://b.test/2", "https://c.test/3", "https://d.test/4"]);
   });
+
+  // SearXNG answers 200 with an EMPTY result list when its own upstreams have
+  // throttled it, reporting them in `unresponsive_engines`. Reading that field is
+  // what separates "this query has no hits" from "come back in five minutes".
+  it("names the throttled upstream engines instead of reporting an empty query", async () => {
+    installFetchMock(
+      routes([
+        [
+          "format=json",
+          {
+            body: JSON.stringify({
+              results: [],
+              unresponsive_engines: [
+                ["brave", "Suspended: too many requests"],
+                ["duckduckgo", "CAPTCHA"],
+              ],
+            }),
+            contentType: "application/json",
+          },
+        ],
+      ]),
+    );
+    const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888" }));
+    expect(r.items).toHaveLength(0);
+    const note = r.notes.join(" ");
+    expect(note).toMatch(/throttling this instance/i);
+    expect(note).toMatch(/transient/i);
+    expect(note).toContain("brave (Suspended: too many requests)");
+    expect(note).toContain("duckduckgo (CAPTCHA)");
+  });
+
+  it("still says plainly when a query simply has no hits", async () => {
+    installFetchMock(routes([["format=json", { body: JSON.stringify({ results: [] }), contentType: "application/json" }]]));
+    const r = await searxngBackend(makeCtx("x", { searxng: "http://localhost:8888" }));
+    expect(r.notes.join(" ")).toBe("SearXNG returned no results.");
+  });
 });

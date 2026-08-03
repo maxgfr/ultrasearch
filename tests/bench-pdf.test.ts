@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { extractPdf, resetPdfLadderCache } from "../src/backends/pdf.js";
+import { scrapeViaFirecrawl } from "../src/backends/firecrawl.js";
 
 // What each PDF rung actually delivers, on real papers. Network by design, so it
 // is OFF unless ULTRASEARCH_BENCH=1 (`pnpm run bench:pdf`) and never gates CI.
@@ -26,7 +27,25 @@ const CASES = [
   { id: "arxiv-math", url: "https://arxiv.org/pdf/2404.19756", witness: "Kolmogorov" },
 ] as const;
 
-const RUNGS = ["pdf-inspector", "pdftotext", "native"] as const;
+// Firecrawl is included so the container rung is measured too — it is the one
+// that covers the platforms npm has no pdf-inspector binary for. With the stack
+// down it simply reports `kept=no`, which is the honest answer rather than a
+// silent gap in the table.
+const RUNGS = ["pdf-inspector", "firecrawl", "pdftotext", "native"] as const;
+
+// tests/setup.ts pins ULTRASEARCH_FIRECRAWL=off for the whole suite (a stubbed
+// fetch would otherwise make the probe succeed everywhere). A bench wants the
+// real container, so it carries its own base.
+const FIRECRAWL_BASE = process.env.ULTRASEARCH_BENCH_FIRECRAWL || "http://localhost:3002";
+
+// Rungs that emit Markdown escape their brackets — Firecrawl returns
+// `\[13\] and gated recurrent \[7\]` for the witness sentence. That is the SAME
+// text, so comparing it raw would report a perfectly healthy extractor as having
+// lost the sentence. Normalise the escaping (and whitespace, since `-layout`
+// wraps lines) before matching, so the check only fires on real text loss.
+function normalize(t: string): string {
+  return t.replace(/\\([[\]()*_`#+\-.!])/g, "$1").replace(/\s+/g, " ");
+}
 
 function controlRatio(t: string): number {
   if (!t.length) return 0;
@@ -58,18 +77,24 @@ describe.skipIf(!process.env.ULTRASEARCH_BENCH)("PDF extractor ladder — bench"
         resetPdfLadderCache();
         const t0 = Date.now();
         // Pin ONE rung so each is measured on its own; production falls through.
-        const out = await extractPdf(bytes, { engines: [rung] });
+        const out = await extractPdf(bytes, {
+          engines: [rung],
+          firecrawl: async () => {
+            const fc = await scrapeViaFirecrawl(c.url, { firecrawl: FIRECRAWL_BASE });
+            return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : undefined;
+          },
+        });
         const ms = Date.now() - t0;
         const kept = !!out.via;
         rows.push(
           `  ${c.id.padEnd(11)} ${rung.padEnd(14)} kept=${(kept ? "yes" : "no").padEnd(4)} chars=${String(out.text.length).padStart(7)} ` +
-            `control=${controlRatio(out.text).toExponential(1).padStart(8)} witness=${out.text.includes(c.witness) ? "intact" : "ABSENT"} ${ms}ms` +
+            `control=${controlRatio(out.text).toExponential(1).padStart(8)} witness=${normalize(out.text).includes(normalize(c.witness)) ? "intact" : "ABSENT"} ${ms}ms` +
             (out.reason ? `  (${out.reason})` : ""),
         );
 
         // The gate must never accept text with the witness sentence missing —
         // that would be exactly the silent loss it exists to prevent.
-        if (kept) expect(out.text.includes(c.witness), `${c.id}/${rung} passed the gate but lost the witness sentence`).toBe(true);
+        if (kept) expect(normalize(out.text).includes(normalize(c.witness)), `${c.id}/${rung} passed the gate but lost the witness sentence`).toBe(true);
       }
 
       // eslint-disable-next-line no-console

@@ -34,6 +34,8 @@
 #   `ultrasearch-* / construct-* / ultradoc-*` containers still hold the ports
 #   and this file can no longer stop them. Remove them once:
 #     docker rm -f $(docker ps -aq --filter name='^(ultrasearch|construct|ultradoc)-')
+#   Their volumes are Firecrawl queue state and are safe to drop too:
+#     docker volume ls -q | grep -E '^(ultrasearch|construct|ultradoc)_' | xargs -r docker volume rm
 name: skills
 
 services:
@@ -159,9 +161,9 @@ services:
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=postgres
     volumes:
-      - skills_firecrawl_pg:/var/lib/postgresql/data
+      - firecrawl_pg:/var/lib/postgresql/data
     restart: unless-stopped
     profiles: ["extract"]
 
 volumes:
-  skills_firecrawl_pg:
+  firecrawl_pg:

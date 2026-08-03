@@ -1761,6 +1761,7 @@ var searxngBackend = async (ctx) => {
   const base0 = `${base}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""}${ctx.options.since ? `&time_range=year` : ""}`;
   const seen = /* @__PURE__ */ new Set();
   const found = [];
+  const suspended = /* @__PURE__ */ new Map();
   for (let p = 0; p < pages; p++) {
     const url = base0 + (p > 0 ? `&pageno=${p + 1}` : "");
     const r = await httpGet(url, { accept: "application/json", acceptLanguage, timeoutMs: 8e3 });
@@ -1788,6 +1789,10 @@ var searxngBackend = async (ctx) => {
       }
       break;
     }
+    for (const u of Array.isArray(data?.unresponsive_engines) ? data.unresponsive_engines : []) {
+      const [engine, why] = Array.isArray(u) ? u : [u, ""];
+      if (engine) suspended.set(String(engine), String(why ?? "").trim());
+    }
     const results = Array.isArray(data?.results) ? data.results : [];
     const before = found.length;
     for (const x of results.slice(0, perPage)) {
@@ -1808,10 +1813,14 @@ var searxngBackend = async (ctx) => {
     snippet: f.snippet,
     lang: ctx.options.lang
   }));
+  const throttled = [...suspended].map(([engine, why]) => why ? `${engine} (${why})` : engine);
+  const blocked = throttled.length ? ` Upstream engines unavailable: ${throttled.join(", ")}.` : "";
   return {
     backend: "searxng",
     items,
-    notes: items.length ? [`SearXNG returned ${items.length} result(s).`] : [`SearXNG returned no results.`]
+    notes: items.length ? [`SearXNG returned ${items.length} result(s).${blocked}`] : [
+      throttled.length ? `SearXNG returned no results \u2014 its upstream engines are throttling this instance, which is transient.${blocked} The cascade fell through to the other engines; retry in a few minutes for SearXNG's own recall.` : `SearXNG returned no results.`
+    ]
   };
 };
 

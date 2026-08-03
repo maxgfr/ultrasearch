@@ -104,6 +104,12 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
   }${ctx.options.since ? `&time_range=year` : ""}`;
   const seen = new Set<string>();
   const found: { url: string; title: string; snippet: string }[] = [];
+  // SearXNG answers 200 with an EMPTY result list when its own upstreams have
+  // throttled it — it reports them in `unresponsive_engines` instead of failing.
+  // Without reading that field, a rate-limited instance is indistinguishable
+  // from a query that genuinely has no hits, and the run says "no results" for
+  // something that will work again in a few minutes.
+  const suspended = new Map<string, string>();
   // SearXNG paginates with `&pageno=` (1-based). Accumulate + dedupe across pages
   // and stop when a page adds no new URLs.
   for (let p = 0; p < pages; p++) {
@@ -133,6 +139,11 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
       }
       break;
     }
+    // `[["brave","Suspended: too many requests"],["duckduckgo","CAPTCHA"],…]`
+    for (const u of Array.isArray(data?.unresponsive_engines) ? data.unresponsive_engines : []) {
+      const [engine, why] = Array.isArray(u) ? u : [u, ""];
+      if (engine) suspended.set(String(engine), String(why ?? "").trim());
+    }
     const results: any[] = Array.isArray(data?.results) ? data.results : [];
     const before = found.length;
     for (const x of results.slice(0, perPage)) {
@@ -155,9 +166,22 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
     snippet: f.snippet,
     lang: ctx.options.lang,
   }));
+  // Name the throttled upstreams. Empty results with every engine suspended is a
+  // TRANSIENT block, not an empty query — saying "no results" there sends you
+  // rewording a question that was fine. The web cascade has already moved on to
+  // DuckDuckGo et al. either way (an engine returning nothing never satisfies
+  // `perSource`), so this is about telling the truth, not about routing.
+  const throttled = [...suspended].map(([engine, why]) => (why ? `${engine} (${why})` : engine));
+  const blocked = throttled.length ? ` Upstream engines unavailable: ${throttled.join(", ")}.` : "";
   return {
     backend: "searxng",
     items,
-    notes: items.length ? [`SearXNG returned ${items.length} result(s).`] : [`SearXNG returned no results.`],
+    notes: items.length
+      ? [`SearXNG returned ${items.length} result(s).${blocked}`]
+      : [
+          throttled.length
+            ? `SearXNG returned no results — its upstream engines are throttling this instance, which is transient.${blocked} The cascade fell through to the other engines; retry in a few minutes for SearXNG's own recall.`
+            : `SearXNG returned no results.`,
+        ],
   };
 };
