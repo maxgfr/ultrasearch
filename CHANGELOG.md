@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.17.0](https://github.com/maxgfr/ultrasearch/compare/v1.16.0...v1.17.0) (2026-08-03)
+
+
+### Features
+
+* **pdf,services:** extractor ladder, and actually use SearXNG/Firecrawl ([d2447b2](https://github.com/maxgfr/ultrasearch/commit/d2447b26b6cdbf965db229567c04cc6fe452185b))
+
 # [1.16.0](https://github.com/maxgfr/ultrasearch/compare/v1.15.0...v1.16.0) (2026-08-02)
 
 
