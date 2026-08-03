@@ -14,7 +14,27 @@
 # ultrasearch falls through to DuckDuckGo + your own WebSearch). `extract` adds
 # the Firecrawl stack, which replaces the built-in HTML stripper with
 # browser-rendered main-content markdown — see docker/firecrawl/README.md.
-name: ultrasearch
+# ── Shared with the sibling skills ───────────────────────────────────────────
+# ultrasearch, construct and ultradoc all need SearXNG and Firecrawl (and two of
+# them Qdrant and Ollama), and all bound the SAME host ports from three separate
+# compose projects — so only one could ever be up. Starting a second failed with
+# "port is already allocated", *after* leaving its sidecars running.
+#
+# They now share one project name, one set of container names and one set of
+# volumes, and the service definitions below are identical across the three. So
+# `<any skill> firecrawl up` targets the SAME containers: the second one is a
+# no-op instead of a collision, and the stack costs one machine's worth of RAM
+# rather than three.
+#
+# ⚠ Keep the shared service blocks byte-identical across the three repos. Docker
+#   compares the resolved config: a divergence makes `up` from one repo RECREATE
+#   the other's running containers.
+#
+# ⚠ Upgrading from a version that used per-skill container names? The old
+#   `ultrasearch-* / construct-* / ultradoc-*` containers still hold the ports
+#   and this file can no longer stop them. Remove them once:
+#     docker rm -f $(docker ps -aq --filter name='^(ultrasearch|construct|ultradoc)-')
+name: skills
 
 services:
   # Self-hosted metasearch for keyless web discovery. JSON output is enabled in
@@ -22,7 +42,7 @@ services:
   # Also backs Firecrawl's keyless /search through SEARXNG_ENDPOINT.
   searxng:
     image: searxng/searxng:2026.6.11-a1490676e
-    container_name: ultrasearch-searxng
+    container_name: skills-searxng
     ports:
       - "8888:8080"
     environment:
@@ -51,7 +71,7 @@ services:
   #   docker compose --profile search --profile extract up -d
   firecrawl:
     image: ghcr.io/firecrawl/firecrawl:2.10.5@sha256:8ce1af201332e1de046d70d5d516fbfe7f0f6229820d271d880873eeca531ea6
-    container_name: ultrasearch-firecrawl
+    container_name: skills-firecrawl
     ports:
       - "3002:3002"
     env_file:
@@ -99,7 +119,7 @@ services:
   # Headless-browser sidecar — this is what makes JS-rendered pages extractable.
   firecrawl-playwright:
     image: ghcr.io/firecrawl/playwright-service:latest@sha256:8c50add7293201e575110e6c7489fa383a9dfc46f168936526a458e06ffc5c28
-    container_name: ultrasearch-firecrawl-playwright
+    container_name: skills-firecrawl-playwright
     environment:
       - PORT=3000
       - BLOCK_MEDIA=true
@@ -114,14 +134,14 @@ services:
 
   firecrawl-redis:
     image: redis:alpine
-    container_name: ultrasearch-firecrawl-redis
+    container_name: skills-firecrawl-redis
     command: redis-server --bind 0.0.0.0
     restart: unless-stopped
     profiles: ["extract"]
 
   firecrawl-rabbitmq:
     image: rabbitmq:3-management
-    container_name: ultrasearch-firecrawl-rabbitmq
+    container_name: skills-firecrawl-rabbitmq
     restart: unless-stopped
     profiles: ["extract"]
     healthcheck:
@@ -133,15 +153,15 @@ services:
 
   firecrawl-postgres:
     image: ghcr.io/firecrawl/nuq-postgres:latest@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
-    container_name: ultrasearch-firecrawl-postgres
+    container_name: skills-firecrawl-postgres
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=postgres
     volumes:
-      - ultrasearch_firecrawl_pg:/var/lib/postgresql/data
+      - skills_firecrawl_pg:/var/lib/postgresql/data
     restart: unless-stopped
     profiles: ["extract"]
 
 volumes:
-  ultrasearch_firecrawl_pg:
+  skills_firecrawl_pg:

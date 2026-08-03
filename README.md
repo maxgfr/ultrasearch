@@ -164,6 +164,20 @@ the case worth seeing, and `ultrasearch doctor` says why.
   disable). Costs ~3 GB of images and ~4 GB of RAM; see
   [`docker/firecrawl/README.md`](docker/firecrawl/README.md).
 
+The stack is **shared with the sibling skills** (ultrasearch, construct,
+ultradoc): one compose project, one set of containers, one set of volumes. They
+used to define three separate projects on the same host ports, so only one could
+be up at a time — starting a second failed on the port *after* leaving its
+sidecars running. Bringing it up from any of them now targets the same
+containers, so the second is a no-op and the RAM is paid once.
+
+Upgrading from a version with per-skill container names? Remove the old ones
+once — this file can no longer stop them, and they still hold the ports:
+
+```bash
+docker rm -f $(docker ps -aq --filter name='^(ultrasearch|construct|ultradoc)-')
+```
+
 ## Keyless, no API keys
 
 Discovery is a layered, free fallback cascade, mirroring ultradoc:
