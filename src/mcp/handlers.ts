@@ -4,14 +4,29 @@ import { runBackends } from "../backends/registry.js";
 import { runBrainstorm } from "../brainstorm.js";
 import { runCheck } from "../check.js";
 import { buildSource } from "../dossier.js";
-import { addSource } from "../enrich.js";
+import { addSource, addSources } from "../enrich.js";
+import { parseWebResults } from "../backends/websearch.js";
 import { runGather } from "../gather.js";
 import { runMerge } from "../merge.js";
 import { getMode, listModes } from "../modes/registry.js";
 import { runPlan } from "../plan.js";
 import { autoRelink, listIssues, relink } from "../relink.js";
 import { writeHtml, writeReportMarkdown } from "../render.js";
-import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, DEPTH_CAPS, type BackendKind, type Depth, type GatherOptions, type ModeName } from "../types.js";
+import {
+  ALL_BACKENDS,
+  ALL_DEPTHS,
+  ALL_MODES,
+  ALL_SEARCH_PROFILES,
+  ALL_WEB_ENGINES,
+  DEPTH_CAPS,
+  type BackendKind,
+  type Depth,
+  type GatherOptions,
+  type ModeName,
+  type SearchProfile,
+  type WebEngine,
+  type WebSearchHit,
+} from "../types.js";
 import { runVerify } from "../verify.js";
 import { withRunLock } from "../run-lock.js";
 import { isNoWrite, takeArtifacts } from "../no-write.js";
@@ -89,6 +104,21 @@ function oneOf<T extends string>(value: string | undefined, allowed: readonly T[
   return value as T;
 }
 
+// The WebSearch lane, as an MCP client supplies it: a structured array rather
+// than the CLI's file path. Reuses the CLI's forgiving parser by round-tripping
+// through JSON, so both surfaces accept exactly the same shapes and there is
+// one place where "what counts as a hit" is decided.
+function webResultsArg(v: unknown): { hits: WebSearchHit[]; rejected: number } | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v)) throw new ToolError("`web_results` must be an array of {url, title, snippet} objects (or of URL strings).");
+  if (!v.length) return undefined;
+  const parsed = parseWebResults(JSON.stringify(v));
+  if (!parsed.hits.length) {
+    throw new ToolError('`web_results` held no usable hit — expected [{"url": "https://…"}, …] (or a list of URL strings).');
+  }
+  return { hits: parsed.hits, rejected: parsed.rejected };
+}
+
 function requiredRun(args: Record<string, unknown>, defaults: HandlerDefaults): string {
   const run = str(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
@@ -117,6 +147,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
   // optional in GatherOptions, and passing 0 silently caps the run to nothing:
   // the dossier comes back empty and looks like the web had no answer.
   const caps = DEPTH_CAPS[depth];
+  const web = webResultsArg(args.web_results);
 
   return {
     question: requiredStr(args, "question", "the topic or question to research."),
@@ -128,7 +159,13 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
     lang: str(args.lang) ?? "en",
     region: str(args.region),
-    webEngine: "auto",
+    // Pilotable from MCP, at last: these were hardcoded, so a client could not
+    // pin an engine, point at a SearXNG, or reach the WebSearch lane at all.
+    webEngine: oneOf<WebEngine>(str(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
+    search: oneOf<SearchProfile>(str(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
+    ...(web ? { webResults: web.hits, webResultsRejected: web.rejected } : {}),
+    searxng: str(args.searxng),
+    firecrawl: str(args.firecrawl),
     since: str(args.since),
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
@@ -153,6 +190,7 @@ export async function callTool(name: string, args: Record<string, unknown>, defa
 // no. `render` is absent on purpose: it streams index.md instead.
 const NO_WRITE_REFUSED_TOOLS: Record<string, string> = {
   ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
+  ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
   ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
 };
@@ -190,6 +228,8 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
         switch (name) {
           case "ultrasearch_fetch":
             return await handleFetch(args, run);
+          case "ultrasearch_ingest":
+            return await handleIngest(args, run);
           case "ultrasearch_check":
             return handleCheck(args, run);
           case "ultrasearch_relink":
@@ -348,6 +388,29 @@ async function handleFetch(args: Record<string, unknown>, run: string): Promise<
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
   const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url) });
   return { run, url, ...res };
+}
+
+async function handleIngest(args: Record<string, unknown>, run: string): Promise<unknown> {
+  const web = webResultsArg(args.web_results);
+  const listed = strArray(args.urls) ?? [];
+  for (const u of listed) {
+    if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
+  }
+  const hits: (string | WebSearchHit)[] = [...listed, ...(web?.hits ?? [])];
+  if (!hits.length) throw new ToolError("`web_results` or `urls` is required — the URLs to fold into the dossier.");
+
+  const res = await addSources(run, hits, { question: str(args.question), firecrawl: str(args.firecrawl), cache: true });
+  return {
+    run,
+    ...res,
+    ...(web?.rejected ? { rejected: web.rejected } : {}),
+    // Say what to do next, and only when there IS something to do: a partial
+    // ingest is normal (walls, dead links), and the caller needs to know which
+    // URLs never became citable rather than assume all of them did.
+    ...(res.skipped
+      ? { next: "Some URLs were not added — read each result's `note`. A refused page is not citable; find a primary source that carries the text." }
+      : {}),
+  };
 }
 
 function handleCheck(args: Record<string, unknown>, run: string): unknown {

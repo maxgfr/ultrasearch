@@ -214,13 +214,16 @@ Worklist: \`${join(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \
 
 For EACH of your sub-questions:
 
-1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
-   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --out "<its out dir>"\`
+1. **Sweep with your OWN WebSearch first — this is the primary engine, not an extra.**
+   \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
+   names how many DISTINCT queries to run and which angles to cover. Run your WebSearch once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":…,"title":…,"snippet":…}, …]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
+2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your WebSearch queries into that language when the run targets a non-English audience):
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
-2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, enrich with your own WebSearch and, for each good URL:
-   \`node ${engineAbs} fetch --url "<url>" --out "<its out dir>"\`
-   Pin a URL a reader can OPEN — a landing page, never a raw API endpoint or a batch/search URL (the engine rewrites the endpoints it knows and refuses the rest). If it answers that the page "extracted to a … wall", the host is throttling you: that is a refusal, not a setback to work around — take another source, or pass the provider's text endpoint and let the engine record the page.
-3. Do NOT write any report tier.
+3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND WebSearch round at that gap and fold the whole round in with ONE call:
+   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"\`
+   Pin URLs a reader can OPEN — landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a … wall", the host is throttling you: that is a refusal, not a setback to work around — take another source, or pass the provider's text endpoint and let the engine record the page.
+4. Do NOT write any report tier.
 
 Return (structured output): \`{ "gathered": [{ "id", "out", "coverage", "newSubQuestions" }] }\` — for each of your ITEMS: its \`out\` dir, a one-line coverage note, and any NEW sub-questions you discovered (an empty array for none).
 ${gathererFooter}`,
@@ -280,7 +283,7 @@ ${status}
 ## The loop (play every role yourself, one item at a time)
 
 1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` → \`${join(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q … --queries … --out <its out dir>\`, then enrich a thin or under-covered sub-dossier (your WebSearch + \`fetch --url … --out <its out dir>\`).
+2. **Gather per sub-question** — for EVERY entry in \`${join(runAbs, "PLAN.json")}\`, apply \`${join(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q … --queries … --web-results … --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** — \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** — SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** — \`${engine} verify --run ${run}\` writes \`${join(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.

@@ -74,6 +74,27 @@ const DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
 const ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
 const PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
 
+// An arXiv identifier as it appears as a whole PATH SEGMENT (…/2408.05636,
+// …/2408.05636v2). Deliberately host-independent — this is the identifier's
+// documented syntax, not a list of sites we like.
+const ARXIV_ID_PATH_RE = /\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:$|[/?#])/;
+
+/**
+ * Does the URL ITSELF carry a persistent identifier?
+ *
+ * `deriveCitableUrl` reads identifiers out of a document's text, which misses
+ * the commonest case in scholarly work: the address IS the identifier
+ * (`arxiv.org/pdf/2408.05636`, `doi.org/10.1145/…`). A PDF makes that worse —
+ * extraction drops hyperlinks, so the text can carry none at all. Measured: two
+ * arXiv papers were flagged "thin attribution" purely because nothing looked at
+ * their own URL.
+ *
+ * Identifier SYNTAX only (DOI, arXiv id). No hostnames.
+ */
+export function urlDeclaresIdentity(url: string): boolean {
+  return DOI_RE.test(url) || ARXIV_ID_PATH_RE.test(url);
+}
+
 /**
  * Derive a citable URL from what a fetch returned, for the case where the URL we
  * fetched is not itself citable. Reads the document's own identifiers, in

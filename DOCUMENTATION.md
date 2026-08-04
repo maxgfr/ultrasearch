@@ -9,11 +9,17 @@ ungrounded claims), pointed at the open web instead of a git repo.
 
 ```
 question
+  │  queries → the agent runs its OWN WebSearch, N distinct angles, pools the hits
+  ▼
+[ --web-results ] ── the WebSearch lane (backend "claude"), the primary engine
   │  gather
   ▼
 plan query variants (full question + keywords + identifiers, by depth)
   │
 [ backends ] ── fan out concurrent, keyless, per-variant ──► RawSource[] per backend
+  │  (--search light: the lane + the mode's API backends only.
+  │   --search full: also the scraped cascade + SearXNG, all fused.
+  │   auto = light when a lane was supplied, full when it was not)
   │  (web discovery walks engines in concurrent waves up to --web-breadth;
   │   polite scholarly APIs serialize their per-variant calls)
   │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
@@ -22,13 +28,16 @@ plan query variants (full question + keywords + identifiers, by depth)
   │   built-in reader; junk/consent-wall extractions re-tried through Firecrawl
   │   then rejected; dead links → Wayback)
   │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
+  │   (the cap gives the agent's curated lane first claim: a hit that passed
+  │    hydration + the relevance floor is not displaced by a scraped result)
   │  map per-term coverage → the under-covered enrichment worklist
   ▼
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
   │  (research mode also writes refs.bib)
   ▼
-the AGENT reads DOSSIER.md, enriches via its own WebSearch (`fetch --url`),
-then writes SUMMARY.md / REPORT.md  (+ glossary.md for learn)
+the AGENT reads DOSSIER.md, tops up the gaps with a second WebSearch round
+(`ingest --web-results`, one process for the whole round), then writes
+SUMMARY.md / REPORT.md  (+ glossary.md for learn)
   │  render                                   │  check
   ▼                                           ▼
 index.html (self-contained)        grounding verdict (exit≠0 if ungrounded)
@@ -100,7 +109,22 @@ extracts, so it costs no extra retrieval. See
   which collect artifacts in memory instead of writing when the gate is on, so
   "nothing was written" is a property of one module rather than a promise each
   command keeps. `cli.ts` streams the collected artifacts to stdout.
-- `enrich.ts` — `addSource`: the WebSearch→dossier bridge behind `fetch`.
+- `enrich.ts` — `addSource` (behind `fetch`) and `addSources` (behind `ingest`,
+  the batch form). Deliberately sequential: `addSource` reads sources.json, picks
+  the next free `[S#]` and writes it back, so two concurrent calls would both
+  claim the same id and leave a citation resolving to the wrong page. Stable ids
+  are what the grounding contract rests on; the saving `ingest` delivers is the
+  N process spawns and N agent round-trips, which is where the cost actually was.
+- `backends/websearch.ts` — the harness WebSearch lane (backend kind `claude`).
+  `parseWebResults` is the forgiving seam between a model's output and the
+  engine — object arrays, bare URL arrays, `{results:[…]}` wrappers, newline
+  lists — and it COUNTS what it refuses rather than silently halving recall. The
+  backend itself carries no text, so every hit is hydrated and wall-checked like
+  any other candidate.
+- `queries.ts` — `planQueries`: the agent's WebSearch worklist (how many distinct
+  queries for the depth, plus the mode's `searchAngles`). The engine cannot run
+  the agent's search tool, so the next best thing is saying precisely what to
+  search — one query against a great index is still only one slice of it.
 - `check.ts` — the citation grammar + grounding algorithm (with model-hint
   tolerance and per-claim coverage on REPORT); exports the claim parser
   (`unitsOfFile` / `unitSourceTokens`) for `verify`, and the `--semantic` fold.

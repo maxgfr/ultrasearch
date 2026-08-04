@@ -7,6 +7,7 @@ const DUMMY_MODE: ModeProfile = {
   deepOnly: [],
   template: "",
   extras: [],
+  searchAngles: [],
 };
 
 // Build a minimal RunContext for backend tests.

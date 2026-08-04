@@ -69,6 +69,7 @@ describe("annotations", () => {
     ultrasearch_search: { readOnlyHint: true, openWorldHint: true },
     ultrasearch_gather: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     ultrasearch_fetch: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    ultrasearch_ingest: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     ultrasearch_check: { readOnlyHint: true, openWorldHint: false },
     ultrasearch_relink: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_verify: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -95,7 +96,7 @@ describe("annotations", () => {
     // A client that batches or caches read-only calls must be told which ones
     // depend on the outside world.
     const openWorld = ALL.filter((t) => TOOL_META[t.name]!.openWorld).map((t) => t.name);
-    expect(openWorld.sort()).toEqual(["ultrasearch_fetch", "ultrasearch_gather", "ultrasearch_search"]);
+    expect(openWorld.sort()).toEqual(["ultrasearch_fetch", "ultrasearch_gather", "ultrasearch_ingest", "ultrasearch_search"]);
   });
 
   it("declares nothing destructive — no tool here removes a dossier", () => {
@@ -135,8 +136,16 @@ describe("declared schemas accept what the handlers expect", () => {
   it("validates a representative call per tool", () => {
     const sample: Record<string, Record<string, unknown>> = {
       ultrasearch_search: { query: "rust async", backend: "duckduckgo", max_sources: 5 },
-      ultrasearch_gather: { question: "rust async", mode: "topic", depth: "summary", backends: ["duckduckgo"] },
+      ultrasearch_gather: {
+        question: "rust async",
+        mode: "topic",
+        depth: "summary",
+        web_results: [{ url: "https://example.com/a", title: "A" }],
+        search: "light",
+        web_engine: "claude",
+      },
       ultrasearch_fetch: { run: "/tmp/d", url: "https://example.com", cite_url: "https://example.com/page" },
+      ultrasearch_ingest: { run: "/tmp/d", web_results: [{ url: "https://example.com/a" }], urls: ["https://example.com/b"] },
       ultrasearch_check: { run: "/tmp/d", semantic: true, min_sources: 3 },
       ultrasearch_relink: { run: "/tmp/d", id: "S12", url: "https://example.com/a" },
       ultrasearch_verify: { run: "/tmp/d", max_verify: 10, shards: 2, shard: 0 },

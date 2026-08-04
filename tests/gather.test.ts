@@ -38,7 +38,9 @@ describe("runGather (offline, fixture backend)", () => {
 
     const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
     expect(manifest.backendsUsed).toContain("fixture");
-    expect(manifest.notes.join(" ")).toMatch(/fetch --url/); // the enrich nudge
+    // The top-up nudge points at the BATCH form: a WebSearch round that found
+    // ten pages must cost one process, not ten.
+    expect(manifest.notes.join(" ")).toMatch(/ingest --run <dir> --web-results/);
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -80,12 +82,16 @@ describe("runGather (thin-dossier recall floor)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("does not flag thin when --max-sources is below the floor (no false positive)", async () => {
+  it("keeps every on-topic page it fetched — --max-sources is a FETCH budget, not a quota", async () => {
     rmSync(dir, { recursive: true, force: true });
-    // asking for at most 2 sources and getting them is not 'thin'.
+    // The fixture backend carries 3 sources. A low --max-sources bounds how many
+    // candidates are hydrated (plus the depth's overshoot), and everything that
+    // survives hydration + the relevance floor + de-duplication is kept:
+    // discarding a page already fetched and judged relevant is pure waste.
     const r = await runGather(opts({ backends: ["fixture"], out: dir, maxSources: 2 }));
     const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
-    expect(r.sources.length).toBe(2);
+    expect(r.sources.length).toBe(3);
+    // …and asking for few sources and getting them is not a 'thin' dossier.
     expect(manifest.recallFloor).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });

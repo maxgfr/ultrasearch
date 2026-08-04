@@ -232,10 +232,25 @@ describe("gatherReport (empty-dossier guardrail)", () => {
     expect(r.exitCode).toBe(1);
     const text = r.lines.join("\n");
     expect(text).toMatch(/EMPTY DOSSIER/i);
-    expect(text).toMatch(/--web-engine/);
-    expect(text).toMatch(/fetch --url/);
+    // The recovery order is the engine hierarchy: the agent's own WebSearch
+    // first, the keyless engines after. Sending it back to re-roll a scraper
+    // before it has used the tool in its own hand is the old failure mode.
+    expect(text).toMatch(/--web-results/);
+    expect(text).toMatch(/ingest --run/);
     expect(text).toMatch(/never invent/i);
     expect(text).not.toMatch(/write SUMMARY\/REPORT/);
+    const first = text.split("\n").findIndex((l) => /--web-results/.test(l));
+    const keyless = text.split("\n").findIndex((l) => /--search full|--web-engine/.test(l));
+    expect(first).toBeGreaterThan(-1);
+    if (keyless > -1) expect(first).toBeLessThan(keyless);
+  });
+
+  it("with a lane already supplied, points at widening it rather than re-running WebSearch", () => {
+    const withLane = buildGatherOptions(parseArgs(["gather", "--q", "niche commercial query"]));
+    withLane.webResults = [{ url: "https://a.test" }];
+    const r = gatherReport({ dir: "/tmp/run", sources: [], manifest: fakeManifest } as never, withLane);
+    expect(r.exitCode).toBe(1);
+    expect(r.lines.join("\n")).toMatch(/widen the lane/i);
   });
 
   it(">0 sources → exit 0 with the normal next-steps", () => {

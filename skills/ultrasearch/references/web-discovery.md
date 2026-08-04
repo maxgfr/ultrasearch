@@ -1,10 +1,91 @@
-# Web discovery — a keyless fallback cascade, with a WebSearch bridge
+# Web discovery — your WebSearch is the engine, the cascade is the amplifier
 
-For the general-web part of a run, discovery is a resilient **fallback cascade**
-across several keyless/free engines. Fetching and text extraction of the chosen
-URLs is always done by the script.
+Discovery has two lanes. Fetching and text extraction of the chosen URLs is
+always done by the script, whichever lane found them.
 
-## The cascade (`--web-engine auto`, the default)
+## Lane 1 — your own WebSearch (the engine)
+
+The best index in this pipeline, and the only one that needs neither a container
+nor a scrape. The engine cannot call it — that tool lives in your harness — so
+you run it and hand the hits over:
+
+```
+node <skill-dir>/scripts/ultrasearch.mjs queries --q "<question>" --mode <m> --depth <d>
+# → run your WebSearch once per angle, pool every hit into one JSON array
+node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --web-results <RUN>/websearch.json
+```
+
+`queries` sizes the sweep (2 · 4 · 8 distinct queries by depth) and names the
+mode's angles. **One query is not a sweep**: a definition query and a criticism
+query return different halves of the web, and pooling them is where the recall
+comes from.
+
+The payload is forgiving — `[{url,title,snippet}, …]`, a bare array of URL
+strings, a `{results:[…]}` wrapper, or one URL per line; `-` reads stdin. Every
+entry it cannot use is **counted and reported**, never silently dropped.
+
+What the lane gets, and what it deliberately does not:
+
+- **No trust privilege.** `claude` has no authority floor in the backend-trust
+  table, exactly like every other discovery engine: trust comes from the domain.
+- **No exemption from being read.** Hits carry no text, so each page is fetched,
+  cleaned, wall-checked and hydrated through the same rescue ladder as any other
+  candidate. A snippet never becomes evidence.
+- **First claim on `--max-sources`.** Once a hit has passed hydration, the
+  relevance floor and the near-duplicate collapse, it is not displaced by a
+  scraped result. Measured before this rule existed: fusing the cascade in cut a
+  15-hit lane to 7 kept, and what it dropped were the IETF record, the Chromium
+  docs, chromestatus, the Fastly and Akamai pages — replaced by SEO status-code
+  aggregators.
+
+## The two profiles (`--search`)
+
+| `--search` | Your WebSearch lane | Mode API backends (Wikipedia, arXiv, Crossref, StackExchange, GitHub, HN, standards) | Keyless cascade (DDG, DDG Lite, Mojeek, Marginalia) | SearXNG | Firecrawl |
+|---|---|---|---|---|---|
+| `light` | ✅ the engine | ✅ | ❌ | ❌ | ✅ (extraction) |
+| `full` | ✅ | ✅ | ✅ fused | ✅ if up | ✅ (extraction) |
+| `max` | ✅ | ✅ | ✅ fused | ✅ if up | ✅ **also discovery** |
+| `auto` *(default)* | `light` when you passed `--web-results` and pinned no `--web-engine`; `full` otherwise. Never `max` — ~3 GB of containers is always a decision. | | | | |
+
+## `--search max` — the ceiling
+
+`full`, plus three things:
+
+- **Firecrawl's `/search` joins discovery.** It is excluded elsewhere because its
+  upstream is the same SearXNG — but its hits can arrive *with* browser-rendered
+  markdown, and `fuse` prefers the copy carrying text. So a duplicate URL comes
+  back already read by a real browser instead of being re-fetched by the regex
+  stripper.
+- **Every recall knob at its limit**: `--pages 5`, `--web-breadth 5`,
+  `--rounds 2`. It supersedes a pinned `--web-engine` and says so.
+- **`--depth deep`**, unless you pinned a depth yourself.
+
+It wants the whole stack (`docker compose --profile search --profile extract up
+-d --wait`). A preflight warns before the run, and the dossier names whatever
+was missing — a max run that silently degraded to full is the worst outcome
+here, because it *looks* exhaustive.
+
+> **`max` buys recall, and can cost precision.** Measured on two real runs of the
+> same engine: on a `research` question it returned 60 sources with SearXNG
+> contributing 19, 10 PDFs through the extractor ladder, and the papers ranked
+> 1, 3, 5, 6, 7… On a `topic` question about a heavily-blogged subject it tripled
+> the pool but pushed the WHATWG spec and the vendor API docs from ranks 6–21
+> down to 27–57 — SEO posts written verbatim around the query out-score a
+> specification that never uses the query's words. Reach for `max` on research
+> and on decisions; on a commercial `topic`, `light` is the sharper tool.
+
+Two consequences worth knowing:
+
+- **Firecrawl stays on in `light`.** It *extracts* pages, it does not find them —
+  so it keeps rescuing consent walls in either profile. Only SearXNG, a discovery
+  engine, drops out.
+- **`light` has no discovery engine**, so `--seed-domains` and `--rounds 2` have
+  nothing to run their queries on. The run says so in its notes rather than
+  pretending. Pass those hosts' pages in `--web-results`, or use `--search full`.
+- **`auto` never regresses a harness without WebSearch.** No `--web-results` ⇒
+  `full` ⇒ exactly the behaviour that existed before this lane did.
+
+## Lane 2 — the keyless cascade (`--search full`)
 
 Engines are tried in order. How many are used depends on **breadth**, scaled by
 `--depth` (override with `--web-breadth <n>`):
@@ -40,23 +121,34 @@ which engines were tried/fused, so you can see where results came from.
 5. **Marginalia.** Queries the free public JSON API
    (`api.marginalia-search.com`). Indexes the non-commercial, text-first
    long-tail web the big engines under-surface — broad-recall final fallback.
-6. **Your WebSearch (the bridge).** The keyless layers are best-effort. Use your
-   own **WebSearch** tool to find the authoritative URLs they miss, then ingest
-   each one:
-   ```
-   node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dossier-dir>
-   ```
-   This is not a fallback of last resort — it's the recommended way to reach
-   primary sources and exactly the pages the user cares about. Ingested sources
-   are stamped with the `claude` backend label for provenance.
+
+These are scrapers and free APIs: they rate-limit, they go empty, and their
+markup shifts under them. The engine records each failure honestly in the notes
+rather than hiding it. That is why they amplify lane 1 instead of replacing it.
+
+## Topping up an existing dossier
+
+A second WebSearch round folds in as one process, never one per URL:
+
+```
+node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dossier-dir> --web-results <round2.json>
+```
+
+Each URL gets its own `S#` and its own outcome line — added, already present, or
+refused with the reason. `fetch --url` remains the single-page form. Sources
+ingested either way are stamped with the `claude` backend label for provenance.
 
 ## Pinning an engine
 
 `--web-engine auto|searxng|firecrawl|ddg|ddglite|mojeek|marginalia|claude` —
 `auto` (default) runs the fallback cascade above; a named engine pins to exactly
-that one (injected even if the mode profile didn't list it); `claude` drops
-keyless web discovery entirely, so your own WebSearch + `fetch --url` drives the
-run.
+that one (injected even if the mode profile didn't list it); `claude` drops the
+keyless engines so your `--web-results` lane IS the discovery — the same thing
+`--search light` does, spelled as an engine.
+
+Pinning is a deliberate request, so it **suppresses the `auto` inference**:
+`--web-results` plus `--web-engine mojeek` resolves to `full`, not `light`, and
+you get both lanes. Ask for `--search light` explicitly to override that.
 
 `firecrawl` is **not** in the `auto` cascade and never will be: it needs a local
 container stack, and its `/search` proxies the same SearXNG the `searxng` engine

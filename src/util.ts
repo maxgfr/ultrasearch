@@ -107,8 +107,23 @@ export function domainOf(raw: string): string {
   }
 }
 
-// Backend authority floor — how much a source is trusted purely for where it
-// came from, before domain class is considered.
+// Provenance floor — how much a source is trusted for the ROUTE it arrived by.
+//
+// This is deliberately the only trust table left, and it is a statement about
+// THIS TOOL'S OWN plumbing, not about the web: a record handed over by arXiv's
+// API is a bibliographic record by construction, while a page a scraper found
+// is an arbitrary page. There used to be a second table here scoring hostnames
+// — .gov, the spec bodies, the doc hosts, the content farms — and it was
+// deleted on purpose. A frozen list of "good sites" is unmaintainable and was
+// measurably wrong: it scored the WHATWG HTML Standard, the normative
+// specification for the subject under research, exactly the same as a content
+// farm, because nobody had added whatwg.org to it. Every list has that failure
+// waiting in it.
+//
+// Authority now comes from two places that need no list: structural signals
+// computed from the document itself (src/authority.ts), and the reading agent,
+// which sees every extract and is far better at "is this a source of record?"
+// than any regex could be.
 const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   arxiv: 0.9,
   crossref: 0.9,
@@ -130,33 +145,22 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   hackernews: 0.5,
 };
 
-// Domain-class heuristic. Authoritative TLDs and official-docs hosts score
-// high; SEO/aggregator domains score low; everything else is neutral.
-function domainTrust(domain: string): number {
-  if (!domain) return 0.5;
-  if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
-  if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
-  if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  // Major vendor / standards doc hosts — primary sources for their own products.
-  if (
-    /(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
-      domain,
-    )
-  )
-    return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
-  if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
-  if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
-  if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;
-  return 0.5;
-}
+// Neutral prior for a source whose route says nothing about it — every page a
+// general-web engine found. It is a deliberate 0.5 rather than 0: the tool has
+// NO opinion on an arbitrary page, and pretending otherwise is what the deleted
+// hostname table did.
+const NEUTRAL_TRUST = 0.5;
 
-// Combined 0..1 trust for a source: the better of its backend floor and its
-// domain class, lightly rounded.
-export function trustScore(url: string, backend: BackendKind): number {
-  const d = domainTrust(domainOf(url));
-  const b = BACKEND_TRUST[backend] ?? 0;
-  return Number(Math.max(d, b).toFixed(2));
+/**
+ * Provenance trust, 0..1: how much the ROUTE a source arrived by vouches for it.
+ * Never a judgment about the page — that is the agent's, made from the text.
+ *
+ * `url` is kept in the signature because callers legitimately have it and a
+ * future route-based rule may need it (a DOI resolver, say); it is deliberately
+ * NOT inspected for hostnames.
+ */
+export function trustScore(_url: string, backend: BackendKind): number {
+  return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
 }
 
 // Drop duplicate sources by canonical URL, keeping the best-scored copy (ties

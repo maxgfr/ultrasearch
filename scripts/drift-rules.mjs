@@ -23,6 +23,20 @@ export function helpCoversFlag(help, flag) {
 // follow the flag (only non-letters between), so a markdown-table pipe elsewhere
 // can't false-positive; backticks are stripped first so `a`|`b` still matches.
 export function webEngineEnum(line) {
-  const m = line.replace(/`/g, "").match(/--web-engine[^a-z|]*((?:[a-z][a-z0-9-]*\s*\|\s*)+[a-z][a-z0-9-]*)/);
+  return pipedEnum(line, "web-engine");
+}
+
+// Same, for the `--search light|full|auto` preset list. The two profiles are
+// the user-facing shape of the whole WebSearch-first design, so a doc that
+// drifts from the engine's set is exactly the drift worth failing on.
+export function searchProfileEnum(line) {
+  return pipedEnum(line, "search");
+}
+
+function pipedEnum(line, flag) {
+  // Backticks are stripped so `a`|`b` still matches, and a backslash before a
+  // pipe with it: inside a markdown TABLE a literal `|` must be written `\|`,
+  // and an enumeration in a table cell is still an enumeration.
+  const m = line.replace(/`/g, "").replace(/\\\|/g, "|").match(new RegExp(`--${flag}[^a-z|]*((?:[a-z][a-z0-9-]*\\s*\\|\\s*)+[a-z][a-z0-9-]*)`));
   return m ? m[1].split("|").map((s) => s.trim()) : null;
 }

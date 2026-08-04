@@ -8,6 +8,16 @@ export const learnMode: ModeProfile = {
   backends: ["wikipedia", "duckduckgo", "searxng"],
   deepOnly: ["standards"],
   extras: ["glossary", "exercises"],
+  searchAngles: [
+    "the topic + 'tutorial' or 'getting started'",
+    "the topic explained for a beginner ('explained', 'from scratch')",
+    "the official documentation's own introduction",
+    "worked examples and common exercises",
+    "the mistakes beginners make ('common pitfalls', 'gotchas')",
+    "the prerequisites: what you must know first",
+    "the mental model an expert uses (analogies, first principles)",
+    "what to learn NEXT once this is understood",
+  ],
   template: [
     "## Learning objectives",
     "## Prerequisites",

@@ -88,16 +88,23 @@ Each mode is a **report template** + a **backend-priority profile**:
 > (`~/.claude/skills/ultrasearch/…`) — see `SKILL.md`.
 
 ```bash
-# 1. Retrieve — fan out keyless backends, write the dossier
+# 1. Sweep — what to search, and how wide
+node scripts/ultrasearch.mjs queries --q "how does HTTP rate limiting work" \
+  --mode topic --depth standard
+#    The agent runs its OWN WebSearch once per angle and pools every hit into
+#    /tmp/rl-hits.json:  [{"url":"…","title":"…","snippet":"…"}, …]
+
+# 2. Retrieve — fetch, clean, rank and de-duplicate every page into the dossier
 node scripts/ultrasearch.mjs gather --q "how does HTTP rate limiting work" \
-  --mode topic --depth standard --out /tmp/rl
+  --mode topic --depth standard --web-results /tmp/rl-hits.json --out /tmp/rl
+#    add --search full to fuse the keyless engines in on top
 
-# 2. The agent reads DOSSIER.md, enriches thin areas with its own WebSearch:
-node scripts/ultrasearch.mjs fetch --url "https://…" --out /tmp/rl    # → prints new S#
+# 3. The agent reads DOSSIER.md and tops up the gaps — a whole round, one process
+node scripts/ultrasearch.mjs ingest --run /tmp/rl --web-results /tmp/rl-round2.json
 
-# 3. The agent writes SUMMARY.md / REPORT.md, citing every claim [S#]
+# 4. The agent writes SUMMARY.md / REPORT.md, citing every claim [S#]
 
-# 4. Render + verify grounding
+# 5. Render + verify grounding
 node scripts/ultrasearch.mjs render --run /tmp/rl     # → index.html
 node scripts/ultrasearch.mjs check  --run /tmp/rl     # exit≠0 if ungrounded
 ```
@@ -178,16 +185,37 @@ once — this file can no longer stop them, and they still hold the ports:
 docker rm -f $(docker ps -aq --filter name='^(ultrasearch|construct|ultradoc)-')
 ```
 
-## Keyless, no API keys
+## Your WebSearch is the engine
 
-Discovery is a layered, free fallback cascade, mirroring ultradoc:
+Discovery has two lanes, and the first one is the agent's own **WebSearch** —
+the best index in the pipeline, and the only one needing neither a container nor
+a scrape. `queries` sizes the sweep (2 · 4 · 8 distinct queries by depth) and
+names the angles to cover; the agent runs them and pools the hits into
+`--web-results`. The engine then does what a model cannot: fetch every page,
+strip it, rank it, de-duplicate it, and refuse a consent wall.
+
+Those hits get **no trust privilege** — a weak domain stays weak, and every page
+is read like any other. What they do get is first claim on `--max-sources`, so a
+page the agent deliberately chose is never displaced by a scraped aggregator.
+
+`--search max` is the ceiling: everything below, plus Firecrawl's own `/search`
+in discovery, every recall knob at its limit and `--depth deep`. It wants the
+whole container stack up, warns before the run when it is not, and records what
+it lost. It buys **recall, not precision** — excellent on `research`, noisier on
+a heavily-blogged `topic`.
+
+The second lane is the free fallback cascade, behind `--search full`:
 **SearXNG** (local, optional) → **DuckDuckGo** → **DuckDuckGo Lite** → **Mojeek**
-→ **Marginalia** — it stops at the first engine that returns enough, so recall
-survives one engine blocking — then the agent's own **WebSearch** (URLs fed back
-via `fetch --url`). Mode-specific backends add
-Wikipedia, the keyless StackExchange (multi-site) / Hacker News / GitHub APIs,
-and the scholarly APIs (arXiv / Crossref / OpenAlex / Semantic Scholar /
-Europe PMC / PubMed / dblp) — all keyless.
+→ **Marginalia**, fused by breadth. These are scrapers and free APIs — they
+rate-limit and go empty — so they amplify the first lane rather than replace it.
+`--search light` (the default once you pass `--web-results`) skips them entirely:
+no container, no scraping, nothing to rate-limit. A harness with no WebSearch
+tool passes no hits and keeps the cascade as before.
+
+Mode-specific backends run in both profiles: Wikipedia, the keyless
+StackExchange (multi-site) / Hacker News / GitHub APIs, and the scholarly APIs
+(arXiv / Crossref / OpenAlex / Semantic Scholar / Europe PMC / PubMed / dblp) —
+all keyless.
 
 Each run plans **query variants** and fans backends out across them, re-ranks
 sources by how well their fetched text covers the question, dedupes the same
@@ -206,9 +234,13 @@ that override silently voided.
 
 ## Commands
 
-- `gather` — the main entrypoint: search → fetch → dedupe → write dossier.
+- `queries` — the WebSearch worklist: how many distinct queries to run for this
+  depth, and which angles to cover. Start here.
+- `gather` — the main entrypoint: fetch → rank → dedupe → write dossier, driven
+  by `--web-results` (your hits) and sized by `--search light|full`.
+- `ingest` — fold a whole round of URLs into a dossier in ONE process.
 - `search --backend <kind>` — drill one backend (debugging retrieval).
-- `fetch` / `add-source` — ingest a URL into a dossier (the WebSearch bridge).
+- `fetch` / `add-source` — ingest a single URL into a dossier.
 - `render --run <dir>` — render the report tiers to a self-contained `index.html`.
 - `check --run <dir>` — validate citation grounding (`--semantic` folds in the
   verify verdicts + contradictions; `--min-sources N` fails a too-thin dossier).

@@ -408,6 +408,30 @@ export function extractMainHtml(html: string): string {
 }
 
 export const PDF_URL_RE = /\.pdf($|[?#])/i;
+
+// A `/pdf/<id>` route that serves a PDF with no extension. arXiv's canonical
+// PDF URL — `arxiv.org/pdf/2502.19732`, versioned `…v4` — is the case that
+// matters: it is the most common PDF a `research` run ever fetches, and an
+// extension test misses every one of them.
+const PDF_ROUTE_RE = /\/pdf\/[^/?#]+($|[?#])/i;
+// …unless the last segment names a format that is plainly not a PDF, so a
+// documentation page living under /pdf/ is not mistaken for one.
+const NON_PDF_TAIL_RE = /\.(html?|php|aspx?|jsp|json|xml|txt|md|csv)($|[?#])/i;
+
+/**
+ * Is this URL a PDF, judged before the fetch?
+ *
+ * It decides two things that both matter: whether to request BYTES (an
+ * extension-less PDF fetched as text costs a second round-trip once the
+ * content-type gives it away), and whether the documented extractor ladder
+ * runs in its documented order. `fetchAndExtract` hands a non-PDF to Firecrawl
+ * FIRST, so a misjudged PDF silently skips `pdf-inspector` — the ladder's
+ * preferred rung — whenever a Firecrawl container happens to be up.
+ */
+export function looksLikePdfUrl(url: string): boolean {
+  if (PDF_URL_RE.test(url)) return true;
+  return PDF_ROUTE_RE.test(url) && !NON_PDF_TAIL_RE.test(url);
+}
 const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 } as const;
 
 // Which extractor produced a page's text. `undefined` (absent) means the
@@ -442,7 +466,7 @@ export interface ExtractResult {
 // A Firecrawl that is up and still fails, or one the user asked for explicitly
 // and did not get, does emit a note (src/backends/firecrawl.ts decides which).
 export async function fetchAndExtract(url: string, opts: { acceptLanguage?: string; firecrawl?: string } = {}): Promise<ExtractResult> {
-  const wantsPdf = PDF_URL_RE.test(url);
+  const wantsPdf = looksLikePdfUrl(url);
   let firecrawlNote: string | undefined;
   if (!wantsPdf) {
     const fc = await scrapeViaFirecrawl(url, opts);

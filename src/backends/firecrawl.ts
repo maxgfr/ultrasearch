@@ -70,34 +70,56 @@ function authHeaders(): Record<string, string> | undefined {
 const probeCache = new Map<string, Promise<boolean>>();
 
 /**
+ * Decide whether the thing that answered `GET {base}/` is actually Firecrawl.
+ *
+ * "Something is listening" is NOT the same question, and conflating them is a
+ * real trap: 3002 is a common dev port, so a Next.js/Vite app squatting it
+ * answers 200 and every page extraction then POSTs to an app that 404s — each
+ * one paying a wasted round-trip before falling back, while `doctor` cheerfully
+ * reports "firecrawl answering". A false positive here is worse than a false
+ * negative, because it is invisible.
+ *
+ * The rule: an HTML page with no Firecrawl marker is somebody else's app.
+ * Anything else (its JSON root, an empty body, a proxy's 404) is accepted, so
+ * the reverse-proxy case the original probe protected still works. Exported for
+ * unit tests — this is a decision, not a detail.
+ */
+export function looksLikeFirecrawl(contentType: string | null, body: string): boolean {
+  if (/firecrawl/i.test(body.slice(0, 4096))) return true;
+  return !/^\s*text\/html/i.test(contentType ?? "");
+}
+
+/**
  * Is a Firecrawl instance answering at `base`? `GET {base}/` with a hard 2s
- * ceiling; ANY HTTP response counts as up (the root returns 200 `{"message":
- * "Firecrawl API"}`, but a 404 from a proxy in front of it still proves
- * something is listening). Connection refused / timeout ⇒ down. Memoised for
- * the process, so the whole cost of an absent Firecrawl is one refused
- * connection. Never throws.
+ * ceiling. The response must also look like Firecrawl (see above) unless the
+ * caller named the instance itself — pointing `--firecrawl` somewhere is a
+ * statement about what lives there, and it may legitimately sit behind a proxy
+ * that masks the root. Connection refused / timeout ⇒ down. Memoised for the
+ * process, so the whole cost of an absent Firecrawl is one refused connection.
+ * Never throws.
  *
  * Deliberately bypasses `httpGet`: that layer retries once with a backoff,
  * which would turn a 2s ceiling into ~4.6s on a blackholed host. A probe wants
  * a single shot.
  */
-export function probeFirecrawl(base: string): Promise<boolean> {
-  let p = probeCache.get(base);
+export function probeFirecrawl(base: string, explicit = false): Promise<boolean> {
+  const key = `${base}|${explicit}`;
+  let p = probeCache.get(key);
   if (!p) {
     p = (async () => {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       try {
         const res = await fetch(`${base}/`, { signal: ctrl.signal });
-        await res.text().catch(() => ""); // drain so the socket is released
-        return true;
+        const body = await res.text().catch(() => ""); // drain so the socket is released
+        return explicit || looksLikeFirecrawl(res.headers.get("content-type"), body);
       } catch {
         return false;
       } finally {
         clearTimeout(t);
       }
     })();
-    probeCache.set(base, p);
+    probeCache.set(key, p);
   }
   return p;
 }
@@ -208,7 +230,7 @@ export interface ScrapeAttempt {
 export async function scrapeViaFirecrawl(url: string, opts: FirecrawlOptions = {}): Promise<ScrapeAttempt> {
   const base = firecrawlBase(opts);
   if (!base) return {};
-  if (!(await probeFirecrawl(base))) {
+  if (!(await probeFirecrawl(base, firecrawlIsExplicit(opts)))) {
     // Only worth a note when the user asked for a specific instance and did not
     // get it; the localhost default being absent is the normal case.
     return firecrawlIsExplicit(opts) ? { why: `Firecrawl not reachable at ${base} — used the built-in extractor.` } : {};
@@ -243,7 +265,7 @@ export async function scrapeViaFirecrawl(url: string, opts: FirecrawlOptions = {
 export async function searchViaFirecrawl(query: string, limit: number, opts: FirecrawlOptions = {}): Promise<{ hits?: FirecrawlHit[]; why?: string }> {
   const base = firecrawlBase(opts);
   if (!base) return { why: `Firecrawl disabled (--firecrawl off / ULTRASEARCH_FIRECRAWL=off). Skipping.` };
-  if (!(await probeFirecrawl(base))) {
+  if (!(await probeFirecrawl(base, firecrawlIsExplicit(opts)))) {
     return { why: `Firecrawl not reachable at ${base} (bring it up with \`docker compose --profile search --profile extract up -d --wait\`). Skipping.` };
   }
   const r = await postJson(base, "/search", { query, limit, sources: ["web"] }, SEARCH_TIMEOUT_MS);

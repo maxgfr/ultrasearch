@@ -21,12 +21,15 @@ import { europepmcBackend } from "./europepmc.js";
 import { pubmedBackend } from "./pubmed.js";
 import { dblpBackend } from "./dblp.js";
 import { standardsBackend } from "./standards.js";
+import { websearchBackend } from "./websearch.js";
 
 // Registry of retrieval backends. Each is independent, returns candidate
 // sources + honest notes, and never throws (the runner wraps failures into
-// notes). "claude" is not a search backend — it's the provenance label for a
-// source the agent ingested via `fetch`, so it has no handler here.
+// notes). "claude" is the harness WebSearch lane: it does not search — it reads
+// the hits the agent supplies via --web-results — and it doubles as the
+// provenance label for a source ingested through `fetch` / `ingest`.
 const HANDLERS: Partial<Record<BackendKind, Backend>> = {
+  claude: websearchBackend,
   searxng: searxngBackend,
   firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
@@ -53,7 +56,7 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
 // query variants are planned: rate-limited APIs (one shot to respect anon
 // quotas) and query-independent backends (fixture/generic). The rest fan out
 // across the variants and have their per-variant lists fused.
-const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic"]);
+const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic", "claude"]);
 
 // Backends that DO fan out across query variants but whose polite public APIs
 // dislike a burst of concurrent requests (Crossref/OpenAlex/arXiv/Europe PMC

@@ -75,9 +75,18 @@ describe("runBackends variant fan-out politeness", () => {
 });
 
 describe("runBackends — unknown backend", () => {
-  it("returns an empty result + a note for a kind with no handler (e.g. the 'claude' provenance label)", async () => {
+  it("returns an empty result + a note for a kind with no handler, instead of throwing", async () => {
+    // Every kind in ALL_BACKENDS now has a handler, so reach the defensive
+    // branch the only way left: a kind that is not in the registry at all. A
+    // single unknown backend must never sink a run.
+    const [res] = await runBackends(["not-a-backend" as never], makeCtx("q"));
+    expect(res!.items).toHaveLength(0);
+    expect(res!.notes.join(" ")).toMatch(/no handler for backend "not-a-backend"/i);
+  });
+
+  it("the 'claude' WebSearch lane has a handler and reports an absent payload", async () => {
     const [res] = await runBackends(["claude"], makeCtx("q"));
     expect(res!.items).toHaveLength(0);
-    expect(res!.notes.join(" ")).toMatch(/no handler for backend "claude"/i);
+    expect(res!.notes.join(" ")).toMatch(/no hits supplied/i);
   });
 });

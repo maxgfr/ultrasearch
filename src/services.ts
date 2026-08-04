@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { runWithInput } from "./backends/pdf/exec.js";
-import { firecrawlBase, probeFirecrawl } from "./backends/firecrawl.js";
+import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
 import { enabledExtractors } from "./backends/pdf.js";
 import type { ManifestServices } from "./types.js";
@@ -52,11 +52,16 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
   const fcBase = firecrawlBase(opts);
   if (!fcBase) out.push({ name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" });
   else {
-    const up = await probeFirecrawl(fcBase);
+    const explicit = firecrawlIsExplicit(opts);
+    const up = await probeFirecrawl(fcBase, explicit);
     out.push({
       name: "firecrawl",
       ok: up,
-      detail: up ? `answering at ${fcBase}` : `not running at ${fcBase} — \`ultrasearch firecrawl up\``,
+      detail: up
+        ? `answering at ${fcBase}`
+        : // Distinguish "nothing there" from "something there, but not Firecrawl" —
+          // a squatted port is a confusing failure to debug without being told.
+          `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} — \`ultrasearch firecrawl up\``,
     });
   }
 
@@ -99,6 +104,37 @@ export function describeServices(s: ManifestServices): string {
 export function formatServices(rows: ServiceStatus[]): string {
   const w = Math.max(...rows.map((r) => r.name.length));
   return rows.map((r) => `  ${r.ok ? "✓" : "✗"} ${r.name.padEnd(w)}  ${r.detail}`).join("\n");
+}
+
+/**
+ * The WebSearch lane, as `doctor` reports it.
+ *
+ * It cannot be probed: the tool lives in the caller's harness, not in this
+ * process. What CAN be checked is whether a given run actually used one — and
+ * that is the failure worth catching, because it is invisible everywhere else.
+ * A dossier built without a lane looks exactly like one built with a bad lane.
+ */
+export function describeWebSearchLane(manifest?: { webSearch?: { supplied: number; rejected: number; kept: number }; searchProfile?: string }): ServiceStatus {
+  if (!manifest) {
+    return {
+      name: "websearch",
+      ok: true,
+      detail: "the PRIMARY engine — supplied by you, not probeable here. Run `queries`, then `gather --web-results <f.json>`.",
+    };
+  }
+  const ws = manifest.webSearch;
+  if (!ws?.supplied) {
+    return {
+      name: "websearch",
+      ok: false,
+      detail: "this run had NO lane — discovery fell back to the best-effort keyless engines. Top it up: `ingest --run <dir> --web-results <f.json>`.",
+    };
+  }
+  return {
+    name: "websearch",
+    ok: true,
+    detail: `${ws.supplied} hit(s) supplied → ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}${manifest.searchProfile ? `, --search ${manifest.searchProfile}` : ""}`,
+  };
 }
 
 // --- container lifecycle ---------------------------------------------------

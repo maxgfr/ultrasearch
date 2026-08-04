@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Manifest, RawSource, Source } from "./types.js";
 import { UNDER_COVERED_MIN } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
+import { sourceSignals } from "./authority.js";
 import { ensureDir, isNoWrite, writeArtifact } from "./no-write.js";
 import { toBibtex } from "./bibtex.js";
 import { focusedSnippet, capExtract } from "./backends/fetch.js";
@@ -70,6 +71,18 @@ export function nextSourceId(sources: Source[]): string {
 // Build a Source record (no file written) from a backend's RawSource.
 export function buildSource(rs: RawSource, id: string, builtAt: string, question: string): Source {
   const text = rs.text ?? rs.snippet ?? "";
+  const trust = trustScore(rs.url, rs.backend);
+  // Structural signals, computed from the text we already hold and from how
+  // many backends agreed — no host list, no phrase list. Guidance only.
+  const signals = sourceSignals({
+    url: rs.url,
+    text,
+    corroboration: typeof rs.meta?.foundBy === "number" ? rs.meta.foundBy : 1,
+    // Someone who knows better than a heuristic already vouched for this page:
+    // the agent picked it out of its own WebSearch (`claude`), or a route with
+    // a provenance floor handed it over (a scholarly API, Wikipedia).
+    vouchedFor: rs.backend === "claude" || trust > 0.5,
+  }).notes;
   return {
     id,
     url: rs.url,
@@ -79,7 +92,8 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
     fetchedAt: builtAt,
     lang: rs.lang,
     domain: domainOf(rs.url),
-    trust: trustScore(rs.url, rs.backend),
+    trust,
+    ...(signals.length ? { signals } : {}),
     score: Number(rs.score.toFixed(4)),
     extract: `sources/${id}.md`,
     // A richer multi-sentence digest snippet when we have full text; a backend's
@@ -185,7 +199,9 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
 // is worse than one that prescribes none.
 export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string): string {
   const noWrite = isNoWrite();
-  const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Enrich them (your WebSearch + `fetch --url`)";
+  const enrich = noWrite
+    ? "Search further yourself (your own WebSearch) and read those pages directly"
+    : "Top them up (another WebSearch round + `ingest --run <dir> --web-results <f.json>`)";
   const out: string[] = [];
   out.push(`# Search dossier`);
   out.push("");
@@ -195,7 +211,22 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
       `**sources:** ${sources.length} · **built:** ${manifest.builtAt}`,
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
+  if (manifest.searchProfile) out.push(`**Search profile:** ${manifest.searchProfile}`);
   out.push("");
+  // The WebSearch lane, stated in the dossier itself. A run that had no lane is
+  // the case worth surfacing: the strongest engine available to the reader sat
+  // idle while scrapers did its job, and nothing else would ever say so.
+  if (manifest.webSearch) {
+    const ws = manifest.webSearch;
+    out.push(
+      ws.supplied
+        ? `**WebSearch lane:** ${ws.supplied} agent-supplied hit(s) → ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "")
+        : `> 🔎 **No WebSearch lane** — discovery ran on the keyless engines alone, and those are best-effort. ` +
+            `If you have a WebSearch tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; ` +
+            `next time, pass them to \`gather --web-results\` from the start.`,
+    );
+    out.push("");
+  }
   if (manifest.recallFloor) {
     out.push(
       `> ⚠ **Thin dossier** — only ${manifest.recallFloor.count} on-topic source(s) were retrieved ` +
@@ -248,11 +279,34 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
 
   out.push(`## Sources`);
   out.push("");
+  out.push(
+    `> **You are the judge of these sources.** This engine ranks for RELEVANCE and keeps everything it ` +
+      `retrieved — it holds no list of "good" websites, and \`trust\` below reflects only the ROUTE a source ` +
+      `arrived by (a scholarly API vouches for a record; a web engine vouches for nothing). Deciding what is ` +
+      `authoritative is your job, and you are the only party here who can actually read the page.`,
+  );
+  out.push(`>`);
+  out.push(
+    `> As you read each extract, appraise it: is this the primary source (a spec, a vendor's own docs, the ` +
+      `paper), secondary reporting, or content marketing rewriting someone else's work? Prefer the primary ` +
+      `one for a load-bearing claim, and when only a weak source carries a claim, **say so in the report** ` +
+      `rather than leaning on it silently. Discarding a page you judge worthless is a legitimate reading ` +
+      `decision — the engine deliberately did not make it for you.`,
+  );
+  out.push("");
+  if (sources.some((s) => s.signals?.length)) {
+    out.push(
+      `> Some sources carry **structural hints** below — reference diversity, self-declared identity, ` +
+        `cross-engine corroboration — computed from the document itself. Advisory only: nothing was dropped ` +
+        `or re-ranked because of them, and a \`⚠ thin attribution\` page can still be correct.`,
+    );
+    out.push("");
+  }
   if (sources.length === 0) {
     out.push(
       noWrite
         ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._`
-        : `_No sources were retrieved. Broaden the query, add backends, or enrich with your own WebSearch via \`fetch --url\`._`,
+        : `_No sources were retrieved. Search yourself and feed the hits in — \`gather --web-results <f.json>\`, or \`ingest --run <dir> --web-results <f.json>\` on this dossier — then widen with \`--search full\`._`,
     );
   }
   for (const s of sources) {
@@ -261,6 +315,10 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     // Under no-write `sources/S#.md` is a stream label, not a path on disk.
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}`);
+    // Structural signals, shown as GUIDANCE. They never dropped or re-ranked
+    // this source — measured, they are right often, not always — so the call
+    // is yours, made from the text.
+    for (const sig of s.signals ?? []) out.push(`> ${sig}`);
     out.push("");
     out.push(s.snippet);
     out.push("");

@@ -334,7 +334,12 @@ describe("orchestrate — contracts & runbook", () => {
     // the contract must say the cache is on and warn against turning it off.
     expect(md).toMatch(/cache is ON by default/i);
     expect(md).toContain("--no-cache");
-    expect(md).toContain("fetch --url");
+    // Each gatherer drives its own WebSearch sweep and folds its top-up round in
+    // with ONE ingest: a fan-out multiplies whatever discovery it was handed, so
+    // a sub-question gathered without a lane is where the tier degrades quietly.
+    expect(md).toContain("--web-results");
+    expect(md).toMatch(/queries --q/);
+    expect(md).toContain("ingest --run");
     // The playbook's return contract: out dir + one-line coverage note + NEW sub-questions.
     expect(md).toContain("coverage");
     expect(md).toMatch(/NEW sub-questions/i);

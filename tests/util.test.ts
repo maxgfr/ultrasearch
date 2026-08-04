@@ -81,22 +81,35 @@ describe("dedupeByUrl", () => {
   });
 });
 
-describe("trustScore", () => {
-  it("scores authoritative domains and scholarly backends high", () => {
-    expect(trustScore("https://nist.gov/x", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
+describe("trustScore — PROVENANCE only, never a judgment about the web", () => {
+  it("credits the route a source arrived by", () => {
     expect(trustScore("https://example.com/p", "arxiv")).toBeGreaterThanOrEqual(0.9);
+    expect(trustScore("https://example.com/p", "crossref")).toBeGreaterThanOrEqual(0.9);
     expect(trustScore("https://en.wikipedia.org/wiki/X", "wikipedia")).toBeGreaterThanOrEqual(0.85);
+    expect(trustScore("https://example.com/q", "stackexchange")).toBeGreaterThan(0.5);
   });
-  it("scores SEO/aggregator domains low", () => {
-    expect(trustScore("https://www.w3schools.com/x", "duckduckgo")).toBeLessThan(0.5);
+
+  it("holds NO opinion on a page a web engine found, whatever its host", () => {
+    // The hostname table this used to consult was deleted: a frozen list of
+    // "good sites" is unmaintainable, and it was measurably wrong — it scored
+    // the WHATWG HTML Standard, the normative spec for the subject under
+    // research, identically to a content farm, because whatwg.org was missing.
+    // Authority is now the reading agent's call, made from the text.
+    const hosts = [
+      "https://nist.gov/x",
+      "https://html.spec.whatwg.org/multipage/server-sent-events.html",
+      "https://docs.aws.amazon.com/apigateway/x",
+      "https://developer.mozilla.org/en-US/docs/Web/HTTP",
+      "https://www.w3schools.com/x",
+      "https://jobsbyculture.com/blog/whatever",
+    ];
+    for (const u of hosts) expect(trustScore(u, "duckduckgo"), u).toBe(0.5);
   });
-  it("scores major vendor doc hosts as primary (0.9)", () => {
-    expect(trustScore("https://docs.aws.amazon.com/apigateway/x", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
-    expect(trustScore("https://developer.mozilla.org/en-US/docs/Web/HTTP", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
-    expect(trustScore("https://datatracker.ietf.org/doc/rfc6585", "duckduckgo")).toBeGreaterThanOrEqual(0.9);
-  });
-  it("scores generic official-docs subdomains above neutral", () => {
-    expect(trustScore("https://docs.someproject.io/guide", "duckduckgo")).toBeGreaterThanOrEqual(0.82);
+
+  it("never invents authority for a general-web engine", () => {
+    for (const b of ["duckduckgo", "mojeek", "marginalia", "searxng", "firecrawl", "claude"] as const) {
+      expect(trustScore("https://anything.test/x", b), b).toBe(0.5);
+    }
   });
 });
 

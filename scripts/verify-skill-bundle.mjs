@@ -13,7 +13,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { docFlagRegex, helpCoversFlag, webEngineEnum } from "./drift-rules.mjs";
+import { docFlagRegex, helpCoversFlag, webEngineEnum, searchProfileEnum } from "./drift-rules.mjs";
 
 // Claude Code matches skill descriptions at <=1024 chars; 1000 leaves a safety
 // margin so a future edit can't silently cross the cap.
@@ -155,6 +155,36 @@ if (existsSync(pkgEngine) && existsSync(skillMd)) {
       }
     }
     if (enumsChecked === 0) bad("no --web-engine value enumeration found in the skill docs — references/web-discovery.md should carry the canonical list (was it reformatted past assertion C's matcher?)");
+
+    // D. The same, for the --search preset list. These two profiles ARE the
+    // user-facing shape of the WebSearch-first design, so a doc that drifts
+    // from the engine's set misroutes every run it describes.
+    const wantProfiles = [...cli.ALL_SEARCH_PROFILES].sort().join(", ");
+    let profileEnums = 0;
+    for (const [file, text] of docs) {
+      for (const line of text.split("\n")) {
+        const profiles = searchProfileEnum(line);
+        if (!profiles) continue;
+        profileEnums++;
+        const got = profiles.slice().sort().join(", ");
+        got === wantProfiles
+          ? ok(`${file} --search value list matches the engine`)
+          : bad(`${file} lists --search values [${got}] but the engine supports [${wantProfiles}]`);
+      }
+    }
+    if (profileEnums === 0) bad("no --search value enumeration found in the skill docs — SKILL.md should carry the canonical light|full|auto list");
+
+    // E. The WebSearch lane must be documented AS the primary engine. This is a
+    // property of the SKILL, not of the code: the engine can be WebSearch-first
+    // and the agent still behave exactly as before if SKILL.md never says so.
+    const skillText = docs[0][1];
+    for (const [needle, why] of [
+      ["--web-results", "the flag that carries the agent's own WebSearch hits"],
+      ["queries", "the command that sizes the sweep"],
+      ["ingest", "the batch top-up that replaces a fetch loop"],
+    ]) {
+      skillText.includes(needle) ? ok(`SKILL.md documents ${needle} (${why})`) : bad(`SKILL.md never mentions ${needle} — ${why}`);
+    }
   }
 }
 

@@ -402,7 +402,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   if (manifest?.recallFloor) {
     warnings.push(
       `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) — ` +
-        `consider enriching with \`fetch --url\` before relying on it.`,
+        `run another WebSearch round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`,
     );
   }
   if (manifest?.coverage?.under.length) {

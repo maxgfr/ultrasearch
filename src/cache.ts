@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { fetchAndExtract, PDF_URL_RE, type ExtractorId } from "./backends/fetch.js";
-import { firecrawlBase, probeFirecrawl } from "./backends/firecrawl.js";
+import { fetchAndExtract, looksLikePdfUrl, type ExtractorId } from "./backends/fetch.js";
+import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { canonicalizeUrl, domainOf, fnv1a64 } from "./util.js";
 import { isNoWrite } from "./no-write.js";
 
@@ -69,9 +69,9 @@ const PDF_CACHE_NS = "pdf" as const;
 type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS;
 
 async function currentExtractor(opts: { firecrawl?: string }, url: string): Promise<CacheNamespace> {
-  if (PDF_URL_RE.test(url)) return PDF_CACHE_NS;
+  if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
   const base = firecrawlBase(opts);
-  return base && (await probeFirecrawl(base)) ? "firecrawl" : "native";
+  return base && (await probeFirecrawl(base, firecrawlIsExplicit(opts))) ? "firecrawl" : "native";
 }
 
 function ttlMs(): number {

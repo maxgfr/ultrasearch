@@ -60,17 +60,21 @@ More generally the dossier is thin when no source addresses the specific
 question, or when one backend dominated and a needed angle is missing (e.g.
 `bug` has Stack Overflow answers but no GitHub issue confirming the fix).
 
-## 5. Enrich with your own WebSearch (the bridge)
+## 5. Top up with a second WebSearch round
 
-The keyless backends are best-effort. **Use your own WebSearch tool** for
-authoritative primary sources, the specific thing the user asked about, and
-anything the dossier is thin on. Ingest each good URL so you can cite it:
+Your first sweep aimed at the question as asked; the dossier now names exactly
+where it fell short (`🔍 Under-covered`, `⚠ Thin`, a missing angle). Run
+**another WebSearch round** at those gaps — the authoritative primary sources,
+the specific thing the user asked about — then fold the whole round in at once:
 
 ```
-node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>   # prints the new S#
+node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dir> --web-results <round2.json>
 ```
 
-Repeat per URL. Aim for solid coverage of every section of the template.
+One process, one `S#` per page, one outcome line per URL — added, already there,
+or refused with the reason. Use `fetch --url "<url>" --out <dir>` only for a
+single page; calling it in a loop is what `ingest` exists to replace. Aim for
+solid coverage of every section of the template.
 
 ## 6. Triage before writing
 

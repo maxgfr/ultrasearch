@@ -3,7 +3,7 @@
 // src/cli.ts
 import { basename as basename2, join as join14, relative as relative2, resolve as resolve4 } from "path";
 import { pathToFileURL, fileURLToPath as fileURLToPath3 } from "url";
-import { realpathSync as realpathSync3, existsSync as existsSync10, statSync as statSync3, readdirSync as readdirSync2 } from "fs";
+import { realpathSync as realpathSync3, existsSync as existsSync10, statSync as statSync3, readdirSync as readdirSync2, readFileSync as readFileSync9 } from "fs";
 
 // src/types.ts
 var VERSION = "1.17.1";
@@ -60,6 +60,112 @@ var DEEP_CAPS = {
   perSubQuestionSources: 60
 };
 var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
+var ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"];
+
+// src/backends/websearch.ts
+var URL_KEYS = ["url", "link", "href", "uri"];
+var TITLE_KEYS = ["title", "name", "heading"];
+var SNIPPET_KEYS = ["snippet", "description", "summary", "content", "text", "excerpt"];
+function firstString(o, keys) {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return void 0;
+}
+function normalizeUrl(raw) {
+  const s = raw.trim();
+  if (!s) return void 0;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return void 0;
+    return u.toString();
+  } catch {
+    return void 0;
+  }
+}
+function hitFrom(entry) {
+  if (typeof entry === "string") {
+    const url2 = normalizeUrl(entry);
+    return url2 ? { url: url2 } : void 0;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return void 0;
+  const o = entry;
+  const raw = firstString(o, URL_KEYS);
+  if (!raw) return void 0;
+  const url = normalizeUrl(raw);
+  if (!url) return void 0;
+  return {
+    url,
+    title: firstString(o, TITLE_KEYS),
+    snippet: firstString(o, SNIPPET_KEYS)
+  };
+}
+function entriesOf(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    for (const k of ["results", "hits", "items", "webResults", "web_results", "sources"]) {
+      const v = parsed[k];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return void 0;
+}
+function parseWebResults(raw) {
+  const text = raw.trim();
+  if (!text) return { hits: [], rejected: 0, notes: ["--web-results was empty."] };
+  const notes = [];
+  let entries;
+  try {
+    entries = entriesOf(JSON.parse(text));
+    if (!entries) {
+      return { hits: [], rejected: 0, notes: ["--web-results parsed as JSON but held no array of results (expected [{url,title,snippet}, \u2026])."] };
+    }
+  } catch {
+    entries = text.split(/\r?\n/).filter((l) => l.trim());
+    notes.push("--web-results was not JSON \u2014 read it as a newline-separated URL list.");
+  }
+  const hits = [];
+  const seen = /* @__PURE__ */ new Set();
+  let rejected = 0;
+  for (const entry of entries) {
+    const hit = hitFrom(entry);
+    if (!hit) {
+      rejected++;
+      continue;
+    }
+    if (seen.has(hit.url)) continue;
+    seen.add(hit.url);
+    hits.push(hit);
+  }
+  if (rejected) notes.push(`--web-results: ignored ${rejected} entr${rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`);
+  return { hits, rejected, notes };
+}
+var websearchBackend = async (ctx) => {
+  const hits = ctx.options.webResults ?? [];
+  if (!hits.length) {
+    return {
+      backend: "claude",
+      items: [],
+      notes: ["WebSearch lane: no hits supplied (pass --web-results <file.json|->)."]
+    };
+  }
+  const items = hits.map((h, i) => ({
+    url: h.url,
+    title: h.title || h.url,
+    backend: "claude",
+    score: hits.length - i,
+    snippet: h.snippet ?? ""
+    // No `text`: the page is hydrated by the gatherer through the same rescue
+    // ladder as any other candidate, so a WebSearch hit is held to the same
+    // evidentiary standard. The snippet is only the fallback when it fails.
+  }));
+  return {
+    backend: "claude",
+    items,
+    notes: [`WebSearch lane: ${items.length} hit(s) supplied by the agent.`]
+  };
+};
 
 // src/gather.ts
 import { join as join4 } from "path";
@@ -72,6 +178,16 @@ var topicMode = {
   backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
   deepOnly: [],
   extras: [],
+  searchAngles: [
+    "the subject itself, as a plain definition",
+    "how it works \u2014 mechanism, architecture, internals",
+    "the official/primary source: the vendor, project or standards body's own pages",
+    "criticism, limitations and open debates",
+    "current state: what changed most recently, and when",
+    "alternatives and how they compare",
+    "who actually runs it in production, and what they report",
+    "the numbers: benchmarks, costs, adoption figures with a date"
+  ],
   template: [
     "## TL;DR",
     "## What it is",
@@ -92,6 +208,16 @@ var bugMode = {
   backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
   deepOnly: ["searxng"],
   extras: [],
+  searchAngles: [
+    "the error text VERBATIM, in quotes",
+    "the error text with the volatile parts (paths, ids, ports) stripped out",
+    "the symptom described in plain words, without the stack trace",
+    "the library/tool name + the error + 'github issue'",
+    "the library/tool name + the version where it started",
+    "the fix phrasing: how people who solved it describe the workaround",
+    "the changelog or release notes around the version that broke it",
+    "the same symptom in a NEIGHBOURING tool \u2014 often the same root cause"
+  ],
   template: [
     "## TL;DR (likely cause + fastest fix)",
     "## Symptom & reproduction",
@@ -113,6 +239,16 @@ var researchMode = {
   backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
   deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
+  searchAngles: [
+    "the topic + 'survey' or 'systematic review'",
+    "the canonical method/model name, as the field spells it",
+    "the seminal paper: earliest work everyone cites",
+    "recent work: the topic + the current year",
+    "the counter-position: critiques, failed replications, negative results",
+    "the benchmark or dataset the field measures this on",
+    "the review article that maps the subfield's disagreements",
+    "who cites the seminal work and what they changed about it"
+  ],
   template: [
     "## Abstract / TL;DR",
     "## Background & motivation",
@@ -133,6 +269,16 @@ var learnMode = {
   backends: ["wikipedia", "duckduckgo", "searxng"],
   deepOnly: ["standards"],
   extras: ["glossary", "exercises"],
+  searchAngles: [
+    "the topic + 'tutorial' or 'getting started'",
+    "the topic explained for a beginner ('explained', 'from scratch')",
+    "the official documentation's own introduction",
+    "worked examples and common exercises",
+    "the mistakes beginners make ('common pitfalls', 'gotchas')",
+    "the prerequisites: what you must know first",
+    "the mental model an expert uses (analogies, first principles)",
+    "what to learn NEXT once this is understood"
+  ],
   template: [
     "## Learning objectives",
     "## Prerequisites",
@@ -155,6 +301,16 @@ var startupMode = {
   backends: ["duckduckgo", "searxng", "hackernews"],
   deepOnly: ["wikipedia"],
   extras: [],
+  searchAngles: [
+    "the product category + 'alternatives' or 'vs'",
+    "each named competitor's own pricing page",
+    "market size / market share for the category, with a year",
+    "what customers complain about (reviews, forums, HN threads)",
+    "funding, acquisitions and who is actually shipping",
+    "the regulatory or distribution constraint the category lives under",
+    "how incumbents price and package, in their own words",
+    "who tried this and failed, and the post-mortem they wrote"
+  ],
   template: [
     "## Executive summary",
     "## Problem & customer",
@@ -259,25 +415,9 @@ var BACKEND_TRUST = {
   stackexchange: 0.72,
   hackernews: 0.5
 };
-function domainTrust(domain) {
-  if (!domain) return 0.5;
-  if (/\.gov(\.[a-z]{2})?$/.test(domain) || /\.edu(\.[a-z]{2})?$/.test(domain)) return 0.95;
-  if (/(^|\.)wikipedia\.org$/.test(domain)) return 0.85;
-  if (/(^|\.)(arxiv\.org|nih\.gov|acm\.org|ieee\.org|nature\.com|sciencedirect\.com|springer\.com)$/.test(domain)) return 0.9;
-  if (/(^|\.)(learn\.microsoft\.com|docs\.aws\.amazon\.com|cloud\.google\.com|developer\.mozilla\.org|kubernetes\.io|docs\.docker\.com|docs\.github\.com|rfc-editor\.org|datatracker\.ietf\.org)$/.test(
-    domain
-  ))
-    return 0.9;
-  if (/(readthedocs\.io|docs\.|developer\.|\.dev$)/.test(domain)) return 0.82;
-  if (/(^|\.)(github\.com|gitlab\.com|stackoverflow\.com|stackexchange\.com|mozilla\.org|w3\.org)$/.test(domain)) return 0.8;
-  if (/(^|\.)(medium\.com|dev\.to|substack\.com|hashnode\.|blogspot\.|wordpress\.com)$/.test(domain)) return 0.55;
-  if (/(^|\.)(pinterest\.|quora\.com|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com)$/.test(domain)) return 0.35;
-  return 0.5;
-}
-function trustScore(url, backend) {
-  const d = domainTrust(domainOf(url));
-  const b = BACKEND_TRUST[backend] ?? 0;
-  return Number(Math.max(d, b).toFixed(2));
+var NEUTRAL_TRUST = 0.5;
+function trustScore(_url, backend) {
+  return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
 }
 var STOPWORDS = /* @__PURE__ */ new Set([
   "the",
@@ -1104,23 +1244,28 @@ function authHeaders() {
   return key ? { authorization: `Bearer ${key}` } : void 0;
 }
 var probeCache = /* @__PURE__ */ new Map();
-function probeFirecrawl(base) {
-  let p = probeCache.get(base);
+function looksLikeFirecrawl(contentType, body) {
+  if (/firecrawl/i.test(body.slice(0, 4096))) return true;
+  return !/^\s*text\/html/i.test(contentType ?? "");
+}
+function probeFirecrawl(base, explicit = false) {
+  const key = `${base}|${explicit}`;
+  let p = probeCache.get(key);
   if (!p) {
     p = (async () => {
       const ctrl = new AbortController();
       const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       try {
         const res = await fetch(`${base}/`, { signal: ctrl.signal });
-        await res.text().catch(() => "");
-        return true;
+        const body = await res.text().catch(() => "");
+        return explicit || looksLikeFirecrawl(res.headers.get("content-type"), body);
       } catch {
         return false;
       } finally {
         clearTimeout(t);
       }
     })();
-    probeCache.set(base, p);
+    probeCache.set(key, p);
   }
   return p;
 }
@@ -1174,7 +1319,7 @@ function mapSearchResponse(json) {
 async function scrapeViaFirecrawl(url, opts = {}) {
   const base = firecrawlBase(opts);
   if (!base) return {};
-  if (!await probeFirecrawl(base)) {
+  if (!await probeFirecrawl(base, firecrawlIsExplicit(opts))) {
     return firecrawlIsExplicit(opts) ? { why: `Firecrawl not reachable at ${base} \u2014 used the built-in extractor.` } : {};
   }
   const r = await postJson(
@@ -1202,7 +1347,7 @@ async function scrapeViaFirecrawl(url, opts = {}) {
 async function searchViaFirecrawl(query, limit, opts = {}) {
   const base = firecrawlBase(opts);
   if (!base) return { why: `Firecrawl disabled (--firecrawl off / ULTRASEARCH_FIRECRAWL=off). Skipping.` };
-  if (!await probeFirecrawl(base)) {
+  if (!await probeFirecrawl(base, firecrawlIsExplicit(opts))) {
     return { why: `Firecrawl not reachable at ${base} (bring it up with \`docker compose --profile search --profile extract up -d --wait\`). Skipping.` };
   }
   const r = await postJson(base, "/search", { query, limit, sources: ["web"] }, SEARCH_TIMEOUT_MS);
@@ -1534,9 +1679,15 @@ function extractMainHtml(html) {
   return best;
 }
 var PDF_URL_RE = /\.pdf($|[?#])/i;
+var PDF_ROUTE_RE = /\/pdf\/[^/?#]+($|[?#])/i;
+var NON_PDF_TAIL_RE = /\.(html?|php|aspx?|jsp|json|xml|txt|md|csv)($|[?#])/i;
+function looksLikePdfUrl(url) {
+  if (PDF_URL_RE.test(url)) return true;
+  return PDF_ROUTE_RE.test(url) && !NON_PDF_TAIL_RE.test(url);
+}
 var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
 async function fetchAndExtract(url, opts = {}) {
-  const wantsPdf = PDF_URL_RE.test(url);
+  const wantsPdf = looksLikePdfUrl(url);
   let firecrawlNote;
   if (!wantsPdf) {
     const fc = await scrapeViaFirecrawl(url, opts);
@@ -2630,6 +2781,7 @@ var standardsBackend = async (ctx) => {
 
 // src/backends/registry.ts
 var HANDLERS = {
+  claude: websearchBackend,
   searxng: searxngBackend,
   firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
@@ -2651,7 +2803,7 @@ var HANDLERS = {
   dblp: dblpBackend,
   standards: standardsBackend
 };
-var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic"]);
+var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic", "claude"]);
 var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
 async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
@@ -2756,9 +2908,9 @@ function cachePath(url, acceptLanguage = "", extractor = "native") {
 }
 var PDF_CACHE_NS = "pdf";
 async function currentExtractor(opts, url) {
-  if (PDF_URL_RE.test(url)) return PDF_CACHE_NS;
+  if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
   const base = firecrawlBase(opts);
-  return base && await probeFirecrawl(base) ? "firecrawl" : "native";
+  return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
 function ttlMs() {
   return envInt2("ULTRASEARCH_CACHE_TTL_MS", DEFAULT_TTL_MS);
@@ -2848,6 +3000,87 @@ function resolveEutils(raw, op) {
 // src/dossier.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
 import { join as join2 } from "path";
+
+// src/citable.ts
+var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
+var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
+var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
+function isApiEndpoint(url) {
+  try {
+    const u = new URL(url);
+    if (API_HOSTS.has(u.hostname.toLowerCase().replace(/^www\./, ""))) return true;
+    if (API_PATHS.some((re) => re.test(u.pathname))) return true;
+    return API_FORMATS.test(u.search);
+  } catch {
+    return false;
+  }
+}
+var ID_PARAMS = ["id", "ids", "uid", "uids", "pmid", "doi", "identifier"];
+function addressedIdCount(url) {
+  try {
+    const params = new URL(url).searchParams;
+    for (const name of ID_PARAMS) {
+      const raw = params.get(name);
+      if (!raw) continue;
+      const ids = raw.split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
+      if (ids.length) return ids.length;
+    }
+  } catch {
+  }
+  return 0;
+}
+function isCitableUrl(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") && !isApiEndpoint(url);
+  } catch {
+    return false;
+  }
+}
+var DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
+var ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
+var PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
+var ARXIV_ID_PATH_RE = /\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:$|[/?#])/;
+function urlDeclaresIdentity(url) {
+  return DOI_RE.test(url) || ARXIV_ID_PATH_RE.test(url);
+}
+function deriveCitableUrl(text, canonical) {
+  if (canonical && isCitableUrl(canonical)) return canonical;
+  const head = text.slice(0, 4e3);
+  const doi = head.match(DOI_RE)?.[1];
+  if (doi) return `https://doi.org/${doi.replace(/[.,;:)\]]+$/, "")}`;
+  const arxiv = head.match(ARXIV_RE)?.[1];
+  if (arxiv) return `https://arxiv.org/abs/${arxiv}`;
+  const pmid = head.match(PMID_RE)?.[1];
+  if (pmid) return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
+  return void 0;
+}
+
+// src/authority.ts
+var URL_IN_TEXT = /https?:\/\/[a-z0-9.-]+/gi;
+function externalHosts(url, text) {
+  const self = domainOf(url).replace(/^www\./, "");
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text.match(URL_IN_TEXT) ?? []) {
+    const h = domainOf(m).replace(/^www\./, "");
+    if (h && h !== self) out.add(h);
+  }
+  return out;
+}
+function sourceSignals(opts) {
+  const hosts = externalHosts(opts.url, opts.text);
+  const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl(opts.text.slice(0, 4e3));
+  const corroboration = opts.corroboration ?? 1;
+  const notes = [];
+  if (!opts.vouchedFor && hosts.size <= 1 && corroboration <= 1 && !selfIdentified) {
+    notes.push(
+      `\u26A0 thin attribution \u2014 cites ${hosts.size === 0 ? "no" : "one"} external source, no other engine surfaced it, and it declares no DOI/canonical identity of its own. That combination often means marketing content rather than a source of record \u2014 but it is a hint, not a verdict. Read it and judge.`
+    );
+  }
+  if (corroboration >= 3) notes.push(`\u2713 corroborated \u2014 ${corroboration} independent engines surfaced this page.`);
+  if (selfIdentified && hosts.size >= 5) notes.push(`\u2713 document of record \u2014 declares a persistent identity and cites ${hosts.size} external sources.`);
+  return { refDiversity: hosts.size, selfIdentified, corroboration, notes };
+}
 
 // src/bibtex.ts
 function clean(s) {
@@ -2939,6 +3172,16 @@ function nextSourceId(sources) {
 }
 function buildSource(rs, id, builtAt, question) {
   const text = rs.text ?? rs.snippet ?? "";
+  const trust = trustScore(rs.url, rs.backend);
+  const signals = sourceSignals({
+    url: rs.url,
+    text,
+    corroboration: typeof rs.meta?.foundBy === "number" ? rs.meta.foundBy : 1,
+    // Someone who knows better than a heuristic already vouched for this page:
+    // the agent picked it out of its own WebSearch (`claude`), or a route with
+    // a provenance floor handed it over (a scholarly API, Wikipedia).
+    vouchedFor: rs.backend === "claude" || trust > 0.5
+  }).notes;
   return {
     id,
     url: rs.url,
@@ -2948,7 +3191,8 @@ function buildSource(rs, id, builtAt, question) {
     fetchedAt: builtAt,
     lang: rs.lang,
     domain: domainOf(rs.url),
-    trust: trustScore(rs.url, rs.backend),
+    trust,
+    ...signals.length ? { signals } : {},
     score: Number(rs.score.toFixed(4)),
     extract: `sources/${id}.md`,
     // A richer multi-sentence digest snippet when we have full text; a backend's
@@ -3006,7 +3250,7 @@ function writeDossier(dir, rawSources, manifest, template) {
 }
 function renderDossierMarkdown(sources, manifest, template) {
   const noWrite = isNoWrite();
-  const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Enrich them (your WebSearch + `fetch --url`)";
+  const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Top them up (another WebSearch round + `ingest --run <dir> --web-results <f.json>`)";
   const out = [];
   out.push(`# Search dossier`);
   out.push("");
@@ -3015,7 +3259,15 @@ function renderDossierMarkdown(sources, manifest, template) {
     `**Mode:** ${manifest.mode} \xB7 **depth:** ${manifest.depth} \xB7 **lang:** ${manifest.lang} \xB7 **sources:** ${sources.length} \xB7 **built:** ${manifest.builtAt}`
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
+  if (manifest.searchProfile) out.push(`**Search profile:** ${manifest.searchProfile}`);
   out.push("");
+  if (manifest.webSearch) {
+    const ws = manifest.webSearch;
+    out.push(
+      ws.supplied ? `**WebSearch lane:** ${ws.supplied} agent-supplied hit(s) \u2192 ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "") : `> \u{1F50E} **No WebSearch lane** \u2014 discovery ran on the keyless engines alone, and those are best-effort. If you have a WebSearch tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; next time, pass them to \`gather --web-results\` from the start.`
+    );
+    out.push("");
+  }
   if (manifest.recallFloor) {
     out.push(
       `> \u26A0 **Thin dossier** \u2014 only ${manifest.recallFloor.count} on-topic source(s) were retrieved (recall floor ${manifest.recallFloor.floor}). ${enrich} BEFORE answering, or the answer will rest on too little evidence.`
@@ -3054,9 +3306,23 @@ function renderDossierMarkdown(sources, manifest, template) {
   }
   out.push(`## Sources`);
   out.push("");
+  out.push(
+    `> **You are the judge of these sources.** This engine ranks for RELEVANCE and keeps everything it retrieved \u2014 it holds no list of "good" websites, and \`trust\` below reflects only the ROUTE a source arrived by (a scholarly API vouches for a record; a web engine vouches for nothing). Deciding what is authoritative is your job, and you are the only party here who can actually read the page.`
+  );
+  out.push(`>`);
+  out.push(
+    `> As you read each extract, appraise it: is this the primary source (a spec, a vendor's own docs, the paper), secondary reporting, or content marketing rewriting someone else's work? Prefer the primary one for a load-bearing claim, and when only a weak source carries a claim, **say so in the report** rather than leaning on it silently. Discarding a page you judge worthless is a legitimate reading decision \u2014 the engine deliberately did not make it for you.`
+  );
+  out.push("");
+  if (sources.some((s) => s.signals?.length)) {
+    out.push(
+      `> Some sources carry **structural hints** below \u2014 reference diversity, self-declared identity, cross-engine corroboration \u2014 computed from the document itself. Advisory only: nothing was dropped or re-ranked because of them, and a \`\u26A0 thin attribution\` page can still be correct.`
+    );
+    out.push("");
+  }
   if (sources.length === 0) {
     out.push(
-      noWrite ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._` : `_No sources were retrieved. Broaden the query, add backends, or enrich with your own WebSearch via \`fetch --url\`._`
+      noWrite ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._` : `_No sources were retrieved. Search yourself and feed the hits in \u2014 \`gather --web-results <f.json>\`, or \`ingest --run <dir> --web-results <f.json>\` on this dossier \u2014 then widen with \`--search full\`._`
     );
   }
   for (const s of sources) {
@@ -3064,6 +3330,7 @@ function renderDossierMarkdown(sources, manifest, template) {
     const quality = s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 ${where}${quality}`);
+    for (const sig of s.signals ?? []) out.push(`> ${sig}`);
     out.push("");
     out.push(s.snippet);
     out.push("");
@@ -3105,11 +3372,16 @@ async function probeServices(opts = {}) {
   const fcBase = firecrawlBase(opts);
   if (!fcBase) out.push({ name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" });
   else {
-    const up = await probeFirecrawl(fcBase);
+    const explicit = firecrawlIsExplicit(opts);
+    const up = await probeFirecrawl(fcBase, explicit);
     out.push({
       name: "firecrawl",
       ok: up,
-      detail: up ? `answering at ${fcBase}` : `not running at ${fcBase} \u2014 \`ultrasearch firecrawl up\``
+      detail: up ? `answering at ${fcBase}` : (
+        // Distinguish "nothing there" from "something there, but not Firecrawl" —
+        // a squatted port is a confusing failure to debug without being told.
+        `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} \u2014 \`ultrasearch firecrawl up\``
+      )
     });
   }
   const rungs = enabledExtractors();
@@ -3141,6 +3413,28 @@ function describeServices(s) {
 function formatServices(rows) {
   const w = Math.max(...rows.map((r) => r.name.length));
   return rows.map((r) => `  ${r.ok ? "\u2713" : "\u2717"} ${r.name.padEnd(w)}  ${r.detail}`).join("\n");
+}
+function describeWebSearchLane(manifest) {
+  if (!manifest) {
+    return {
+      name: "websearch",
+      ok: true,
+      detail: "the PRIMARY engine \u2014 supplied by you, not probeable here. Run `queries`, then `gather --web-results <f.json>`."
+    };
+  }
+  const ws = manifest.webSearch;
+  if (!ws?.supplied) {
+    return {
+      name: "websearch",
+      ok: false,
+      detail: "this run had NO lane \u2014 discovery fell back to the best-effort keyless engines. Top it up: `ingest --run <dir> --web-results <f.json>`."
+    };
+  }
+  return {
+    name: "websearch",
+    ok: true,
+    detail: `${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}${manifest.searchProfile ? `, --search ${manifest.searchProfile}` : ""}`
+  };
 }
 function composeFile() {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -3186,8 +3480,8 @@ var HYDRATE_CONCURRENCY = 6;
 function headingLines(text) {
   return text.split("\n").filter((l) => /^#{1,6}\s/.test(l)).join("\n");
 }
-var ENRICH_NUDGE = "agent: enrich thin areas with your own WebSearch, then ingest each good URL via `ultrasearch fetch --url <u> --out <dir>` before writing the report.";
-var ENRICH_NUDGE_NO_WRITE = "agent: enrich thin areas with your own WebSearch and read those pages directly before answering.";
+var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
+var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode, question, d) {
   return join4(tmpdir2(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
 }
@@ -3239,7 +3533,15 @@ function ignoredByExplicitBackends(options) {
   if (options.seedDomains?.length) out.push("--seed-domains");
   if ((options.rounds ?? 1) >= 2) out.push("--rounds");
   if (options.webEngine !== "auto") out.push("--web-engine");
+  if (options.search && options.search !== "auto") out.push("--search");
+  if (options.webResults?.length && !options.backends.includes("claude")) out.push("--web-results");
   return out;
+}
+function resolveSearchProfile(options) {
+  const asked = options.search ?? "auto";
+  if (asked !== "auto") return asked;
+  if (options.webResults?.length && options.webEngine === "auto") return "light";
+  return "full";
 }
 function termCoverage(items, queryTerms, top = 10) {
   const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
@@ -3251,14 +3553,32 @@ function underCovered(cov) {
 function resolveBackends(options, mode) {
   if (options.backends?.length) return [...new Set(options.backends)];
   const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
-  return [...new Set(applyWebEngine(base, options.webEngine))];
+  const withEngine = applyWebEngine(base, options.webEngine);
+  const profile = resolveSearchProfile(options);
+  const discovery = profile === "light" ? withEngine.filter((k) => !DISCOVERY.includes(k)) : withEngine;
+  const ceiling = profile === "max" ? [...DISCOVERY, "firecrawl"] : [];
+  const lane = options.webResults?.length ? ["claude"] : [];
+  return [.../* @__PURE__ */ new Set([...lane, ...discovery, ...ceiling])];
+}
+var MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2 };
+function ignoredByMaxProfile(options) {
+  if (resolveSearchProfile(options) !== "max") return [];
+  const out = [];
+  if (options.webEngine !== "auto") out.push("--web-engine");
+  return out;
 }
 function fuse(lists) {
   const fused = rrf(lists, identityKey);
   const best = /* @__PURE__ */ new Map();
+  const foundBy = /* @__PURE__ */ new Map();
   for (const list of lists) {
+    const seenInList = /* @__PURE__ */ new Set();
     for (const it of list) {
       const key = identityKey(it);
+      if (!seenInList.has(key)) {
+        seenInList.add(key);
+        foundBy.set(key, (foundBy.get(key) ?? 0) + 1);
+      }
       const prev = best.get(key);
       if (!prev) {
         best.set(key, { ...it });
@@ -3269,6 +3589,7 @@ function fuse(lists) {
       }
     }
   }
+  for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
   const merged = [...best.values()];
   for (const it of merged) it.score = fused.get(identityKey(it)) ?? 0;
   merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
@@ -3295,6 +3616,12 @@ async function runGather(options) {
   const t0 = Date.now();
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
+  const profile = resolveSearchProfile(options);
+  if (profile === "max") {
+    options.pages ??= MAX_PROFILE_KNOBS.pages;
+    options.webBreadth ??= MAX_PROFILE_KNOBS.webBreadth;
+    options.rounds ??= MAX_PROFILE_KNOBS.rounds;
+  }
   const variants = resolveVariants(options);
   const effPages = Math.max(1, options.pages ?? PAGES_PER_DEPTH[options.depth] ?? 1);
   options.pages = effPages;
@@ -3454,7 +3781,7 @@ async function runGather(options) {
     const floorDropped = dropped.length;
     const near = dedupeNearDuplicates(kept);
     return {
-      merged: near.items.slice(0, options.maxSources),
+      merged: near.items,
       withContent: kept,
       hydrateNotes,
       droppedDup,
@@ -3487,7 +3814,7 @@ async function runGather(options) {
   }
   const merged = r.merged;
   const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
-  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b)))];
+  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "claude" || b === "firecrawl"))];
   const timings = {};
   for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
@@ -3496,7 +3823,10 @@ async function runGather(options) {
   const coverageTerms = termCoverage(r.withContent, r.queryTerms);
   const under = underCovered(coverageTerms);
   const ignoredFlags = ignoredByExplicitBackends(options);
-  const bridge = options.stdout ? "and read those pages directly before answering" : "via `fetch --url` before writing";
+  const supplied = options.webResults?.length ?? 0;
+  const laneKept = merged.filter((it) => it.backend === "claude").length;
+  const webSearch = { supplied, rejected: options.webResultsRejected ?? 0, kept: laneKept };
+  const bridge = options.stdout ? "and read those pages directly before answering" : "and fold the round in with `ingest --web-results` before writing";
   const searxngResult = results.find((res) => res.backend === "searxng");
   const services = {
     searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
@@ -3516,6 +3846,39 @@ async function runGather(options) {
     ...gapNote ? [gapNote] : [],
     ...explicit ? [
       `--backends pinned retrieval to ${backends.join(", ")}: the resilient web cascade is OFF` + (ignoredFlags.length ? `, and ${ignoredFlags.join(" / ")} ${ignoredFlags.length > 1 ? "were" : "was"} ignored` : "") + `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`
+    ] : [],
+    // The WebSearch lane, said out loud in every direction. Silence here is
+    // exactly the failure this whole layer exists to fix: the best engine
+    // available to the caller going unused, and nothing recording the fact.
+    ...webSearch.rejected > 0 ? [`--web-results: ignored ${webSearch.rejected} entr${webSearch.rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`] : [],
+    ...supplied > 0 ? [`WebSearch lane: ${supplied} agent-supplied hit(s), ${laneKept} kept after fusion, hydration and the relevance floor.`] : explicit ? [] : [
+      `No WebSearch lane this run: discovery fell back to the keyless engines, which are best-effort. If you have a WebSearch tool, run it and pass the hits with --web-results <file.json> \u2014 it is the strongest engine available here.`
+    ],
+    // `max` is a promise of the ceiling, and the ceiling includes ~3 GB of
+    // containers the engine cannot start for you. A run that asked for max and
+    // silently got full-minus-the-stack is the worst outcome here: it LOOKS
+    // exhaustive. So say exactly which part was missing.
+    ...profile === "max" ? [
+      `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), Firecrawl /search in discovery).`,
+      ...ignoredByMaxProfile(options).length ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`] : [],
+      // Do NOT guess why. A running SearXNG whose upstreams are throttling
+      // (brave 429, duckduckgo CAPTCHA) contributes nothing and reports
+      // exactly that in its own note — telling the reader "the container is
+      // down" would contradict a more accurate note in the same dossier and
+      // send them to restart something that is already healthy.
+      ...services.searxng.sources === 0 ? [
+        `\u26A0 max asked for SearXNG and it contributed nothing. Its own note above says why (a stopped container, or its upstream engines throttling). \`ultrasearch doctor\` tells the two apart.`
+      ] : [],
+      ...services.firecrawl.pages === 0 ? [
+        `\u26A0 max asked for Firecrawl and no page came back through it \u2014 the stack is down. Start it: \`docker compose --profile search --profile extract up -d --wait\`. Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`
+      ] : []
+    ] : [],
+    ...profile === "light" && !explicit ? [
+      `--search light: the keyless scraped cascade and SearXNG are OFF (the WebSearch lane is the discovery). Firecrawl still extracts. Use --search full to fuse the keyless engines in as well.`,
+      ...seedDomains.length ? [
+        `--seed-domains needs a discovery engine to run its site: queries; --search light has none. Use --search full, or pass those pages in --web-results.`
+      ] : [],
+      ...(options.rounds ?? 1) >= 2 ? [`--rounds 2 needs a discovery engine for its gap search; --search light has none. Use --search full.`] : []
     ] : [],
     ...cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : [],
     ...services.firecrawl.pages > 0 ? [`Firecrawl cleaned ${services.firecrawl.pages} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`] : [],
@@ -3540,6 +3903,8 @@ async function runGather(options) {
     backends,
     backendsUsed,
     ...enginesFused.length ? { enginesFused } : {},
+    webSearch,
+    searchProfile: profile,
     sourceCount: merged.length,
     maxSources: options.maxSources,
     builtAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -3559,58 +3924,20 @@ async function runGather(options) {
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
-// src/citable.ts
-var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
-var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
-var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
-function isApiEndpoint(url) {
-  try {
-    const u = new URL(url);
-    if (API_HOSTS.has(u.hostname.toLowerCase().replace(/^www\./, ""))) return true;
-    if (API_PATHS.some((re) => re.test(u.pathname))) return true;
-    return API_FORMATS.test(u.search);
-  } catch {
-    return false;
-  }
-}
-var ID_PARAMS = ["id", "ids", "uid", "uids", "pmid", "doi", "identifier"];
-function addressedIdCount(url) {
-  try {
-    const params = new URL(url).searchParams;
-    for (const name of ID_PARAMS) {
-      const raw = params.get(name);
-      if (!raw) continue;
-      const ids = raw.split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
-      if (ids.length) return ids.length;
-    }
-  } catch {
-  }
-  return 0;
-}
-function isCitableUrl(url) {
-  try {
-    const u = new URL(url);
-    return (u.protocol === "https:" || u.protocol === "http:") && !isApiEndpoint(url);
-  } catch {
-    return false;
-  }
-}
-var DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
-var ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
-var PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
-function deriveCitableUrl(text, canonical) {
-  if (canonical && isCitableUrl(canonical)) return canonical;
-  const head = text.slice(0, 4e3);
-  const doi = head.match(DOI_RE)?.[1];
-  if (doi) return `https://doi.org/${doi.replace(/[.,;:)\]]+$/, "")}`;
-  const arxiv = head.match(ARXIV_RE)?.[1];
-  if (arxiv) return `https://arxiv.org/abs/${arxiv}`;
-  const pmid = head.match(PMID_RE)?.[1];
-  if (pmid) return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
-  return void 0;
-}
-
 // src/enrich.ts
+async function addSources(dir, hits, opts = {}) {
+  const results = [];
+  for (const hit of hits) {
+    const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
+    const r = await addSource(dir, url, { ...opts, title });
+    results.push({ ...r, url });
+  }
+  return {
+    results,
+    added: results.filter((r) => r.added).length,
+    skipped: results.filter((r) => !r.added).length
+  };
+}
 async function addSource(dir, url, opts = {}) {
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
@@ -4786,7 +5113,7 @@ function runCheck(dir, opts = {}) {
   const manifest = readManifestSafe(dir);
   if (manifest?.recallFloor) {
     warnings.push(
-      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 consider enriching with \`fetch --url\` before relying on it.`
+      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 run another WebSearch round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`
     );
   }
   if (manifest?.coverage?.under.length) {
@@ -5189,6 +5516,42 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
   return result;
 }
 
+// src/queries.ts
+var TARGET_PER_DEPTH = { summary: 2, standard: 4, deep: 8 };
+function planQueries(opts) {
+  const lang = opts.lang ?? "en";
+  const mode = getMode(opts.mode);
+  const target = TARGET_PER_DEPTH[opts.depth];
+  return {
+    question: opts.question,
+    mode: opts.mode,
+    depth: opts.depth,
+    lang,
+    target,
+    planned: planVariants(opts.question, opts.depth),
+    angles: mode.searchAngles.slice(0, target),
+    next: `Run your own WebSearch once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`
+  };
+}
+function formatQueryPlan(plan) {
+  const lines = [
+    `ultrasearch: WebSearch worklist for "${plan.question}"`,
+    `  mode: ${plan.mode} \xB7 depth: ${plan.depth} \xB7 search language: ${plan.lang}`,
+    ``,
+    // Say the budget AND what it covers. Announcing "run 8" over a list of 6
+    // is the kind of small dishonesty that teaches an agent to stop reading.
+    plan.angles.length >= plan.target ? `Run ${plan.target} DISTINCT WebSearch queries \u2014 one per angle, phrased in ${plan.lang}:` : `Run ${plan.target} DISTINCT WebSearch queries, phrased in ${plan.lang} \u2014 these ${plan.angles.length} angles, then ${plan.target - plan.angles.length} of your own:`,
+    ...plan.angles.map((a, i) => `  ${i + 1}. ${a}`),
+    ``,
+    `Starting points from the built-in planner (yours will be better):`,
+    ...plan.planned.map((q) => `  \xB7 ${q}`),
+    ``,
+    `Then pool every hit into one JSON array \u2014 [{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026] \u2014 and:`,
+    `  ultrasearch gather --q "${plan.question}" --mode ${plan.mode} --depth ${plan.depth} --web-results <hits.json>`
+  ];
+  return lines.join("\n") + "\n";
+}
+
 // src/brainstorm.ts
 import { join as join9 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
@@ -5563,13 +5926,16 @@ Worklist: \`${join10(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has
 
 For EACH of your sub-questions:
 
-1. Run (add \`--lang <code> --region <cc>\` and translate the \`--queries\` into that language when the run targets a non-English audience):
-   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --out "<its out dir>"\`
+1. **Sweep with your OWN WebSearch first \u2014 this is the primary engine, not an extra.**
+   \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
+   names how many DISTINCT queries to run and which angles to cover. Run your WebSearch once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
+2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your WebSearch queries into that language when the run targets a non-English audience):
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
-2. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, enrich with your own WebSearch and, for each good URL:
-   \`node ${engineAbs} fetch --url "<url>" --out "<its out dir>"\`
-   Pin a URL a reader can OPEN \u2014 a landing page, never a raw API endpoint or a batch/search URL (the engine rewrites the endpoints it knows and refuses the rest). If it answers that the page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
-3. Do NOT write any report tier.
+3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND WebSearch round at that gap and fold the whole round in with ONE call:
+   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"\`
+   Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
+4. Do NOT write any report tier.
 
 Return (structured output): \`{ "gathered": [{ "id", "out", "coverage", "newSubQuestions" }] }\` \u2014 for each of your ITEMS: its \`out\` dir, a one-line coverage note, and any NEW sub-questions you discovered (an empty array for none).
 ${gathererFooter}`,
@@ -5624,7 +5990,7 @@ ${status}
 ## The loop (play every role yourself, one item at a time)
 
 1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join10(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join10(runAbs, "PLAN.json")}\`, apply \`${join10(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: run its \`gather --q \u2026 --queries \u2026 --out <its out dir>\`, then enrich a thin or under-covered sub-dossier (your WebSearch + \`fetch --url \u2026 --out <its out dir>\`).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join10(runAbs, "PLAN.json")}\`, apply \`${join10(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join10(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join10(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join10(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
@@ -5806,6 +6172,16 @@ function oneOf(value, allowed, key, fallback) {
   }
   return value;
 }
+function webResultsArg(v) {
+  if (v === void 0 || v === null) return void 0;
+  if (!Array.isArray(v)) throw new ToolError("`web_results` must be an array of {url, title, snippet} objects (or of URL strings).");
+  if (!v.length) return void 0;
+  const parsed = parseWebResults(JSON.stringify(v));
+  if (!parsed.hits.length) {
+    throw new ToolError('`web_results` held no usable hit \u2014 expected [{"url": "https://\u2026"}, \u2026] (or a list of URL strings).');
+  }
+  return { hits: parsed.hits, rejected: parsed.rejected };
+}
 function requiredRun(args, defaults) {
   const run = str(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
@@ -5827,6 +6203,7 @@ function gatherOptions(args) {
   if (out !== void 0 && !isAbsolute(out)) throw new ToolError("`out` must be an absolute path.");
   const depth = oneOf(str(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
   const caps = DEPTH_CAPS[depth];
+  const web = webResultsArg(args.web_results);
   return {
     question: requiredStr(args, "question", "the topic or question to research."),
     mode: oneOf(str(args.mode), ALL_MODES, "mode", "topic"),
@@ -5837,7 +6214,13 @@ function gatherOptions(args) {
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
     lang: str(args.lang) ?? "en",
     region: str(args.region),
-    webEngine: "auto",
+    // Pilotable from MCP, at last: these were hardcoded, so a client could not
+    // pin an engine, point at a SearXNG, or reach the WebSearch lane at all.
+    webEngine: oneOf(str(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
+    search: oneOf(str(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
+    ...web ? { webResults: web.hits, webResultsRejected: web.rejected } : {},
+    searxng: str(args.searxng),
+    firecrawl: str(args.firecrawl),
     since: str(args.since),
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
@@ -5851,6 +6234,7 @@ async function callTool(name, args, defaults = {}) {
 }
 var NO_WRITE_REFUSED_TOOLS = {
   ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
+  ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
   ultrasearch_verify: "it emits a worklist for skeptics to read from disk"
 };
@@ -5884,6 +6268,8 @@ async function dispatch(name, args, defaults) {
         switch (name) {
           case "ultrasearch_fetch":
             return await handleFetch(args, run);
+          case "ultrasearch_ingest":
+            return await handleIngest(args, run);
           case "ultrasearch_check":
             return handleCheck(args, run);
           case "ultrasearch_relink":
@@ -6010,6 +6396,25 @@ async function handleFetch(args, run) {
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
   const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url) });
   return { run, url, ...res };
+}
+async function handleIngest(args, run) {
+  const web = webResultsArg(args.web_results);
+  const listed = strArray(args.urls) ?? [];
+  for (const u of listed) {
+    if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
+  }
+  const hits = [...listed, ...web?.hits ?? []];
+  if (!hits.length) throw new ToolError("`web_results` or `urls` is required \u2014 the URLs to fold into the dossier.");
+  const res = await addSources(run, hits, { question: str(args.question), firecrawl: str(args.firecrawl), cache: true });
+  return {
+    run,
+    ...res,
+    ...web?.rejected ? { rejected: web.rejected } : {},
+    // Say what to do next, and only when there IS something to do: a partial
+    // ingest is normal (walls, dead links), and the caller needs to know which
+    // URLs never became citable rather than assume all of them did.
+    ...res.skipped ? { next: "Some URLs were not added \u2014 read each result's `note`. A refused page is not citable; find a primary source that carries the text." } : {}
+  };
 }
 function handleCheck(args, run) {
   const res = runCheck(run, {
@@ -6204,6 +6609,26 @@ var modeProp = {
   description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors). Default: topic."
 };
 var langProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
+var webResultsProp = {
+  type: "array",
+  items: { type: "object" },
+  description: "YOUR OWN web-search hits \u2014 [{url, title, snippet}, \u2026]. This is the PRIMARY discovery lane: the strongest index available here, and the only one that needs neither a container nor a scrape. Run your web search first, pass the hits, and the engine fetches, ranks and dedupes them like any other candidate. A bare list of URL strings works too."
+};
+var searchProfileProp = {
+  type: "string",
+  enum: [...ALL_SEARCH_PROFILES].sort(),
+  description: "How wide discovery casts: 'light' = your web_results lane + the mode's API backends (no scraped cascade, no SearXNG); 'full' = also fuse the keyless engines and SearXNG; 'auto' (default) = light when web_results is given, full when it is not."
+};
+var webEngineProp = {
+  type: "string",
+  enum: [...ALL_WEB_ENGINES].sort(),
+  description: "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'claude' means your web_results lane IS the discovery."
+};
+var searxngProp = { type: "string", description: "SearXNG base URL (optional self-hosted container; auto-detected on localhost:8888)." };
+var firecrawlProp = {
+  type: "string",
+  description: "Self-hosted Firecrawl base URL for browser-rendered extraction; 'off' disables it. Auto-detected on localhost:3002. Extraction only \u2014 it does not discover."
+};
 var GROUNDING_NOTE = "Returns SOURCES, not an answer \u2014 you write the report from them, citing [S#], and prove it with ultrasearch_check.";
 var TOOLS = [
   {
@@ -6228,11 +6653,13 @@ var TOOLS = [
   {
     name: "ultrasearch_gather",
     title: "Build a cited dossier from the web",
-    description: "Fan out across keyless search backends, fetch and dedupe the pages, and WRITE a dossier to disk: sources.json, one file per source, DOSSIER.md and manifest.json. Returns the dossier directory. SLOW and network-bound: depth 'summary' is about 30s, 'standard' 2-4 minutes, 'deep' 10-20 minutes \u2014 'standard' is the default here because a client that times out mid-gather loses the run. " + GROUNDING_NOTE,
+    description: "Fetch and dedupe pages into a dossier on disk: sources.json, one file per source, DOSSIER.md and manifest.json. Returns the dossier directory. PASS YOUR OWN WEB-SEARCH HITS as `web_results` \u2014 that lane is the primary engine, and the keyless backends behind it are best-effort fallbacks. SLOW and network-bound: depth 'summary' is about 30s, 'standard' 2-4 minutes, 'deep' 10-20 minutes \u2014 'standard' is the default here because a client that times out mid-gather loses the run. " + GROUNDING_NOTE,
     inputSchema: {
       type: "object",
       properties: {
         question: questionProp,
+        web_results: webResultsProp,
+        search: searchProfileProp,
         mode: modeProp,
         depth: {
           type: "string",
@@ -6248,9 +6675,28 @@ var TOOLS = [
         since: { type: "string", description: "Recency filter, where the backend supports it (e.g. 2024)." },
         seed_domains: { type: "array", items: { type: "string" }, description: "Primary hosts to also search with site: and rank as primary." },
         exclude_domains: { type: "array", items: { type: "string" }, description: "Hosts to drop from results." },
+        web_engine: webEngineProp,
+        searxng: searxngProp,
+        firecrawl: firecrawlProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." }
       },
       required: ["question"]
+    }
+  },
+  {
+    name: "ultrasearch_ingest",
+    title: "Ingest many URLs into a dossier at once",
+    description: "The batch form of ultrasearch_fetch: fold a whole set of your own web-search hits into an existing dossier in one call, each becoming a citable [S#]. Use this instead of calling ultrasearch_fetch once per URL. Every URL comes back with an outcome \u2014 added, already present, or refused with the reason.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        web_results: webResultsProp,
+        urls: { type: "array", items: { type: "string" }, description: "Plain list of absolute http(s) URLs (alternative to web_results)." },
+        question: { type: "string", description: "What you're looking for on these pages \u2014 ranks the excerpts kept. Defaults to the dossier's question." },
+        firecrawl: firecrawlProp
+      },
+      required: ["run"]
     }
   },
   {
@@ -6409,6 +6855,9 @@ var TOOL_META = {
   ultrasearch_search: { openWorld: true },
   ultrasearch_gather: { write: true, destructive: false, idempotent: false, openWorld: true },
   ultrasearch_fetch: { write: true, destructive: false, idempotent: true, openWorld: true },
+  // Idempotent for the same reason `fetch` is: a URL already in the dossier
+  // comes back as its existing [S#] rather than a second copy.
+  ultrasearch_ingest: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
   ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
@@ -7042,12 +7491,15 @@ report (with self-contained HTML). The web-facing sibling of ultradoc.
 
 Usage:
   ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
+  ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
+  ultrasearch doctor [--run <dossier-dir>] [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
@@ -7060,9 +7512,17 @@ Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
            You then write SUMMARY/REPORT.md, run render, then check.
+  queries  Print the WebSearch worklist: how many DISTINCT queries to run for
+           this depth, the mode's angles to cover, and the planner's starting
+           points. Run YOUR OWN WebSearch once per angle, pool every hit, and
+           feed them to gather --web-results. One query is not a sweep.
   search   Drill ONE backend and print ranked results (writes nothing).
-  fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
-           new source id (S#). This is the bridge for your own WebSearch hits.
+  fetch    Ingest ONE URL into an existing dossier (alias: add-source). Prints
+           the new source id (S#).
+  ingest   Ingest MANY URLs into an existing dossier in a single process \u2014 the
+           batch form of 'fetch', and the way to top up a dossier from your own
+           WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
+           reports one outcome per URL (added / already there / refused).
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -7074,10 +7534,12 @@ Commands:
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
            --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
-  doctor   Report which optional helpers are actually available: the SearXNG and
-           Firecrawl containers, and the PDF extractor ladder. Everything here is
+  doctor   Report the state of the engine and its optional helpers: the SearXNG
+           and Firecrawl containers, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
+           With --run <dossier-dir>, also says whether THAT run had a WebSearch
+           lane \u2014 a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
@@ -7108,7 +7570,9 @@ Options:
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
                        built-in planner; kept in dedup order, capped 2/4/6 by depth)
-  --max-sources <n>    Cap total sources kept            (default: per depth)
+  --max-sources <n>    How many candidates to FETCH (the retrieval budget, not a
+                       quota on the dossier: every page that is fetched, found
+                       on-topic and de-duplicated is kept)  (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
@@ -7116,11 +7580,24 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
+  --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, \u2026]
+                       (a bare array of URLs, or '-' for stdin, also work). This
+                       is the PRIMARY discovery lane \u2014 the strongest index here,
+                       and the only one needing neither a container nor a scrape.
+  --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
+                       light = the WebSearch lane + the mode's API backends
+                       full  = also fuse the keyless cascade + SearXNG
+                       max   = the ceiling \u2014 full + Firecrawl's /search in
+                               discovery, every recall knob at its limit, and
+                               --depth deep unless you pin one. Wants the whole
+                               container stack up and says so when it is not.
+                       auto  = light when --web-results is given, else full
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --urls <u,...>       For 'ingest': the URLs to add (alternative to --web-results)
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
@@ -7178,9 +7655,11 @@ Grounding:
 `;
 var COMMANDS = /* @__PURE__ */ new Set([
   "gather",
+  "queries",
   "search",
   "fetch",
   "add-source",
+  "ingest",
   "render",
   "check",
   "relink",
@@ -7216,6 +7695,9 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "searxng",
   "firecrawl",
   "web-engine",
+  "web-results",
+  "search",
+  "urls",
   "url",
   "cite-url",
   "id",
@@ -7359,6 +7841,22 @@ function parseShardArgs(shardsRaw, shardRaw) {
   }
   return { ok: true, shards, shard };
 }
+function readWebResultsPayload(spec) {
+  if (spec === "-") {
+    try {
+      return readFileSync9(0, "utf8");
+    } catch {
+      fail("--web-results -: could not read stdin");
+    }
+  }
+  const abs = resolve4(spec);
+  if (!existsSync10(abs)) fail(`--web-results file not found: ${abs}`);
+  try {
+    return readFileSync9(abs, "utf8");
+  } catch (e) {
+    fail(`--web-results: could not read ${abs} (${e.message})`);
+  }
+}
 function parseBackends(s) {
   const out = [];
   for (const t of parseList(s)) {
@@ -7374,6 +7872,7 @@ var NO_WRITE_REFUSED = {
   merge: "it unions the sub-dossiers into a master dossier on disk",
   fetch: "it adds a new [S#] to a dossier on disk",
   "add-source": "it adds a new [S#] to a dossier on disk",
+  ingest: "it adds new [S#] entries to a dossier on disk",
   relink: "it rewrites a source's url in a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path"
@@ -7416,13 +7915,14 @@ function gatherReport(r, options) {
     options.stdout ? `  dossier:  --stdout \u2014 nothing written; the dossier is on stdout` : `  dossier:  ${r.dir}`
   ];
   if (r.sources.length === 0) {
+    const noLane = !options.webResults?.length;
     return {
       exitCode: 1,
       lines: [
         ...head,
-        `  EMPTY DOSSIER \u2014 the keyless backends returned nothing usable. Do NOT write tiers over this. Bridge it:`,
-        `    1. retry once with a different engine: ultrasearch gather --q "\u2026" --web-engine mojeek (or searxng, ddg-lite)`,
-        options.stdout ? `    2. or search yourself (your own WebSearch) and read those pages directly \u2014 \`fetch\` needs a dossier on disk.` : `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
+        `  EMPTY DOSSIER \u2014 retrieval returned nothing usable. Do NOT write tiers over this. Recover it:`,
+        noLane ? `    1. run YOUR OWN WebSearch and feed it back: ultrasearch gather --q "\u2026" --web-results <hits.json>` : `    1. widen the lane: more/other WebSearch queries \u2192 a bigger --web-results, or --search full to fuse the keyless engines`,
+        options.stdout ? `    2. or read the pages your WebSearch found directly \u2014 \`fetch\`/\`ingest\` need a dossier on disk.` : `    2. or pin what you found: ultrasearch ingest --run ${r.dir} --web-results <hits.json>`,
         `    3. stop after two empty attempts \u2014 report the gap; NEVER invent sources.`
       ]
     };
@@ -7430,10 +7930,14 @@ function gatherReport(r, options) {
   const fused = r.manifest.enginesFused ?? [];
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
+  const ws = r.manifest.webSearch;
+  const laneLine = ws?.supplied ? `  websearch: ${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}` : `  websearch: none supplied \u2014 pass your own hits with --web-results <f.json> for the strongest lane`;
   return {
     exitCode: 0,
     lines: [
       ...head,
+      ...r.manifest.searchProfile ? [`  search:   ${r.manifest.searchProfile}`] : [],
+      laneLine,
       ...fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : [],
       ...ignored.length ? [`  IGNORED:  ${ignored.join(", ")} \u2014 --backends bypasses the cascade, seed-domain and gap rounds`] : [],
       ...under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} \u2014 enrich these before ${options.stdout ? "answering" : "writing"}`] : [],
@@ -7451,9 +7955,20 @@ function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
   const mode = oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
-  const depth = oneOf2("depth", p.values.depth ?? "standard", ALL_DEPTHS);
+  const askedMax = p.values.search === "max";
+  const depth = oneOf2("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
   const webEngine = oneOf2("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
+  const search = oneOf2("search", p.values.search ?? "auto", ALL_SEARCH_PROFILES);
+  const webSpec = p.values["web-results"];
+  const parsedWeb = webSpec ? parseWebResults(readWebResultsPayload(webSpec)) : void 0;
+  if (parsedWeb) {
+    for (const n of parsedWeb.notes) process.stderr.write(`ultrasearch: ${n}
+`);
+    if (!parsedWeb.hits.length) {
+      fail(`--web-results ${webSpec} yielded no usable hit \u2014 expected [{"url":"https://\u2026"}, \u2026] (or a list of URLs).`);
+    }
+  }
   return {
     question,
     mode,
@@ -7467,6 +7982,8 @@ function buildGatherOptions(p, opts = {}) {
     searxng: p.values.searxng,
     firecrawl: p.values.firecrawl,
     webEngine,
+    search,
+    ...parsedWeb ? { webResults: parsedWeb.hits, webResultsRejected: parsedWeb.rejected } : {},
     pages: p.values.pages ? Math.min(5, num2("pages", p.values.pages, 1)) : void 0,
     webBreadth: p.values["web-breadth"] ? Math.min(5, num2("web-breadth", p.values["web-breadth"], 1)) : void 0,
     urls: p.values.url ? parseList(p.values.url) : void 0,
@@ -7503,6 +8020,19 @@ async function main(argv = process.argv.slice(2)) {
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
+      if (options.search === "max" && !options.json) {
+        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng })).filter(
+          (s) => !s.ok && (s.name === "searxng" || s.name === "firecrawl")
+        );
+        if (down.length) {
+          process.stderr.write(
+            `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.
+             Start it:  docker compose --profile search --profile extract up -d --wait
+             Continuing without it \u2014 the run will say what it lost.
+`
+          );
+        }
+      }
       const r = await runGather(options);
       const report = gatherReport(r, options);
       if (options.stdout) {
@@ -7544,6 +8074,18 @@ async function main(argv = process.argv.slice(2)) {
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
+    case "queries": {
+      const question = p.values.q ?? p.values.question;
+      if (!question) fail('missing --q "<question>"');
+      const plan = planQueries({
+        question,
+        mode: oneOf2("mode", p.values.mode ?? "topic", ALL_MODES),
+        depth: oneOf2("depth", p.values.depth ?? "standard", ALL_DEPTHS),
+        lang: p.values.lang
+      });
+      process.stdout.write(p.bools.has("json") ? JSON.stringify(plan, null, 2) + "\n" : formatQueryPlan(plan));
+      return;
+    }
     case "modes": {
       const modes = listModes();
       if (p.bools.has("json")) {
@@ -7563,12 +8105,24 @@ async function main(argv = process.argv.slice(2)) {
     // is skipped in silence when absent: without this, a SearXNG container can
     // sit up for weeks, never be queried, and nothing anywhere says so.
     case "doctor": {
-      const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng });
+      const runDir = p.values.run;
+      let manifest;
+      if (runDir) {
+        const mf = join14(resolve4(runDir), "manifest.json");
+        if (!existsSync10(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
+        try {
+          manifest = JSON.parse(readFileSync9(mf, "utf8"));
+        } catch (e) {
+          fail(`could not read ${mf}: ${e.message}`);
+        }
+      }
+      const rows = [describeWebSearchLane(manifest), ...await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })];
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      process.stdout.write(`ultrasearch ${VERSION} \u2014 optional helpers
+      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve4(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
+      process.stdout.write(`${head}
 
 ${formatServices(rows)}
 `);
@@ -7691,6 +8245,41 @@ ${formatServices(rows)}
 `);
       }
       if (!r.id) process.exit(1);
+      return;
+    }
+    case "ingest": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const spec = p.values["web-results"];
+      const listed = p.values.urls ? parseList(p.values.urls) : [];
+      if (!spec && !listed.length) fail("missing --web-results <f.json|-> or --urls <u,...>");
+      const hits = [...listed];
+      if (spec) {
+        const parsed = parseWebResults(readWebResultsPayload(spec));
+        for (const n of parsed.notes) process.stderr.write(`ultrasearch: ${n}
+`);
+        if (!parsed.hits.length && !listed.length) {
+          fail(`--web-results ${spec} yielded no usable hit \u2014 expected [{"url":"https://\u2026"}, \u2026] (or a list of URLs).`);
+        }
+        hits.push(...parsed.hits);
+      }
+      const r = await addSources(resolve4(dir), hits, {
+        question: p.values.q ?? p.values.question,
+        cache: !p.bools.has("no-cache"),
+        firecrawl: p.values.firecrawl
+      });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      } else {
+        for (const o of r.results) {
+          process.stdout.write(o.added ? `${o.id}	${o.url}
+` : `-	${o.url}	${o.note ?? "not added"}
+`);
+        }
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} URL(s) \u2192 ${resolve4(dir)}
+`);
+      }
+      if (!r.added) process.exit(1);
       return;
     }
     case "render": {
@@ -7922,6 +8511,7 @@ if (isInvokedDirectly()) {
   main().catch((e) => fail(e.message));
 }
 export {
+  ALL_SEARCH_PROFILES,
   ALL_WEB_ENGINES,
   BOOL_FLAGS,
   COMMANDS,
@@ -7933,5 +8523,6 @@ export {
   main,
   parseArgs,
   parseShardArgs,
+  readWebResultsPayload,
   resolveApplyPaths
 };

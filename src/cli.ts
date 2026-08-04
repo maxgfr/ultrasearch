@@ -1,21 +1,23 @@
 import { basename, join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
-import { realpathSync, existsSync, statSync, readdirSync } from "node:fs";
-import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
+import { realpathSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
+import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, ALL_SEARCH_PROFILES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
 
 // Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
 // bundle and cross-checks the documented flag surface against these tables.
-export { ALL_WEB_ENGINES };
-import type { BackendKind, Depth, GatherOptions, ModeName, WebEngine } from "./types.js";
+export { ALL_WEB_ENGINES, ALL_SEARCH_PROFILES };
+import type { BackendKind, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine } from "./types.js";
+import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
-import { addSource } from "./enrich.js";
+import { addSource, addSources } from "./enrich.js";
 import { writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { autoRelink, listIssues, relink } from "./relink.js";
 import { runPlan } from "./plan.js";
+import { planQueries, formatQueryPlan } from "./queries.js";
 import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
@@ -23,7 +25,7 @@ import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
 import { runStdioServer } from "./mcp/stdio.js";
 import { startHttpServer } from "./mcp/http.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
-import { probeServices, formatServices, compose } from "./services.js";
+import { probeServices, formatServices, compose, describeWebSearchLane } from "./services.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -32,12 +34,15 @@ report (with self-contained HTML). The web-facing sibling of ultradoc.
 
 Usage:
   ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
+  ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
+  ultrasearch doctor [--run <dossier-dir>] [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
@@ -50,9 +55,17 @@ Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
            You then write SUMMARY/REPORT.md, run render, then check.
+  queries  Print the WebSearch worklist: how many DISTINCT queries to run for
+           this depth, the mode's angles to cover, and the planner's starting
+           points. Run YOUR OWN WebSearch once per angle, pool every hit, and
+           feed them to gather --web-results. One query is not a sweep.
   search   Drill ONE backend and print ranked results (writes nothing).
-  fetch    Ingest a URL into an existing dossier (alias: add-source). Prints the
-           new source id (S#). This is the bridge for your own WebSearch hits.
+  fetch    Ingest ONE URL into an existing dossier (alias: add-source). Prints
+           the new source id (S#).
+  ingest   Ingest MANY URLs into an existing dossier in a single process — the
+           batch form of 'fetch', and the way to top up a dossier from your own
+           WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
+           reports one outcome per URL (added / already there / refused).
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -64,10 +77,12 @@ Commands:
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
            --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
-  doctor   Report which optional helpers are actually available: the SearXNG and
-           Firecrawl containers, and the PDF extractor ladder. Everything here is
+  doctor   Report the state of the engine and its optional helpers: the SearXNG
+           and Firecrawl containers, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
+           With --run <dossier-dir>, also says whether THAT run had a WebSearch
+           lane — a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
@@ -98,7 +113,9 @@ Options:
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
                        built-in planner; kept in dedup order, capped 2/4/6 by depth)
-  --max-sources <n>    Cap total sources kept            (default: per depth)
+  --max-sources <n>    How many candidates to FETCH (the retrieval budget, not a
+                       quota on the dossier: every page that is fetched, found
+                       on-topic and de-duplicated is kept)  (default: per depth)
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
@@ -106,11 +123,24 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
+  --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, …]
+                       (a bare array of URLs, or '-' for stdin, also work). This
+                       is the PRIMARY discovery lane — the strongest index here,
+                       and the only one needing neither a container nor a scrape.
+  --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
+                       light = the WebSearch lane + the mode's API backends
+                       full  = also fuse the keyless cascade + SearXNG
+                       max   = the ceiling — full + Firecrawl's /search in
+                               discovery, every recall knob at its limit, and
+                               --depth deep unless you pin one. Wants the whole
+                               container stack up and says so when it is not.
+                       auto  = light when --web-results is given, else full
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
+  --urls <u,...>       For 'ingest': the URLs to add (alternative to --web-results)
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
@@ -169,9 +199,11 @@ Grounding:
 
 export const COMMANDS = new Set([
   "gather",
+  "queries",
   "search",
   "fetch",
   "add-source",
+  "ingest",
   "render",
   "check",
   "relink",
@@ -207,6 +239,9 @@ export const VALUE_FLAGS = new Set([
   "searxng",
   "firecrawl",
   "web-engine",
+  "web-results",
+  "search",
+  "urls",
   "url",
   "cite-url",
   "id",
@@ -381,6 +416,25 @@ export function parseShardArgs(
   return { ok: true, shards, shard };
 }
 
+// Read the `--web-results` payload: a file path, or "-" for stdin so a
+// read-only phase can pipe its hits in without ever touching the disk.
+export function readWebResultsPayload(spec: string): string {
+  if (spec === "-") {
+    try {
+      return readFileSync(0, "utf8");
+    } catch {
+      fail("--web-results -: could not read stdin");
+    }
+  }
+  const abs = resolve(spec);
+  if (!existsSync(abs)) fail(`--web-results file not found: ${abs}`);
+  try {
+    return readFileSync(abs, "utf8");
+  } catch (e) {
+    fail(`--web-results: could not read ${abs} (${(e as Error).message})`);
+  }
+}
+
 function parseBackends(s: string): BackendKind[] {
   const out: BackendKind[] = [];
   for (const t of parseList(s)) {
@@ -405,6 +459,7 @@ export const NO_WRITE_REFUSED: Record<string, string> = {
   merge: "it unions the sub-dossiers into a master dossier on disk",
   fetch: "it adds a new [S#] to a dossier on disk",
   "add-source": "it adds a new [S#] to a dossier on disk",
+  ingest: "it adds new [S#] entries to a dossier on disk",
   relink: "it rewrites a source's url in a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
@@ -467,15 +522,22 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
     options.stdout ? `  dossier:  --stdout — nothing written; the dossier is on stdout` : `  dossier:  ${r.dir}`,
   ];
   if (r.sources.length === 0) {
+    // The recovery order follows the engine hierarchy: the agent's own WebSearch
+    // first (strongest index, no infra), the keyless engines second. Telling an
+    // agent to re-roll the dice on a scraper before it has tried the tool in its
+    // own hand is what made WebSearch a last resort in the first place.
+    const noLane = !options.webResults?.length;
     return {
       exitCode: 1,
       lines: [
         ...head,
-        `  EMPTY DOSSIER — the keyless backends returned nothing usable. Do NOT write tiers over this. Bridge it:`,
-        `    1. retry once with a different engine: ultrasearch gather --q "…" --web-engine mojeek (or searxng, ddg-lite)`,
+        `  EMPTY DOSSIER — retrieval returned nothing usable. Do NOT write tiers over this. Recover it:`,
+        noLane
+          ? `    1. run YOUR OWN WebSearch and feed it back: ultrasearch gather --q "…" --web-results <hits.json>`
+          : `    1. widen the lane: more/other WebSearch queries → a bigger --web-results, or --search full to fuse the keyless engines`,
         options.stdout
-          ? `    2. or search yourself (your own WebSearch) and read those pages directly — \`fetch\` needs a dossier on disk.`
-          : `    2. or search yourself (your own WebSearch) and pin what you find: ultrasearch fetch --url <u> --out ${r.dir}`,
+          ? `    2. or read the pages your WebSearch found directly — \`fetch\`/\`ingest\` need a dossier on disk.`
+          : `    2. or pin what you found: ultrasearch ingest --run ${r.dir} --web-results <hits.json>`,
         `    3. stop after two empty attempts — report the gap; NEVER invent sources.`,
       ],
     };
@@ -486,10 +548,19 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   // --backends silently voids several flags; say so rather than lose recall quietly.
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
+  // Say which lane drove discovery, and say it when there was none: an agent
+  // that owns a WebSearch tool and did not use it should learn that from the
+  // run, not from re-reading the docs.
+  const ws = r.manifest.webSearch;
+  const laneLine = ws?.supplied
+    ? `  websearch: ${ws.supplied} hit(s) supplied → ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}`
+    : `  websearch: none supplied — pass your own hits with --web-results <f.json> for the strongest lane`;
   return {
     exitCode: 0,
     lines: [
       ...head,
+      ...(r.manifest.searchProfile ? [`  search:   ${r.manifest.searchProfile}`] : []),
+      laneLine,
       ...(fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : []),
       ...(ignored.length ? [`  IGNORED:  ${ignored.join(", ")} — --backends bypasses the cascade, seed-domain and gap rounds`] : []),
       ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before ${options.stdout ? "answering" : "writing"}`] : []),
@@ -510,9 +581,30 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
   const mode = oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
-  const depth = oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS);
+  // `--search max` means the ceiling, and the biggest single lever on how much
+  // detail comes back is --depth. Raising it here (only when the caller pinned
+  // no depth) is the difference between "max retrieval at standard caps" and
+  // what someone asking for max actually wants. gatherReport prints the result,
+  // so the implication is visible rather than magic.
+  const askedMax = p.values.search === "max";
+  const depth = oneOf<Depth>("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
   const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
+  const search = oneOf<SearchProfile>("search", p.values.search ?? "auto", ALL_SEARCH_PROFILES);
+
+  // The WebSearch lane. Parsing is forgiving (see parseWebResults) but an EMPTY
+  // result is a hard failure, not a silent downgrade: the agent believed it had
+  // handed over its hits, and letting the run quietly fall back to the keyless
+  // engines would hide the one thing it most needs to know.
+  const webSpec = p.values["web-results"];
+  const parsedWeb = webSpec ? parseWebResults(readWebResultsPayload(webSpec)) : undefined;
+  if (parsedWeb) {
+    for (const n of parsedWeb.notes) process.stderr.write(`ultrasearch: ${n}\n`);
+    if (!parsedWeb.hits.length) {
+      fail(`--web-results ${webSpec} yielded no usable hit — expected [{"url":"https://…"}, …] (or a list of URLs).`);
+    }
+  }
+
   return {
     question,
     mode,
@@ -531,6 +623,8 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     searxng: p.values.searxng,
     firecrawl: p.values.firecrawl,
     webEngine,
+    search,
+    ...(parsedWeb ? { webResults: parsedWeb.hits, webResultsRejected: parsedWeb.rejected } : {}),
     pages: p.values.pages ? Math.min(5, num("pages", p.values.pages, 1)) : undefined,
     webBreadth: p.values["web-breadth"] ? Math.min(5, num("web-breadth", p.values["web-breadth"], 1)) : undefined,
     urls: p.values.url ? parseList(p.values.url) : undefined,
@@ -579,6 +673,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
+      // Preflight for `--search max` ONLY. It promises the whole stack, and a
+      // deep max run costs 10-20 minutes — learning at the end that the
+      // containers were down is learning too late. Two probes, ~2s worst case,
+      // and it never aborts: a stack-less max is still a good run, it is just
+      // not the one that was asked for.
+      if (options.search === "max" && !options.json) {
+        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng })).filter(
+          (s) => !s.ok && (s.name === "searxng" || s.name === "firecrawl"),
+        );
+        if (down.length) {
+          process.stderr.write(
+            `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.\n` +
+              `             Start it:  docker compose --profile search --profile extract up -d --wait\n` +
+              `             Continuing without it — the run will say what it lost.\n`,
+          );
+        }
+      }
       const r = await runGather(options);
       const report = gatherReport(r, options);
       if (options.stdout) {
@@ -622,6 +733,21 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       return;
     }
 
+    case "queries": {
+      const question = p.values.q ?? p.values.question;
+      if (!question) fail('missing --q "<question>"');
+      const plan = planQueries({
+        question,
+        mode: oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES),
+        depth: oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS),
+        lang: p.values.lang,
+      });
+      // Prints only — safe in a read-only phase, which is exactly where an agent
+      // wants to know what to search before it commits to a run.
+      process.stdout.write(p.bools.has("json") ? JSON.stringify(plan, null, 2) + "\n" : formatQueryPlan(plan));
+      return;
+    }
+
     case "modes": {
       const modes = listModes();
       if (p.bools.has("json")) {
@@ -642,12 +768,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     // is skipped in silence when absent: without this, a SearXNG container can
     // sit up for weeks, never be queried, and nothing anywhere says so.
     case "doctor": {
-      const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng });
+      // With --run, report the lane THAT RUN actually had. A dossier built
+      // without one looks identical to a dossier built with a bad one, so this
+      // is the only place the omission becomes visible after the fact.
+      const runDir = p.values.run;
+      let manifest: Manifest | undefined;
+      if (runDir) {
+        const mf = join(resolve(runDir), "manifest.json");
+        if (!existsSync(mf)) fail(`no dossier at ${resolve(runDir)} (no manifest.json)`);
+        try {
+          manifest = JSON.parse(readFileSync(mf, "utf8")) as Manifest;
+        } catch (e) {
+          fail(`could not read ${mf}: ${(e as Error).message}`);
+        }
+      }
+      const rows = [describeWebSearchLane(manifest), ...(await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }))];
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      process.stdout.write(`ultrasearch ${VERSION} — optional helpers\n\n${formatServices(rows)}\n`);
+      const head = runDir ? `ultrasearch ${VERSION} — ${resolve(runDir)}` : `ultrasearch ${VERSION} — the engine, and the optional helpers`;
+      process.stdout.write(`${head}\n\n${formatServices(rows)}\n`);
       return;
     }
 
@@ -781,6 +922,43 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (r.id) process.stdout.write(`${r.id}\n`);
       }
       if (!r.id) process.exit(1);
+      return;
+    }
+
+    case "ingest": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const spec = p.values["web-results"];
+      const listed = p.values.urls ? parseList(p.values.urls) : [];
+      if (!spec && !listed.length) fail("missing --web-results <f.json|-> or --urls <u,...>");
+
+      const hits: (string | { url: string; title?: string })[] = [...listed];
+      if (spec) {
+        const parsed = parseWebResults(readWebResultsPayload(spec));
+        for (const n of parsed.notes) process.stderr.write(`ultrasearch: ${n}\n`);
+        if (!parsed.hits.length && !listed.length) {
+          fail(`--web-results ${spec} yielded no usable hit — expected [{"url":"https://…"}, …] (or a list of URLs).`);
+        }
+        hits.push(...parsed.hits);
+      }
+
+      const r = await addSources(resolve(dir), hits, {
+        question: p.values.q ?? p.values.question,
+        cache: !p.bools.has("no-cache"),
+        firecrawl: p.values.firecrawl,
+      });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      } else {
+        // One line per URL, refusals included: an ingest that silently dropped
+        // half its input would be worse than one that failed outright.
+        for (const o of r.results) {
+          process.stdout.write(o.added ? `${o.id}\t${o.url}\n` : `-\t${o.url}\t${o.note ?? "not added"}\n`);
+        }
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} URL(s) → ${resolve(dir)}\n`);
+      }
+      // Nothing added at all is a failed acquisition, not a quiet success.
+      if (!r.added) process.exit(1);
       return;
     }
 

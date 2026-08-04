@@ -70,12 +70,16 @@ the verification worklist.
    omits it and fans out at standard depth.
 
 2. **Fan out** — one `gather --depth deep --out <its out dir>` per
-   sub-question, passing that sub-question's `queries`. The on-disk fetch cache
-   is on by default and shared across processes, so a URL two sub-questions both
-   surface is fetched once, not twice (`--no-cache` disables it, which on a
-   fan-out is usually the wrong trade). Enrich each thin area with your own
-   WebSearch + `fetch` (the standard "bridge"); a sub-dossier under the recall
-   floor is flagged in its `DOSSIER.md`, so enrich it before it feeds the merge.
+   sub-question, passing that sub-question's `queries`. **Each gatherer runs its
+   own WebSearch sweep first** (8 distinct queries at deep) and passes the pooled
+   hits as `--web-results <its out dir>/websearch.json` — a fan-out multiplies
+   whatever discovery you gave it, so a sub-question gathered without a lane is
+   where this tier quietly gets worse. The on-disk fetch cache is on by default
+   and shared across processes, so a URL two sub-questions both surface is
+   fetched once, not twice (`--no-cache` disables it, which on a fan-out is
+   usually the wrong trade). Top up each thin area with a second round through
+   `ingest`; a sub-dossier under the recall floor is flagged in its `DOSSIER.md`,
+   so fix it before it feeds the merge.
    Parallel when possible (see the contract below), sequential otherwise.
    **Carry the locale through every fan-out** (`--lang`/`--region`, translated
    `queries`); report in the user's language — SKILL.md's locale rule.
@@ -166,12 +170,16 @@ to find the dossier. Dispatch one subagent per sub-question with a prompt shaped
 like (`<skill-dir>` = this skill's absolute directory, resolved by the parent):
 
 > You are gathering web evidence for ONE sub-question of a larger research run.
-> Run (add `--lang <code> --region <cc>` and translate the `--queries` into that
-> language when the run targets a non-English audience):
-> `node <skill-dir>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --cache --out "<its out dir>"`
+> FIRST run your own WebSearch on 8 genuinely different angles for that
+> sub-question (`node <skill-dir>/scripts/ultrasearch.mjs queries --q "<sub-question>" --mode <m> --depth deep`
+> names them) and pool every hit into `<its out dir>/websearch.json` as
+> `[{"url":…,"title":…,"snippet":…}, …]`. Then run (add `--lang <code> --region <cc>`
+> and translate the `--queries` and your WebSearch queries into that language when
+> the run targets a non-English audience):
+> `node <skill-dir>/scripts/ultrasearch.mjs gather --q "<sub-question>" --queries "<q1|q2|q3>" --mode <m> --depth deep --cache --web-results "<its out dir>/websearch.json" --out "<its out dir>"`
 > Then open `<its out dir>/DOSSIER.md`. If it is flagged **thin** (or an angle is
-> missing), enrich with your own WebSearch and, for each good URL,
-> `node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out "<its out dir>"`.
+> missing), run a second WebSearch round at the gap and fold it in with
+> `node <skill-dir>/scripts/ultrasearch.mjs ingest --run "<its out dir>" --web-results "<round2.json>"`.
 > Do NOT write any report tier. Reply with exactly: the `out` dir, a one-line
 > coverage note, and any NEW sub-questions you discovered (or "none").
 

@@ -193,6 +193,34 @@ export interface Provenance {
 export const ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"] as const;
 export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 
+// How wide the DISCOVERY layer casts, as a preset over the primitives above.
+// The harness WebSearch lane is the engine; the keyless cascade is the
+// amplifier — this knob says whether to pay for the amplifier.
+//
+//   light — the WebSearch lane + the mode's API backends (Wikipedia, arXiv,
+//           Crossref, StackExchange, GitHub, HN, standards). No scraped cascade,
+//           no SearXNG. Firecrawl still EXTRACTS (it is not a discovery engine).
+//   full  — everything keyless, fused: the lane + the scraped cascade + SearXNG.
+//   max   — the ceiling. `full`, plus Firecrawl's own /search as a discovery
+//           lane, plus every recall knob at its limit (pages 5, breadth 5, the
+//           gap round) and `--depth deep` unless the caller pinned one. Wants
+//           the whole container stack up; says so plainly when it is not.
+//   auto  — light when the agent supplied --web-results, full when it did not.
+//           A harness with no WebSearch tool therefore keeps the old behaviour
+//           and never comes back empty. `auto` never resolves to `max`: paying
+//           for ~3 GB of containers and a 10-minute run is always a decision.
+export const ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"] as const;
+export type SearchProfile = (typeof ALL_SEARCH_PROFILES)[number];
+
+// One hit from the agent's own WebSearch tool, as handed to `--web-results`.
+// Only `url` is required — a hit with no title falls back to the URL, and a
+// missing snippet just means the excerpt comes from the hydrated page.
+export interface WebSearchHit {
+  url: string;
+  title?: string;
+  snippet?: string;
+}
+
 // Optional, backend-specific metadata carried on a source.
 export interface SourceMeta {
   doi?: string;
@@ -208,6 +236,7 @@ export interface SourceMeta {
   absUrl?: string; // arxiv: the /abs/<id> abstract page (hydration fallback)
   waybackSnapshot?: string; // timestamp of the Wayback snapshot a dead link was recovered from
   textVia?: string; // API endpoint the text was hydrated from when the landing page was walled (the source url stays the page)
+  foundBy?: number; // independent backend lists that surfaced this source (cross-engine corroboration)
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   [k: string]: unknown;
 }
@@ -248,6 +277,11 @@ export interface Source {
   // extract is the snippet, not the real page. Surfaced in DOSSIER.md / HTML so
   // a reader doesn't cite a source it only saw a snippet of. Absent ⇒ full text.
   fullText?: boolean;
+  // Structural, corpus-relative authority signals (src/authority.ts): reference
+  // diversity, self-declared identity, cross-backend corroboration. Rendered as
+  // guidance for the reader — they never drop or re-rank a source, because the
+  // measurement says they are right often, not always.
+  signals?: string[];
 }
 
 // What a backend module returns: candidate sources + honest notes (e.g.
@@ -272,6 +306,11 @@ export interface ModeProfile {
   deepOnly: BackendKind[]; // additional backends run only at --depth deep
   template: string; // the markdown template skeleton (section headings)
   extras: ModeExtra[];
+  // The distinct ANGLES a WebSearch sweep should cover for this mode, emitted by
+  // `queries` as the agent's search worklist. The engine cannot run the agent's
+  // WebSearch for it, so the next best thing is to say precisely what to search
+  // — one query per angle beats one query repeated.
+  searchAngles: string[];
 }
 
 // Resolved options for one `gather` run.
@@ -288,6 +327,9 @@ export interface GatherOptions {
   searxng?: string; // SearXNG base URL (else env / default)
   firecrawl?: string; // Firecrawl base URL (else env / http://localhost:3002); "off" disables it
   webEngine: WebEngine;
+  search?: SearchProfile; // --search: how wide DISCOVERY casts (default auto)
+  webResults?: WebSearchHit[]; // --web-results: the harness WebSearch hits the agent supplied
+  webResultsRejected?: number; // entries in that payload with no usable http(s) URL (reported, never hidden)
   pages?: number; // result pages each web engine fetches per query (else per depth)
   webBreadth?: number; // engines the auto cascade fuses before stopping (else per depth)
   urls?: string[]; // explicit URLs for the `generic` backend / `search --backend generic`
@@ -325,7 +367,12 @@ export interface Manifest {
   pages?: number; // result pages fetched per web engine this run
   backends: BackendKind[]; // requested
   backendsUsed: BackendKind[]; // returned at least one source
-  enginesFused?: BackendKind[]; // web discovery engines whose results were fused this run
+  enginesFused?: BackendKind[]; // discovery lanes whose results were fused this run (incl. "claude", the WebSearch lane)
+  // What the harness WebSearch lane contributed. `supplied: 0` on a run that
+  // could have had one is the signal that the best engine available was not
+  // used — the dossier says so rather than leaving it to be inferred.
+  webSearch?: { supplied: number; rejected: number; kept: number };
+  searchProfile?: SearchProfile; // the DISCOVERY preset this run resolved to (light | full)
   sourceCount: number;
   maxSources: number;
   builtAt: string;

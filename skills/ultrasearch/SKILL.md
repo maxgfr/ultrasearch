@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Searches the real web + scholarly APIs (keyless) and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML/MD) from fetched sources. Modes: topic · bug (debug an error via Stack Overflow/GitHub/HN) · research (lit review + BibTeX) · learn (lesson + glossary) · startup (market/competitor research). Triggers: 'research X', 'what does the web say about X', 'summarize everything about X', 'deep dive on X', 'debug/why am I getting <error>', 'literature review of X', 'teach me / help me learn X', 'market research for <idea>', 'competitors of X', 'prior art / papers on X'. Routed by ask shape: a cheap cited lookup for a one-fact ask, a full report otherwise, an opt-in deep tier (decomposition + adversarial per-claim verification) on 'deep research on X', 'exhaustively research/verify X'. Vague ask? brainstorm probes it and proposes angles + clarifying questions."
+description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Drives YOUR OWN WebSearch as the primary engine (several distinct queries, pooled), then fetches, de-duplicates and ranks every page into an evidence dossier and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML/MD). Keyless engines, SearXNG and Firecrawl are optional amplifiers, never the floor. Modes: topic · bug (an error, via Stack Overflow/GitHub/HN) · research (lit review + BibTeX) · learn (lesson + glossary) · startup (market/competitors). Triggers: 'research X', 'what does the web say about X', 'deep dive on X', 'why am I getting <error>', 'literature review of X', 'teach me X', 'market research for <idea>', 'competitors of X', 'prior art on X'. Routed by ask shape: a cheap cited lookup for a one-fact ask, a full report otherwise, an opt-in deep tier (decomposition + adversarial verification) on 'deep research on X'. Vague ask? brainstorm proposes angles + questions."
 license: MIT
 metadata:
   version: 1.17.1
@@ -8,16 +8,37 @@ metadata:
 
 # ultrasearch — recap the web, grounded not guessed
 
-The deterministic engine (`scripts/ultrasearch.mjs`, zero-dependency Node) does
-the searching, fetching and de-duplicating **with code**. Your job is to read the
-retrieved sources and write a precise, **cited**, tiered report. `ultrasearch
-check` mechanically fails the report if any citation is dangling or any claim in
-REPORT is unsourced and unflagged.
+**You are the search engine. The tool is the evidence machine.**
+
+Your own **WebSearch** is the best index in this pipeline: no container, no
+scraping, no rate-limit roulette. But it stops at titles and snippets, and a
+report built on snippets is a report built on guesses. So the split is:
+
+- **You search** — several genuinely different queries, because one query is not
+  a sweep — and hand over the hits.
+- **The engine** (`scripts/ultrasearch.mjs`, zero-dependency Node) fetches every
+  page, cleans it, ranks it, de-duplicates it and writes the dossier **with
+  code**.
+- **You read the fetched text** and write a precise, **cited**, tiered report.
+  `ultrasearch check` mechanically fails it if any citation is dangling or any
+  claim in REPORT is unsourced and unflagged.
+
+The keyless engines behind it (DuckDuckGo, Mojeek, Marginalia, a self-hosted
+SearXNG) are an **amplifier**, not the floor. They are best-effort scrapers, and
+`--search full` is how you ask for them.
 
 ## Invariants
 
-Six rules hold on every run, at every depth. Later sections cite them by number
+Seven rules hold on every run, at every depth. Later sections cite them by number
 instead of restating them.
+
+- **I0 — Your WebSearch drives discovery.** Every route starts with you
+  searching. `queries` tells you how many distinct queries to run and which
+  angles to cover; you pool every hit into one JSON array and pass it as
+  `--web-results`. Never let a run fall back to the keyless engines *by default*
+  — that is what the run means when it prints `websearch: none supplied`. If your
+  harness genuinely has no WebSearch tool, omit the flag and the engine keeps its
+  old behaviour on its own.
 
 - **I1 — Answer only from retrieved sources.** Never from your own knowledge of
   the topic. If you must add background knowledge, FLAG it: end the sentence with
@@ -63,6 +84,35 @@ question. You do not have to create it: `plan --run-root <RUN>` makes it and its
 `<RUN>/q1`, `<RUN>/q2`… sub-dirs, and `merge --master <RUN>` turns it into the
 master dossier. Without `--out`, `gather` picks its own dir and prints it.
 
+## The sweep — do this first, on every route (I0)
+
+```
+node <skill-dir>/scripts/ultrasearch.mjs queries --q "<question>" --mode <m> --depth <d>
+```
+
+It prints a worklist: how many **distinct** queries to run (2 · 4 · 8 by depth),
+the mode's angles to cover, and the planner's starting points. Then:
+
+1. **Run your own WebSearch once per angle.** Different angles, not rephrasings —
+   a definition query and a criticism query return different halves of the web.
+   Translate them into the search locale first (I3).
+2. **Pool every hit into ONE JSON array**, duplicates and all — the engine
+   de-duplicates:
+   ```json
+   [{"url": "…", "title": "…", "snippet": "…"}, …]
+   ```
+   Write it to `<RUN>/websearch.json`. A bare array of URL strings also works.
+3. **Hand it to the engine** with `--web-results <RUN>/websearch.json`.
+
+Your hits get **no special trust** — every page is fetched, cleaned and
+wall-checked like any other, and a weak domain stays weak. But nothing is
+thrown away either: **every page fetched and found on-topic is kept**.
+`--max-sources` bounds how many candidates get FETCHED, not how many survive,
+so a page you deliberately chose is never dropped to make room.
+
+Under `--stdout` you have no disk: pass the array on **stdin** with
+`--web-results -`.
+
 ## Triage — route the ask before you spend anything
 
 Take the **first** route that matches. Cost across routes is roughly 1 : 4 : 15
@@ -100,9 +150,10 @@ Writes `BRAINSTORM.md` with candidate angles, refined questions, and 2-4
 questions for the user. Present those as a choice, then re-enter triage with the
 refined question.
 
-**Route L — the cheap path (one process, ≤10 sources, ~30s).**
+**Route L — the cheap path (one process, ≤10 sources, ~30s).** Two WebSearch
+queries (I0), then:
 ```
-node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth summary
+node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth summary --web-results <RUN>/websearch.json
 ```
 Read `DOSSIER.md`, write a short `REPORT.md` (the answer, every sentence cited)
 plus a two-line `SUMMARY.md`, then `check`. `check` requires a `REPORT.md` even
@@ -110,7 +161,8 @@ when it is six lines — that is the grounding contract. Skip `plan`,
 `orchestrate`, `verify` and `--semantic` entirely; `render` only if the user
 wants a file. If the dossier comes back **⚠ Thin**, or the answer simply isn't in
 it, upgrade to route S rather than padding. In a read-only phase, this is the
-route to take: `gather --depth summary --stdout` and answer inline (I6).
+route to take: `gather --depth summary --stdout --web-results -` and answer
+inline (I6).
 
 **Route S** — the standard route below. **Route D** — the deep tier below.
 
@@ -118,12 +170,14 @@ route to take: `gather --depth summary --stdout` and answer inline (I6).
 
 `gather` / `merge` write a **dossier** (`sources.json`, `sources/S#.md`,
 `DOSSIER.md`, `manifest.json`). `plan` / `verify` / `orchestrate` write
-**worklists**. `render` / `check` / `search` / `modes` / `brainstorm` write no
-dossier. Every "Writes" below is what happens **without** `--stdout` (I6).
-Canonical invocations (I4):
+**worklists**. `render` / `check` / `search` / `queries` / `modes` / `brainstorm`
+write no dossier. Every "Writes" below is what happens **without** `--stdout`
+(I6). Canonical invocations (I4):
 
 ```
-node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --mode <m> --depth <d> [--out <dir>]
+node <skill-dir>/scripts/ultrasearch.mjs queries --q "<question>" --mode <m> --depth <d>
+node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --mode <m> --depth <d> --web-results <RUN>/websearch.json [--out <dir>]
+node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dir> --web-results <more.json>
 node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
 node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>
 node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
@@ -133,9 +187,11 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 
 | Command | Writes | Flags that matter |
 |---|---|---|
-| `gather` | the dossier (`--stdout`: streams it, writes nothing) | `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
+| `queries` | nothing (prints) | `--q` · `--mode` · `--depth` · `--lang` · `--json`. Your WebSearch worklist: how many distinct queries to run, and the angles to cover. Start every route here (I0). |
+| `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
+| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` · `--urls a,b,c` · `--q` (excerpt hint) · `--json`. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--cite-url <page>` (read the text from `--url`, cite this instead). The bridge from your own WebSearch into the dossier. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
@@ -156,14 +212,31 @@ not hand control back mid-retrieval.
 1. **Resolve intent.** Restate the question. Fix `--mode`, `--depth` and the
    search locale (I3) from the triage table.
 
-2. **Gather.** One process, unless the ask has ≥2 independent facets:
+2. **Sweep, then gather.** Run the sweep (I0) — `queries`, one WebSearch per
+   angle, pool the hits — then one process, unless the ask has ≥2 independent
+   facets:
    ```
-   node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d>
+   node <skill-dir>/scripts/ultrasearch.mjs gather --q "<precise question>" --mode <m> --depth <d> --web-results <RUN>/websearch.json
    ```
-   It prints the dossier path. If a local SearXNG is up, add `--searxng <url>`.
-   A local Firecrawl (`http://localhost:3002`) is picked up automatically and
-   needs no flag. The keyless backends are best-effort — some may be
-   rate-limited or empty, and the engine records that honestly in the notes.
+   It prints the dossier path and, on the `websearch:` line, how many of your
+   hits survived. A local Firecrawl (`http://localhost:3002`) is picked up
+   automatically in every profile and needs no flag; it extracts pages, it does
+   not find them.
+
+   **Widen only when it pays** (measured on two real runs, same engine):
+
+   | Profile | Take it when | What it did |
+   |---|---|---|
+   | `light` *(default with a lane)* | almost always | the sweep + the mode's API backends. Primary sources ranked **6, 13, 17…** on a `topic` run. |
+   | `full` | your sweep came back thin, or the long tail matters | + the keyless cascade + SearXNG. |
+   | `max` | a `research`/decision run where you want everything | + Firecrawl's `/search`, every knob at its ceiling, `--depth deep`. On a `research` question: 60 sources, SearXNG 19, 10 PDFs through the ladder, papers ranked **1, 3, 5, 6, 7…**. |
+
+   ⚠ **`max` is recall, not precision.** On a `topic` question about a
+   commercially-blogged subject it tripled the pool and pushed the WHATWG spec,
+   the vendor API docs and the standards pages from ranks 6–21 down to **27–57**:
+   SEO posts written verbatim around the query beat a spec that never uses the
+   query's words. `research` mode does not have this problem — its backends
+   return real authority. Read by `trust`, not just top-down, on a wide run.
 
    With ≥2 facets, fan out instead — `plan` writes `<RUN>` and its sub-dirs,
    `orchestrate` emits the workflow, and you run the fold:
@@ -174,20 +247,39 @@ not hand control back mid-retrieval.
    ```
    After the merge, `<RUN>` is the run dir and only MASTER `[S#]` resolve.
 
-3. **Read the dossier.** Open `DOSSIER.md`: every source with an id (`[S1]`,
+3. **Read the dossier — YOU are the judge of the sources.** The engine ranks for
+   RELEVANCE and keeps everything it retrieved. It holds **no list of good or bad
+   websites**: `trust` reflects only the ROUTE a source arrived by (a scholarly
+   API vouches for a record; a web engine vouches for nothing). Deciding what is
+   authoritative is your job — you are the only party here that can read the page.
+
+   As you read each extract, appraise it: primary source (a spec, a vendor's own
+   docs, the paper), secondary reporting, or content marketing rewriting someone
+   else's work? Prefer the primary one for a load-bearing claim; when only a weak
+   source carries a claim, **say so in the report** instead of leaning on it
+   silently. Discarding a page you judge worthless is a legitimate reading
+   decision — the engine deliberately did not make it for you.
+
+   Some sources carry **structural hints**, computed from the document itself:
+   `⚠ thin attribution` (cites almost nothing, no other engine found it, declares
+   no identity), `✓ document of record`, `✓ corroborated`. Advisory only —
+   measured, they are right often, not always. A `⚠` page can be correct.
+
+   Open it: every source with an id (`[S1]`,
    `[S2]`, …), a snippet, and the path to its cleaned full text in `sources/S#.md`.
    Read the actual source text. It also flags what retrieval could not do —
    **⚠ Thin dossier**, **🔍 Under-covered** (named question terms barely present
    in the sources: your enrichment worklist), and per-source **⚠ snippet only**.
 
-4. **Enrich the thin areas (the bridge).** Retrieval is recall-oriented and the
-   keyless backends miss things. Use **your own WebSearch** for authoritative
-   primary sources, the angles flagged under-covered, and anything the user
-   specifically asked about. Ingest each good URL:
+4. **Top up the thin areas.** Your first sweep aimed at the question; the dossier
+   now tells you where it fell short. Run **another WebSearch round** targeted at
+   the `🔍 Under-covered` terms, the angles the user specifically asked about, and
+   any primary source still missing. Then fold the whole round in at once:
    ```
-   node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
+   node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dir> --web-results <RUN>/round2.json
    ```
-   It fetches, cleans, assigns the next `S#`, and prints the id so you can cite it.
+   One process, one `S#` per page, an outcome printed for every URL. Use
+   `fetch --url` only for a single page.
 
 5. **Write the two tiers.** In the run folder:
    - `SUMMARY.md` — the TL;DR (top of the mode template, a few sentences each).
@@ -272,7 +364,12 @@ contracts and the budget live in `references/deep-research-playbook.md`.
    Passing `--depth deep` records it, so the emitted fan-out gathers deep too.
    Override with `--subquestions "a|b|c"` when you know the domain better.
 2. **Fan out and merge** — as in route S step 2, but each sub-gather runs
-   `--depth deep`, and you enrich thin sub-dossiers *before* they feed the merge.
+   `--depth deep`, and you top up thin sub-dossiers *before* they feed the merge.
+   **Every gatherer runs its OWN sweep** (I0): 8 distinct WebSearch queries for
+   its sub-question, pooled into its own `<RUN>/q#/websearch.json`. A sub-question
+   gathered without a lane is the one place this tier silently gets worse — the
+   fan-out multiplies whatever discovery you gave it. At this depth `--search
+   full` usually earns its wall-clock: you want the long tail too.
 3. **Verify (adversarial)** — `verify --run <RUN>` emits the claim↔source
    worklist. For each pair, judge whether the cited `sources/S#.md` actually
    SUPPORTS the claim: `supported` · `partial` · `unsupported` · `refuted`, in
@@ -297,10 +394,16 @@ contracts and the budget live in `references/deep-research-playbook.md`.
 Full operational detail — exit codes, cost model, env vars, troubleshooting — is
 in `references/operations.md`.
 
-- **Recall**, in the order worth trying: `--queries "a|b|c"` (your own phrasings)
-  → `--seed-domains` (hosts you know are authoritative) → `--pages` /
-  `--web-breadth` (search wider) → `--rounds 2` (one automatic follow-up for the
-  under-covered terms) → your own WebSearch + `fetch`.
+- **Recall**, in the order worth trying: **more WebSearch queries into
+  `--web-results`** (always first — it is the best index you have, and breadth
+  there is nearly free) → `ingest` a second round aimed at the under-covered
+  terms → `--search full` (fuse the keyless engines in) → then, and only inside
+  `full`, the keyless knobs: `--queries "a|b|c"`, `--seed-domains`, `--pages` /
+  `--web-breadth`, `--rounds 2`.
+- **`--search light` (the default once you pass `--web-results`) has no keyless
+  discovery**, so `--seed-domains` and `--rounds 2` have no engine to run on and
+  the run says so. Either pass those hosts' pages in `--web-results` yourself, or
+  ask for `--search full`.
 - **A walled page** (a host throttling you — some answer with a consent wall or
   a reCAPTCHA page under HTTP **200**) is never banked as text. The ladder runs
   itself: same-document alternate → Firecrawl → Wayback → `⚠ snippet only`, and
@@ -325,8 +428,9 @@ in `references/operations.md`.
   run. `--concurrency <n>` (default 6) bounds in-flight fetches; leave it alone
   unless you have a reason, the defaults are politeness to free services.
 - **Footgun 1 — `--backends` pins retrieval** and silently turns off the web
-  cascade, `--seed-domains`, `--rounds 2` and `--web-engine`. The run now prints
-  an `IGNORED:` line when this bites. Use it deliberately
+  cascade, `--seed-domains`, `--rounds 2`, `--web-engine`, `--search` **and your
+  `--web-results` lane** unless `claude` is in the pinned set. The run prints an
+  `IGNORED:` line naming every one it voided. Use it deliberately
   (`--backends fixture` = fully offline) or not at all.
 - **Footgun 2 — `--semantic` without an adjudicated `VERIFY.json`** fails closed,
   always. It belongs to route D only.
@@ -335,6 +439,11 @@ in `references/operations.md`.
 
 ## Common mistakes
 
+- **Letting the run search for you.** A `websearch: none supplied` line means the
+  best engine in the pipeline sat idle while scrapers did its job (I0).
+- **One WebSearch query and calling it a sweep.** `queries` names the angles;
+  four different questions beat one question asked four ways.
+- **Calling `fetch` in a loop.** That is `ingest`, in one process.
 - Running the script relative to your cwd — use the absolute `<skill-dir>/`
   prefix everywhere, including inside every subagent prompt (I4).
 - Answering from memory — an unbacked claim is `[M]` or `> [model-hint]`, never a
@@ -367,6 +476,6 @@ in `references/operations.md`.
 | You need a mode's report skeleton | `references/report-templates.md` |
 | Choosing a mode or a depth (backend profiles, budgets) | `references/modes.md` |
 | Retrieval is failing and you need the endpoints and rate limits | `references/backend-apis.md` |
-| Tuning the web search, locale, or the WebSearch bridge | `references/web-discovery.md` |
+| Tuning the WebSearch lane, the `light`/`full` profiles, or the locale | `references/web-discovery.md` |
 | Exit codes, caching, env vars, cost, troubleshooting | `references/operations.md` |
 | Understanding what `render` produces | `references/html-rendering.md` |

@@ -1,4 +1,4 @@
-import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES } from "../types.js";
+import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_WEB_ENGINES } from "../types.js";
 import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "./protocol.js";
 import { isNoWrite } from "../no-write.js";
 
@@ -30,6 +30,37 @@ const modeProp: JsonSchemaProp = {
     "Which research profile to use: topic (general), bug (an error — StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors). Default: topic.",
 };
 const langProp: JsonSchemaProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
+
+// The WebSearch lane, as an MCP client sees it: structured args, not a file
+// path. A client passes values, so the payload comes inline here where the CLI
+// takes `--web-results <file>`.
+const webResultsProp: JsonSchemaProp = {
+  type: "array",
+  items: { type: "object" },
+  description:
+    "YOUR OWN web-search hits — [{url, title, snippet}, …]. This is the PRIMARY discovery lane: the strongest index available here, and the only one that " +
+    "needs neither a container nor a scrape. Run your web search first, pass the hits, and the engine fetches, ranks and dedupes them like any other candidate. " +
+    "A bare list of URL strings works too.",
+};
+const searchProfileProp: JsonSchemaProp = {
+  type: "string",
+  enum: [...ALL_SEARCH_PROFILES].sort(),
+  description:
+    "How wide discovery casts: 'light' = your web_results lane + the mode's API backends (no scraped cascade, no SearXNG); 'full' = also fuse the keyless " +
+    "engines and SearXNG; 'auto' (default) = light when web_results is given, full when it is not.",
+};
+const webEngineProp: JsonSchemaProp = {
+  type: "string",
+  enum: [...ALL_WEB_ENGINES].sort(),
+  description:
+    "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'claude' means your web_results lane IS the discovery.",
+};
+const searxngProp: JsonSchemaProp = { type: "string", description: "SearXNG base URL (optional self-hosted container; auto-detected on localhost:8888)." };
+const firecrawlProp: JsonSchemaProp = {
+  type: "string",
+  description:
+    "Self-hosted Firecrawl base URL for browser-rendered extraction; 'off' disables it. Auto-detected on localhost:3002. Extraction only — it does not discover.",
+};
 
 // The line every retrieval tool carries. The whole point of this skill is that
 // the answer comes from fetched pages, and a model that treats a dossier as
@@ -64,14 +95,17 @@ export const TOOLS: ToolDecl[] = [
     name: "ultrasearch_gather",
     title: "Build a cited dossier from the web",
     description:
-      "Fan out across keyless search backends, fetch and dedupe the pages, and WRITE a dossier to disk: sources.json, one file per source, DOSSIER.md and " +
-      "manifest.json. Returns the dossier directory. SLOW and network-bound: depth 'summary' is about 30s, 'standard' 2-4 minutes, 'deep' 10-20 minutes — " +
-      "'standard' is the default here because a client that times out mid-gather loses the run. " +
+      "Fetch and dedupe pages into a dossier on disk: sources.json, one file per source, DOSSIER.md and manifest.json. Returns the dossier directory. " +
+      "PASS YOUR OWN WEB-SEARCH HITS as `web_results` — that lane is the primary engine, and the keyless backends behind it are best-effort fallbacks. " +
+      "SLOW and network-bound: depth 'summary' is about 30s, 'standard' 2-4 minutes, 'deep' 10-20 minutes — 'standard' is the default here because a client " +
+      "that times out mid-gather loses the run. " +
       GROUNDING_NOTE,
     inputSchema: {
       type: "object",
       properties: {
         question: questionProp,
+        web_results: webResultsProp,
+        search: searchProfileProp,
         mode: modeProp,
         depth: {
           type: "string",
@@ -87,9 +121,30 @@ export const TOOLS: ToolDecl[] = [
         since: { type: "string", description: "Recency filter, where the backend supports it (e.g. 2024)." },
         seed_domains: { type: "array", items: { type: "string" }, description: "Primary hosts to also search with site: and rank as primary." },
         exclude_domains: { type: "array", items: { type: "string" }, description: "Hosts to drop from results." },
+        web_engine: webEngineProp,
+        searxng: searxngProp,
+        firecrawl: firecrawlProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." },
       },
       required: ["question"],
+    },
+  },
+  {
+    name: "ultrasearch_ingest",
+    title: "Ingest many URLs into a dossier at once",
+    description:
+      "The batch form of ultrasearch_fetch: fold a whole set of your own web-search hits into an existing dossier in one call, each becoming a citable [S#]. " +
+      "Use this instead of calling ultrasearch_fetch once per URL. Every URL comes back with an outcome — added, already present, or refused with the reason.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        web_results: webResultsProp,
+        urls: { type: "array", items: { type: "string" }, description: "Plain list of absolute http(s) URLs (alternative to web_results)." },
+        question: { type: "string", description: "What you're looking for on these pages — ranks the excerpts kept. Defaults to the dossier's question." },
+        firecrawl: firecrawlProp,
+      },
+      required: ["run"],
     },
   },
   {
@@ -278,6 +333,9 @@ export const TOOL_META: Record<string, { write?: boolean; destructive?: boolean;
   ultrasearch_search: { openWorld: true },
   ultrasearch_gather: { write: true, destructive: false, idempotent: false, openWorld: true },
   ultrasearch_fetch: { write: true, destructive: false, idempotent: true, openWorld: true },
+  // Idempotent for the same reason `fetch` is: a URL already in the dossier
+  // comes back as its existing [S#] rather than a second copy.
+  ultrasearch_ingest: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
   ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },

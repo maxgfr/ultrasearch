@@ -1,4 +1,4 @@
-import type { BackendKind, RawSource, SourceMeta } from "./types.js";
+import type { BackendKind, RawSource, SourceMeta, WebSearchHit } from "./types.js";
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, nextSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, DEAD_LINK_STATUS } from "./backends/fetch.js";
@@ -12,6 +12,47 @@ export interface EnrichResult {
   id: string;
   added: boolean;
   note?: string;
+}
+
+export interface IngestOutcome extends EnrichResult {
+  url: string;
+}
+
+export interface IngestResult {
+  results: IngestOutcome[];
+  added: number;
+  skipped: number;
+}
+
+// Ingest a BATCH of URLs into one dossier — the whole point being that a
+// WebSearch that returned twelve good pages costs ONE process, not twelve.
+//
+// Deliberately SEQUENTIAL. `addSource` reads sources.json, picks the next free
+// [S#] and writes the file back; two concurrent calls both read the same
+// highest id, both claim it, and one source silently overwrites the other —
+// leaving a citation that still resolves, to the wrong page. Stable ids are
+// what the whole grounding contract rests on, so they are not something to
+// trade for wall-clock. The saving this command delivers is the N process
+// spawns and the N agent round-trips, which is where the cost actually was.
+//
+// Every URL gets an outcome, including the refusals: an ingest that quietly
+// dropped half its input would be worse than one that failed.
+export async function addSources(
+  dir: string,
+  hits: (string | WebSearchHit)[],
+  opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
+): Promise<IngestResult> {
+  const results: IngestOutcome[] = [];
+  for (const hit of hits) {
+    const { url, title } = typeof hit === "string" ? { url: hit, title: undefined } : hit;
+    const r = await addSource(dir, url, { ...opts, title });
+    results.push({ ...r, url });
+  }
+  return {
+    results,
+    added: results.filter((r) => r.added).length,
+    skipped: results.filter((r) => !r.added).length,
+  };
 }
 
 // Ingest a single URL into an existing dossier — the bridge for the agent's own

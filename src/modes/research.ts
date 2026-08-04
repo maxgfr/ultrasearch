@@ -7,6 +7,16 @@ export const researchMode: ModeProfile = {
   backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
   deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
+  searchAngles: [
+    "the topic + 'survey' or 'systematic review'",
+    "the canonical method/model name, as the field spells it",
+    "the seminal paper: earliest work everyone cites",
+    "recent work: the topic + the current year",
+    "the counter-position: critiques, failed replications, negative results",
+    "the benchmark or dataset the field measures this on",
+    "the review article that maps the subfield's disagreements",
+    "who cites the seminal work and what they changed about it",
+  ],
   template: [
     "## Abstract / TL;DR",
     "## Background & motivation",
