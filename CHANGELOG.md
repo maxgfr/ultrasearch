@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.19.0](https://github.com/maxgfr/ultrasearch/compare/v1.18.0...v1.19.0) (2026-08-04)
+
+
+### Features
+
+* **rank:** order for diversity, and report source facts instead of verdicts ([51503e4](https://github.com/maxgfr/ultrasearch/commit/51503e43b6e14736ec4aaec0339177ee0b467f94))
+
 # [1.18.0](https://github.com/maxgfr/ultrasearch/compare/v1.17.1...v1.18.0) (2026-08-04)
 
 
