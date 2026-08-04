@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.20.0](https://github.com/maxgfr/ultrasearch/compare/v1.19.1...v1.20.0) (2026-08-04)
+
+
+### Features
+
+* **gather:** no FETCH budget by default — --max-sources becomes opt-in ([9d356ff](https://github.com/maxgfr/ultrasearch/commit/9d356ff2e46254ba5f555f9ca7846fd5a8c4aa02))
+
 ## [1.19.1](https://github.com/maxgfr/ultrasearch/compare/v1.19.0...v1.19.1) (2026-08-04)
 
 
