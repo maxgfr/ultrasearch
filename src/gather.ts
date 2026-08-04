@@ -416,6 +416,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
     const overshoot = OVERSHOOT[options.depth] ?? 10;
     const pool = merged.slice(0, Math.min(merged.length, options.maxSources + overshoot));
+    // Candidates discovery found but this run will never FETCH. The last silent
+    // loss in the pipeline: every other way a source leaves is reported, and a
+    // reader who is told "74 sources" deserves to know whether that was all the
+    // web offered or all the budget allowed.
+    const notFetched = merged.length - pool.length;
 
     const hydrateNotes: string[] = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
@@ -594,6 +599,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       withContent: kept,
       hydrateNotes,
       droppedDup,
+      notFetched,
       nearDropped: near.dropped,
       floorDropped,
       queryTerms: bm25.queryTerms,
@@ -686,6 +692,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
+    ...(r.notFetched > 0
+      ? [
+          `Discovery found ${r.notFetched} more candidate(s) than this run fetched — \`--max-sources ${options.maxSources}\` is the FETCH budget ` +
+            `(+${OVERSHOOT[options.depth] ?? 10} overshoot). They were never retrieved, so they are not in this dossier: raise --max-sources or --depth to reach them.`,
+        ]
+      : []),
     ...(seedDomains.length ? [`Ran a targeted site: search for seed domain(s): ${seedDomains.join(", ")}.`] : []),
     ...(gapNote ? [gapNote] : []),
     ...(explicit

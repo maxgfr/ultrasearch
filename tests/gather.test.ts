@@ -184,3 +184,21 @@ describe("runGather (exclude-domains)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("runGather (nothing leaves the pool silently)", () => {
+  const dir = join(tmpdir(), "us-gather-notfetched");
+  it("says when discovery found more candidates than the run FETCHED", async () => {
+    rmSync(dir, { recursive: true, force: true });
+    // Every other way a source leaves is reported — duplicates, near-duplicates,
+    // the relevance floor. The pre-hydration budget was the last silent one: a
+    // reader told "N sources" deserves to know whether N was all the web offered
+    // or all the budget allowed. The fixture backend carries 3 sources and the
+    // budget here admits 1 + overshoot, so nothing is truncated and the note
+    // stays absent — it must not cry wolf either.
+    const r = await runGather(opts({ backends: ["fixture"], out: dir, maxSources: 1 }));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+    expect(r.sources.length).toBe(3);
+    expect(manifest.notes.join(" ")).not.toMatch(/Discovery found/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
