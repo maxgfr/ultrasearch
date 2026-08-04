@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.21.0](https://github.com/maxgfr/ultrasearch/compare/v1.20.0...v1.21.0) (2026-08-04)
+
+
+### Features
+
+* **search:** put --per-source in the max ceiling, and purge the stale trust docs ([3b85caf](https://github.com/maxgfr/ultrasearch/commit/3b85caf42dc5b3ab5b14464656c88d24d94d8b16))
+
 # [1.20.0](https://github.com/maxgfr/ultrasearch/compare/v1.19.1...v1.20.0) (2026-08-04)
 
 

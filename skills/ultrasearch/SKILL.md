@@ -3,7 +3,7 @@ name: ultrasearch
 description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Drives YOUR OWN WebSearch as the primary engine (several distinct queries, pooled), then fetches, de-duplicates and ranks every page into an evidence dossier and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML/MD). Keyless engines, SearXNG and Firecrawl are optional amplifiers, never the floor. Modes: topic · bug (an error, via Stack Overflow/GitHub/HN) · research (lit review + BibTeX) · learn (lesson + glossary) · startup (market/competitors). Triggers: 'research X', 'what does the web say about X', 'deep dive on X', 'why am I getting <error>', 'literature review of X', 'teach me X', 'market research for <idea>', 'competitors of X', 'prior art on X'. Routed by ask shape: a cheap cited lookup for a one-fact ask, a full report otherwise, an opt-in deep tier (decomposition + adversarial verification) on 'deep research on X'. Vague ask? brainstorm proposes angles + questions."
 license: MIT
 metadata:
-  version: 1.20.0
+  version: 1.21.0
 ---
 
 # ultrasearch — recap the web, grounded not guessed
