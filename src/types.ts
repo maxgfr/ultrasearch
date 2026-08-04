@@ -237,6 +237,10 @@ export interface SourceMeta {
   waybackSnapshot?: string; // timestamp of the Wayback snapshot a dead link was recovered from
   textVia?: string; // API endpoint the text was hydrated from when the landing page was walled (the source url stays the page)
   foundBy?: number; // independent backend lists that surfaced this source (cross-engine corroboration)
+  // The score's components, kept so a re-weighting can be replayed exactly
+  // against a dossier already on disk instead of re-running retrieval (two runs
+  // never return the same pool, which made the question unanswerable).
+  rank?: { rrf: number; content: number; trust: number; recency: number };
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   [k: string]: unknown;
 }

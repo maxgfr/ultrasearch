@@ -38,6 +38,7 @@ import {
   applyRelevanceFloor,
   recencyScore,
   dedupeNearDuplicates,
+  diversify,
   trustScore,
   mapLimit,
 } from "./util.js";
@@ -47,6 +48,12 @@ import type { Bm25Doc } from "./util.js";
 // can promote a deeply-relevant page a backend ranked low.
 const OVERSHOOT: Record<string, number> = { summary: 5, standard: 10, deep: 20 };
 const HYDRATE_CONCURRENCY = 6;
+
+// Round a 0..1 score component for on-disk storage: enough precision to replay
+// a re-weighting exactly, short enough not to bloat sources.json.
+function round4(n: number): number {
+  return Number(n.toFixed(4));
+}
 
 // Heading lines (markdown "# …" emitted by htmlToText) of a fetched page —
 // fed to BM25 as a boosted field so on-topic headings lift a source's score.
@@ -547,6 +554,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
+      // Keep the COMPONENTS, not just the blend. Without them a weighting can
+      // only be evaluated by re-running, and two runs never return the same
+      // pool — so "is 0.15 the right weight for trust?" was unanswerable. With
+      // them, any blend replays exactly against a dossier already on disk.
+      it.meta = { ...it.meta, rank: { rrf: round4(rrfN), content: round4(content), trust: round4(trust), recency: round4(recency) } };
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
 
@@ -562,6 +574,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => (isDisambiguation(it) ? [] : (matchedByUrl.get(it.url) ?? [])), bm25.queryTerms, floor);
     const floorDropped = dropped.length;
     const near = dedupeNearDuplicates(kept);
+    // Break up topical monopolies before handing the list over. Measured on a
+    // real `topic` pool: eight content-marketing pages rewriting each other held
+    // ranks 6-20; this takes that to five and lifts a primary source into the
+    // top 20. A `research` pool is left byte-identical — there was nothing
+    // redundant to demote. Reorders only, never drops.
+    const ordered = diversify(near.items, (it) => new Set(bm25Tokenize((it.text || it.snippet || "").slice(0, 20000))));
     // No final cut. Everything that was fetched, cleaned, found on-topic and
     // de-duplicated is KEPT. `--max-sources` bounds how many candidates get
     // HYDRATED (the network cost, applied at `pool` above) — it is a retrieval
@@ -572,7 +590,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // This also retires the lane-retention rule that used to live here: when
     // nothing is displaced, nothing needs protecting from displacement.
     return {
-      merged: near.items,
+      merged: ordered,
       withContent: kept,
       hydrateNotes,
       droppedDup,

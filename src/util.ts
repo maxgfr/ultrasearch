@@ -893,6 +893,92 @@ function betterSource(a: RawSource, b: RawSource): boolean {
   return a.url.localeCompare(b.url) < 0;
 }
 
+/**
+ * Re-order a ranked list so the top of it says several DIFFERENT things.
+ *
+ * The failure this fixes, measured on a real `topic` run: eight content-marketing
+ * pages rewriting each other took ranks 6-20, while the WHATWG specification —
+ * the only source saying something none of them said — sat at 57. They were not
+ * near-duplicates (the SimHash collapse below correctly left them alone); they
+ * were eight independent restatements. Relevance ranking has no defence against
+ * that, because each one really is on topic.
+ *
+ * So: greedy Maximal Marginal Relevance. At each rank pick the candidate
+ * maximising `λ·relevance − (1−λ)·(similarity to what is already ranked)`. The
+ * fourth rewrite of an argument already covered loses to the first source that
+ * covers new ground. Similarity is Jaccard over the tokens already computed for
+ * BM25 — no new extraction, no model, deterministic.
+ *
+ * It REORDERS ONLY. Every input comes back, exactly once: this changes what you
+ * read first, never what you have. That matters more since the source cap was
+ * removed — nothing is cut, so reading order is the whole ranking product.
+ *
+ * λ = 0.75 keeps relevance dominant: diversity breaks ties and demotes
+ * redundancy, it does not promote an off-topic page.
+ */
+export function diversify(items: RawSource[], tokensOf: (it: RawSource) => Set<string>, lambda = 0.75): RawSource[] {
+  if (items.length <= 2) return [...items];
+  const toks = new Map<RawSource, Set<string>>(items.map((it) => [it, tokensOf(it)]));
+  // Relevance normalised to 0..1 across the pool, so λ trades off two
+  // commensurable quantities rather than a score against a ratio.
+  const max = Math.max(...items.map((it) => it.score), 1e-9);
+  const rel = (it: RawSource): number => it.score / max;
+
+  const jaccard = (a: Set<string>, b: Set<string>): number => {
+    if (!a.size || !b.size) return 0;
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let inter = 0;
+    for (const t of small) if (large.has(t)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+
+  // Normalise similarity WITHIN the pool. Raw Jaccard between two long
+  // documents is small even when they are redundant — measured on a real pool,
+  // eight content-marketing pages rewriting each other scored 0.25 to one
+  // another against 0.12 to everything else. The contrast is a clean 2×, but
+  // 0.25·0.25 ≈ 0.06 of penalty is lost against a relevance range of 0..1. So
+  // the scale, not the signal, was the problem: divide by the pool's own
+  // maximum and "as similar as anything here gets" becomes 1.
+  let simMax = 0;
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const v = jaccard(toks.get(items[i]!)!, toks.get(items[j]!)!);
+      if (v > simMax) simMax = v;
+    }
+  }
+  const sim = (a: RawSource, b: RawSource): number => (simMax > 0 ? jaccard(toks.get(a)!, toks.get(b)!) / simMax : 0);
+
+  const remaining = [...items];
+  const out: RawSource[] = [];
+  // Best-scored source always leads: the most relevant result is never demoted
+  // for being similar to nothing.
+  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  out.push(remaining.shift()!);
+  // Running max-similarity to the selected set, updated incrementally — this is
+  // what keeps the whole pass O(n²) instead of O(n³).
+  const maxSim = new Map<RawSource, number>(remaining.map((it) => [it, sim(it, out[0]!)]));
+
+  while (remaining.length) {
+    let bestIdx = 0;
+    let bestVal = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < remaining.length; i++) {
+      const it = remaining[i]!;
+      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
+      // Ties broken by url so the order is reproducible run to run.
+      if (val > bestVal || (val === bestVal && it.url.localeCompare(remaining[bestIdx]!.url) < 0)) {
+        bestVal = val;
+        bestIdx = i;
+      }
+    }
+    const picked = remaining.splice(bestIdx, 1)[0]!;
+    out.push(picked);
+    for (const it of remaining) {
+      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
+    }
+  }
+  return out;
+}
+
 // Collapse near-duplicate sources by SimHash over their extracted text, keeping
 // the best-scored copy. Short texts are skipped (too little signal to trust).
 // Expects items pre-sorted best-first; preserves their order. Deterministic.

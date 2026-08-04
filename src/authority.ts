@@ -65,38 +65,29 @@ export function externalHosts(url: string, text: string): Set<string> {
  * nothing external, sits on a domain the trust table does not recognise, and
  * declares no persistent identity. Any one of those alone is ordinary.
  */
-export function sourceSignals(opts: { url: string; text: string; corroboration?: number; vouchedFor?: boolean }): SourceSignals {
+export function sourceSignals(opts: { url: string; text: string; corroboration?: number }): SourceSignals {
   const hosts = externalHosts(opts.url, opts.text);
   // Either the document names itself in its text, or its own address is a
   // persistent identifier. A PDF usually only has the second: extraction drops
   // hyperlinks, so the text can declare nothing at all.
   const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl(opts.text.slice(0, 4000));
   const corroboration = opts.corroboration ?? 1;
-  const notes: string[] = [];
 
-  // Purely structural, and purely a conjunction: a page that nobody vouched
-  // for, that cites almost nothing, that no other engine independently found,
-  // and that declares no identity of its own. Any ONE of those absent makes it
-  // completely ordinary.
+  // FACTS, not a verdict.
   //
-  // `vouchedFor` is what stops the caution from being noise. A page the AGENT
-  // picked out of its own WebSearch, or one a scholarly API handed over, has
-  // already been vouched for by someone who knows more than this heuristic
-  // does — warning the agent about a URL it chose itself is backwards. It was:
-  // `developers.openai.com/api/reference/…` is a vendor's own API reference,
-  // and it was flagged purely because a reference page links nowhere.
+  // This used to render a judgment — "⚠ thin attribution — often marketing
+  // content" — and a judgment can be wrong. It was: a vendor's own API
+  // reference and a legitimate standards registry both got flagged, purely
+  // because a reference page links nowhere. Patching that took a `vouchedFor`
+  // escape hatch, which is the shape of a heuristic defending a claim it
+  // should not have made.
   //
-  // This used to also require "on a domain with no known authority", which
-  // depended on the hostname table that has since been deleted. Dropping that
-  // clause is what makes the signal list-free.
-  if (!opts.vouchedFor && hosts.size <= 1 && corroboration <= 1 && !selfIdentified) {
-    notes.push(
-      `⚠ thin attribution — cites ${hosts.size === 0 ? "no" : "one"} external source, no other engine surfaced it, and it declares no DOI/canonical identity of its own. ` +
-        `That combination often means marketing content rather than a source of record — but it is a hint, not a verdict. Read it and judge.`,
-    );
-  }
-  if (corroboration >= 3) notes.push(`✓ corroborated — ${corroboration} independent engines surfaced this page.`);
-  if (selfIdentified && hosts.size >= 5) notes.push(`✓ document of record — declares a persistent identity and cites ${hosts.size} external sources.`);
+  // Three counts, each of them simply true, are strictly more useful and
+  // cannot be false. The agent reads them next to the extract and draws the
+  // conclusion — which is the party that was going to be right anyway.
+  const notes = [
+    `cites ${hosts.size} external source(s) · surfaced by ${corroboration} engine(s) · ${selfIdentified ? "declares a persistent identity (DOI/arXiv/canonical)" : "declares no persistent identity"}`,
+  ];
 
   return { refDiversity: hosts.size, selfIdentified, corroboration, notes };
 }

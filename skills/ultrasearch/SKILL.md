@@ -260,10 +260,15 @@ not hand control back mid-retrieval.
    silently. Discarding a page you judge worthless is a legitimate reading
    decision — the engine deliberately did not make it for you.
 
-   Some sources carry **structural hints**, computed from the document itself:
-   `⚠ thin attribution` (cites almost nothing, no other engine found it, declares
-   no identity), `✓ document of record`, `✓ corroborated`. Advisory only —
-   measured, they are right often, not always. A `⚠` page can be correct.
+   Every source carries three **measured facts**: how many external sources it
+   cites, how many engines independently surfaced it, and whether it declares a
+   persistent identity (DOI/arXiv/canonical). They are counts, not verdicts — a
+   page citing nothing can be the primary source (a spec, an API reference), and
+   a page citing plenty can be a rewrite. Use them to choose what to open first.
+
+   The order you receive is **relevance, then diversity**: when several sources
+   restate each other, the later restatements are pushed down so the top of the
+   list says several different things. Nothing is removed by it.
 
    Open it: every source with an id (`[S1]`,
    `[S2]`, …), a snippet, and the path to its cleaned full text in `sources/S#.md`.

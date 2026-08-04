@@ -950,6 +950,50 @@ function betterSource(a, b) {
   if (a.score !== b.score) return a.score > b.score;
   return a.url.localeCompare(b.url) < 0;
 }
+function diversify(items, tokensOf, lambda = 0.75) {
+  if (items.length <= 2) return [...items];
+  const toks = new Map(items.map((it) => [it, tokensOf(it)]));
+  const max = Math.max(...items.map((it) => it.score), 1e-9);
+  const rel = (it) => it.score / max;
+  const jaccard2 = (a, b) => {
+    if (!a.size || !b.size) return 0;
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let inter = 0;
+    for (const t of small) if (large.has(t)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  let simMax = 0;
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const v = jaccard2(toks.get(items[i]), toks.get(items[j]));
+      if (v > simMax) simMax = v;
+    }
+  }
+  const sim = (a, b) => simMax > 0 ? jaccard2(toks.get(a), toks.get(b)) / simMax : 0;
+  const remaining = [...items];
+  const out = [];
+  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  out.push(remaining.shift());
+  const maxSim = new Map(remaining.map((it) => [it, sim(it, out[0])]));
+  while (remaining.length) {
+    let bestIdx = 0;
+    let bestVal = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < remaining.length; i++) {
+      const it = remaining[i];
+      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
+      if (val > bestVal || val === bestVal && it.url.localeCompare(remaining[bestIdx].url) < 0) {
+        bestVal = val;
+        bestIdx = i;
+      }
+    }
+    const picked = remaining.splice(bestIdx, 1)[0];
+    out.push(picked);
+    for (const it of remaining) {
+      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
+    }
+  }
+  return out;
+}
 function dedupeNearDuplicates(items, opts = {}) {
   const maxBits = opts.maxBits ?? 3;
   const minChars = opts.minChars ?? 500;
@@ -3071,14 +3115,9 @@ function sourceSignals(opts) {
   const hosts = externalHosts(opts.url, opts.text);
   const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl(opts.text.slice(0, 4e3));
   const corroboration = opts.corroboration ?? 1;
-  const notes = [];
-  if (!opts.vouchedFor && hosts.size <= 1 && corroboration <= 1 && !selfIdentified) {
-    notes.push(
-      `\u26A0 thin attribution \u2014 cites ${hosts.size === 0 ? "no" : "one"} external source, no other engine surfaced it, and it declares no DOI/canonical identity of its own. That combination often means marketing content rather than a source of record \u2014 but it is a hint, not a verdict. Read it and judge.`
-    );
-  }
-  if (corroboration >= 3) notes.push(`\u2713 corroborated \u2014 ${corroboration} independent engines surfaced this page.`);
-  if (selfIdentified && hosts.size >= 5) notes.push(`\u2713 document of record \u2014 declares a persistent identity and cites ${hosts.size} external sources.`);
+  const notes = [
+    `cites ${hosts.size} external source(s) \xB7 surfaced by ${corroboration} engine(s) \xB7 ${selfIdentified ? "declares a persistent identity (DOI/arXiv/canonical)" : "declares no persistent identity"}`
+  ];
   return { refDiversity: hosts.size, selfIdentified, corroboration, notes };
 }
 
@@ -3176,11 +3215,7 @@ function buildSource(rs, id, builtAt, question) {
   const signals = sourceSignals({
     url: rs.url,
     text,
-    corroboration: typeof rs.meta?.foundBy === "number" ? rs.meta.foundBy : 1,
-    // Someone who knows better than a heuristic already vouched for this page:
-    // the agent picked it out of its own WebSearch (`claude`), or a route with
-    // a provenance floor handed it over (a scholarly API, Wikipedia).
-    vouchedFor: rs.backend === "claude" || trust > 0.5
+    corroboration: typeof rs.meta?.foundBy === "number" ? rs.meta.foundBy : 1
   }).notes;
   return {
     id,
@@ -3316,7 +3351,7 @@ function renderDossierMarkdown(sources, manifest, template) {
   out.push("");
   if (sources.some((s) => s.signals?.length)) {
     out.push(
-      `> Some sources carry **structural hints** below \u2014 reference diversity, self-declared identity, cross-engine corroboration \u2014 computed from the document itself. Advisory only: nothing was dropped or re-ranked because of them, and a \`\u26A0 thin attribution\` page can still be correct.`
+      `> Each source carries three **measured facts** \u2014 how many external sources it cites, how many engines independently surfaced it, whether it declares a persistent identity. They are counts, not verdicts: a page citing nothing can be the primary source (a spec, an API reference), and a page citing plenty can be a rewrite. Use them to decide what to open first, then judge from the text.`
     );
     out.push("");
   }
@@ -3330,7 +3365,7 @@ function renderDossierMarkdown(sources, manifest, template) {
     const quality = s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 ${where}${quality}`);
-    for (const sig of s.signals ?? []) out.push(`> ${sig}`);
+    for (const sig of s.signals ?? []) out.push(`_${sig}_`);
     out.push("");
     out.push(s.snippet);
     out.push("");
@@ -3477,6 +3512,9 @@ function compose(service, action) {
 // src/gather.ts
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
+function round4(n) {
+  return Number(n.toFixed(4));
+}
 function headingLines(text) {
   return text.split("\n").filter((l) => /^#{1,6}\s/.test(l)).join("\n");
 }
@@ -3772,6 +3810,7 @@ async function runGather(options) {
       const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
+      it.meta = { ...it.meta, rank: { rrf: round4(rrfN), content: round4(content), trust: round4(trust), recency: round4(recency) } };
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
     const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
@@ -3780,8 +3819,9 @@ async function runGather(options) {
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
     const floorDropped = dropped.length;
     const near = dedupeNearDuplicates(kept);
+    const ordered = diversify(near.items, (it) => new Set(bm25Tokenize((it.text || it.snippet || "").slice(0, 2e4))));
     return {
-      merged: near.items,
+      merged: ordered,
       withContent: kept,
       hydrateNotes,
       droppedDup,

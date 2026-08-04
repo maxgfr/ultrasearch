@@ -78,10 +78,6 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
     url: rs.url,
     text,
     corroboration: typeof rs.meta?.foundBy === "number" ? rs.meta.foundBy : 1,
-    // Someone who knows better than a heuristic already vouched for this page:
-    // the agent picked it out of its own WebSearch (`claude`), or a route with
-    // a provenance floor handed it over (a scholarly API, Wikipedia).
-    vouchedFor: rs.backend === "claude" || trust > 0.5,
   }).notes;
   return {
     id,
@@ -296,9 +292,10 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   out.push("");
   if (sources.some((s) => s.signals?.length)) {
     out.push(
-      `> Some sources carry **structural hints** below — reference diversity, self-declared identity, ` +
-        `cross-engine corroboration — computed from the document itself. Advisory only: nothing was dropped ` +
-        `or re-ranked because of them, and a \`⚠ thin attribution\` page can still be correct.`,
+      `> Each source carries three **measured facts** — how many external sources it cites, how many engines ` +
+        `independently surfaced it, whether it declares a persistent identity. They are counts, not verdicts: ` +
+        `a page citing nothing can be the primary source (a spec, an API reference), and a page citing plenty ` +
+        `can be a rewrite. Use them to decide what to open first, then judge from the text.`,
     );
     out.push("");
   }
@@ -315,10 +312,10 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     // Under no-write `sources/S#.md` is a stream label, not a path on disk.
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}`);
-    // Structural signals, shown as GUIDANCE. They never dropped or re-ranked
-    // this source — measured, they are right often, not always — so the call
-    // is yours, made from the text.
-    for (const sig of s.signals ?? []) out.push(`> ${sig}`);
+    // Measured facts about the document, on their own line. Never a verdict —
+    // they cost one line per source and let the reader judge without opening
+    // every extract first.
+    for (const sig of s.signals ?? []) out.push(`_${sig}_`);
     out.push("");
     out.push(s.snippet);
     out.push("");
