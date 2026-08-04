@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.19.1](https://github.com/maxgfr/ultrasearch/compare/v1.19.0...v1.19.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **gather:** say when discovery found more candidates than the run fetched ([80e154b](https://github.com/maxgfr/ultrasearch/commit/80e154b57f9cb49fd9f561bc77df1ff00dcf8ea9))
+
 # [1.19.0](https://github.com/maxgfr/ultrasearch/compare/v1.18.0...v1.19.0) (2026-08-04)
 
 
