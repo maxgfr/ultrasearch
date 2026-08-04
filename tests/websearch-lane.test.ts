@@ -168,7 +168,7 @@ describe("--search max — the ceiling", () => {
   });
 
   it("declares the knob ceiling the docs promise", () => {
-    expect(MAX_PROFILE_KNOBS).toEqual({ pages: 5, webBreadth: 5, rounds: 2 });
+    expect(MAX_PROFILE_KNOBS).toEqual({ pages: 5, webBreadth: 5, rounds: 2, perSource: 50 });
   });
 });
 

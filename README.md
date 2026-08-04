@@ -194,9 +194,11 @@ names the angles to cover; the agent runs them and pools the hits into
 `--web-results`. The engine then does what a model cannot: fetch every page,
 strip it, rank it, de-duplicate it, and refuse a consent wall.
 
-Those hits get **no trust privilege** — a weak domain stays weak, and every page
-is read like any other. What they do get is first claim on `--max-sources`, so a
-page the agent deliberately chose is never displaced by a scraped aggregator.
+Those hits get **no trust privilege** — every page is read like any other, and
+there is no hostname table at all: `trust` reflects only the route a source
+arrived by. What they do get is that **nothing is thrown away**. There is no
+source quota, and `--max-sources` is an opt-in fetch budget that is unset by
+default, so a page the agent deliberately chose is never dropped to make room.
 
 `--search max` is the ceiling: everything below, plus Firecrawl's own `/search`
 in discovery, every recall knob at its limit and `--depth deep`. It wants the

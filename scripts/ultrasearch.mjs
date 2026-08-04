@@ -3598,7 +3598,7 @@ function resolveBackends(options, mode) {
   const lane = options.webResults?.length ? ["claude"] : [];
   return [.../* @__PURE__ */ new Set([...lane, ...discovery, ...ceiling])];
 }
-var MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2 };
+var MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2, perSource: 50 };
 function ignoredByMaxProfile(options) {
   if (resolveSearchProfile(options) !== "max") return [];
   const out = [];
@@ -3657,6 +3657,7 @@ async function runGather(options) {
   const profile = resolveSearchProfile(options);
   if (profile === "max") {
     options.pages ??= MAX_PROFILE_KNOBS.pages;
+    options.perSource = Math.max(options.perSource, MAX_PROFILE_KNOBS.perSource);
     options.webBreadth ??= MAX_PROFILE_KNOBS.webBreadth;
     options.rounds ??= MAX_PROFILE_KNOBS.rounds;
   }
@@ -3905,7 +3906,7 @@ async function runGather(options) {
     // silently got full-minus-the-stack is the worst outcome here: it LOOKS
     // exhaustive. So say exactly which part was missing.
     ...profile === "max" ? [
-      `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), Firecrawl /search in discovery).`,
+      `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), ${options.perSource} per backend, Firecrawl /search in discovery).`,
       ...ignoredByMaxProfile(options).length ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`] : [],
       // Do NOT guess why. A running SearXNG whose upstreams are throttling
       // (brave 429, duckduckgo CAPTCHA) contributes nothing and reports

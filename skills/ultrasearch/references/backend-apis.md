@@ -150,6 +150,14 @@ any of this can still be brought up to standard.
 
 ## Trust scoring
 
-Each source gets a 0–1 `trust` from its domain class (`.gov`/`.edu`/Wikipedia/
-official docs high; SEO/aggregator low) and its backend authority (scholarly
-APIs high). Prefer higher-trust sources when a claim is contested.
+Each source gets a 0–1 `trust` from the ROUTE it arrived by, and nothing else:
+a scholarly API vouches for a bibliographic record, a general-web engine vouches
+for nothing (0.5, neutral). There is deliberately **no hostname table** — one
+used to exist and it scored the WHATWG HTML Standard the same as a content farm,
+because nobody had added whatwg.org to it.
+
+So `trust` does not tell you whether a page is any good. That judgment is yours,
+made from the extract, helped by the three measured facts each source carries
+(external sources cited · engines that surfaced it · whether it declares a
+persistent identity). Prefer the primary source when a claim is contested, and
+say so in the report when only a weak source carries one.

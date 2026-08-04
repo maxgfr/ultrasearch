@@ -237,8 +237,15 @@ export function resolveBackends(options: GatherOptions, mode: ModeProfile): Back
 }
 
 // The recall knobs `--search max` raises, for any the caller did not pin.
-// `pages` and `webBreadth` are capped at 5 by the CLI, so these ARE the limits.
-export const MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2 } as const;
+// `pages` and `webBreadth` are capped at 5 by the CLI, so those ARE the limits.
+//
+// `perSource` belongs here and was missing, which made `max` quietly under-
+// deliver on its own promise: it kept the depth's per-backend cut (10 at deep)
+// while claiming every recall knob was at its ceiling. Measured on a real
+// `standard` pool, lifting the three discovery knobs together took 43 sources
+// to 78. 50 is chosen to stop being the binding constraint at 5 pages of ~10
+// results each — the pages fetched decide the yield, not an arbitrary trim.
+export const MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2, perSource: 50 } as const;
 
 /** What `--search max` overrides, so the override is never silent. */
 export function ignoredByMaxProfile(options: GatherOptions): string[] {
@@ -327,6 +334,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // and the gap round alike — and `??=` keeps an explicit value the caller pinned.
   if (profile === "max") {
     options.pages ??= MAX_PROFILE_KNOBS.pages;
+    // perSource always has a value (the depth default), so `??=` cannot work:
+    // raise it unless the caller asked for something bigger themselves.
+    options.perSource = Math.max(options.perSource, MAX_PROFILE_KNOBS.perSource);
     options.webBreadth ??= MAX_PROFILE_KNOBS.webBreadth;
     options.rounds ??= MAX_PROFILE_KNOBS.rounds;
   }
@@ -558,8 +568,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     withContent.forEach((it, i) => {
       const content = rawContent[i]! / contentMax;
       const rrfN = it.score / rrfMax;
-      // A seeded primary domain is ranked as primary (≥0.95) regardless of its
-      // backend/domain class — the agent vouched for it explicitly.
+      // A seeded primary domain is ranked as primary (≥0.95) regardless of the
+      // route it arrived by — the agent named that host explicitly, which is a
+      // judgment from someone who can read, unlike anything the engine has.
       const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
       it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
@@ -731,7 +742,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // exhaustive. So say exactly which part was missing.
     ...(profile === "max"
       ? [
-          `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), Firecrawl /search in discovery).`,
+          `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), ${options.perSource} per backend, Firecrawl /search in discovery).`,
           ...(ignoredByMaxProfile(options).length
             ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`]
             : []),

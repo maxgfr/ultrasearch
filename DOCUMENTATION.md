@@ -27,9 +27,10 @@ plan query variants (full question + keywords + identifiers, by depth)
   │   cache; HTML via a self-hosted Firecrawl when one answers, else the
   │   built-in reader; junk/consent-wall extractions re-tried through Firecrawl
   │   then rejected; dead links → Wayback)
-  │  re-rank by content keyword-coverage + fusion rank + trust, THEN cap
-  │   (the cap gives the agent's curated lane first claim: a hit that passed
-  │    hydration + the relevance floor is not displaced by a scraped result)
+  │  re-rank by content keyword-coverage + fusion rank + trust, then re-order
+  │   for DIVERSITY (MMR: the fourth restatement of an argument already covered
+  │   loses its slot to the first source covering new ground). No cap: every
+  │   page fetched, on-topic and de-duplicated is kept.
   │  map per-term coverage → the under-covered enrichment worklist
   ▼
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md

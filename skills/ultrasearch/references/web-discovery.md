@@ -26,17 +26,17 @@ entry it cannot use is **counted and reported**, never silently dropped.
 
 What the lane gets, and what it deliberately does not:
 
-- **No trust privilege.** `claude` has no authority floor in the backend-trust
-  table, exactly like every other discovery engine: trust comes from the domain.
+- **No trust privilege.** `claude` has no authority floor, exactly like every
+  other discovery engine. There is no hostname table at all any more: `trust`
+  reflects only the ROUTE a source arrived by, and judging the page is the
+  reading agent's job.
 - **No exemption from being read.** Hits carry no text, so each page is fetched,
   cleaned, wall-checked and hydrated through the same rescue ladder as any other
   candidate. A snippet never becomes evidence.
-- **First claim on `--max-sources`.** Once a hit has passed hydration, the
-  relevance floor and the near-duplicate collapse, it is not displaced by a
-  scraped result. Measured before this rule existed: fusing the cascade in cut a
-  15-hit lane to 7 kept, and what it dropped were the IETF record, the Chromium
-  docs, chromestatus, the Fastly and Akamai pages — replaced by SEO status-code
-  aggregators.
+- **Nothing is displaced, because nothing is cut.** There is no source quota: a
+  hit that passed hydration, the relevance floor and the near-duplicate collapse
+  is in the dossier, full stop. `--max-sources` is an opt-in FETCH budget, unset
+  by default, and whatever it leaves behind is reported.
 
 ## The two profiles (`--search`)
 
@@ -57,7 +57,9 @@ What the lane gets, and what it deliberately does not:
   back already read by a real browser instead of being re-fetched by the regex
   stripper.
 - **Every recall knob at its limit**: `--pages 5`, `--web-breadth 5`,
-  `--rounds 2`. It supersedes a pinned `--web-engine` and says so.
+  `--rounds 2`, `--per-source 50`. It supersedes a pinned `--web-engine` and
+  says so. Measured on one question: 60 sources before `--per-source` was part
+  of the ceiling, 188 after.
 - **`--depth deep`**, unless you pinned a depth yourself.
 
 It wants the whole stack (`docker compose --profile search --profile extract up

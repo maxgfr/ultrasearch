@@ -204,8 +204,9 @@ export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 //           no SearXNG. Firecrawl still EXTRACTS (it is not a discovery engine).
 //   full  — everything keyless, fused: the lane + the scraped cascade + SearXNG.
 //   max   — the ceiling. `full`, plus Firecrawl's own /search as a discovery
-//           lane, plus every recall knob at its limit (pages 5, breadth 5, the
-//           gap round) and `--depth deep` unless the caller pinned one. Wants
+//           lane, plus every recall knob at its limit (pages 5, breadth 5, 50
+//           per backend, the gap round) and `--depth deep` unless the caller
+//           pinned one. Wants
 //           the whole container stack up; says so plainly when it is not.
 //   auto  — light when the agent supplied --web-results, full when it did not.
 //           A harness with no WebSearch tool therefore keeps the old behaviour
@@ -274,7 +275,7 @@ export interface Source {
   fetchedAt: string;
   lang?: string;
   domain: string;
-  trust: number; // 0..1 heuristic (domain class + backend authority)
+  trust: number; // 0..1 PROVENANCE only — the route it arrived by, never its hostname
   score: number; // fused relevance
   extract: string; // relative path, e.g. "sources/S1.md"
   snippet: string;
