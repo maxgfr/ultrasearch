@@ -69,8 +69,10 @@ export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "lear
 export type Depth = "summary" | "standard" | "deep";
 export const ALL_DEPTHS: readonly Depth[] = ["summary", "standard", "deep"];
 
-// Per-depth retrieval caps, scaled in gather. maxSources/perSource defaults are
-// derived from these unless overridden by --max-sources / --per-source.
+// Per-depth retrieval caps, scaled in gather. `perSource` defaults are derived
+// from these. `maxSources` is NOT a default any more — it is the suggested
+// value if you choose to bound a run with `--max-sources`, which is opt-in:
+// nothing should inherit a limit that silently drops discovered pages.
 export const DEPTH_CAPS: Record<Depth, { maxSources: number; perSource: number; deepOnly: boolean }> = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
   standard: { maxSources: 25, perSource: 6, deepOnly: false },
@@ -324,7 +326,14 @@ export interface GatherOptions {
   depth: Depth;
   backends?: BackendKind[]; // explicit override of the mode profile
   queries?: string[]; // agent-supplied query variants (override the planner)
-  maxSources: number;
+  /**
+   * FETCH budget: how many discovered candidates to hydrate. ABSENT = no
+   * limit, which is the default — a bound that silently drops discovered pages
+   * has to be asked for, not inherited. Measured before this was optional: a
+   * `standard` run kept 30 sources and left 25 candidates unfetched; without
+   * the bound the same query kept 43.
+   */
+  maxSources?: number;
   perSource: number;
   lang: string;
   region?: string; // region/country for locale-aware web search (else derived from lang)
@@ -378,7 +387,7 @@ export interface Manifest {
   webSearch?: { supplied: number; rejected: number; kept: number };
   searchProfile?: SearchProfile; // the DISCOVERY preset this run resolved to (light | full)
   sourceCount: number;
-  maxSources: number;
+  maxSources?: number; // the FETCH budget in force, absent when the run was unbounded
   builtAt: string;
   slug: string;
   tiers: string[]; // ["SUMMARY.md","REPORT.md"]

@@ -187,6 +187,20 @@ describe("runGather (exclude-domains)", () => {
 
 describe("runGather (nothing leaves the pool silently)", () => {
   const dir = join(tmpdir(), "us-gather-notfetched");
+  it("fetches everything discovery found when no budget was asked for", async () => {
+    rmSync(dir, { recursive: true, force: true });
+    // No --max-sources ⇒ no FETCH budget at all. Nothing should inherit a limit
+    // that silently drops discovered pages: measured on a real `standard` run,
+    // the old per-depth default kept 30 sources and left 25 candidates
+    // unfetched; unbounded, the same query kept 43.
+    const r = await runGather(opts({ backends: ["fixture"], out: dir, maxSources: undefined }));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+    expect(r.sources.length).toBe(3);
+    expect(manifest.maxSources).toBeUndefined();
+    expect(manifest.notes.join(" ")).not.toMatch(/Discovery found/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("says when discovery found more candidates than the run FETCHED", async () => {
     rmSync(dir, { recursive: true, force: true });
     // Every other way a source leaves is reported — duplicates, near-duplicates,

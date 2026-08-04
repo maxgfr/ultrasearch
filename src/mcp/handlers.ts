@@ -155,7 +155,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     depth,
     backends: backends as BackendKind[] | undefined,
     queries: strArray(args.queries),
-    maxSources: positive(args.max_sources, "max_sources") ?? caps.maxSources,
+    maxSources: positive(args.max_sources, "max_sources"),
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
     lang: str(args.lang) ?? "en",
     region: str(args.region),

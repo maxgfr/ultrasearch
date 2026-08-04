@@ -113,9 +113,11 @@ Options:
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
                        built-in planner; kept in dedup order, capped 2/4/6 by depth)
-  --max-sources <n>    How many candidates to FETCH (the retrieval budget, not a
-                       quota on the dossier: every page that is fetched, found
-                       on-topic and de-duplicated is kept)  (default: per depth)
+  --max-sources <n>    Opt-in FETCH budget: cap how many discovered candidates
+                       get hydrated. UNSET BY DEFAULT — every page discovery
+                       finds is fetched, and every page fetched and found
+                       on-topic is kept. Set it only to bound a run's cost;
+                       whatever it leaves behind is reported, never silent.
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
@@ -616,7 +618,8 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
           .map((s) => s.trim())
           .filter(Boolean)
       : undefined,
-    maxSources: num("max-sources", p.values["max-sources"], caps.maxSources),
+    // Unset unless asked for: no default FETCH budget (see GatherOptions).
+    maxSources: p.values["max-sources"] ? num("max-sources", p.values["max-sources"], 0) : undefined,
     perSource: num("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
     region: p.values.region,

@@ -415,7 +415,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     if (options.excludeDomains.length) merged = merged.filter(excluded);
 
     const overshoot = OVERSHOOT[options.depth] ?? 10;
-    const pool = merged.slice(0, Math.min(merged.length, options.maxSources + overshoot));
+    // No budget ⇒ fetch everything discovery found. `--max-sources` is opt-in:
+    // inheriting a bound that silently drops discovered pages is exactly the
+    // failure this pipeline spends its notes avoiding.
+    const budget = options.maxSources === undefined ? merged.length : Math.min(merged.length, options.maxSources + overshoot);
+    const pool = merged.slice(0, budget);
     // Candidates discovery found but this run will never FETCH. The last silent
     // loss in the pipeline: every other way a source leaves is reported, and a
     // reader who is told "74 sources" deserves to know whether that was all the
@@ -575,7 +579,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // from emptying itself.
     const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
     const isDisambiguation = (it: RawSource): boolean => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
-    const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+    const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => (isDisambiguation(it) ? [] : (matchedByUrl.get(it.url) ?? [])), bm25.queryTerms, floor);
     const floorDropped = dropped.length;
     const near = dedupeNearDuplicates(kept);
@@ -654,7 +658,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // Thin-dossier signal: the recall floor is the depth's target, clamped to what
   // the run could keep (--max-sources). A run below it is flagged so the agent
   // enriches before writing rather than reasoning over too little evidence.
-  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
   const thin = merged.length < floor;
 
   // Which of the question's own terms the kept sources barely mention. Free (the

@@ -3708,7 +3708,8 @@ async function runGather(options) {
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
     if (options.excludeDomains.length) merged2 = merged2.filter(excluded);
     const overshoot = OVERSHOOT[options.depth] ?? 10;
-    const pool = merged2.slice(0, Math.min(merged2.length, options.maxSources + overshoot));
+    const budget = options.maxSources === void 0 ? merged2.length : Math.min(merged2.length, options.maxSources + overshoot);
+    const pool = merged2.slice(0, budget);
     const notFetched = merged2.length - pool.length;
     const hydrateNotes = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
@@ -3816,7 +3817,7 @@ async function runGather(options) {
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
     const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
     const isDisambiguation = (it) => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
-    const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+    const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
     const floorDropped = dropped.length;
     const near = dedupeNearDuplicates(kept);
@@ -3860,7 +3861,7 @@ async function runGather(options) {
   const timings = {};
   for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
-  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources);
+  const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
   const thin = merged.length < floor;
   const coverageTerms = termCoverage(r.withContent, r.queryTerms);
   const under = underCovered(coverageTerms);
@@ -6255,7 +6256,7 @@ function gatherOptions(args) {
     depth,
     backends,
     queries: strArray(args.queries),
-    maxSources: positive(args.max_sources, "max_sources") ?? caps.maxSources,
+    maxSources: positive(args.max_sources, "max_sources"),
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
     lang: str(args.lang) ?? "en",
     region: str(args.region),
@@ -7615,9 +7616,11 @@ Options:
   --backend <kind>     For 'search': the single backend to drill
   --queries <a|b|c>    Pipe-separated query variants to search with (overrides the
                        built-in planner; kept in dedup order, capped 2/4/6 by depth)
-  --max-sources <n>    How many candidates to FETCH (the retrieval budget, not a
-                       quota on the dossier: every page that is fetched, found
-                       on-topic and de-duplicated is kept)  (default: per depth)
+  --max-sources <n>    Opt-in FETCH budget: cap how many discovered candidates
+                       get hydrated. UNSET BY DEFAULT \u2014 every page discovery
+                       finds is fetched, and every page fetched and found
+                       on-topic is kept. Set it only to bound a run's cost;
+                       whatever it leaves behind is reported, never silent.
   --per-source <n>     Cap results per backend           (default: per depth)
   --lang <code>        Search language (translate --queries to it)  (default: en)
   --region <cc>        Region/country for locale-aware search   (default: from lang)
@@ -8020,7 +8023,8 @@ function buildGatherOptions(p, opts = {}) {
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : void 0,
     queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : void 0,
-    maxSources: num2("max-sources", p.values["max-sources"], caps.maxSources),
+    // Unset unless asked for: no default FETCH budget (see GatherOptions).
+    maxSources: p.values["max-sources"] ? num2("max-sources", p.values["max-sources"], 0) : void 0,
     perSource: num2("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
     region: p.values.region,
