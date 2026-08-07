@@ -1,0 +1,170 @@
+name: Engine re-pin
+
+# Daily check for a new release of any vendored engine (webindex).
+# If every pin is already on its latest v* tag, this is a green no-op.
+# Otherwise it re-pins the stale ones, rebuilds the bundle, and runs the same
+# gates as ci.yml:
+#   - all green  -> commit + push straight to main, then explicitly trigger
+#                   release.yml and ci.yml (a GITHUB_TOKEN push does NOT fire
+#                   other workflows, so `gh workflow run` is required).
+#   - any gate red -> the run simply fails (no push, no adjudication PR);
+#                     the next daily cron retries. A red run is the signal
+#                     to investigate locally.
+#
+# The engine list is NOT duplicated here. `sync-engine.mjs --list` prints one
+# `<name> <repo> <pinned-tag>` line per engine, so adding an engine is a
+# one-line edit in that script and this workflow follows automatically — the
+# automation cannot drift from the list it is supposed to be watching.
+#
+# All stale engines are re-pinned in ONE commit and gated together: they are
+# inlined into the same bundle, so testing them separately would prove less and
+# cost two CI runs.
+#
+# No secrets beyond the built-in GITHUB_TOKEN.
+on:
+  schedule:
+    - cron: "31 6 * * *" # daily; minute offset staggers load across repos
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency: engine-repin
+
+jobs:
+  repin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Re-pin every engine that has a newer release
+        id: detect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          SUMMARY=""
+          while read -r NAME REPO PINNED; do
+            # NOT releases/latest: a repo may also publish non-engine asset
+            # releases, which are not tags this can pin to.
+            LATEST=$(gh api "repos/${REPO}/releases" --jq '[.[] | select(.tag_name | test("^v[0-9]")) | .tag_name] | first')
+            if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+              echo "::error::could not determine the latest ${NAME} release tag"
+              exit 1
+            fi
+            if [ "$PINNED" = "$LATEST" ]; then
+              echo "${NAME}: up to date (${PINNED})"
+              continue
+            fi
+            echo "${NAME}: ${PINNED} -> ${LATEST}"
+            node scripts/sync-engine.mjs --engine "$NAME" --ref "$LATEST"
+            SUMMARY="${SUMMARY}${NAME} ${PINNED} -> ${LATEST}"$'\n'
+          done < <(node scripts/sync-engine.mjs --list)
+
+          if [ -z "$SUMMARY" ]; then
+            echo "repin=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "repin=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "summary<<EOF"
+              printf '%s' "$SUMMARY"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify the vendored engines match their new pins
+        if: steps.detect.outputs.repin == 'true'
+        run: node scripts/sync-engine.mjs --check
+
+      - name: Typecheck
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run typecheck
+
+      - name: Lint
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run lint
+
+      - name: Rebuild the bundle
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run build
+
+      # check:build's own `git diff --exit-code` compares the working tree to
+      # the index. Stage the rebuild here so that internal diff is clean —
+      # same as the local flow (rebuild, `git add`, then verify).
+      - name: Stage the rebuilt bundle + vendor pins
+        if: steps.detect.outputs.repin == 'true'
+        run: git add -A src/vendor scripts skills
+
+      - name: Build is reproducible
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run check:build
+
+      - name: Verify skill bundle shape
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run verify:bundle
+
+      - name: Test (with coverage)
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run test:coverage
+
+      - name: Smoke-run the committed bundle (offline render + check)
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run demo
+
+      - name: Assert the dossier was produced
+        if: steps.detect.outputs.repin == 'true'
+        run: |
+          test -f /tmp/ultrasearch-demo/manifest.json
+          test -f /tmp/ultrasearch-demo/sources.json
+          test -f /tmp/ultrasearch-demo/DOSSIER.md
+
+      - name: Retrieval evals (offline, deterministic)
+        if: steps.detect.outputs.repin == 'true'
+        run: pnpm run eval
+
+      - name: The committed goldens did not move
+        if: steps.detect.outputs.repin == 'true'
+        run: |
+          # An engine bump that changes the example dossier or a snapshot is a
+          # behaviour change, not a re-pin. Fail loudly rather than push it as
+          # routine.
+          git diff --exit-code -- assets tests/__snapshots__
+
+      - name: Commit + push the re-pin to main
+        if: steps.detect.outputs.repin == 'true'
+        env:
+          SUMMARY: ${{ steps.detect.outputs.summary }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          DIFFSTAT=$(git diff --cached --stat | tail -1)
+          git commit -m "feat(engine): re-pin vendored engines" -m "automated re-pin, all gates green, goldens byte-identical" -m "${SUMMARY}
+          ${DIFFSTAT}"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Trigger release + CI on the pushed commit
+        if: steps.detect.outputs.repin == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # A push authenticated with GITHUB_TOKEN does not fire other
+          # workflows' `on: push` triggers — dispatch them explicitly.
+          gh workflow run release.yml --ref main
+          gh workflow run ci.yml --ref main
