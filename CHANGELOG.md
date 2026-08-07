@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.22.0](https://github.com/maxgfr/ultrasearch/compare/v1.21.0...v1.22.0) (2026-08-07)
+
+
+### Features
+
+* **doc,ingest:** read office documents instead of citing their bytes ([69cd482](https://github.com/maxgfr/ultrasearch/commit/69cd482d5b447be7e95dc627f2552381f157f237))
+
 # [1.21.0](https://github.com/maxgfr/ultrasearch/compare/v1.20.0...v1.21.0) (2026-08-04)
 
 
