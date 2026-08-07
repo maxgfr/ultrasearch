@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.23.0](https://github.com/maxgfr/ultrasearch/compare/v1.22.1...v1.23.0) (2026-08-07)
+
+
+### Features
+
+* **pdf:** read scanned PDFs with copyable-pdf, the ladder's OCR rung ([cee188d](https://github.com/maxgfr/ultrasearch/commit/cee188d3bbfd8f5ad9188341a720b2bc5e206a6e))
+
 ## [1.22.1](https://github.com/maxgfr/ultrasearch/compare/v1.22.0...v1.22.1) (2026-08-07)
 
 
