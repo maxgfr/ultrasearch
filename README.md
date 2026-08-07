@@ -155,8 +155,8 @@ the case worth seeing, and `ultrasearch doctor` says why.
 - **SearXNG** (`--profile search`) backs the `searxng` discovery backend. Used on
   `http://localhost:8888` with no flag at all (`--searxng <url>` /
   `ULTRASEARCH_SEARXNG` to point elsewhere, `off` to disable).
-- **PDFs** get their own extractor ladder — `npx @firecrawl/pdf-inspector`, then
-  `npx @firecrawl/anydoc` (the same conversion, but with a `darwin-x64` binary
+- **PDFs** get their own extractor ladder — `npx @firecrawl/pdf-inspector@1`, then
+  `npx @firecrawl/anydoc@0.1` (the same conversion, but with a `darwin-x64` binary
   pdf-inspector lacks, so Intel Macs still read PDFs without Docker), then
   Firecrawl, then `pdftotext`, then the built-in reader — stopping at the first
   whose output passes a quality gate, and REFUSING rather than citing a PDF none

@@ -13,6 +13,10 @@ import { runWithInput } from "../src/backends/pdf/exec.js";
 // silence the pdftotext probe that file deliberately runs for real.
 vi.mock("../src/backends/pdf/exec.js", () => ({
   runWithInput: vi.fn(async () => ({ ok: false, stdout: "", error: "not installed" })),
+  // Re-exported verbatim: the pinned specs are plain constants, and the code
+  // under test reads them to build argv.
+  PDF_INSPECTOR_SPEC: "@firecrawl/pdf-inspector@1",
+  ANYDOC_SPEC: "@firecrawl/anydoc@0.1",
 }));
 const runMock = vi.mocked(runWithInput);
 

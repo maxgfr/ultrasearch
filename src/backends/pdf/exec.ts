@@ -12,6 +12,24 @@ import { spawn } from "node:child_process";
 // ("Fatal process out of memory: Zone"), which would kill a whole research run
 // from inside the process. A child that dies is just a rung that failed.
 
+// The npm specs the extractor rungs run through `npx`, pinned to a COMPATIBLE
+// RANGE rather than left floating. One place to change, so the ladders and the
+// `doctor` probes can never disagree about which version they are talking about.
+//
+// The range is what semver says is safe, which differs by major:
+//   pdf-inspector is 1.x — minor and patch releases are backwards compatible,
+//   so `@1` keeps picking up improvements.
+//   anydoc is 0.x — under semver a 0.MINOR bump is allowed to break, and this
+//   package is days old, so `@0.1` takes patches only. Widen it deliberately
+//   after checking a 0.2 against tests/bench-pdf.ts, not by accident.
+//
+// Floating on `latest` was the previous behaviour and is a silent-failure risk:
+// a breaking release would change what every dossier is grounded on, and a rung
+// that starts emitting something new degrades quietly — the quality gate only
+// catches garbage, not a subtly different extraction.
+export const PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
+export const ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
+
 export interface RunResult {
   ok: boolean;
   stdout: string;

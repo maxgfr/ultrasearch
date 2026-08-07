@@ -1,5 +1,19 @@
 import { describe, it, expect } from "vitest";
 import { docFormatForUrl, docFormatForContentType, DOC_EXTENSIONS } from "../src/backends/doc.js";
+import { looksLikePdfUrl } from "../src/backends/fetch.js";
+import { ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "../src/backends/pdf/exec.js";
+
+// The npx rungs run a PINNED range, not `latest`. Floating would let a breaking
+// release change what every dossier is grounded on, and a rung that starts
+// emitting something subtly different degrades quietly — the quality gate
+// catches garbage, not a changed-but-plausible extraction. anydoc is 0.x, where
+// semver allows a MINOR to break, so it takes patches only.
+describe("the npm specs the rungs run", () => {
+  it("pins both to a range instead of floating on latest", () => {
+    expect(PDF_INSPECTOR_SPEC).toBe("@firecrawl/pdf-inspector@1");
+    expect(ANYDOC_SPEC).toBe("@firecrawl/anydoc@0.1");
+  });
+});
 
 describe("docFormatForUrl", () => {
   it("recognises every office extension it claims to route", () => {
@@ -25,6 +39,22 @@ describe("docFormatForUrl", () => {
 
   it("does not mistake a dotted path segment for an extension", () => {
     expect(docFormatForUrl("https://x.test/v1.2/guide")).toBeUndefined();
+  });
+
+  // The three shapes a naive "does the URL contain .docx" test gets wrong. A
+  // false positive here costs a wasted binary re-fetch and a refusal note on a
+  // page that was readable all along.
+  it("reads the RESOURCE's extension, not one that appears elsewhere in the URL", () => {
+    expect(docFormatForUrl("https://docs.example.com/guide")).toBeUndefined(); // dotted hostname
+    expect(docFormatForUrl("https://x.test/a.docx/preview")).toBeUndefined(); // extension mid-path
+    expect(docFormatForUrl("https://x.test/archive.tar.gz")).toBeUndefined(); // unrelated double extension
+  });
+
+  // The two ladders must partition the space: a URL routed to both would fetch
+  // twice and report whichever branch happened to run first.
+  it("never claims a URL is both a PDF and an office document", () => {
+    const urls = ["https://x.test/paper.pdf", "https://arxiv.org/pdf/2502.19732", "https://x.test/report.docx", "https://x.test/data.csv", "https://x.test/"];
+    for (const u of urls) expect(looksLikePdfUrl(u) && !!docFormatForUrl(u)).toBe(false);
   });
 
   // The security property: a format reaching argv must come from the table, so

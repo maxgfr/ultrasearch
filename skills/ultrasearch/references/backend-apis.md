@@ -34,12 +34,11 @@ honest notes in the dossier.
   confidently found, so it never extracts *less* than a blunt strip.
 - **PDFs** (`.pdf` URL or `application/pdf`) go through an **extractor ladder**,
   stopping at the first rung whose output passes a quality gate:
-  1. **pdf-inspector** — `npx -y --prefer-offline @firecrawl/pdf-inspector -`,
-     the PDF bytes on stdin. Real Markdown with reading order and tables, and
-     always the latest version. Costs one ~6 MB npx download the first time it
-     is ever used, in a child process (so it can never take a run down).
-     `ULTRASEARCH_NO_NPX=1` skips this rung.
-  2. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc - --format pdf`.
+  1. **pdf-inspector** — `npx -y --prefer-offline @firecrawl/pdf-inspector@1 -`,
+     the PDF bytes on stdin. Real Markdown with reading order and tables. Costs
+     one ~6 MB npx download the first time it is ever used, in a child process
+     (so it can never take a run down). `ULTRASEARCH_NO_NPX=1` skips this rung.
+  2. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc@0.1 - --format pdf`.
      The same conversion by another route: anydoc embeds pdf-inspector for text
      PDFs, and on a real paper the two outputs differ by a single trailing
      newline. It is here purely for **platform coverage** — npm publishes an
@@ -63,13 +62,20 @@ honest notes in the dossier.
   `ULTRASEARCH_PDF_ENGINE=<rung>` forces one rung; `ultrasearch doctor` shows
   which are available.
 
+  Both npx rungs run a **pinned range**, not `latest` — `pdf-inspector@1` (1.x is
+  semver-compatible, so improvements still flow in) and `anydoc@0.1` (0.x lets a
+  MINOR break, and the package is new). Floating would let an upstream release
+  quietly change what every dossier is grounded on, and the quality gate only
+  catches garbage, not a subtly different extraction. The specs live in one place
+  (`src/backends/pdf/exec.ts`) so the ladders and `doctor` cannot disagree.
+
   arXiv PDFs are cited as `/abs/<id>` but READ as the PDF (`preferText` in
   providers.ts): the abstract page always fetches successfully, so treating the
   PDF as a mere fallback meant papers were only ever grounded on their abstract.
 - **Office documents** — `.docx`/`.doc`/`.odt`/`.rtf`, `.pptx`/`.ppt`/`.odp`,
   `.xlsx`/`.xls`/`.ods`, `.epub`, `.csv`, recognised by extension or by
   content-type — go through their own two-rung **document ladder**:
-  1. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc -`, the bytes on
+  1. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc@0.1 -`, the bytes on
      stdin, converting to GitHub-Flavored Markdown. The format is read from the
      BYTES (ZIP package mimetype, OLE stream names, the RTF open group), so a
      mislabelled file still converts; `--format` is passed only for CSV, which

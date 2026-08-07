@@ -1189,6 +1189,8 @@ function assessExtractedText(text, emptyReason) {
 
 // src/backends/pdf/exec.ts
 import { spawn } from "child_process";
+var PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
+var ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
 var MAX_STDOUT_BYTES = 24 * 1024 * 1024;
 function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
@@ -1249,11 +1251,11 @@ function enabledExtractors(engines) {
   return PDF_EXTRACTORS;
 }
 async function viaAnydoc(bytes) {
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
   return r.ok ? r.stdout : void 0;
 }
 async function viaPdfInspector(bytes) {
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/pdf-inspector", "-"], bytes, NPX_TIMEOUT_MS);
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "-"], bytes, NPX_TIMEOUT_MS);
   return r.ok ? r.stdout : void 0;
 }
 async function viaPdftotext(bytes) {
@@ -1354,7 +1356,7 @@ function enabledDocExtractors(engines) {
   return DOC_EXTRACTORS;
 }
 async function viaAnydoc2(bytes, format) {
-  const args = ["-y", "--prefer-offline", "@firecrawl/anydoc", "-"];
+  const args = ["-y", "--prefer-offline", ANYDOC_SPEC, "-"];
   if (format) args.push("--format", format);
   const r = await runWithInput("npx", args, bytes, NPX_TIMEOUT_MS2);
   return r.ok ? r.stdout : void 0;
@@ -3558,7 +3560,7 @@ async function probeServices(opts = {}) {
   }
   const rungs = enabledExtractors();
   if (rungs.includes("pdf-inspector")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/pdf-inspector", "--version"]);
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]);
     out.push({
       name: "pdf-inspector",
       ok: !!v,
@@ -3572,7 +3574,7 @@ async function probeServices(opts = {}) {
   out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" \u2192 ") });
   const docRungs = enabledDocExtractors();
   if (docRungs.includes("anydoc")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "--version"]);
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]);
     out.push({
       name: "anydoc",
       ok: !!v,

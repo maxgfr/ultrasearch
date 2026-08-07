@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { runWithInput } from "./backends/pdf/exec.js";
+import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/pdf/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
 import { enabledExtractors } from "./backends/pdf.js";
@@ -68,7 +68,7 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
 
   const rungs = enabledExtractors();
   if (rungs.includes("pdf-inspector")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/pdf-inspector", "--version"]);
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]);
     out.push({
       name: "pdf-inspector",
       ok: !!v,
@@ -88,7 +88,7 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
   // host rather than a misconfiguration — say so instead of implying a fix.
   const docRungs = enabledDocExtractors();
   if (docRungs.includes("anydoc")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "--version"]);
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]);
     out.push({
       name: "anydoc",
       ok: !!v,

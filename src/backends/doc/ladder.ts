@@ -1,4 +1,4 @@
-import { runWithInput } from "../pdf/exec.js";
+import { runWithInput, ANYDOC_SPEC } from "../pdf/exec.js";
 import { assessExtractedText } from "../pdf/quality.js";
 import type { DocFormat } from "./formats.js";
 
@@ -87,7 +87,7 @@ async function viaAnydoc(bytes: Buffer, format?: string): Promise<string | undef
   // at one local cache hit instead of a registry round-trip per run; `-y` stops
   // npx asking to install. No user input reaches argv — the document travels on
   // stdin, and `format` comes from the table in ./formats.ts, never from a URL.
-  const args = ["-y", "--prefer-offline", "@firecrawl/anydoc", "-"];
+  const args = ["-y", "--prefer-offline", ANYDOC_SPEC, "-"];
   if (format) args.push("--format", format);
   const r = await runWithInput("npx", args, bytes, NPX_TIMEOUT_MS);
   return r.ok ? r.stdout : undefined;

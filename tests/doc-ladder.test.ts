@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { extractDocument, enabledDocExtractors, resetDocLadderCache } from "../src/backends/doc.js";
-import { runWithInput } from "../src/backends/pdf/exec.js";
+import { runWithInput, ANYDOC_SPEC } from "../src/backends/pdf/exec.js";
 
 // The anydoc rung spawns `npx`, which on a cold machine is a network download —
 // the suite stays offline and deterministic (CONTRIBUTING.md, rule 3), so the
@@ -9,6 +9,10 @@ import { runWithInput } from "../src/backends/pdf/exec.js";
 // registry.
 vi.mock("../src/backends/pdf/exec.js", () => ({
   runWithInput: vi.fn(async () => ({ ok: false, stdout: "", error: "not installed" })),
+  // Re-exported verbatim: the pinned specs are plain constants, and the code
+  // under test reads them to build argv.
+  PDF_INSPECTOR_SPEC: "@firecrawl/pdf-inspector@1",
+  ANYDOC_SPEC: "@firecrawl/anydoc@0.1",
 }));
 const runMock = vi.mocked(runWithInput);
 
@@ -123,12 +127,12 @@ describe("extractDocument", () => {
     await extractDocument(BYTES, BINARY, { engines: ["anydoc"] });
     const [cmd, args, input] = runMock.mock.calls[0]!;
     expect(cmd).toBe("npx");
-    expect(args).toEqual(["-y", "--prefer-offline", "@firecrawl/anydoc", "-"]);
+    expect(args).toEqual(["-y", "--prefer-offline", ANYDOC_SPEC, "-"]);
     expect(input).toBe(BYTES);
 
     runMock.mockClear();
     await extractDocument(BYTES, { format: "csv", textFallback: true }, { engines: ["anydoc"] });
-    expect(runMock.mock.calls[0]![1]).toEqual(["-y", "--prefer-offline", "@firecrawl/anydoc", "-", "--format", "csv"]);
+    expect(runMock.mock.calls[0]![1]).toEqual(["-y", "--prefer-offline", ANYDOC_SPEC, "-", "--format", "csv"]);
   });
 
   it("falls through a failed rung to the next one", async () => {

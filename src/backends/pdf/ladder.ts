@@ -1,4 +1,4 @@
-import { runWithInput } from "./exec.js";
+import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./exec.js";
 import { assessPdfText } from "./quality.js";
 import { pdfToText } from "./native.js";
 
@@ -14,8 +14,9 @@ import { pdfToText } from "./native.js";
 //
 // Rung order, and why:
 //   1. pdf-inspector  the best output by a wide margin (real Markdown, reading
-//                     order, tables) and always the latest version. Costs one
-//                     ~6 MB npx download the first time it is ever used.
+//                     order, tables). Costs one ~6 MB npx download the first
+//                     time it is ever used. Pinned to a compatible range rather
+//                     than `latest` — see the specs in ./exec.ts.
 //   2. anydoc         the same conversion, reached through the office-document
 //                     converter (backends/doc/): anydoc embeds pdf-inspector for
 //                     text PDFs, and on a real paper the two outputs differ by a
@@ -93,7 +94,7 @@ async function viaAnydoc(bytes: Buffer): Promise<string | undefined> {
   // `--format pdf` rather than letting anydoc sniff: this rung is only ever
   // reached with bytes the caller already judged to be a PDF, and naming the
   // format keeps a truncated download from being misread as something else.
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
   return r.ok ? r.stdout : undefined;
 }
 
@@ -101,7 +102,7 @@ async function viaPdfInspector(bytes: Buffer): Promise<string | undefined> {
   // `-` reads the PDF from stdin. `--prefer-offline` keeps the steady state at
   // one local cache hit instead of a registry round-trip per run; `-y` stops npx
   // asking to install. No user input reaches argv — the PDF travels on stdin.
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/pdf-inspector", "-"], bytes, NPX_TIMEOUT_MS);
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "-"], bytes, NPX_TIMEOUT_MS);
   return r.ok ? r.stdout : undefined;
 }
 
