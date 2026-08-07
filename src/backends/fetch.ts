@@ -1,5 +1,6 @@
 import { buildMatcher } from "../util.js";
 import { extractPdf } from "./pdf.js";
+import { extractDocument, docFormatForUrl, docFormatForContentType } from "./doc.js";
 // Cyclic by design: firecrawl.ts is a CLIENT of this HTTP layer, and this layer
 // is where the extraction seam lives. Safe because neither module calls into the
 // other at module-evaluation time — only from inside function bodies.
@@ -433,16 +434,22 @@ export function looksLikePdfUrl(url: string): boolean {
   return PDF_ROUTE_RE.test(url) && !NON_PDF_TAIL_RE.test(url);
 }
 const PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 } as const;
+// Office documents are binary too, and for the same reason need the raw bytes:
+// the default text fetch decodes them as UTF-8, which is lossy and irreversible.
+// Same 16 MB ceiling as PDFs — a deck or a spreadsheet is comparable in size.
+const DOC_FETCH_OPTS = { accept: "*/*", binary: true, maxBytes: 16 * 1024 * 1024 } as const;
 
 // Which extractor produced a page's text. `undefined` (absent) means the
 // built-in regex reader — the historical behaviour and still the fallback for
 // every failure path. Part of the on-disk cache key, so a body cleaned by one
 // extractor is never served to a run configured for the other (see src/cache.ts).
 //
-// `pdf-inspector` and `pdftotext` are PDF-only rungs (see backends/pdf/ladder.ts).
-// They are reported so a dossier can say which tool read a paper, but PDFs share
-// a single cache namespace — see the note on currentExtractor in src/cache.ts.
-export type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext";
+// `pdf-inspector` and `pdftotext` are PDF-only rungs (see backends/pdf/ladder.ts);
+// `anydoc` reads office documents (backends/doc/ladder.ts) and PDFs. They are
+// reported so a dossier can say which tool read a paper, but PDFs and office
+// documents each share a single cache namespace — see the note on
+// currentExtractor in src/cache.ts.
+export type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext" | "anydoc";
 
 export interface ExtractResult {
   text: string;
@@ -467,8 +474,13 @@ export interface ExtractResult {
 // and did not get, does emit a note (src/backends/firecrawl.ts decides which).
 export async function fetchAndExtract(url: string, opts: { acceptLanguage?: string; firecrawl?: string } = {}): Promise<ExtractResult> {
   const wantsPdf = looksLikePdfUrl(url);
+  // An office document skips the HTML Firecrawl path for the same reason a PDF
+  // does (see looksLikePdfUrl above): handing it to Firecrawl first would
+  // silently bypass the document ladder's preferred rung whenever a container
+  // happens to be up. Firecrawl is still reachable — as rung 2, via callback.
+  const wantsDoc = wantsPdf ? undefined : docFormatForUrl(url);
   let firecrawlNote: string | undefined;
-  if (!wantsPdf) {
+  if (!wantsPdf && !wantsDoc) {
     const fc = await scrapeViaFirecrawl(url, opts);
     // Firecrawl reports success even for an error page, handing back the
     // origin's 404/403 body as markdown. Accept only a 2xx/3xx: anything else
@@ -485,7 +497,8 @@ export async function fetchAndExtract(url: string, opts: { acceptLanguage?: stri
     }
     firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} — fell back to the built-in extractor.` : fc.why;
   }
-  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
+  const fetchOpts = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
+  const res = await httpGet(url, fetchOpts);
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
@@ -513,6 +526,37 @@ export async function fetchAndExtract(url: string, opts: { acceptLanguage?: stri
       // `native` keeps reporting as absent, which is what the cache key and every
       // existing dossier already assume.
       extractor: got.via && got.via !== "native" ? got.via : undefined,
+      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text — ${got.reason}.`,
+    };
+  }
+  // An office document, either because the URL said so or because only the
+  // content-type did. Everything here exists to stop the fall-through below
+  // treating a ZIP as prose: a .docx is not HTML, so `res.body` used to become
+  // the source text — kilobytes of U+FFFD, cited, with no note saying so.
+  const docFmt = wantsDoc ?? docFormatForContentType(res.contentType);
+  if (docFmt) {
+    // Same re-fetch as the PDF path: a content-type-only document was fetched as
+    // text, so the bytes must be pulled again intact.
+    const bytes = res.bytes ?? (await httpGet(url, DOC_FETCH_OPTS)).bytes;
+    const got = bytes
+      ? await extractDocument(bytes, docFmt, {
+          firecrawl: async () => {
+            const fc = await scrapeViaFirecrawl(url, opts);
+            return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : undefined;
+          },
+        })
+      : { text: "", reason: "empty response body" };
+    // A format that is already plain text (CSV) keeps its raw body when no
+    // converter is available: it was usable before this ladder existed, so
+    // refusing it would be a regression rather than a fix.
+    if (!got.text && docFmt.textFallback && bytes?.length) {
+      return { text: bytes.toString("utf8"), finalUrl: res.url, status: res.status, note: firecrawlNote };
+    }
+    return {
+      text: got.text,
+      finalUrl: res.url,
+      status: res.status,
+      extractor: got.via,
       note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text — ${got.reason}.`,
     };
   }

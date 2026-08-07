@@ -16,18 +16,26 @@ import { pdfToText } from "./native.js";
 //   1. pdf-inspector  the best output by a wide margin (real Markdown, reading
 //                     order, tables) and always the latest version. Costs one
 //                     ~6 MB npx download the first time it is ever used.
-//   2. firecrawl      the caller's already-running container. Covers the
-//                     platforms npm has no pdf-inspector binary for — Mac Intel,
-//                     Linux ARM, Alpine — because Docker runs the linux-x64
-//                     image there anyway. Also covers hosts without npm.
-//   3. pdftotext      poppler, if it happens to be installed. Fast, no network.
-//   4. native         the built-in reader. Always present, frequently wrong;
+//   2. anydoc         the same conversion, reached through the office-document
+//                     converter (backends/doc/): anydoc embeds pdf-inspector for
+//                     text PDFs, and on a real paper the two outputs differ by a
+//                     single trailing newline. It sits here purely for platform
+//                     coverage — npm publishes an anydoc binary for darwin-x64
+//                     and pdf-inspector does not, so on an Intel Mac this is the
+//                     rung that keeps PDFs readable without Docker or poppler.
+//                     Costs nothing where rung 1 already worked: it only ever
+//                     runs after rung 1 has failed.
+//   3. firecrawl      the caller's already-running container. Covers hosts with
+//                     no npm at all, and any platform neither binary is built
+//                     for, because Docker runs the linux-x64 image there anyway.
+//   4. pdftotext      poppler, if it happens to be installed. Fast, no network.
+//   5. native         the built-in reader. Always present, frequently wrong;
 //                     kept only so an offline machine with no tools at all still
 //                     gets something, and gated hard by assessPdfText.
 
-export type PdfExtractorId = "pdf-inspector" | "firecrawl" | "pdftotext" | "native";
+export type PdfExtractorId = "pdf-inspector" | "anydoc" | "firecrawl" | "pdftotext" | "native";
 
-export const PDF_EXTRACTORS: PdfExtractorId[] = ["pdf-inspector", "firecrawl", "pdftotext", "native"];
+export const PDF_EXTRACTORS: PdfExtractorId[] = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native"];
 
 export interface PdfExtraction {
   text: string;
@@ -75,8 +83,18 @@ export function enabledExtractors(engines?: PdfExtractorId[]): PdfExtractorId[] 
   if (engines) return engines;
   const forced = process.env.ULTRASEARCH_PDF_ENGINE?.trim() as PdfExtractorId | undefined;
   if (forced && (PDF_EXTRACTORS as string[]).includes(forced)) return [forced];
-  if (process.env.ULTRASEARCH_NO_NPX) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector");
+  // Both npx rungs go, not just the first: `anydoc` needs the same implicit
+  // install, so leaving it in would defeat the point of the switch.
+  if (process.env.ULTRASEARCH_NO_NPX) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector" && e !== "anydoc");
   return PDF_EXTRACTORS;
+}
+
+async function viaAnydoc(bytes: Buffer): Promise<string | undefined> {
+  // `--format pdf` rather than letting anydoc sniff: this rung is only ever
+  // reached with bytes the caller already judged to be a PDF, and naming the
+  // format keeps a truncated download from being misread as something else.
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
+  return r.ok ? r.stdout : undefined;
 }
 
 async function viaPdfInspector(bytes: Buffer): Promise<string | undefined> {
@@ -111,6 +129,7 @@ export async function extractPdf(bytes: Buffer, opts: PdfLadderOptions = {}): Pr
     let text: string | undefined;
     try {
       if (id === "pdf-inspector") text = await viaPdfInspector(bytes);
+      else if (id === "anydoc") text = await viaAnydoc(bytes);
       else if (id === "pdftotext") text = await viaPdftotext(bytes);
       else if (id === "firecrawl") text = opts.firecrawl ? await opts.firecrawl() : undefined;
       else text = pdfToText(bytes);

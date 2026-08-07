@@ -12,7 +12,7 @@ import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gathe
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
-import { addSource, addSources } from "./enrich.js";
+import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
 import { writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { autoRelink, listIssues, relink } from "./relink.js";
@@ -37,7 +37,7 @@ Usage:
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
-  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--json]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -143,6 +143,9 @@ Options:
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
   --urls <u,...>       For 'ingest': the URLs to add (alternative to --web-results)
+  --files <p,...>      For 'ingest': local documents to add — PDFs, office files
+                       (.docx/.pptx/.xlsx/.odt/…) and plain text. Their contents
+                       enter the dossier and any report rendered from it.
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
@@ -244,6 +247,7 @@ export const VALUE_FLAGS = new Set([
   "web-results",
   "search",
   "urls",
+  "files",
   "url",
   "cite-url",
   "id",
@@ -933,23 +937,34 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (!dir) fail("missing --run <dossier-dir>");
       const spec = p.values["web-results"];
       const listed = p.values.urls ? parseList(p.values.urls) : [];
-      if (!spec && !listed.length) fail("missing --web-results <f.json|-> or --urls <u,...>");
+      const files = p.values.files ? parseList(p.values.files) : [];
+      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...> or --files <p,...>");
 
       const hits: (string | { url: string; title?: string })[] = [...listed];
       if (spec) {
         const parsed = parseWebResults(readWebResultsPayload(spec));
         for (const n of parsed.notes) process.stderr.write(`ultrasearch: ${n}\n`);
-        if (!parsed.hits.length && !listed.length) {
+        if (!parsed.hits.length && !listed.length && !files.length) {
           fail(`--web-results ${spec} yielded no usable hit — expected [{"url":"https://…"}, …] (or a list of URLs).`);
         }
         hits.push(...parsed.hits);
       }
 
-      const r = await addSources(resolve(dir), hits, {
+      const enrichOpts = {
         question: p.values.q ?? p.values.question,
         cache: !p.bools.has("no-cache"),
         firecrawl: p.values.firecrawl,
-      });
+      };
+      // URLs and files share one ingest so an agent can pin a page and the deck
+      // it links to in a single call. Sequential for the reason addSources is:
+      // both allocate [S#] ids by read-then-write.
+      const web = hits.length ? await addSources(resolve(dir), hits, enrichOpts) : undefined;
+      const local = files.length ? await addFiles(resolve(dir), files, enrichOpts) : undefined;
+      const r: IngestResult = {
+        results: [...(web?.results ?? []), ...(local?.results ?? [])],
+        added: (web?.added ?? 0) + (local?.added ?? 0),
+        skipped: (web?.skipped ?? 0) + (local?.skipped ?? 0),
+      };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else {
@@ -958,7 +973,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         for (const o of r.results) {
           process.stdout.write(o.added ? `${o.id}\t${o.url}\n` : `-\t${o.url}\t${o.note ?? "not added"}\n`);
         }
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} URL(s) → ${resolve(dir)}\n`);
+        const what = files.length ? (hits.length ? "input(s)" : "file(s)") : "URL(s)";
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
       }
       // Nothing added at all is a failed acquisition, not a quiet success.
       if (!r.added) process.exit(1);

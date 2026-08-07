@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fetchAndExtract, looksLikePdfUrl, type ExtractorId } from "./backends/fetch.js";
+import { docFormatForUrl } from "./backends/doc.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { canonicalizeUrl, domainOf, fnv1a64 } from "./util.js";
 import { isNoWrite } from "./no-write.js";
@@ -65,11 +66,16 @@ export function cachePath(url: string, acceptLanguage = "", extractor: CacheName
 // is only known AFTER extraction — a pre-fetch prediction cannot name it, so
 // filing PDFs under the rung that won would miss the cache on every single run.
 // The rung is still reported on the source itself; it just isn't part of the key.
+// Office documents share one namespace for exactly the same reason, and are
+// resolved the same way: the ladder in backends/doc/ladder.ts picks its rung
+// from what is installed, which no pre-fetch prediction can name.
 const PDF_CACHE_NS = "pdf" as const;
-type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS;
+const DOC_CACHE_NS = "doc" as const;
+type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS | typeof DOC_CACHE_NS;
 
 async function currentExtractor(opts: { firecrawl?: string }, url: string): Promise<CacheNamespace> {
   if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
+  if (docFormatForUrl(url)) return DOC_CACHE_NS;
   const base = firecrawlBase(opts);
   return base && (await probeFirecrawl(base, firecrawlIsExplicit(opts))) ? "firecrawl" : "native";
 }
@@ -128,6 +134,6 @@ export async function cachedFetchAndExtract(
   // text — a Firecrawl run that fell back to the built-in reader for one page
   // must not leave that page sitting in Firecrawl's namespace. PDFs keep the
   // shared namespace resolved above, for the reason documented there.
-  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS ? PDF_CACHE_NS : (res.extractor ?? "native"));
+  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : (res.extractor ?? "native"));
   return res;
 }

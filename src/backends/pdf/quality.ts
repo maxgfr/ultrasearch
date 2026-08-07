@@ -1,13 +1,18 @@
-// Is this extracted PDF text fit to be cited?
+// Is this extracted text fit to be cited?
 //
-// This is the rung test for the extractor ladder (see ladder.ts) AND the last
-// gate before a PDF's text enters a dossier. It exists because the built-in
-// text-layer reader can hand back output that LOOKS like prose but isn't: a
-// stream of image/font bytes that happened to inflate and contain `Tj`, or a
-// CID-font page decoded through the wrong code map. Such text is long, non-empty
-// and plausible, so nothing downstream catches it — `looksLikeJunkExtraction`
-// only inspects the first 800 chars of texts SHORTER than 2000 and only looks
-// for consent/anti-bot walls.
+// This is the rung test for both extractor ladders (see ./ladder.ts and
+// ../doc/ladder.ts) AND the last gate before a converted document's text enters
+// a dossier. It exists because the built-in PDF text-layer reader can hand back
+// output that LOOKS like prose but isn't: a stream of image/font bytes that
+// happened to inflate and contain `Tj`, or a CID-font page decoded through the
+// wrong code map. Such text is long, non-empty and plausible, so nothing
+// downstream catches it — `looksLikeJunkExtraction` only inspects the first 800
+// chars of texts SHORTER than 2000 and only looks for consent/anti-bot walls.
+//
+// The same checks guard office documents, where the failure is cruder and used
+// to be worse: a .docx is a ZIP, and decoding one as UTF-8 yields kilobytes of
+// U+FFFD that sailed into dossiers as evidence until the document ladder began
+// routing them here.
 //
 // A false positive costs one rung (we fall through to the next extractor, or
 // keep the search snippet). A false negative puts fabricated evidence under a
@@ -65,13 +70,23 @@ function scanRatios(t: string): { control: number; replacement: number } {
 /**
  * Judge extracted PDF text. Returns `{ ok: true }` when the text is safe to
  * cite, else a short reason the caller can put in a dossier note.
+ */
+export function assessPdfText(text: string): PdfVerdict {
+  return assessExtractedText(text, "no text layer (scanned or image-only PDF?)");
+}
+
+/**
+ * Judge extracted text. Returns `{ ok: true }` when the text is safe to cite,
+ * else a short reason the caller can put in a dossier note. `emptyReason` names
+ * what an empty extraction means for the format at hand — a PDF with no text
+ * layer was probably scanned, an empty .docx conversion means something else.
  *
  * Deliberately independent of length: the failure this guards against produces
  * HUNDREDS of kilobytes, which is exactly what a length-gated check misses.
  */
-export function assessPdfText(text: string): PdfVerdict {
+export function assessExtractedText(text: string, emptyReason: string): PdfVerdict {
   const t = text.trim();
-  if (!t) return { ok: false, reason: "no text layer (scanned or image-only PDF?)" };
+  if (!t) return { ok: false, reason: emptyReason };
 
   const { control, replacement } = scanRatios(t);
   if (control > CONTROL_RATIO_MAX) {

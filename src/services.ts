@@ -6,6 +6,7 @@ import { runWithInput } from "./backends/pdf/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
 import { enabledExtractors } from "./backends/pdf.js";
+import { enabledDocExtractors } from "./backends/doc.js";
 import type { ManifestServices } from "./types.js";
 
 // What the optional helpers are doing right now, and how to start them.
@@ -81,6 +82,28 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
   out.push({ name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" });
 
   out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" → ") });
+
+  // The office-document converter. It needs Node 20+, one version above this
+  // package's own floor, so "unavailable" here is a normal outcome on a Node 18
+  // host rather than a misconfiguration — say so instead of implying a fix.
+  const docRungs = enabledDocExtractors();
+  if (docRungs.includes("anydoc")) {
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "--version"]);
+    out.push({
+      name: "anydoc",
+      ok: !!v,
+      detail: v ? `${v} (via npx)` : "unavailable — needs npm, Node 20+, and a prebuilt binary for this platform",
+    });
+  } else {
+    out.push({ name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" });
+  }
+  out.push({
+    name: "doc ladder",
+    ok: docRungs.length > 0,
+    // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
+    // run meets will be refused — worth saying plainly rather than printing "".
+    detail: docRungs.length ? docRungs.join(" → ") : "disabled — office documents will be refused, not read",
+  });
   return out;
 }
 
@@ -97,6 +120,8 @@ export function describeServices(s: ManifestServices): string {
   parts.push(s.firecrawl.pages ? `firecrawl ✓ ${s.firecrawl.pages} page(s)` : "firecrawl ✗ not used");
   const pdf = Object.entries(s.pdf);
   if (pdf.length) parts.push(`pdf ${pdf.map(([k, n]) => `${k} ✓ ${n}`).join(", ")}`);
+  const doc = Object.entries(s.doc ?? {});
+  if (doc.length) parts.push(`doc ${doc.map(([k, n]) => `${k} ✓ ${n}`).join(", ")}`);
   return parts.join(" · ") + ". Run `ultrasearch doctor` to see what is available.";
 }
 

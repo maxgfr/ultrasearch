@@ -31,7 +31,11 @@ export type BackendKind =
   | "standards"
   | "generic"
   | "fixture"
-  | "claude";
+  | "claude"
+  // A document read off the local filesystem (`ingest --files`). Deliberately
+  // absent from ALL_BACKENDS below: it is a provenance label, not something a
+  // run can be pointed at, so `--backends file` stays an error.
+  | "file";
 
 export const ALL_BACKENDS: readonly BackendKind[] = [
   "searxng",
@@ -422,6 +426,8 @@ export interface ManifestServices {
   firecrawl: { pages: number };
   /** PDF ladder rung → pages read by it. Absent rungs simply never won. */
   pdf: Record<string, number>;
+  /** Document ladder rung → office documents read by it. Same convention. */
+  doc?: Record<string, number>;
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on

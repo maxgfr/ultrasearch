@@ -156,11 +156,23 @@ the case worth seeing, and `ultrasearch doctor` says why.
   `http://localhost:8888` with no flag at all (`--searxng <url>` /
   `ULTRASEARCH_SEARXNG` to point elsewhere, `off` to disable).
 - **PDFs** get their own extractor ladder — `npx @firecrawl/pdf-inspector`, then
+  `npx @firecrawl/anydoc` (the same conversion, but with a `darwin-x64` binary
+  pdf-inspector lacks, so Intel Macs still read PDFs without Docker), then
   Firecrawl, then `pdftotext`, then the built-in reader — stopping at the first
   whose output passes a quality gate, and REFUSING rather than citing a PDF none
-  of them could read. `ULTRASEARCH_NO_NPX=1` drops the npx rung;
+  of them could read. `ULTRASEARCH_NO_NPX=1` drops the npx rungs;
   `ULTRASEARCH_PDF_ENGINE=<rung>` pins one. See
   [`references/backend-apis.md`](skills/ultrasearch/references/backend-apis.md).
+- **Office documents** (`.docx`, `.pptx`, `.xlsx`, `.odt`, `.rtf`, `.epub`,
+  `.csv`, …) are converted to Markdown by [`@firecrawl/anydoc`][anydoc], with
+  Firecrawl as the fallback rung — and refused, with a reason, when neither can
+  read them. These are ZIP and OLE containers, so the alternative is not a worse
+  extract but a fabricated one: before this ladder a `.docx` entered the dossier
+  as kilobytes of replacement characters, cited, and silently. Needs Node 20+;
+  `ULTRASEARCH_DOC_ENGINE=none` disables it. The same converters back
+  `ingest --files <p,...>`, which pins a local document into a dossier.
+
+[anydoc]: https://github.com/firecrawl/anydoc
 - **Firecrawl** (`--profile extract`) replaces the built-in regex HTML stripper
   with **browser-rendered main-content markdown**: better on nav/cookie chrome,
   and the only way a JS-rendered page yields text at all. It also *rescues* the

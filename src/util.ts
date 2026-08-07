@@ -101,11 +101,20 @@ export function normalizeDoi(doi: string): string {
 // Bare hostname of a URL (no leading www), or "" when unparseable.
 export function domainOf(raw: string): string {
   try {
-    return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+    const u = new URL(raw);
+    // A file: URL has no hostname, so the honest answer is not "" — that reads
+    // as "unknown" in a source list and groups every local file with every
+    // unparseable URL. Name the route instead: a reader seeing this in a report
+    // should know at a glance the evidence came off the machine, not the web.
+    if (u.protocol === "file:") return LOCAL_FILE_DOMAIN;
+    return u.hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return "";
   }
 }
+
+/** The `domain` a local file is filed under. Not a host, and deliberately not one. */
+export const LOCAL_FILE_DOMAIN = "local file";
 
 // Provenance floor — how much a source is trusted for the ROUTE it arrived by.
 //
@@ -143,6 +152,11 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   firecrawl: 0,
   stackexchange: 0.72,
   hackernews: 0.5,
+  // A file the user named on the command line. No floor, for the same reason the
+  // discovery engines get none: the route says the operator chose it, not that
+  // the document is authoritative. Spelled out at the neutral value so the
+  // omission reads as a decision.
+  file: 0.5,
 };
 
 // Neutral prior for a source whose route says nothing about it — every page a

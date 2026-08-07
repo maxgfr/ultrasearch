@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename2, join as join14, relative as relative2, resolve as resolve4 } from "path";
-import { pathToFileURL, fileURLToPath as fileURLToPath3 } from "url";
-import { realpathSync as realpathSync3, existsSync as existsSync10, statSync as statSync3, readdirSync as readdirSync2, readFileSync as readFileSync9 } from "fs";
+import { basename as basename3, join as join14, relative as relative2, resolve as resolve5 } from "path";
+import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath3 } from "url";
+import { realpathSync as realpathSync3, existsSync as existsSync11, statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync10 } from "fs";
 
 // src/types.ts
 var VERSION = "1.21.0";
@@ -390,11 +390,14 @@ function normalizeDoi(doi) {
 }
 function domainOf(raw) {
   try {
-    return new URL(raw).hostname.toLowerCase().replace(/^www\./, "");
+    const u = new URL(raw);
+    if (u.protocol === "file:") return LOCAL_FILE_DOMAIN;
+    return u.hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return "";
   }
 }
+var LOCAL_FILE_DOMAIN = "local file";
 var BACKEND_TRUST = {
   arxiv: 0.9,
   crossref: 0.9,
@@ -413,7 +416,12 @@ var BACKEND_TRUST = {
   // decision rather than an oversight — its /search proxies the same open web.
   firecrawl: 0,
   stackexchange: 0.72,
-  hackernews: 0.5
+  hackernews: 0.5,
+  // A file the user named on the command line. No floor, for the same reason the
+  // discovery engines get none: the route says the operator chose it, not that
+  // the document is authoritative. Spelled out at the neutral value so the
+  // omission reads as a decision.
+  file: 0.5
 };
 var NEUTRAL_TRUST = 0.5;
 function trustScore(_url, backend) {
@@ -1157,8 +1165,11 @@ function scanRatios(t) {
   return { control: control / t.length, replacement: replacement / t.length };
 }
 function assessPdfText(text) {
+  return assessExtractedText(text, "no text layer (scanned or image-only PDF?)");
+}
+function assessExtractedText(text, emptyReason) {
   const t = text.trim();
-  if (!t) return { ok: false, reason: "no text layer (scanned or image-only PDF?)" };
+  if (!t) return { ok: false, reason: emptyReason };
   const { control, replacement } = scanRatios(t);
   if (control > CONTROL_RATIO_MAX) {
     return { ok: false, reason: "binary/control characters in the text (undecodable PDF stream)" };
@@ -1183,12 +1194,12 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     let child;
     try {
       child = spawn(binaryName(cmd), args, { stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
-      resolve5({ ok: false, stdout: "", error: e.message });
+      resolve6({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -1198,7 +1209,7 @@ function runWithInput(cmd, args, input, timeoutMs) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve5(r);
+      resolve6(r);
     };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -1226,7 +1237,7 @@ function runWithInput(cmd, args, input, timeoutMs) {
 }
 
 // src/backends/pdf/ladder.ts
-var PDF_EXTRACTORS = ["pdf-inspector", "firecrawl", "pdftotext", "native"];
+var PDF_EXTRACTORS = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native"];
 var NPX_TIMEOUT_MS = 9e4;
 var PDFTOTEXT_TIMEOUT_MS = 6e4;
 var dead = /* @__PURE__ */ new Set();
@@ -1234,8 +1245,12 @@ function enabledExtractors(engines) {
   if (engines) return engines;
   const forced = process.env.ULTRASEARCH_PDF_ENGINE?.trim();
   if (forced && PDF_EXTRACTORS.includes(forced)) return [forced];
-  if (process.env.ULTRASEARCH_NO_NPX) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector");
+  if (process.env.ULTRASEARCH_NO_NPX) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector" && e !== "anydoc");
   return PDF_EXTRACTORS;
+}
+async function viaAnydoc(bytes) {
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
+  return r.ok ? r.stdout : void 0;
 }
 async function viaPdfInspector(bytes) {
   const r = await runWithInput("npx", ["-y", "--prefer-offline", "@firecrawl/pdf-inspector", "-"], bytes, NPX_TIMEOUT_MS);
@@ -1252,6 +1267,7 @@ async function extractPdf(bytes, opts = {}) {
     let text;
     try {
       if (id === "pdf-inspector") text = await viaPdfInspector(bytes);
+      else if (id === "anydoc") text = await viaAnydoc(bytes);
       else if (id === "pdftotext") text = await viaPdftotext(bytes);
       else if (id === "firecrawl") text = opts.firecrawl ? await opts.firecrawl() : void 0;
       else text = pdfToText(bytes);
@@ -1267,6 +1283,102 @@ async function extractPdf(bytes, opts = {}) {
     lastReason = verdict.reason;
   }
   return { text: "", reason: lastReason ?? "no PDF extractor available" };
+}
+
+// src/backends/doc/formats.ts
+var BINARY = { textFallback: false };
+var CSV = { format: "csv", textFallback: true };
+var BY_EXTENSION = {
+  // Word
+  doc: BINARY,
+  docx: BINARY,
+  docm: BINARY,
+  odt: BINARY,
+  rtf: BINARY,
+  // PowerPoint
+  ppt: BINARY,
+  pps: BINARY,
+  pot: BINARY,
+  pptx: BINARY,
+  pptm: BINARY,
+  ppsx: BINARY,
+  ppsm: BINARY,
+  odp: BINARY,
+  // Excel
+  xls: BINARY,
+  xlsx: BINARY,
+  xlsm: BINARY,
+  xlsb: BINARY,
+  ods: BINARY,
+  // Everything else the converter reads
+  epub: BINARY,
+  csv: CSV
+};
+var BY_CONTENT_TYPE = {
+  "application/msword": BINARY,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": BINARY,
+  "application/vnd.ms-word.document.macroenabled.12": BINARY,
+  "application/vnd.oasis.opendocument.text": BINARY,
+  "application/rtf": BINARY,
+  "text/rtf": BINARY,
+  "application/vnd.ms-powerpoint": BINARY,
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": BINARY,
+  "application/vnd.oasis.opendocument.presentation": BINARY,
+  "application/vnd.ms-excel": BINARY,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": BINARY,
+  "application/vnd.ms-excel.sheet.binary.macroenabled.12": BINARY,
+  "application/vnd.oasis.opendocument.spreadsheet": BINARY,
+  "application/epub+zip": BINARY,
+  "text/csv": CSV
+};
+var DOC_EXTENSIONS = Object.keys(BY_EXTENSION);
+function docFormatForUrl(url) {
+  const m = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
+  return m ? BY_EXTENSION[m[1].toLowerCase()] : void 0;
+}
+function docFormatForContentType(contentType) {
+  const type = contentType.split(";")[0]?.trim().toLowerCase();
+  return type ? BY_CONTENT_TYPE[type] : void 0;
+}
+
+// src/backends/doc/ladder.ts
+var DOC_EXTRACTORS = ["anydoc", "firecrawl"];
+var NPX_TIMEOUT_MS2 = 9e4;
+var dead2 = /* @__PURE__ */ new Set();
+function enabledDocExtractors(engines) {
+  if (engines) return engines;
+  const forced = process.env.ULTRASEARCH_DOC_ENGINE?.trim();
+  if (forced === "none") return [];
+  if (forced && DOC_EXTRACTORS.includes(forced)) return [forced];
+  if (process.env.ULTRASEARCH_NO_NPX) return DOC_EXTRACTORS.filter((e) => e !== "anydoc");
+  return DOC_EXTRACTORS;
+}
+async function viaAnydoc2(bytes, format) {
+  const args = ["-y", "--prefer-offline", "@firecrawl/anydoc", "-"];
+  if (format) args.push("--format", format);
+  const r = await runWithInput("npx", args, bytes, NPX_TIMEOUT_MS2);
+  return r.ok ? r.stdout : void 0;
+}
+async function extractDocument(bytes, fmt, opts = {}) {
+  let lastReason;
+  for (const id of enabledDocExtractors(opts.engines)) {
+    if (dead2.has(id)) continue;
+    let text;
+    try {
+      if (id === "anydoc") text = await viaAnydoc2(bytes, fmt.format);
+      else text = opts.firecrawl ? await opts.firecrawl() : void 0;
+    } catch {
+      text = void 0;
+    }
+    if (text === void 0) {
+      if (id !== "firecrawl") dead2.add(id);
+      continue;
+    }
+    const verdict = assessExtractedText(text, "the converter produced no text");
+    if (verdict.ok) return { text: text.trim(), via: id };
+    lastReason = verdict.reason;
+  }
+  return { text: "", reason: lastReason ?? "no document converter available" };
 }
 
 // src/backends/firecrawl.ts
@@ -1730,10 +1842,12 @@ function looksLikePdfUrl(url) {
   return PDF_ROUTE_RE.test(url) && !NON_PDF_TAIL_RE.test(url);
 }
 var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
+var DOC_FETCH_OPTS = { accept: "*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
 async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = looksLikePdfUrl(url);
+  const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
   let firecrawlNote;
-  if (!wantsPdf) {
+  if (!wantsPdf && !wantsDoc) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
       return {
@@ -1746,7 +1860,8 @@ async function fetchAndExtract(url, opts = {}) {
     }
     firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} \u2014 fell back to the built-in extractor.` : fc.why;
   }
-  const res = await httpGet(url, wantsPdf ? PDF_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage });
+  const fetchOpts = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
+  const res = await httpGet(url, fetchOpts);
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
@@ -1766,6 +1881,26 @@ async function fetchAndExtract(url, opts = {}) {
       // `native` keeps reporting as absent, which is what the cache key and every
       // existing dossier already assume.
       extractor: got.via && got.via !== "native" ? got.via : void 0,
+      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`
+    };
+  }
+  const docFmt = wantsDoc ?? docFormatForContentType(res.contentType);
+  if (docFmt) {
+    const bytes = res.bytes ?? (await httpGet(url, DOC_FETCH_OPTS)).bytes;
+    const got = bytes ? await extractDocument(bytes, docFmt, {
+      firecrawl: async () => {
+        const fc = await scrapeViaFirecrawl(url, opts);
+        return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : void 0;
+      }
+    }) : { text: "", reason: "empty response body" };
+    if (!got.text && docFmt.textFallback && bytes?.length) {
+      return { text: bytes.toString("utf8"), finalUrl: res.url, status: res.status, note: firecrawlNote };
+    }
+    return {
+      text: got.text,
+      finalUrl: res.url,
+      status: res.status,
+      extractor: got.via,
       note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`
     };
   }
@@ -2951,8 +3086,10 @@ function cachePath(url, acceptLanguage = "", extractor = "native") {
   return join(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
 }
 var PDF_CACHE_NS = "pdf";
+var DOC_CACHE_NS = "doc";
 async function currentExtractor(opts, url) {
   if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
+  if (docFormatForUrl(url)) return DOC_CACHE_NS;
   const base = firecrawlBase(opts);
   return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
@@ -2987,7 +3124,7 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   const hit = readCache(url, now, lang, ns);
   if (hit) return { ...hit, cached: true };
   const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS ? PDF_CACHE_NS : res.extractor ?? "native");
+  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
   return res;
 }
 
@@ -3433,6 +3570,24 @@ async function probeServices(opts = {}) {
   const pt = await toolVersion("pdftotext", ["-v"]);
   out.push({ name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" });
   out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" \u2192 ") });
+  const docRungs = enabledDocExtractors();
+  if (docRungs.includes("anydoc")) {
+    const v = await toolVersion("npx", ["-y", "--prefer-offline", "@firecrawl/anydoc", "--version"]);
+    out.push({
+      name: "anydoc",
+      ok: !!v,
+      detail: v ? `${v} (via npx)` : "unavailable \u2014 needs npm, Node 20+, and a prebuilt binary for this platform"
+    });
+  } else {
+    out.push({ name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" });
+  }
+  out.push({
+    name: "doc ladder",
+    ok: docRungs.length > 0,
+    // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
+    // run meets will be refused — worth saying plainly rather than printing "".
+    detail: docRungs.length ? docRungs.join(" \u2192 ") : "disabled \u2014 office documents will be refused, not read"
+  });
   return out;
 }
 function describeServices(s) {
@@ -3443,6 +3598,8 @@ function describeServices(s) {
   parts.push(s.firecrawl.pages ? `firecrawl \u2713 ${s.firecrawl.pages} page(s)` : "firecrawl \u2717 not used");
   const pdf = Object.entries(s.pdf);
   if (pdf.length) parts.push(`pdf ${pdf.map(([k, n]) => `${k} \u2713 ${n}`).join(", ")}`);
+  const doc = Object.entries(s.doc ?? {});
+  if (doc.length) parts.push(`doc ${doc.map(([k, n]) => `${k} \u2713 ${n}`).join(", ")}`);
   return parts.join(" \xB7 ") + ". Run `ultrasearch doctor` to see what is available.";
 }
 function formatServices(rows) {
@@ -3498,14 +3655,14 @@ function compose(service, action) {
   }
   const profiles = SERVICE_PROFILES[service].flatMap((p) => ["--profile", p]);
   const args = ["compose", "-f", file, ...profiles, action, ...action === "up" ? ["-d", "--wait"] : []];
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const child = spawn2("docker", args, { stdio: "inherit" });
     child.on("error", (e) => {
       process.stderr.write(e.code === "ENOENT" ? "ultrasearch: docker not found on PATH.\n" : `ultrasearch: ${e.message}
 `);
-      resolve5(1);
+      resolve6(1);
     });
-    child.on("close", (code) => resolve5(code ?? 1));
+    child.on("close", (code) => resolve6(code ?? 1));
   });
 }
 
@@ -3699,9 +3856,13 @@ async function runGather(options) {
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
   const extractorUse = /* @__PURE__ */ new Map();
-  const tallyExtractor = (res) => {
+  const docExtractorUse = /* @__PURE__ */ new Map();
+  const tallyExtractor = (res, url) => {
     const k = res.extractor ?? "native";
     extractorUse.set(k, (extractorUse.get(k) ?? 0) + 1);
+    if (url && res.extractor && docFormatForUrl(url)) {
+      docExtractorUse.set(k, (docExtractorUse.get(k) ?? 0) + 1);
+    }
   };
   const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
   async function assemble(rawLists) {
@@ -3723,7 +3884,7 @@ async function runGather(options) {
       if (!res) {
         res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
         if (res.cached) cacheHits++;
-        tallyExtractor(res);
+        tallyExtractor(res, it.url);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
@@ -3741,7 +3902,7 @@ async function runGather(options) {
           if (!alt) {
             alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
             if (alt.cached) cacheHits++;
-            tallyExtractor(alt);
+            tallyExtractor(alt, cand);
             hydrateCache.set(altKey, alt);
           }
           if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -3875,7 +4036,12 @@ async function runGather(options) {
   const services = {
     searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
     firecrawl: { pages: extractorUse.get("firecrawl") ?? 0 },
-    pdf: Object.fromEntries([...extractorUse].filter(([k]) => k === "pdf-inspector" || k === "pdftotext"))
+    // `anydoc` is counted under whichever ladder actually ran it: the PDF bucket
+    // gets what it read as a PDF, the doc bucket what it read as an office file.
+    pdf: Object.fromEntries(
+      [...extractorUse].filter(([k]) => k === "pdf-inspector" || k === "pdftotext" || k === "anydoc").map(([k, n]) => [k, n - (docExtractorUse.get(k) ?? 0)]).filter(([, n]) => n > 0)
+    ),
+    ...docExtractorUse.size ? { doc: Object.fromEntries(docExtractorUse) } : {}
   };
   const notes = [
     ...results.flatMap((res) => res.notes),
@@ -3972,6 +4138,9 @@ async function runGather(options) {
 }
 
 // src/enrich.ts
+import { existsSync as existsSync4, readFileSync as readFileSync3, statSync } from "fs";
+import { basename, resolve } from "path";
+import { pathToFileURL } from "url";
 async function addSources(dir, hits, opts = {}) {
   const results = [];
   for (const hit of hits) {
@@ -3984,6 +4153,75 @@ async function addSources(dir, hits, opts = {}) {
     added: results.filter((r) => r.added).length,
     skipped: results.filter((r) => !r.added).length
   };
+}
+var TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log)$/i;
+async function addFiles(dir, paths, opts = {}) {
+  const results = [];
+  for (const p of paths) {
+    const abs = resolve(p);
+    const url = pathToFileURL(abs).href;
+    results.push({ ...await addFile(dir, abs, opts), url });
+  }
+  return {
+    results,
+    added: results.filter((r) => r.added).length,
+    skipped: results.filter((r) => !r.added).length
+  };
+}
+async function addFile(dir, abs, opts) {
+  const url = pathToFileURL(abs).href;
+  if (!existsSync4(abs) || !statSync(abs).isFile()) {
+    return { id: "", added: false, note: `${abs} is not a readable file` };
+  }
+  const { sources, manifest } = readDossier(dir);
+  const question = opts.question ?? manifest.question;
+  const existing = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(url));
+  if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+  const bytes = readFileSync3(abs);
+  const name = basename(abs);
+  let text;
+  let extractor;
+  const docFmt = docFormatForUrl(url);
+  if (looksLikePdfUrl(url)) {
+    const got = await extractPdf(bytes, {});
+    if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` };
+    text = got.text;
+    extractor = got.via;
+  } else if (docFmt) {
+    const got = await extractDocument(bytes, docFmt, {});
+    if (!got.text && docFmt.textFallback) text = bytes.toString("utf8");
+    else if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` };
+    else {
+      text = got.text;
+      extractor = got.via;
+    }
+  } else if (TEXT_FILE_RE.test(abs)) {
+    const raw2 = bytes.toString("utf8");
+    text = /\.html?$/i.test(abs) ? htmlToText(extractMainHtml(raw2)) : raw2;
+  } else {
+    return {
+      id: "",
+      added: false,
+      note: `${name}: unsupported file type \u2014 ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`
+    };
+  }
+  if (!text.trim()) return { id: "", added: false, note: `${name} is empty` };
+  const id = nextSourceId(sources);
+  const raw = {
+    url,
+    title: titleFromText(text) || name,
+    backend: "file",
+    score: 0,
+    snippet: bestExcerpt(text, question),
+    text,
+    ...extractor ? { meta: { textVia: extractor } } : {}
+  };
+  const s = buildSource(raw, id, (/* @__PURE__ */ new Date()).toISOString(), question);
+  writeSourceExtract(dir, s, text, manifest.depth);
+  const nextSources = [...sources, s];
+  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed: [.../* @__PURE__ */ new Set([...manifest.backendsUsed, "file"])] };
+  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
+  return { id, added: true };
 }
 async function addSource(dir, url, opts = {}) {
   const { sources, manifest } = readDossier(dir);
@@ -4096,7 +4334,7 @@ async function addSource(dir, url, opts = {}) {
 }
 
 // src/render.ts
-import { existsSync as existsSync4, readFileSync as readFileSync3 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync4 } from "fs";
 import { join as join5 } from "path";
 
 // src/claims.ts
@@ -4482,16 +4720,16 @@ function citedAcrossTiers(dir) {
   const cited = /* @__PURE__ */ new Set();
   for (const t of TIERS) {
     const p = join5(dir, t.file);
-    if (!existsSync4(p)) continue;
-    for (const id of citedSourceIds(readFileSync3(p, "utf8"))) cited.add(id);
+    if (!existsSync5(p)) continue;
+    for (const id of citedSourceIds(readFileSync4(p, "utf8"))) cited.add(id);
   }
   return cited;
 }
 function readVerify(dir) {
   const p = join5(dir, "VERIFY.json");
-  if (!existsSync4(p)) return void 0;
+  if (!existsSync5(p)) return void 0;
   try {
-    return JSON.parse(readFileSync3(p, "utf8"));
+    return JSON.parse(readFileSync4(p, "utf8"));
   } catch {
     return void 0;
   }
@@ -4507,11 +4745,11 @@ function worstBySource(verify) {
 }
 function renderHtml(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync4(join5(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync5(join5(dir, t.file)));
   const verify = readVerify(dir);
   const verdicts = worstBySource(verify);
   const rendered = present.map((t) => {
-    const md = readFileSync3(join5(dir, t.file), "utf8");
+    const md = readFileSync4(join5(dir, t.file), "utf8");
     const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
@@ -4642,12 +4880,12 @@ function verificationMarkdown(r) {
 }
 function buildReportMarkdown(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync4(join5(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync5(join5(dir, t.file)));
   const verify = readVerify(dir);
   const meta = `> ${manifest.mode} \xB7 depth ${manifest.depth} \xB7 ${sources.length} sources${manifest.lang ? ` \xB7 lang ${manifest.lang}` : ""}${manifest.region ? `/${manifest.region}` : ""} \xB7 ${manifest.builtAt} \xB7 generated by ultrasearch`;
   const parts = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
   for (const t of present) {
-    const body = readFileSync3(join5(dir, t.file), "utf8").trim();
+    const body = readFileSync4(join5(dir, t.file), "utf8").trim();
     if (!body) continue;
     parts.push("---", "", `## ${t.label}`, "", body, "");
   }
@@ -4676,11 +4914,11 @@ function writeReportMarkdown(dir, out) {
 }
 
 // src/check.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
 import { join as join7 } from "path";
 
 // src/verify.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
 import { join as join6 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
@@ -4720,8 +4958,8 @@ function buildWorklist(dir, opts = {}) {
   let claimNo = 0;
   for (const file of HARD_FILES) {
     const p = join6(dir, file);
-    if (!existsSync5(p)) continue;
-    const text = readFileSync4(p, "utf8");
+    if (!existsSync6(p)) continue;
+    const text = readFileSync5(p, "utf8");
     for (const claim of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
@@ -4969,14 +5207,14 @@ function analyzeFile(file, text) {
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
   const p = join7(dir, "VERIFY.json");
-  if (!existsSync6(p)) {
+  if (!existsSync7(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
   let stored;
   try {
-    stored = JSON.parse(readFileSync5(p, "utf8"));
+    stored = JSON.parse(readFileSync6(p, "utf8"));
   } catch (e) {
     result.ok = false;
     result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
@@ -5025,7 +5263,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync5(join7(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync6(join7(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -5034,12 +5272,12 @@ function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
   const sourcesPath = join7(dir, "sources.json");
-  if (!existsSync6(sourcesPath)) {
+  if (!existsSync7(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync5(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync6(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
@@ -5047,11 +5285,11 @@ function runCheck(dir, opts = {}) {
     return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync6(join7(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync7(join7(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync5(join7(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync6(join7(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -5101,7 +5339,7 @@ function runCheck(dir, opts = {}) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
     try {
-      if (!existsSync6(join7(dir, s.extract))) continue;
+      if (!existsSync7(join7(dir, s.extract))) continue;
       const wall = looksLikeJunkExtraction(readSourceText(dir, s));
       if (wall) walled.push(`${s.id} (${wall})`);
     } catch {
@@ -5125,7 +5363,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync6(join7(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
+        t = s && existsSync7(join7(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
       } catch {
         t = null;
       }
@@ -5135,7 +5373,7 @@ function runCheck(dir, opts = {}) {
   };
   for (const f of present) {
     if (!HARD_FILES2.includes(f)) continue;
-    for (const u of unitsOfFile(readFileSync5(join7(dir, f), "utf8"))) {
+    for (const u of unitsOfFile(readFileSync6(join7(dir, f), "utf8"))) {
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -5817,8 +6055,8 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
-import { join as join11, resolve } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { join as join11, resolve as resolve2 } from "path";
 
 // src/orchestrate-templates.ts
 import { join as join10 } from "path";
@@ -6052,12 +6290,12 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 var PHASES = ["gather", "verify"];
 var SMALL_WORKLIST = 3;
 function listPhases(runDir, engineAbs) {
-  const run = resolve(runDir);
+  const run = resolve2(runDir);
   const planPath = join11(run, "PLAN.json");
   let plan;
-  if (existsSync7(planPath)) {
+  if (existsSync8(planPath)) {
     try {
-      const f = JSON.parse(readFileSync6(planPath, "utf8"));
+      const f = JSON.parse(readFileSync7(planPath, "utf8"));
       if (f && Array.isArray(f.subQuestions)) plan = f;
     } catch {
     }
@@ -6066,9 +6304,9 @@ function listPhases(runDir, engineAbs) {
   const verPath = join11(run, "VERIFY.todo.json");
   let verIds = [];
   let verReady = false;
-  if (existsSync7(verPath)) {
+  if (existsSync8(verPath)) {
     try {
-      const f = JSON.parse(readFileSync6(verPath, "utf8"));
+      const f = JSON.parse(readFileSync7(verPath, "utf8"));
       if (f && Array.isArray(f.pairs)) {
         verReady = true;
         verIds = f.pairs.map((p) => `${p.claimId}:${p.sourceId}`);
@@ -6101,8 +6339,8 @@ function listPhases(runDir, engineAbs) {
   ];
 }
 function orchestrateRun(runDir, engineAbs, opts = {}) {
-  const run = resolve(runDir);
-  if (!existsSync7(run)) {
+  const run = resolve2(runDir);
+  if (!existsSync8(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
   const phases = listPhases(run, engineAbs);
@@ -6164,8 +6402,8 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
 import { createInterface } from "readline";
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync8, readFileSync as readFileSync7, realpathSync, statSync } from "fs";
-import { isAbsolute, join as join12, relative, resolve as resolve2, sep } from "path";
+import { existsSync as existsSync9, readFileSync as readFileSync8, realpathSync, statSync as statSync2 } from "fs";
+import { isAbsolute, join as join12, relative, resolve as resolve3, sep } from "path";
 
 // src/run-lock.ts
 var chains = /* @__PURE__ */ new Map();
@@ -6233,8 +6471,8 @@ function requiredRun(args, defaults) {
   const run = str(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute(run)) throw new ToolError("`run` must be an absolute path.");
-  const abs = resolve2(run);
-  if (!existsSync8(join12(abs, "manifest.json"))) {
+  const abs = resolve3(run);
+  if (!existsSync9(join12(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -6425,7 +6663,7 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync8(join12(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync9(join12(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str(args.master);
   if (master !== void 0 && !isAbsolute(master)) throw new ToolError("`master` must be an absolute path.");
@@ -6533,10 +6771,10 @@ function handleRead(args, run) {
   if (real !== root && !real.startsWith(root + sep)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
-  const st = statSync(real);
+  const st = statSync2(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync7(real, "utf8").split("\n");
+  const lines = readFileSync8(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
@@ -7072,25 +7310,25 @@ function str2(v) {
 var DECLARED = new Set([...TOOLS, ...WRITE_TOOLS].map((t) => t.name));
 
 // src/mcp/resources.ts
-import { existsSync as existsSync9, readdirSync, readFileSync as readFileSync8, realpathSync as realpathSync2, statSync as statSync2 } from "fs";
-import { basename, dirname as dirname2, join as join13, resolve as resolve3, sep as sep2 } from "path";
+import { existsSync as existsSync10, readdirSync, readFileSync as readFileSync9, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
+import { basename as basename2, dirname as dirname2, join as join13, resolve as resolve4, sep as sep2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var SKILL_NAME = "ultrasearch";
 var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname2(fileURLToPath2(import.meta.url));
-  const candidates = [resolve3(here, ".."), resolve3(here, "..", "skills", SKILL_NAME), resolve3(here, "..", "..", "skills", SKILL_NAME)];
-  return candidates.find((dir) => existsSync9(join13(dir, "SKILL.md")));
+  const candidates = [resolve4(here, ".."), resolve4(here, "..", "skills", SKILL_NAME), resolve4(here, "..", "..", "skills", SKILL_NAME)];
+  return candidates.find((dir) => existsSync10(join13(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${SKILL_NAME}: the skill`)];
   const refDir = join13(root, "references");
-  if (!existsSync9(refDir)) return out;
+  if (!existsSync10(refDir)) return out;
   for (const file of readdirSync(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join13("references", file), `${SKILL_NAME} reference: ${basename(file, ".md")}`));
+    out.push(describe(root, join13("references", file), `${SKILL_NAME} reference: ${basename2(file, ".md")}`));
   }
   return out;
 }
@@ -7102,7 +7340,7 @@ function readResource(uri, moduleDir) {
   if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
   const rel = uri.slice(URI_SCHEME.length);
   if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve3(root, rel);
+  const target = resolve4(root, rel);
   const rootReal = realpathSync2(root);
   let targetReal;
   try {
@@ -7113,8 +7351,8 @@ function readResource(uri, moduleDir) {
   if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
-  if (!statSync2(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync8(targetReal, "utf8") };
+  if (!statSync3(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync9(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
 };
@@ -7132,7 +7370,7 @@ function describe(root, rel, fallbackTitle) {
 function firstProse(file) {
   let text;
   try {
-    text = readFileSync8(file, "utf8");
+    text = readFileSync9(file, "utf8");
   } catch {
     return void 0;
   }
@@ -7383,14 +7621,14 @@ function startHttpServer(opts = {}) {
   server.requestTimeout = 0;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve5({
+      resolve6({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -7499,7 +7737,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
 function readBody(req) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -7523,7 +7761,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve5(Buffer.concat(chunks).toString("utf8"));
+      else resolve6(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -7541,7 +7779,7 @@ Usage:
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
-  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--json]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -7647,6 +7885,9 @@ Options:
   --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
   --urls <u,...>       For 'ingest': the URLs to add (alternative to --web-results)
+  --files <p,...>      For 'ingest': local documents to add \u2014 PDFs, office files
+                       (.docx/.pptx/.xlsx/.odt/\u2026) and plain text. Their contents
+                       enter the dossier and any report rendered from it.
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint
@@ -7747,6 +7988,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "web-results",
   "search",
   "urls",
+  "files",
   "url",
   "cite-url",
   "id",
@@ -7861,10 +8103,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve4(x));
-  const abs = resolve4(spec);
-  if (existsSync10(abs) && statSync3(abs).isDirectory()) {
-    const files = readdirSync2(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve4(abs, f));
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
+  const abs = resolve5(spec);
+  if (existsSync11(abs) && statSync4(abs).isDirectory()) {
+    const files = readdirSync2(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -7893,15 +8135,15 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync9(0, "utf8");
+      return readFileSync10(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
   }
-  const abs = resolve4(spec);
-  if (!existsSync10(abs)) fail(`--web-results file not found: ${abs}`);
+  const abs = resolve5(spec);
+  if (!existsSync11(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync9(abs, "utf8");
+    return readFileSync10(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -7931,7 +8173,7 @@ function sourceNum(rel) {
   return Number(/^sources\/S(\d+)\.md$/.exec(rel)?.[1] ?? 0);
 }
 function emitArtifacts(dir, asJson, extra = {}) {
-  const artifacts = takeArtifacts().map((a) => ({ rel: relative2(dir, a.path) || basename2(a.path), content: a.content }));
+  const artifacts = takeArtifacts().map((a) => ({ rel: relative2(dir, a.path) || basename3(a.path), content: a.content }));
   if (asJson) {
     const files = {};
     for (const a of artifacts) files[a.rel] = a.content;
@@ -8047,7 +8289,7 @@ function buildGatherOptions(p, opts = {}) {
     // `--cache` stays an accepted no-op so every prompt and emitted contract
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
-    out: p.values.out ? resolve4(p.values.out) : void 0,
+    out: p.values.out ? resolve5(p.values.out) : void 0,
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
@@ -8158,10 +8400,10 @@ async function main(argv = process.argv.slice(2)) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join14(resolve4(runDir), "manifest.json");
-        if (!existsSync10(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
+        const mf = join14(resolve5(runDir), "manifest.json");
+        if (!existsSync11(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync9(mf, "utf8"));
+          manifest = JSON.parse(readFileSync10(mf, "utf8"));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -8171,7 +8413,7 @@ async function main(argv = process.argv.slice(2)) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve4(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
+      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve5(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
       process.stdout.write(`${head}
 
 ${formatServices(rows)}
@@ -8223,7 +8465,7 @@ ${formatServices(rows)}
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve4(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve5(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -8231,7 +8473,7 @@ ${formatServices(rows)}
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num2("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve4(p.values["run-root"]) : void 0;
+      const runRoot = p.values["run-root"] ? resolve5(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       if (options.stdout) takeArtifacts();
@@ -8244,13 +8486,13 @@ ${formatServices(rows)}
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve4(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve5(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync10(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync11(d)) fail(`run dir not found: ${d}`);
       const mode = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve4(p.values.master) : void 0,
+        master: p.values.master ? resolve5(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode
       });
@@ -8273,7 +8515,7 @@ ${formatServices(rows)}
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve4(dir), url, {
+      const r = await addSource(resolve5(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
@@ -8302,22 +8544,30 @@ ${formatServices(rows)}
       if (!dir) fail("missing --run <dossier-dir>");
       const spec = p.values["web-results"];
       const listed = p.values.urls ? parseList(p.values.urls) : [];
-      if (!spec && !listed.length) fail("missing --web-results <f.json|-> or --urls <u,...>");
+      const files = p.values.files ? parseList(p.values.files) : [];
+      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...> or --files <p,...>");
       const hits = [...listed];
       if (spec) {
         const parsed = parseWebResults(readWebResultsPayload(spec));
         for (const n of parsed.notes) process.stderr.write(`ultrasearch: ${n}
 `);
-        if (!parsed.hits.length && !listed.length) {
+        if (!parsed.hits.length && !listed.length && !files.length) {
           fail(`--web-results ${spec} yielded no usable hit \u2014 expected [{"url":"https://\u2026"}, \u2026] (or a list of URLs).`);
         }
         hits.push(...parsed.hits);
       }
-      const r = await addSources(resolve4(dir), hits, {
+      const enrichOpts = {
         question: p.values.q ?? p.values.question,
         cache: !p.bools.has("no-cache"),
         firecrawl: p.values.firecrawl
-      });
+      };
+      const web = hits.length ? await addSources(resolve5(dir), hits, enrichOpts) : void 0;
+      const local = files.length ? await addFiles(resolve5(dir), files, enrichOpts) : void 0;
+      const r = {
+        results: [...web?.results ?? [], ...local?.results ?? []],
+        added: (web?.added ?? 0) + (local?.added ?? 0),
+        skipped: (web?.skipped ?? 0) + (local?.skipped ?? 0)
+      };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else {
@@ -8326,7 +8576,8 @@ ${formatServices(rows)}
 ` : `-	${o.url}	${o.note ?? "not added"}
 `);
         }
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} URL(s) \u2192 ${resolve4(dir)}
+        const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve5(dir)}
 `);
       }
       if (!r.added) process.exit(1);
@@ -8335,7 +8586,7 @@ ${formatServices(rows)}
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve5(dir);
       if (isNoWrite()) {
         if (p.bools.has("no-md")) {
           process.stderr.write("ultrasearch render: --stdout --no-md leaves nothing to emit (--stdout never produces HTML).\n");
@@ -8349,7 +8600,7 @@ ${formatServices(rows)}
       }
       const written = {};
       if (!p.bools.has("no-html")) {
-        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve4(p.values.out) : void 0);
+        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
         process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
       }
@@ -8364,7 +8615,7 @@ ${formatServices(rows)}
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve5(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -8404,8 +8655,8 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync3(fileURLToPath3(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync10(resolve4(dir))) {
-          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve4(dir)}
+        if (!existsSync11(resolve5(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve5(dir)}
 `);
           process.exit(2);
         }
@@ -8429,7 +8680,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join14(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join14(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -8472,14 +8723,14 @@ ${formatServices(rows)}
           void running.close().then(() => process.exit(0));
         });
       }
-      await new Promise((resolve5) => running.server.once("close", resolve5));
+      await new Promise((resolve6) => running.server.once("close", resolve6));
       return;
     }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num2("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve4(dir), {
+      const res = runCheck(resolve5(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -8488,7 +8739,7 @@ ${formatServices(rows)}
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve4(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve5(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;
@@ -8496,7 +8747,7 @@ ${formatServices(rows)}
     case "relink": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve5(dir);
       if (p.bools.has("list")) {
         const issues = listIssues(rdir);
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");
@@ -8555,7 +8806,7 @@ function isInvokedDirectly() {
     if (realpathSync3(argv1) === realpathSync3(modulePath)) return true;
   } catch {
   }
-  return import.meta.url === pathToFileURL(argv1).href;
+  return import.meta.url === pathToFileURL2(argv1).href;
 }
 if (isInvokedDirectly()) {
   main().catch((e) => fail(e.message));

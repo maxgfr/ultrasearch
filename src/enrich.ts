@@ -1,7 +1,12 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { BackendKind, RawSource, SourceMeta, WebSearchHit } from "./types.js";
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, nextSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
-import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { extractPdf } from "./backends/pdf.js";
+import { extractDocument, docFormatForUrl, DOC_EXTENSIONS } from "./backends/doc.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { resolveProvider } from "./providers.js";
@@ -53,6 +58,102 @@ export async function addSources(
     added: results.filter((r) => r.added).length,
     skipped: results.filter((r) => !r.added).length,
   };
+}
+
+// Extensions read straight off disk as text, with no converter in between.
+// Anything outside this set, the PDF sniffer and the office-document table is
+// REFUSED rather than decoded hopefully: a .png read as UTF-8 is exactly the
+// kind of plausible-looking garbage the document ladder exists to stop.
+const TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log)$/i;
+
+// Ingest local FILES into an existing dossier — the same batch contract as
+// addSources (sequential, one outcome per input, refusals included), for
+// documents that never had a URL.
+//
+// A local file skips almost everything addSource does: there is no provider to
+// resolve, no consent wall to see past, no dead origin to rescue from Wayback.
+// What it does share is the part that matters — the same converters, the same
+// quality gate, the same [S#] allocation, so a cited local document is checked
+// exactly like a cited page.
+export async function addFiles(dir: string, paths: string[], opts: { question?: string; cache?: boolean; firecrawl?: string } = {}): Promise<IngestResult> {
+  const results: IngestOutcome[] = [];
+  for (const p of paths) {
+    const abs = resolve(p);
+    const url = pathToFileURL(abs).href;
+    results.push({ ...(await addFile(dir, abs, opts)), url });
+  }
+  return {
+    results,
+    added: results.filter((r) => r.added).length,
+    skipped: results.filter((r) => !r.added).length,
+  };
+}
+
+async function addFile(dir: string, abs: string, opts: { question?: string; firecrawl?: string }): Promise<EnrichResult> {
+  const url = pathToFileURL(abs).href;
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    return { id: "", added: false, note: `${abs} is not a readable file` };
+  }
+
+  const { sources, manifest } = readDossier(dir);
+  const question = opts.question ?? manifest.question;
+
+  const existing = sources.find((s) => s.canonicalUrl === canonicalizeUrl(url));
+  if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+
+  const bytes = readFileSync(abs);
+  const name = basename(abs);
+  let text: string;
+  let extractor: string | undefined;
+
+  const docFmt = docFormatForUrl(url);
+  if (looksLikePdfUrl(url)) {
+    // No Firecrawl callback: the ladder's rung 3 scrapes a URL, and a container
+    // cannot reach a path on this disk. Omitting it skips that rung, which is
+    // exactly right — the npx rungs and the built-in reader still apply.
+    const got = await extractPdf(bytes, {});
+    if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` };
+    text = got.text;
+    extractor = got.via;
+  } else if (docFmt) {
+    const got = await extractDocument(bytes, docFmt, {});
+    if (!got.text && docFmt.textFallback) text = bytes.toString("utf8");
+    else if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` };
+    else {
+      text = got.text;
+      extractor = got.via;
+    }
+  } else if (TEXT_FILE_RE.test(abs)) {
+    const raw = bytes.toString("utf8");
+    text = /\.html?$/i.test(abs) ? htmlToText(extractMainHtml(raw)) : raw;
+  } else {
+    return {
+      id: "",
+      added: false,
+      note: `${name}: unsupported file type — ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`,
+    };
+  }
+
+  if (!text.trim()) return { id: "", added: false, note: `${name} is empty` };
+
+  const id = nextSourceId(sources);
+  const raw: RawSource = {
+    url,
+    title: titleFromText(text) || name,
+    backend: "file",
+    score: 0,
+    snippet: bestExcerpt(text, question),
+    text,
+    ...(extractor ? { meta: { textVia: extractor } } : {}),
+  };
+  const s = buildSource(raw, id, new Date().toISOString(), question);
+  writeSourceExtract(dir, s, text, manifest.depth);
+
+  const nextSources = [...sources, s];
+  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed: [...new Set([...manifest.backendsUsed, "file" as BackendKind])] };
+  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
+
+  return { id, added: true };
 }
 
 // Ingest a single URL into an existing dossier — the bridge for the agent's own

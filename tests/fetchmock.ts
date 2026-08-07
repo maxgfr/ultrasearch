@@ -2,10 +2,16 @@ import { vi } from "vitest";
 
 export interface MockResponse {
   status?: number;
-  body: string;
+  /** The response body as text. Optional only when `bytes` supplies it instead. */
+  body?: string;
   contentType?: string;
   headers?: Record<string, string>; // extra response headers (e.g. retry-after)
   url?: string; // final URL after redirects (defaults to the requested URL)
+  // Raw response bytes, for a body that is NOT valid UTF-8 (a .docx is a ZIP, a
+  // .doc an OLE stream). Set this and `body` is ignored: `arrayBuffer()` hands
+  // back these bytes and `text()` decodes them the way httpGet does, so a test
+  // sees exactly the mojibake a real binary download produces.
+  bytes?: Buffer;
 }
 
 export type Router = (url: string, init?: RequestInit) => MockResponse | undefined;
@@ -30,7 +36,7 @@ export function installFetchMock(router: Router) {
 
 function makeResponse(r: MockResponse, requestedUrl: string) {
   const status = r.status ?? 200;
-  const body = r.body;
+  const body = r.body ?? "";
   const contentType = r.contentType ?? "text/html";
   const headers = r.headers ?? {};
   return {
@@ -46,10 +52,11 @@ function makeResponse(r: MockResponse, requestedUrl: string) {
       },
     },
     async arrayBuffer() {
+      if (r.bytes) return r.bytes.buffer.slice(r.bytes.byteOffset, r.bytes.byteOffset + r.bytes.byteLength);
       return new TextEncoder().encode(body).buffer;
     },
     async text() {
-      return body;
+      return r.bytes ? r.bytes.toString("utf8") : body;
     },
   } as unknown as Response;
 }

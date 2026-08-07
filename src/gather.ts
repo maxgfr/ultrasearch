@@ -17,6 +17,7 @@ import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
 import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
+import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
@@ -409,9 +410,16 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // that silence is why a container can sit up for weeks without being noticed as
   // unused — see the `services` block on the manifest.
   const extractorUse = new Map<string, number>();
-  const tallyExtractor = (res: { extractor?: string }) => {
+  // Office documents are tallied apart from pages. `anydoc` reads both PDFs and
+  // .docx/.pptx/…, so the rung name alone cannot say which ladder ran — the URL
+  // can, and it is the only thing that can.
+  const docExtractorUse = new Map<string, number>();
+  const tallyExtractor = (res: { extractor?: string }, url?: string) => {
     const k = res.extractor ?? "native";
     extractorUse.set(k, (extractorUse.get(k) ?? 0) + 1);
+    if (url && res.extractor && docFormatForUrl(url)) {
+      docExtractorUse.set(k, (docExtractorUse.get(k) ?? 0) + 1);
+    }
   };
   const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
 
@@ -447,7 +455,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (!res) {
         res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
         if (res.cached) cacheHits++;
-        tallyExtractor(res);
+        tallyExtractor(res, it.url);
         hydrateCache.set(key, res);
       }
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -476,7 +484,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           if (!alt) {
             alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
             if (alt.cached) cacheHits++;
-            tallyExtractor(alt);
+            tallyExtractor(alt, cand);
             hydrateCache.set(altKey, alt);
           }
           if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
@@ -696,7 +704,15 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const services: ManifestServices = {
     searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
     firecrawl: { pages: extractorUse.get("firecrawl") ?? 0 },
-    pdf: Object.fromEntries([...extractorUse].filter(([k]) => k === "pdf-inspector" || k === "pdftotext")),
+    // `anydoc` is counted under whichever ladder actually ran it: the PDF bucket
+    // gets what it read as a PDF, the doc bucket what it read as an office file.
+    pdf: Object.fromEntries(
+      [...extractorUse]
+        .filter(([k]) => k === "pdf-inspector" || k === "pdftotext" || k === "anydoc")
+        .map(([k, n]) => [k, n - (docExtractorUse.get(k) ?? 0)] as const)
+        .filter(([, n]) => n > 0),
+    ),
+    ...(docExtractorUse.size ? { doc: Object.fromEntries(docExtractorUse) } : {}),
   };
   const notes = [
     ...results.flatMap((res) => res.notes),

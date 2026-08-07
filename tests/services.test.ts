@@ -65,6 +65,18 @@ describe("probeServices", () => {
     // pdftotext's presence depends on the machine, so only its row is asserted.
     expect(byName.pdftotext).toBeDefined();
   });
+
+  it("always reports the document ladder, and says when it is switched off", async () => {
+    // tests/setup.ts pins ULTRASEARCH_DOC_ENGINE=none, which empties the ladder.
+    // An empty ladder is not broken, but it does mean every office document a
+    // run meets gets refused — the row has to say so rather than print nothing.
+    const rows = await probeServices();
+    const byName = Object.fromEntries(rows.map((r) => [r.name, r]));
+    expect(byName["doc ladder"]!.ok).toBe(false);
+    expect(byName["doc ladder"]!.detail).toMatch(/refused, not read/);
+    expect(byName.anydoc!.ok).toBe(false);
+    expect(byName.anydoc!.detail).toMatch(/skipped/i);
+  });
 });
 
 describe("formatServices", () => {
@@ -86,10 +98,12 @@ describe("describeServices", () => {
       searxng: { requested: true, sources: 12 },
       firecrawl: { pages: 8 },
       pdf: { "pdf-inspector": 3 },
+      doc: { anydoc: 2 },
     });
     expect(line).toContain("searxng ✓ 12 result(s)");
     expect(line).toContain("firecrawl ✓ 8 page(s)");
     expect(line).toContain("pdf-inspector ✓ 3");
+    expect(line).toContain("doc anydoc ✓ 2");
   });
 
   // The case the line exists for: a container that is up and contributed

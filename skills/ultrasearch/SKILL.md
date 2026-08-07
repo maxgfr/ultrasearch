@@ -421,6 +421,13 @@ in `references/operations.md`.
   `fetch --url "<endpoint>" --cite-url "<page>"`, or repair it later with
   `relink` (`references/backend-apis.md`). It still refuses what is not one
   document: a batch URL, a search query.
+- **Documents that are not web pages**: PDFs and office files (`.docx`, `.pptx`,
+  `.xlsx`, `.odt`, `.rtf`, `.epub`, `.csv`, …) are converted to Markdown by
+  their own extractor ladders, and **refused with a reason** when no converter
+  can read them — never handed over as raw bytes. To pin a document you already
+  have on disk, `ingest --run <dir> --files <p,...>`; its contents then live in
+  the dossier and in anything rendered from it. `doctor` shows which converters
+  are available (`references/backend-apis.md`).
 - **Extraction quality**: an optional self-hosted Firecrawl
   (`docker compose --profile search --profile extract up -d --wait`) extracts
   HTML with a real browser instead of the built-in stripper, and re-reads the

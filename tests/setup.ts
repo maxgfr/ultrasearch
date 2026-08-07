@@ -31,3 +31,10 @@ process.env.ULTRASEARCH_SEARXNG = "off";
 // offline, deterministic suite. Pin it to the built-in reader; the tests that
 // exercise other rungs set ULTRASEARCH_PDF_ENGINE or pass `engines` themselves.
 process.env.ULTRASEARCH_PDF_ENGINE = "native";
+
+// The office-document ladder shells out to npx (anydoc) too, and unlike the PDF
+// one it has no built-in last rung to pin it to — so `none` disables it. The
+// tests that exercise a rung pass `engines` themselves. This also keeps the
+// default assertion honest: an office document nothing can read must REFUSE,
+// which is the regression tests/doc-extract.ts pins.
+process.env.ULTRASEARCH_DOC_ENGINE = "none";

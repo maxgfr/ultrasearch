@@ -154,11 +154,21 @@ extracts, so it costs no extra retrieval. See
   and nothing anywhere would say so.
 - `backends/pdf.ts` + `backends/pdf/` — the PDF extractor ladder.
   `ladder.ts` tries pdf-inspector (`npx`, PDF on stdin, child process so a crash
-  can't take the run down) → Firecrawl → `pdftotext` → `native.ts`, stopping at
-  the first rung whose output passes `quality.ts`. That gate rejects C0/C1 and
+  can't take the run down) → anydoc (the same conversion, but the only npm rung
+  with a `darwin-x64` binary) → Firecrawl → `pdftotext` → `native.ts`, stopping
+  at the first rung whose output passes `quality.ts`. That gate rejects C0/C1 and
   U+FFFD-laced text at ANY length — the built-in reader can emit 16 MB of
   image-stream garbage for a 12 MB paper, which every length-limited check waves
   through. Nothing readable ⇒ the source is refused with a reason, not cited.
+- `backends/doc.ts` + `backends/doc/` — the same shape for office documents.
+  `formats.ts` is the only place a format is decided, which is what keeps a
+  URL-derived string out of a converter's argv; `ladder.ts` tries anydoc
+  (`npx`, bytes on stdin) → Firecrawl and reuses the PDF ladder's `exec.ts` and
+  quality gate. It has no built-in last rung on purpose: unzipping OOXML and
+  walking its parts is a different order of problem from mining a text layer,
+  and a wrong answer is worse than none. The refusal is the feature — a `.docx`
+  is a ZIP, so the fall-through this replaced put kilobytes of U+FFFD into
+  dossiers as citable evidence, silently.
 - `modes/` — the five `ModeProfile`s + their registry.
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the

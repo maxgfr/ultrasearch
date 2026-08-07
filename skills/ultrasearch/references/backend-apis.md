@@ -39,11 +39,19 @@ honest notes in the dossier.
      always the latest version. Costs one ~6 MB npx download the first time it
      is ever used, in a child process (so it can never take a run down).
      `ULTRASEARCH_NO_NPX=1` skips this rung.
-  2. **Firecrawl** — the already-running container, which covers the platforms
-     npm has no prebuilt binary for (Mac Intel, Linux ARM, Alpine: Docker runs
-     the linux-x64 image there anyway) and hosts without npm.
-  3. **pdftotext** — poppler, if installed. Fast, no network.
-  4. the **built-in** dependency-free reader (`zlib`-inflated content streams →
+  2. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc - --format pdf`.
+     The same conversion by another route: anydoc embeds pdf-inspector for text
+     PDFs, and on a real paper the two outputs differ by a single trailing
+     newline. It is here purely for **platform coverage** — npm publishes an
+     anydoc binary for `darwin-x64` and pdf-inspector does not, so on an Intel
+     Mac this is what keeps PDFs readable without Docker or poppler. It only
+     ever runs after rung 1 has failed, so it costs nothing elsewhere.
+     `ULTRASEARCH_NO_NPX=1` skips this rung too.
+  3. **Firecrawl** — the already-running container, which covers hosts with no
+     npm at all and any platform neither binary is built for (Docker runs the
+     linux-x64 image there anyway).
+  4. **pdftotext** — poppler, if installed. Fast, no network.
+  5. the **built-in** dependency-free reader (`zlib`-inflated content streams →
      text operators). Frequently wrong on CID fonts and ligatures, so it is a
      last resort, kept only for a machine with no tools at all.
 
@@ -58,6 +66,32 @@ honest notes in the dossier.
   arXiv PDFs are cited as `/abs/<id>` but READ as the PDF (`preferText` in
   providers.ts): the abstract page always fetches successfully, so treating the
   PDF as a mere fallback meant papers were only ever grounded on their abstract.
+- **Office documents** — `.docx`/`.doc`/`.odt`/`.rtf`, `.pptx`/`.ppt`/`.odp`,
+  `.xlsx`/`.xls`/`.ods`, `.epub`, `.csv`, recognised by extension or by
+  content-type — go through their own two-rung **document ladder**:
+  1. **anydoc** — `npx -y --prefer-offline @firecrawl/anydoc -`, the bytes on
+     stdin, converting to GitHub-Flavored Markdown. The format is read from the
+     BYTES (ZIP package mimetype, OLE stream names, the RTF open group), so a
+     mislabelled file still converts; `--format` is passed only for CSV, which
+     has no signature to detect from stdin.
+  2. **Firecrawl** — the already-running container, for hosts without npm.
+
+  Same gate as the PDF ladder, and the same refusal: when no rung can read the
+  document the source is REFUSED with a reason. That refusal is the point. These
+  formats are ZIP or OLE containers, so the older behaviour — falling through to
+  "not HTML, use the response body as text" — did not degrade the evidence, it
+  fabricated it: a `.docx` entered the dossier as hundreds of kilobytes of
+  U+FFFD, citable, with no note saying anything was wrong. The one exception is
+  `.csv`, which is already readable as plain text and so falls back to its raw
+  body instead of being refused.
+
+  anydoc needs **Node 20+**, one version above this package's own floor, so an
+  unavailable converter is a normal outcome on a Node 18 host rather than a
+  misconfiguration. `ULTRASEARCH_DOC_ENGINE=<rung|none>` forces one rung or
+  disables the ladder; `ultrasearch doctor` shows what is available.
+
+  PDFs never take this path — they have their own ladder, with rungs this one
+  does not have.
 - When a self-hosted **Firecrawl** answers (`docker compose --profile search
   --profile extract up -d`), HTML pages are extracted through it FIRST — a real
   headless browser returning main-content markdown via `POST {base}/v2/scrape`
