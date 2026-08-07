@@ -38,3 +38,8 @@ process.env.ULTRASEARCH_PDF_ENGINE = "native";
 // default assertion honest: an office document nothing can read must REFUSE,
 // which is the regression tests/doc-extract.ts pins.
 process.env.ULTRASEARCH_DOC_ENGINE = "none";
+
+// OCR shells out to copyable-pdf + tesseract and rasterises at 300 DPI: machine-
+// dependent, and seconds per page. A budget of 0 switches the rung off for the
+// whole suite; tests/pdf-ocr.test.ts drives it with the subprocess layer stubbed.
+process.env.ULTRASEARCH_OCR_MAX = "0";

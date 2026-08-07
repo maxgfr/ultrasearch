@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/pdf/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
-import { enabledExtractors } from "./backends/pdf.js";
+import { enabledExtractors, ocrTools, ocrBudgetLeft } from "./backends/pdf.js";
 import { enabledDocExtractors } from "./backends/doc.js";
 import type { ManifestServices } from "./types.js";
 
@@ -80,6 +80,28 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
 
   const pt = await toolVersion("pdftotext", ["-v"]);
   out.push({ name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" });
+
+  // OCR is the only rung that can read a scan, and it needs TWO binaries. Which
+  // one is missing is the whole answer here — "OCR unavailable" would send you
+  // looking in the wrong place, and copyable-pdf's own remedy for a missing
+  // tesseract is an interactive `brew install` this never triggers.
+  if (rungs.includes("ocr")) {
+    const { copyablePdf, tesseract } = await ocrTools();
+    out.push({
+      name: "ocr",
+      ok: copyablePdf && tesseract,
+      detail:
+        copyablePdf && tesseract
+          ? `copyable-pdf + tesseract, ${ocrBudgetLeft()} document(s) per run (ULTRASEARCH_OCR_MAX)`
+          : !copyablePdf && !tesseract
+            ? "not installed — `brew install maxgfr/tap/copyable-pdf tesseract` (scanned PDFs stay unreadable)"
+            : copyablePdf
+              ? "copyable-pdf is installed but tesseract is not — `brew install tesseract`"
+              : "tesseract is installed but copyable-pdf is not — `brew install maxgfr/tap/copyable-pdf`",
+    });
+  } else {
+    out.push({ name: "ocr", ok: false, detail: "skipped (ULTRASEARCH_PDF_ENGINE)" });
+  }
 
   out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" → ") });
 

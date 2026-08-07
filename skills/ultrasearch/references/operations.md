@@ -75,9 +75,12 @@ more than saving ten seconds.
 | `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). Opt-in: unset ⇒ the backend skips without calling out. |
 | `ULTRASEARCH_FIRECRAWL` | `http://localhost:3002` | Self-hosted Firecrawl base URL (same as `--firecrawl`). `off` disables it. Unreachable ⇒ silently skipped after one 2s probe. |
 | `ULTRASEARCH_FIRECRAWL_KEY` | unset | Optional `Authorization: Bearer` for the Firecrawl API. Not needed self-hosted — only to point the same client at Firecrawl Cloud. |
-| `ULTRASEARCH_PDF_ENGINE` | unset | Force ONE rung of the PDF extractor ladder: `pdf-inspector`, `anydoc`, `firecrawl`, `pdftotext` or `native`. Unset ⇒ the full ladder, strongest first. |
+| `ULTRASEARCH_PDF_ENGINE` | unset | Force ONE rung of the PDF extractor ladder: `pdf-inspector`, `anydoc`, `firecrawl`, `pdftotext`, `native` or `ocr`. Unset ⇒ the full ladder, strongest first. |
 | `ULTRASEARCH_DOC_ENGINE` | unset | Force ONE rung of the office-document ladder (`anydoc`, `firecrawl`), or `none` to disable it — office documents are then refused rather than read. |
 | `ULTRASEARCH_NO_NPX` | unset | Set to skip both rungs that need an implicit `npx` install (`pdf-inspector`, `anydoc`). Useful offline, or where an unattended install is not acceptable. |
+| `ULTRASEARCH_OCR_MAX` | 3 | Documents a single process will OCR (the last PDF rung). `0` disables OCR. Guards against a run full of scans costing seconds per page each. |
+| `ULTRASEARCH_OCR_LANG` | `eng` | tesseract language code(s) for OCR, e.g. `fra+eng`. Needs the matching language pack (`brew install tesseract-lang`). |
+| `ULTRASEARCH_OCR_TIMEOUT_MS` | 300000 | Ceiling for OCR of ONE document. |
 | `ULTRASEARCH_NO_WRITE` | unset | `1` makes every command write nothing, exactly as `--stdout` does — globally, and for the MCP server, which parses no CLI flags. See "Running without writing". |
 | `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
 | `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |

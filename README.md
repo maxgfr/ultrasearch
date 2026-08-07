@@ -161,7 +161,10 @@ the case worth seeing, and `ultrasearch doctor` says why.
   Firecrawl, then `pdftotext`, then the built-in reader — stopping at the first
   whose output passes a quality gate, and REFUSING rather than citing a PDF none
   of them could read. `ULTRASEARCH_NO_NPX=1` drops the npx rungs;
-  `ULTRASEARCH_PDF_ENGINE=<rung>` pins one. See
+  `ULTRASEARCH_PDF_ENGINE=<rung>` pins one. A **scanned** PDF — no text layer at
+  all, so every rung above fails — is rescued by a final OCR rung,
+  [`copyable-pdf`](https://github.com/maxgfr/copyable-pdf) + `tesseract` when
+  both are installed, budgeted at `ULTRASEARCH_OCR_MAX` documents per run. See
   [`references/backend-apis.md`](skills/ultrasearch/references/backend-apis.md).
 - **Office documents** (`.docx`, `.pptx`, `.xlsx`, `.odt`, `.rtf`, `.epub`,
   `.csv`, …) are converted to Markdown by [`@firecrawl/anydoc`][anydoc], with

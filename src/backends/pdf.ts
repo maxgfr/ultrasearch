@@ -9,6 +9,7 @@
 
 export { pdfToText } from "./pdf/native.js";
 export { assessPdfText, type PdfVerdict } from "./pdf/quality.js";
+export { ocrTools, ocrBudgetLeft, resetOcrBudget } from "./pdf/ocr.js";
 export {
   extractPdf,
   enabledExtractors,

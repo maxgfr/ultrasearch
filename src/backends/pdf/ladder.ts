@@ -1,6 +1,7 @@
 import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./exec.js";
 import { assessPdfText } from "./quality.js";
 import { pdfToText } from "./native.js";
+import { ocrPdf, ocrBudgetLeft, resetOcrBudget } from "./ocr.js";
 
 // The PDF extractor ladder: try the strongest tool available, fall through when
 // it is missing or its output fails the quality gate, and refuse rather than
@@ -33,10 +34,15 @@ import { pdfToText } from "./native.js";
 //   5. native         the built-in reader. Always present, frequently wrong;
 //                     kept only so an offline machine with no tools at all still
 //                     gets something, and gated hard by assessPdfText.
+//   6. ocr            copyable-pdf + tesseract, if both are installed. The only
+//                     rung that can read a page with NO text layer, which is
+//                     precisely what every rung above it fails on. Last because
+//                     it is the only expensive one (~2.7s per page), and it is
+//                     budgeted per process — see ./ocr.ts.
 
-export type PdfExtractorId = "pdf-inspector" | "anydoc" | "firecrawl" | "pdftotext" | "native";
+export type PdfExtractorId = "pdf-inspector" | "anydoc" | "firecrawl" | "pdftotext" | "native" | "ocr";
 
-export const PDF_EXTRACTORS: PdfExtractorId[] = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native"];
+export const PDF_EXTRACTORS: PdfExtractorId[] = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"];
 
 export interface PdfExtraction {
   text: string;
@@ -67,9 +73,10 @@ const PDFTOTEXT_TIMEOUT_MS = 60_000;
 // 90s discovery for every single PDF.
 const dead = new Set<PdfExtractorId>();
 
-/** Test seam: forget which rungs were found unavailable. */
+/** Test seam: forget which rungs were found unavailable, and refill the OCR budget. */
 export function resetPdfLadderCache(): void {
   dead.clear();
+  resetOcrBudget();
 }
 
 /**
@@ -126,6 +133,14 @@ export async function extractPdf(bytes: Buffer, opts: PdfLadderOptions = {}): Pr
 
   for (const id of enabledExtractors(opts.engines)) {
     if (dead.has(id)) continue;
+    // A spent OCR budget is NOT the same as an unreadable document, and saying
+    // so matters: without this the run would report "no text layer" for a scan
+    // it simply declined to read, and the reader would go looking for a fault in
+    // the PDF instead of raising ULTRASEARCH_OCR_MAX.
+    if (id === "ocr" && ocrBudgetLeft() <= 0) {
+      lastReason = "scanned PDF, and this run's OCR budget is spent (raise ULTRASEARCH_OCR_MAX)";
+      continue;
+    }
 
     let text: string | undefined;
     try {
@@ -133,6 +148,7 @@ export async function extractPdf(bytes: Buffer, opts: PdfLadderOptions = {}): Pr
       else if (id === "anydoc") text = await viaAnydoc(bytes);
       else if (id === "pdftotext") text = await viaPdftotext(bytes);
       else if (id === "firecrawl") text = opts.firecrawl ? await opts.firecrawl() : undefined;
+      else if (id === "ocr") text = await ocrPdf(bytes);
       else text = pdfToText(bytes);
     } catch {
       text = undefined; // a rung must never take the run down

@@ -58,7 +58,7 @@ describe("assessPdfText", () => {
 describe("enabledExtractors", () => {
   it("defaults to the full ladder, strongest first", () => {
     vi.stubEnv("ULTRASEARCH_PDF_ENGINE", undefined);
-    expect(enabledExtractors()).toEqual(["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native"]);
+    expect(enabledExtractors()).toEqual(["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"]);
   });
 
   it("drops BOTH rungs that need an implicit install under ULTRASEARCH_NO_NPX", () => {
@@ -76,7 +76,7 @@ describe("enabledExtractors", () => {
 
   it("ignores an unknown engine name rather than emptying the ladder", () => {
     vi.stubEnv("ULTRASEARCH_PDF_ENGINE", "nope");
-    expect(enabledExtractors()).toEqual(["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native"]);
+    expect(enabledExtractors()).toEqual(["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"]);
   });
 });
 
@@ -129,6 +129,17 @@ describe("extractPdf", () => {
     const r = await extractPdf(TEXTUAL, { engines: ["pdf-inspector", "pdftotext"] });
     expect(r.via).toBeUndefined();
     expect(r.text).toBe("");
+  });
+
+  // A spent OCR budget and an unreadable document are different facts, and the
+  // dossier has to say which. Reporting "no text layer" for a scan the run
+  // merely declined to OCR would send a reader hunting a fault in the PDF.
+  it("distinguishes a spent OCR budget from a PDF nothing could read", async () => {
+    vi.stubEnv("ULTRASEARCH_OCR_MAX", "0"); // setup.ts already pins this; explicit here
+    const r = await extractPdf(SCANNED, { engines: ["native", "ocr"] });
+    expect(r.text).toBe("");
+    expect(r.reason).toMatch(/OCR budget is spent/i);
+    expect(r.reason).toMatch(/ULTRASEARCH_OCR_MAX/);
   });
 
   // Without this, a 40-source run would re-pay a 90s npx discovery per PDF.

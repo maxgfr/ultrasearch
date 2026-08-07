@@ -53,6 +53,23 @@ honest notes in the dossier.
   5. the **built-in** dependency-free reader (`zlib`-inflated content streams →
      text operators). Frequently wrong on CID fonts and ligatures, so it is a
      last resort, kept only for a machine with no tools at all.
+  6. **OCR** — [`copyable-pdf`](https://github.com/maxgfr/copyable-pdf) +
+     `tesseract`, if both are installed (`brew install maxgfr/tap/copyable-pdf
+     tesseract`). The only rung that can read a page with **no text layer**,
+     which is exactly what every rung above it fails on: before it, a scanned
+     PDF could only be refused. It is last because it is the only expensive one
+     (~2.7s per page at 300 DPI), and it is **budgeted per process** —
+     `ULTRASEARCH_OCR_MAX` (default 3, `0` disables). A scan skipped for budget
+     says so, rather than being reported as unreadable.
+     `ULTRASEARCH_OCR_LANG` takes tesseract codes (`fra+eng`); it is deliberately
+     NOT derived from `--lang`, because a code whose language pack is missing
+     turns a working rung into a failing one. `ULTRASEARCH_OCR_TIMEOUT_MS`
+     bounds a single document (default 300000).
+
+     Both binaries are checked before the tool is spawned. That is not a
+     nicety: asked for a missing `tesseract`, copyable-pdf offers to run
+     `brew install` / `sudo apt-get install -y` and waits on stdin, and a
+     research run must never install a system package as a side effect.
 
   The gate (`assessPdfText`) rejects output laced with C0/C1 control bytes or
   U+FFFD, whatever its LENGTH — the built-in reader can emit 16 MB of

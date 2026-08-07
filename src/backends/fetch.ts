@@ -449,7 +449,7 @@ const DOC_FETCH_OPTS = { accept: "*/*", binary: true, maxBytes: 16 * 1024 * 1024
 // reported so a dossier can say which tool read a paper, but PDFs and office
 // documents each share a single cache namespace — see the note on
 // currentExtractor in src/cache.ts.
-export type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext" | "anydoc";
+export type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext" | "anydoc" | "ocr";
 
 export interface ExtractResult {
   text: string;

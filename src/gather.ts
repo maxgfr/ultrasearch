@@ -708,7 +708,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // gets what it read as a PDF, the doc bucket what it read as an office file.
     pdf: Object.fromEntries(
       [...extractorUse]
-        .filter(([k]) => k === "pdf-inspector" || k === "pdftotext" || k === "anydoc")
+        .filter(([k]) => k === "pdf-inspector" || k === "pdftotext" || k === "anydoc" || k === "ocr")
         .map(([k, n]) => [k, n - (docExtractorUse.get(k) ?? 0)] as const)
         .filter(([, n]) => n > 0),
     ),
