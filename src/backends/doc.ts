@@ -1,19 +1,20 @@
 // Office-document text extraction — public surface.
 //
-// The implementation lives in ./doc/: `formats.ts` (which documents route here,
-// and how) and `ladder.ts` (convert with the strongest available tool, refuse
-// rather than cite what nothing could read).
-//
-// Callers want `docFormatForUrl` / `docFormatForContentType` to decide whether a
-// response is an office document, then `extractDocument` to convert it.
+// The implementation now lives in the vendored webindex engine
+// (github.com/maxgfr/webindex), pinned in src/vendor/engine.meta.json. It used
+// to live in ./doc/, in a copy byte-identical to construct's and ultradoc's
+// apart from the environment-variable prefix.
 
-export { docFormatForUrl, docFormatForContentType, DOC_EXTENSIONS, type DocFormat } from "./doc/formats.js";
 export {
+  docFormatForUrl,
+  docFormatForContentType,
+  DOC_EXTENSIONS,
   extractDocument,
   enabledDocExtractors,
   resetDocLadderCache,
   DOC_EXTRACTORS,
+  type DocFormat,
   type DocExtraction,
   type DocExtractorId,
   type DocLadderOptions,
-} from "./doc/ladder.js";
+} from "../engine.js";

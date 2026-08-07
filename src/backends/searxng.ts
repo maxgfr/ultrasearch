@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpGet, sleep, PAGE_DELAY_MS } from "./fetch.js";
+import { httpGet, sleep, pageDelayMs } from "./fetch.js";
 import { canonicalizeUrl } from "../util.js";
 import { acceptLanguageHeader } from "../locale.js";
 
@@ -156,7 +156,7 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
       found.push({ url: x.url, title: String(x.title || x.url), snippet: String(x.content ?? "").slice(0, 360) });
     }
     if (found.length === before) break;
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
   const items: RawSource[] = found.map((f, i) => ({
     url: f.url,

@@ -1,6 +1,34 @@
 import type { BackendKind, Depth, RawSource, SourceMeta } from "./types.js";
 
-// Escape a string for safe inclusion as a literal inside a RegExp.
+// URL identity, keyword extraction and matching, and the FNV hash now live in
+// the vendored webindex engine — they were three drifting copies of the same
+// code across this repo, construct and ultradoc. Re-exported from here so every
+// existing `from "./util.js"` keeps working; what remains below is the part
+// that is genuinely ultrasearch's: ranking, dedup, diversification and the
+// dossier-shaped helpers.
+import { canonicalizeUrl, foldTerm, fnv1a64, isStopword, keywords, normalizeDoi, rankedKeywords, type KeywordMatcher } from "./engine.js";
+
+export {
+  escapeRegExp,
+  canonicalizeUrl,
+  normalizeDoi,
+  domainOf,
+  LOCAL_FILE_DOMAIN,
+  fnv1a64,
+  keywords,
+  rankedKeywords,
+  deaccent,
+  foldTerm,
+  subtokens,
+  expandTokens,
+  accentPattern,
+  buildMatcher,
+  type KeywordVariant,
+  type ExpandedKeyword,
+  isStopword,
+  type KeywordMatcher,
+} from "./engine.js";
+
 // A plain-text payload (an E-utilities abstract, a .txt spec) has no <title>,
 // and the endpoint URL is a useless stand-in for one. Take the document's first
 // real paragraph — skipping the bibliographic line a record often opens with
@@ -18,10 +46,6 @@ export function titleFromText(text: string): string {
   const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
   const pick = (bibliographic ? paras[1] : lead) || lead;
   return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
-}
-
-export function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 // Shell-single-quote a value for the command lines `orchestrate` emits (the
@@ -59,62 +83,6 @@ export function runId(d: Date = new Date()): string {
 // ---------------------------------------------------------------------------
 // URL canonicalization, deduplication, and trust scoring.
 // ---------------------------------------------------------------------------
-
-const TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$)/i;
-
-// Canonical form of a URL for deduplication. Lowercases ONLY scheme + host
-// (paths and query values are case-sensitive — github.com/Microsoft/TypeScript
-// is not github.com/microsoft/typescript, and YouTube ?v= ids are case-bearing).
-// Drops the fragment, tracking params and default port, sorts the remaining
-// query params, re-encodes their values (so an encoded '&' in a value isn't
-// turned into a delimiter), and strips a trailing slash. Built from components
-// rather than URL.toString().toLowerCase().
-export function canonicalizeUrl(raw: string): string {
-  try {
-    const u = new URL(raw.trim());
-    const proto = u.protocol.toLowerCase();
-    const host = u.hostname.toLowerCase().replace(/^www\./, "");
-    let port = u.port;
-    if ((proto === "http:" && port === "80") || (proto === "https:" && port === "443")) port = "";
-    const path = u.pathname.replace(/\/+$/, ""); // case preserved
-    const keep: [string, string][] = [];
-    for (const [k, v] of u.searchParams) {
-      if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
-    }
-    keep.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const search = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
-    return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
-  } catch {
-    return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
-  }
-}
-
-// Normalize a DOI to a bare lowercase identifier (strip any doi.org prefix) so
-// the same work cited as a DOI URL and a bare DOI dedupes to one key.
-export function normalizeDoi(doi: string): string {
-  return doi
-    .trim()
-    .toLowerCase()
-    .replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
-}
-
-// Bare hostname of a URL (no leading www), or "" when unparseable.
-export function domainOf(raw: string): string {
-  try {
-    const u = new URL(raw);
-    // A file: URL has no hostname, so the honest answer is not "" — that reads
-    // as "unknown" in a source list and groups every local file with every
-    // unparseable URL. Name the route instead: a reader seeing this in a report
-    // should know at a glance the evidence came off the machine, not the web.
-    if (u.protocol === "file:") return LOCAL_FILE_DOMAIN;
-    return u.hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-
-/** The `domain` a local file is filed under. Not a host, and deliberately not one. */
-export const LOCAL_FILE_DOMAIN = "local file";
 
 // Provenance floor — how much a source is trusted for the ROUTE it arrived by.
 //
@@ -204,340 +172,6 @@ export function dedupeByUrl(items: RawSource[]): { items: RawSource[]; dropped: 
 // fold accents/plurals, split camelCase/snake_case, compile accent-insensitive
 // patterns. Deterministic, no LLM, no deps.
 // ---------------------------------------------------------------------------
-
-const STOPWORDS = new Set([
-  "the",
-  "a",
-  "an",
-  "is",
-  "are",
-  "was",
-  "were",
-  "be",
-  "been",
-  "being",
-  "do",
-  "does",
-  "did",
-  "how",
-  "what",
-  "why",
-  "when",
-  "where",
-  "which",
-  "who",
-  "whom",
-  "this",
-  "that",
-  "these",
-  "those",
-  "of",
-  "in",
-  "on",
-  "to",
-  "for",
-  "with",
-  "and",
-  "or",
-  "but",
-  "if",
-  "then",
-  "else",
-  "than",
-  "as",
-  "at",
-  "by",
-  "from",
-  "into",
-  "about",
-  "it",
-  "its",
-  "i",
-  "you",
-  "we",
-  "they",
-  "he",
-  "she",
-  "there",
-  "here",
-  "can",
-  "could",
-  "should",
-  "would",
-  "will",
-  "shall",
-  "may",
-  "might",
-  "must",
-  "have",
-  "has",
-  "had",
-  "not",
-  "no",
-  "yes",
-  "so",
-  "such",
-  "only",
-  "any",
-  "some",
-  "all",
-  "get",
-  "set",
-  "use",
-  "used",
-  "using",
-  "work",
-  "works",
-  "working",
-  "handle",
-  "handled",
-  "happen",
-  "happens",
-  "default",
-  "value",
-  "values",
-  "please",
-  "explain",
-  "tell",
-  "me",
-  "my",
-  "our",
-  "le",
-  "la",
-  "les",
-  "de",
-  "des",
-  "du",
-  "un",
-  "une",
-  "est",
-  "sont",
-  "que",
-  "qui",
-  "quoi",
-  "quel",
-  "quelle",
-  "quels",
-  "quelles",
-  "pour",
-  "dans",
-  "avec",
-  "entre",
-  "sur",
-  "par",
-  "pas",
-  "plus",
-  "et",
-  "ou",
-  "où",
-  "ce",
-  "cette",
-  "ces",
-  "se",
-  "sa",
-  "son",
-  "ses",
-  "leur",
-  "leurs",
-  "comment",
-  "pourquoi",
-  "quand",
-  "fait",
-  "faire",
-  "peut",
-  "doit",
-  "être",
-  "avoir",
-  "il",
-  "elle",
-  "nous",
-  "vous",
-  "ils",
-  "elles",
-  "au",
-  "aux",
-  "si",
-  "ne",
-]);
-
-export function keywords(question: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of question.split(/[^\p{L}\p{N}_]+/u)) {
-    if (!raw) continue;
-    const lower = raw.toLowerCase();
-    if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower)) continue;
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(raw);
-  }
-  return out;
-}
-
-// Keywords ordered most-distinctive first (numbers, identifiers, long tokens
-// carry more signal). Useful to feed narrow search APIs the few best terms.
-export function rankedKeywords(question: string): string[] {
-  const base = keywords(question);
-  const score = (raw: string): number => {
-    let s = 0;
-    if (/\d/.test(raw)) s += 3;
-    if (/[A-Z]/.test(raw) && !/^[A-Z0-9]+$/.test(raw)) s += 2;
-    if (/_/.test(raw)) s += 2;
-    if (raw.length >= 8) s += 1.5;
-    else if (raw.length >= 5) s += 0.5;
-    return s;
-  };
-  return base
-    .map((k, i) => ({ k, s: score(k), i }))
-    .sort((a, b) => b.s - a.s || a.i - b.i)
-    .map((x) => x.k);
-}
-
-const ACCENT_CLASSES: Record<string, string> = {
-  a: "aàáâãäåāăą",
-  c: "cçćĉċč",
-  d: "dďđ",
-  e: "eèéêëēĕėęě",
-  g: "gĝğġģ",
-  i: "iìíîïĩīĭįı",
-  l: "lĺļľŀł",
-  n: "nñńņň",
-  o: "oòóôõöøōŏő",
-  r: "rŕŗř",
-  s: "sśŝşš",
-  t: "tţťŧ",
-  u: "uùúûüũūŭůűų",
-  y: "yýÿŷ",
-  z: "zźżž",
-};
-const BASE_OF = new Map<string, string>();
-for (const [base, cls] of Object.entries(ACCENT_CLASSES)) {
-  for (const ch of cls) BASE_OF.set(ch, base);
-}
-
-function baseChar(ch: string): string {
-  const known = BASE_OF.get(ch);
-  if (known) return known;
-  const stripped = ch.normalize("NFD").replace(/\p{M}+/gu, "");
-  return stripped.length === 1 ? stripped : ch;
-}
-
-export function deaccent(s: string): string {
-  let out = "";
-  for (const ch of s) out += baseChar(ch);
-  return out;
-}
-
-function foldPlural(t: string): string {
-  if (t.length > 4 && t.endsWith("ies")) return t.slice(0, -3) + "y";
-  if (t.length > 4 && /(?:[sxz]|[cs]h)es$/.test(t)) return t.slice(0, -2);
-  if (t.length > 3 && t.endsWith("s") && !/(?:ss|us|is)$/.test(t)) return t.slice(0, -1);
-  return t;
-}
-
-export function foldTerm(raw: string): string {
-  return foldPlural(deaccent(raw.toLowerCase()));
-}
-
-export function subtokens(raw: string): string[] {
-  const spaced = raw
-    .replace(/([\p{Ll}\p{N}])(\p{Lu})/gu, "$1 $2")
-    .replace(/(\p{Lu}+)(\p{Lu}\p{Ll})/gu, "$1 $2")
-    .replace(/(\p{L})(\p{N})/gu, "$1 $2")
-    .replace(/(\p{N})(\p{L})/gu, "$1 $2");
-  const parts = spaced.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  if (parts.length < 2) return [];
-  const out: string[] = [];
-  for (const p of parts) {
-    const lower = p.toLowerCase();
-    if (lower.length < 3 || STOPWORDS.has(lower)) continue;
-    if (!out.includes(lower)) out.push(lower);
-    if (out.length >= 4) break;
-  }
-  return out;
-}
-
-export interface KeywordVariant {
-  text: string;
-  kind: "original" | "folded" | "subtoken";
-}
-
-export interface ExpandedKeyword {
-  canonical: string;
-  original: string;
-  variants: KeywordVariant[];
-}
-
-const MAX_PATTERNS = 24;
-const VARIANT_PRIORITY: Record<KeywordVariant["kind"], number> = { original: 0, folded: 1, subtoken: 2 };
-
-export function expandTokens(tokens: string[], max = 8): ExpandedKeyword[] {
-  const byCanonical = new Map<string, ExpandedKeyword>();
-  for (const raw of tokens) {
-    if (byCanonical.size >= max) break;
-    const canonical = foldTerm(raw);
-    if (!canonical || byCanonical.has(canonical)) continue;
-    const plain = deaccent(raw.toLowerCase());
-    const variants: KeywordVariant[] = [{ text: raw.toLowerCase(), kind: "original" }];
-    if (canonical !== plain) variants.push({ text: canonical, kind: "folded" });
-    if (plain.length > 4 && plain.endsWith("ies")) variants.push({ text: plain.slice(0, -1), kind: "folded" });
-    for (const sub of subtokens(raw)) variants.push({ text: sub, kind: "subtoken" });
-    byCanonical.set(canonical, { canonical, original: raw, variants });
-  }
-  const all = [...byCanonical.values()].flatMap((ek, kwIdx) => ek.variants.map((v) => ({ ek, v, kwIdx })));
-  all.sort((a, b) => VARIANT_PRIORITY[a.v.kind] - VARIANT_PRIORITY[b.v.kind] || a.kwIdx - b.kwIdx);
-  const seen = new Set<string>();
-  const kept = new Set<KeywordVariant>();
-  for (const { v } of all) {
-    if (kept.size >= MAX_PATTERNS) break;
-    const key = deaccent(v.text);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    kept.add(v);
-  }
-  for (const ek of byCanonical.values()) ek.variants = ek.variants.filter((v) => kept.has(v));
-  return [...byCanonical.values()];
-}
-
-export function accentPattern(text: string): string {
-  let out = "";
-  for (const ch of text) {
-    const cls = ACCENT_CLASSES[baseChar(ch)];
-    out += cls ? `[${cls}]` : escapeRegExp(ch);
-  }
-  return out;
-}
-
-export interface KeywordMatcher {
-  expanded: ExpandedKeyword[];
-  canonicals: string[];
-  matchLine(line: string): Set<string>;
-}
-
-function makeMatcher(expanded: ExpandedKeyword[]): KeywordMatcher {
-  const regexes: { re: RegExp; canonical: string }[] = [];
-  for (const ek of expanded) {
-    for (const v of ek.variants) {
-      regexes.push({ re: new RegExp(accentPattern(v.text), "i"), canonical: ek.canonical });
-    }
-  }
-  return {
-    expanded,
-    canonicals: expanded.map((e) => e.canonical),
-    matchLine: (line) => {
-      const hit = new Set<string>();
-      for (const { re, canonical } of regexes) {
-        if (!hit.has(canonical) && re.test(line)) hit.add(canonical);
-      }
-      return hit;
-    },
-  };
-}
-
-export function buildMatcher(question: string, max = 8): KeywordMatcher {
-  return makeMatcher(expandTokens(keywords(question), max));
-}
 
 // Reciprocal Rank Fusion: merge several ranked lists into one robust ranking
 // without comparable cross-list scores. `k` damps low ranks.
@@ -718,7 +352,7 @@ export function bm25Tokenize(text: string): string[] {
   const out: string[] = [];
   for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
     if (raw.length < 2) continue;
-    if (STOPWORDS.has(raw.toLowerCase())) continue;
+    if (isStopword(raw)) continue;
     const t = foldTerm(raw);
     if (t.length >= 2) out.push(t);
   }
@@ -859,19 +493,6 @@ export function recencyScore(meta: SourceMeta | undefined, minYear: number, maxY
 // CONTENT syndicated across different URLs/domains (mirrored articles, scraper
 // copies) that would otherwise each eat a source slot. 64-bit, deterministic.
 // ---------------------------------------------------------------------------
-
-const FNV_OFFSET = 0xcbf29ce484222325n;
-const FNV_PRIME = 0x100000001b3n;
-const MASK64 = (1n << 64n) - 1n;
-
-export function fnv1a64(s: string): bigint {
-  let h = FNV_OFFSET;
-  for (let i = 0; i < s.length; i++) {
-    h ^= BigInt(s.charCodeAt(i));
-    h = (h * FNV_PRIME) & MASK64;
-  }
-  return h;
-}
 
 // 64-bit SimHash over 3-gram token shingles: near-duplicate documents land a
 // few bits apart, unrelated documents ~32 bits apart.

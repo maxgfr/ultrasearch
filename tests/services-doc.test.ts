@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { probeServices } from "../src/services.js";
-import { runWithInput } from "../src/backends/pdf/exec.js";
+import { runWithInput } from "../src/backends/exec.js";
 
 // Probing anydoc means spawning `npx`, which on a cold machine is a network
 // download — and the suite stays offline and deterministic (CONTRIBUTING.md,
@@ -11,7 +11,7 @@ import { runWithInput } from "../src/backends/pdf/exec.js";
 //
 // This lives apart from tests/services.test.ts so the module mock does not
 // silence the pdftotext probe that file deliberately runs for real.
-vi.mock("../src/backends/pdf/exec.js", () => ({
+vi.mock("../src/backends/exec.js", () => ({
   runWithInput: vi.fn(async () => ({ ok: false, stdout: "", error: "not installed" })),
   // Re-exported verbatim: the pinned specs are plain constants, and the code
   // under test reads them to build argv.

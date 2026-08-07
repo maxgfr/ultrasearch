@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/pdf/exec.js";
+import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
 import { enabledExtractors, ocrTools, ocrBudgetLeft } from "./backends/pdf.js";

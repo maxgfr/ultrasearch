@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpGet, decodeEntities, sleep, PAGE_DELAY_MS } from "./fetch.js";
+import { httpGet, decodeEntities, sleep, pageDelayMs } from "./fetch.js";
 import { canonicalizeUrl } from "../util.js";
 import { ddgRegion, acceptLanguageHeader } from "../locale.js";
 
@@ -77,7 +77,7 @@ export const duckduckgoBackend: Backend = async (ctx): Promise<BackendResult> =>
       found.push(f);
     }
     if (found.length === before) break; // no new URLs → real pagination exhausted/unsupported
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
 
   const items: RawSource[] = found.map((f, i) => ({

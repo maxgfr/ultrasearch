@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpGet, decodeEntities, CONTACT_UA } from "./fetch.js";
+import { httpGet, decodeEntities, contactUa } from "./fetch.js";
 
 function tag(block: string, name: string): string {
   const m = new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i").exec(block);
@@ -11,7 +11,7 @@ function tag(block: string, name: string): string {
 export const arxivBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
-  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12000, userAgent: CONTACT_UA });
+  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12000, userAgent: contactUa() });
   if (!r.ok || !r.body) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
     return { backend: "arxiv", items: [], notes: [`arXiv search ${why}.`] };

@@ -28,7 +28,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "verify:bundle": "node scripts/verify-skill-bundle.mjs",
-    "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs",
+    "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs && node scripts/sync-engine.mjs --check",
     "demo": "node scripts/ultrasearch.mjs gather --q \"what is rate limiting\" --mode topic --backends fixture --out /tmp/ultrasearch-demo",
     "eval": "node evals/run.mjs --suite offline",
     "eval:network": "node evals/run.mjs --suite network",

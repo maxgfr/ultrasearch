@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, htmlToText, cleanInline, CONTACT_UA } from "./fetch.js";
+import { httpJson, htmlToText, cleanInline, contactUa } from "./fetch.js";
 import { sinceDate } from "../util.js";
 
 // Crossref via its keyless REST API (polite UA). Returns work metadata; the
@@ -8,7 +8,7 @@ export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` + (since ? `&filter=from-pub-date:${since}` : "");
-  const r = await httpJson("GET", url, undefined, { timeoutMs: 12000, userAgent: CONTACT_UA });
+  const r = await httpJson("GET", url, undefined, { timeoutMs: 12000, userAgent: contactUa() });
   const items0: any[] = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
     return { backend: "crossref", items: [], notes: [`Crossref search failed or empty (status ${r.status}).`] };

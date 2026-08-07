@@ -340,92 +340,418 @@ function listModes() {
   return Object.values(MODES);
 }
 
-// src/util.ts
-function titleFromText(text) {
-  const heading = /^\s*#{1,6}\s+(.+?)\s*#*\s*$/m.exec(text.split(/\n\s*\n/)[0] ?? "");
-  if (heading) return heading[1].trim().slice(0, 200);
-  const paras = text.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const lead = paras[0] ?? "";
-  const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
-  const pick = (bibliographic ? paras[1] : lead) || lead;
-  return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
+// src/vendor/webindex-engine.mjs
+import { inflateSync, inflateRawSync } from "zlib";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
+import { spawn } from "child_process";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "fs";
+import { join as join2 } from "path";
+import { tmpdir as tmpdir2 } from "os";
+import { mkdirSync, writeFileSync as writeFileSync2 } from "fs";
+var DEFAULT_BRAND = {
+  name: "webindex",
+  envPrefix: "WEBINDEX",
+  cli: "webindex",
+  contactUrl: "https://github.com/maxgfr/webindex"
+};
+var current = { ...DEFAULT_BRAND };
+function configure(next) {
+  if (!next.envPrefix || !/^[A-Z][A-Z0-9_]*$/.test(next.envPrefix)) {
+    throw new Error(`webindex: envPrefix must be UPPER_SNAKE, got ${JSON.stringify(next.envPrefix)}`);
+  }
+  if (!next.name || !next.cli) {
+    throw new Error("webindex: configure() requires both `name` and `cli`");
+  }
+  current = { ...next };
+}
+function brand() {
+  return current;
+}
+function envName(suffix) {
+  return `${current.envPrefix}_${suffix}`;
+}
+function env(suffix) {
+  const raw = process.env[envName(suffix)];
+  if (typeof raw !== "string") return void 0;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : void 0;
+}
+function envFlag(suffix) {
+  const v = env(suffix);
+  if (v === void 0) return false;
+  const lower = v.toLowerCase();
+  return lower !== "0" && lower !== "false" && lower !== "no" && lower !== "off";
+}
+function envInt(suffix, def, min = 0, max = Number.MAX_SAFE_INTEGER) {
+  const raw = env(suffix);
+  if (raw === void 0) return def;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(max, Math.max(min, Math.trunc(n)));
+}
+function decodePdfString(tok) {
+  if (tok[0] !== "(") return "";
+  const inner = tok.slice(1, -1);
+  const simple = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
+  return inner.replace(/\\([nrtbf()\\])/g, (_m, c) => simple[c] ?? c).replace(/\\([0-7]{1,3})/g, (_m, o) => String.fromCharCode(parseInt(o, 8) & 255));
+}
+function decodeHexString(tok) {
+  const hex = tok.slice(1, -1).replace(/\s+/g, "");
+  let out = "";
+  for (let i = 0; i + 1 < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  if (hex.length % 2) out += String.fromCharCode(parseInt(hex[hex.length - 1] + "0", 16));
+  return out;
+}
+function decodeString(tok) {
+  return tok[0] === "<" ? decodeHexString(tok) : decodePdfString(tok);
+}
+function decodeTJArray(tok) {
+  let out = "";
+  const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|-?\d+(?:\.\d+)?/g;
+  let m;
+  while (m = re.exec(tok)) {
+    const t = m[0];
+    if (t[0] === "(" || t[0] === "<") out += decodeString(t);
+    else if (Number(t) <= -100) out += " ";
+  }
+  return out;
+}
+var TOKEN_RE = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|\[(?:\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|[^\]])*\]|\bT\*|\bTd\b|\bTD\b|\bTj\b|\bTJ\b|'|"/g;
+function extractTextOps(content) {
+  let out = "";
+  let operands = [];
+  const take = () => {
+    for (let i = operands.length - 1; i >= 0; i--) {
+      const t = operands[i];
+      if (t[0] === "(" || t[0] === "<") return decodeString(t);
+      if (t[0] === "[") return decodeTJArray(t);
+    }
+    return "";
+  };
+  TOKEN_RE.lastIndex = 0;
+  let m;
+  while (m = TOKEN_RE.exec(content)) {
+    const tok = m[0];
+    const c = tok[0];
+    if (c === "(" || c === "<" || c === "[") {
+      operands.push(tok);
+      continue;
+    }
+    if (tok === "Tj" || tok === "TJ") out += take() + " ";
+    else if (tok === "'" || tok === '"') out += "\n" + take() + " ";
+    else if (tok === "T*") out += "\n";
+    operands = [];
+  }
+  return out;
+}
+function extractStreams(buf) {
+  const out = [];
+  const s = buf.toString("latin1");
+  const re = /stream\r?\n/g;
+  let m;
+  while (m = re.exec(s)) {
+    const start = m.index + m[0].length;
+    const end = s.indexOf("endstream", start);
+    if (end < 0) continue;
+    let stop = end;
+    if (s[stop - 1] === "\n") stop--;
+    if (s[stop - 1] === "\r") stop--;
+    const chunk = buf.subarray(start, stop);
+    let data;
+    try {
+      data = inflateSync(chunk);
+    } catch {
+      try {
+        data = inflateRawSync(chunk);
+      } catch {
+        data = chunk;
+      }
+    }
+    out.push(data.toString("latin1"));
+  }
+  return out;
+}
+function pdfToText(buf) {
+  let out = "";
+  try {
+    for (const stream of extractStreams(buf)) {
+      if (/\b(Tj|TJ)\b/.test(stream) || /\)\s*'/.test(stream)) out += extractTextOps(stream) + "\n";
+    }
+  } catch {
+  }
+  return out.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+var MIN_CHARS_FOR_SHAPE_CHECKS = 200;
+var CONTROL_RATIO_MAX = 5e-3;
+var REPLACEMENT_RATIO_MAX = 5e-3;
+var LONGEST_RUN_MAX = 300;
+var LETTER_RATIO_MIN = 0.5;
+function isControlCode(c) {
+  if (c === 9 || c === 10 || c === 13) return false;
+  return c < 32 || c >= 127 && c <= 159;
+}
+var REPLACEMENT_CODE = 65533;
+function scanRatios(t) {
+  let control = 0;
+  let replacement = 0;
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c === REPLACEMENT_CODE) replacement++;
+    else if (isControlCode(c)) control++;
+  }
+  return { control: control / t.length, replacement: replacement / t.length };
+}
+function assessPdfText(text) {
+  return assessExtractedText(text, "no text layer (scanned or image-only PDF?)");
+}
+function assessExtractedText(text, emptyReason) {
+  const t = text.trim();
+  if (!t) return { ok: false, reason: emptyReason };
+  const { control, replacement } = scanRatios(t);
+  if (control > CONTROL_RATIO_MAX) {
+    return { ok: false, reason: "binary/control characters in the text (undecodable PDF stream)" };
+  }
+  if (replacement > REPLACEMENT_RATIO_MAX) {
+    return { ok: false, reason: "replacement characters throughout (wrong character map)" };
+  }
+  if (t.length < MIN_CHARS_FOR_SHAPE_CHECKS) return { ok: true };
+  let longestRun = 0;
+  for (const w of t.split(/\s+/)) if (w.length > longestRun) longestRun = w.length;
+  const letters = (t.match(new RegExp("\\p{L}|\\p{N}", "gu"))?.length ?? 0) / t.replace(/\s+/g, "").length;
+  if (longestRun > LONGEST_RUN_MAX && letters < LETTER_RATIO_MIN) {
+    return { ok: false, reason: "unreadable text layer (garbled glyph encoding)" };
+  }
+  return { ok: true };
+}
+var PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
+var ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
+var MAX_STDOUT_BYTES = 24 * 1024 * 1024;
+function binaryName(name) {
+  return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
+}
+function runWithInput(cmd, args, input, timeoutMs) {
+  return new Promise((resolve22) => {
+    let child;
+    try {
+      child = spawn(binaryName(cmd), args, { stdio: ["pipe", "pipe", "pipe"] });
+    } catch (e) {
+      resolve22({ ok: false, stdout: "", error: e.message });
+      return;
+    }
+    const chunks = [];
+    let size = 0;
+    let settled = false;
+    const done = (r) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve22(r);
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` });
+    }, timeoutMs);
+    child.stdout?.on("data", (d) => {
+      if (size >= MAX_STDOUT_BYTES) return;
+      size += d.length;
+      chunks.push(d);
+    });
+    child.stderr?.on("data", () => {
+    });
+    child.on("error", (e) => {
+      done({ ok: false, stdout: "", error: e.code === "ENOENT" ? "not installed" : e.message });
+    });
+    child.on("close", (code) => {
+      const stdout = Buffer.concat(chunks).subarray(0, MAX_STDOUT_BYTES).toString("utf8");
+      if (code === 0) done({ ok: true, stdout });
+      else done({ ok: false, stdout, error: `exit ${code}` });
+    });
+    child.stdin?.on("error", () => {
+    });
+    child.stdin?.end(input);
+  });
+}
+var DEFAULT_TIMEOUT_MS = 3e5;
+var DEFAULT_MAX_DOCS = 3;
+var DEFAULT_LANG = "eng";
+var spent = 0;
+function ocrBudgetLeft() {
+  return Math.max(0, envInt("OCR_MAX", DEFAULT_MAX_DOCS) - spent);
+}
+async function ocrTools() {
+  const probe = async (cmd, args) => (await runWithInput(cmd, args, Buffer.alloc(0), 2e4)).ok;
+  const [copyablePdf, tesseract] = await Promise.all([probe("copyable-pdf", ["--help"]), probe("tesseract", ["--version"])]);
+  return { copyablePdf, tesseract };
+}
+async function ocrPdf(bytes) {
+  if (ocrBudgetLeft() <= 0) return void 0;
+  const { copyablePdf, tesseract } = await ocrTools();
+  if (!copyablePdf || !tesseract) return void 0;
+  const dir = mkdtempSync(join(tmpdir(), `${brand().name}-ocr-`));
+  try {
+    const input = join(dir, "in.pdf");
+    const output = join(dir, "out.pdf");
+    writeFileSync(input, bytes);
+    const lang = env("OCR_LANG") || DEFAULT_LANG;
+    const r = await runWithInput("copyable-pdf", ["-o", output, "-m", "-l", lang, input], Buffer.alloc(0), envInt("OCR_TIMEOUT_MS", DEFAULT_TIMEOUT_MS));
+    spent++;
+    if (!r.ok) return void 0;
+    const md = output.replace(/\.pdf$/, ".md");
+    return existsSync(md) ? readFileSync(md, "utf8") : void 0;
+  } catch {
+    return void 0;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+var PDF_EXTRACTORS = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"];
+var NPX_TIMEOUT_MS = 9e4;
+var PDFTOTEXT_TIMEOUT_MS = 6e4;
+var dead = /* @__PURE__ */ new Set();
+function enabledExtractors(engines) {
+  if (engines) return engines;
+  const forced = env("PDF_ENGINE");
+  if (forced && PDF_EXTRACTORS.includes(forced)) return [forced];
+  if (envFlag("NO_NPX")) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector" && e !== "anydoc");
+  return PDF_EXTRACTORS;
+}
+async function viaAnydoc(bytes) {
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
+  return r.ok ? r.stdout : void 0;
+}
+async function viaPdfInspector(bytes) {
+  const r = await runWithInput("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "-"], bytes, NPX_TIMEOUT_MS);
+  return r.ok ? r.stdout : void 0;
+}
+async function viaPdftotext(bytes) {
+  const r = await runWithInput("pdftotext", ["-layout", "-", "-"], bytes, PDFTOTEXT_TIMEOUT_MS);
+  return r.ok ? r.stdout : void 0;
+}
+async function extractPdf(bytes, opts = {}) {
+  let lastReason;
+  for (const id of enabledExtractors(opts.engines)) {
+    if (dead.has(id)) continue;
+    if (id === "ocr" && ocrBudgetLeft() <= 0) {
+      lastReason = `scanned PDF, and this run's OCR budget is spent (raise ${envName("OCR_MAX")})`;
+      continue;
+    }
+    let text;
+    try {
+      if (id === "pdf-inspector") text = await viaPdfInspector(bytes);
+      else if (id === "anydoc") text = await viaAnydoc(bytes);
+      else if (id === "pdftotext") text = await viaPdftotext(bytes);
+      else if (id === "firecrawl") text = opts.firecrawl ? await opts.firecrawl() : void 0;
+      else if (id === "ocr") text = await ocrPdf(bytes);
+      else text = pdfToText(bytes);
+    } catch {
+      text = void 0;
+    }
+    if (text === void 0) {
+      if (id !== "firecrawl") dead.add(id);
+      continue;
+    }
+    const verdict = assessPdfText(text);
+    if (verdict.ok) return { text: text.trim(), via: id };
+    lastReason = verdict.reason;
+  }
+  return { text: "", reason: lastReason ?? "no PDF extractor available" };
+}
+var BINARY = { textFallback: false };
+var CSV = { format: "csv", textFallback: true };
+var BY_EXTENSION = {
+  // Word
+  doc: BINARY,
+  docx: BINARY,
+  docm: BINARY,
+  odt: BINARY,
+  rtf: BINARY,
+  // PowerPoint
+  ppt: BINARY,
+  pps: BINARY,
+  pot: BINARY,
+  pptx: BINARY,
+  pptm: BINARY,
+  ppsx: BINARY,
+  ppsm: BINARY,
+  odp: BINARY,
+  // Excel
+  xls: BINARY,
+  xlsx: BINARY,
+  xlsm: BINARY,
+  xlsb: BINARY,
+  ods: BINARY,
+  // Everything else the converter reads
+  epub: BINARY,
+  csv: CSV
+};
+var BY_CONTENT_TYPE = {
+  "application/msword": BINARY,
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": BINARY,
+  "application/vnd.ms-word.document.macroenabled.12": BINARY,
+  "application/vnd.oasis.opendocument.text": BINARY,
+  "application/rtf": BINARY,
+  "text/rtf": BINARY,
+  "application/vnd.ms-powerpoint": BINARY,
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": BINARY,
+  "application/vnd.oasis.opendocument.presentation": BINARY,
+  "application/vnd.ms-excel": BINARY,
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": BINARY,
+  "application/vnd.ms-excel.sheet.binary.macroenabled.12": BINARY,
+  "application/vnd.oasis.opendocument.spreadsheet": BINARY,
+  "application/epub+zip": BINARY,
+  "text/csv": CSV
+};
+var DOC_EXTENSIONS = Object.keys(BY_EXTENSION);
+function docFormatForUrl(url) {
+  const m = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
+  return m ? BY_EXTENSION[m[1].toLowerCase()] : void 0;
+}
+function docFormatForContentType(contentType) {
+  const type = contentType.split(";")[0]?.trim().toLowerCase();
+  return type ? BY_CONTENT_TYPE[type] : void 0;
+}
+var DOC_EXTRACTORS = ["anydoc", "firecrawl"];
+var NPX_TIMEOUT_MS2 = 9e4;
+var dead2 = /* @__PURE__ */ new Set();
+function enabledDocExtractors(engines) {
+  if (engines) return engines;
+  const forced = env("DOC_ENGINE");
+  if (forced === "none") return [];
+  if (forced && DOC_EXTRACTORS.includes(forced)) return [forced];
+  if (envFlag("NO_NPX")) return DOC_EXTRACTORS.filter((e) => e !== "anydoc");
+  return DOC_EXTRACTORS;
+}
+async function viaAnydoc2(bytes, format) {
+  const args = ["-y", "--prefer-offline", ANYDOC_SPEC, "-"];
+  if (format) args.push("--format", format);
+  const r = await runWithInput("npx", args, bytes, NPX_TIMEOUT_MS2);
+  return r.ok ? r.stdout : void 0;
+}
+async function extractDocument(bytes, fmt, opts = {}) {
+  let lastReason;
+  for (const id of enabledDocExtractors(opts.engines)) {
+    if (dead2.has(id)) continue;
+    let text;
+    try {
+      if (id === "anydoc") text = await viaAnydoc2(bytes, fmt.format);
+      else text = opts.firecrawl ? await opts.firecrawl() : void 0;
+    } catch {
+      text = void 0;
+    }
+    if (text === void 0) {
+      if (id !== "firecrawl") dead2.add(id);
+      continue;
+    }
+    const verdict = assessExtractedText(text, "the converter produced no text");
+    if (verdict.ok) return { text: text.trim(), via: id };
+    lastReason = verdict.reason;
+  }
+  return { text: "", reason: lastReason ?? "no document converter available" };
 }
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-function shq(s) {
-  return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
-}
-function slugify(input) {
-  return input.toLowerCase().replace(/^https?:\/\//, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "run";
-}
-function pad(n) {
-  return String(n).padStart(2, "0");
-}
-function runId(d = /* @__PURE__ */ new Date()) {
-  return `run-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-}
-var TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$)/i;
-function canonicalizeUrl(raw) {
-  try {
-    const u = new URL(raw.trim());
-    const proto = u.protocol.toLowerCase();
-    const host = u.hostname.toLowerCase().replace(/^www\./, "");
-    let port = u.port;
-    if (proto === "http:" && port === "80" || proto === "https:" && port === "443") port = "";
-    const path = u.pathname.replace(/\/+$/, "");
-    const keep = [];
-    for (const [k, v] of u.searchParams) {
-      if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
-    }
-    keep.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-    const search = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
-    return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
-  } catch {
-    return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
-  }
-}
-function normalizeDoi(doi) {
-  return doi.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
-}
-function domainOf(raw) {
-  try {
-    const u = new URL(raw);
-    if (u.protocol === "file:") return LOCAL_FILE_DOMAIN;
-    return u.hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-var LOCAL_FILE_DOMAIN = "local file";
-var BACKEND_TRUST = {
-  arxiv: 0.9,
-  crossref: 0.9,
-  openalex: 0.9,
-  semanticscholar: 0.9,
-  europepmc: 0.9,
-  pubmed: 0.9,
-  dblp: 0.9,
-  standards: 0.9,
-  wikipedia: 0.85,
-  github: 0.8,
-  // General-web discovery engines (searxng, duckduckgo, ddglite, mojeek,
-  // marginalia, firecrawl) deliberately get NO authority floor: they surface
-  // arbitrary pages, so trust must come from the domain alone. `firecrawl` is
-  // spelled out at 0 (identical to being absent) so the omission reads as a
-  // decision rather than an oversight — its /search proxies the same open web.
-  firecrawl: 0,
-  stackexchange: 0.72,
-  hackernews: 0.5,
-  // A file the user named on the command line. No floor, for the same reason the
-  // discovery engines get none: the route says the operator chose it, not that
-  // the document is authoritative. Spelled out at the neutral value so the
-  // omission reads as a decision.
-  file: 0.5
-};
-var NEUTRAL_TRUST = 0.5;
-function trustScore(_url, backend) {
-  return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
 }
 var STOPWORDS = /* @__PURE__ */ new Set([
   "the",
@@ -581,6 +907,9 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "si",
   "ne"
 ]);
+function isStopword(term) {
+  return STOPWORDS.has(term.toLowerCase());
+}
 function keywords(question) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
@@ -721,738 +1050,21 @@ function makeMatcher(expanded) {
 function buildMatcher(question, max = 8) {
   return makeMatcher(expandTokens(keywords(question), max));
 }
-function rrf(lists, keyOf, k = 60) {
-  const score = /* @__PURE__ */ new Map();
-  for (const list of lists) {
-    list.forEach((item, idx) => {
-      const key = keyOf(item);
-      score.set(key, (score.get(key) ?? 0) + 1 / (k + idx + 1));
-    });
-  }
-  return score;
-}
-function arxivIdFromUrl(url) {
-  let host;
-  let path;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return void 0;
-  }
-  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
-  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (modern) return modern[1].toLowerCase();
-  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (legacy) return legacy[1].toLowerCase();
-  return void 0;
-}
-function doiFromUrl(url) {
-  let host;
-  let path;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return void 0;
-  }
-  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
-    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
-    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
-  }
-  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
-  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
-  return void 0;
-}
-function identityKey(item) {
-  const doi = item.meta?.doi;
-  if (doi) return "doi:" + normalizeDoi(String(doi));
-  const arxiv = item.meta?.arxivId;
-  if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
-  const urlDoi = doiFromUrl(item.url);
-  if (urlDoi) return "doi:" + urlDoi;
-  const urlArxiv = arxivIdFromUrl(item.url);
-  if (urlArxiv) return "arxiv:" + urlArxiv;
-  return canonicalizeUrl(item.url);
-}
-function extractIdentifiers(question) {
-  const out = /* @__PURE__ */ new Set();
-  const add = (re, group = 0) => {
-    for (const m of question.matchAll(re)) {
-      const v = (m[group] ?? m[0]).trim();
-      if (v) out.add(v);
-    }
-  };
-  add(/\bv?\d+(?:\.\d+){1,}\b/g);
-  add(/\b10\.\d{4,}\/\S+/g);
-  add(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g);
-  add(/\b[a-z]+(?:[A-Z][a-z0-9]+)+\b/g);
-  add(/\b[A-Za-z]+_[A-Za-z0-9_]+\b/g);
-  add(/\b\d{3,}\b/g);
-  add(/"([^"\n]{3,})"/g, 1);
-  return [...out];
-}
-function planVariants(question, depth) {
-  const base = question.trim();
-  const variants = base ? [base] : [];
-  const kw = rankedKeywords(question).slice(0, 8).join(" ");
-  if (kw && kw.toLowerCase() !== base.toLowerCase()) variants.push(kw);
-  const idents = extractIdentifiers(question);
-  if (idents.length) variants.push(idents.join(" "));
-  const ordered = keywords(question);
-  if (ordered.length >= 2) variants.push(`"${ordered.slice(0, 4).join(" ")}"`);
-  if (idents.length && ordered.length) variants.push([ordered[0], ...idents].join(" "));
-  const seen = /* @__PURE__ */ new Set();
-  const uniq = [];
-  for (const v of variants) {
-    const key = v.toLowerCase();
-    if (v && !seen.has(key)) {
-      seen.add(key);
-      uniq.push(v);
-    }
-  }
-  const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
-  return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
-}
-function bm25Tokenize(text) {
-  if (!text) return [];
-  const out = [];
-  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
-    if (raw.length < 2) continue;
-    if (STOPWORDS.has(raw.toLowerCase())) continue;
-    const t = foldTerm(raw);
-    if (t.length >= 2) out.push(t);
-  }
-  return out;
-}
-function docTokens(doc, titleWeight, headingWeight) {
-  const out = bm25Tokenize(doc.body);
-  const headings = bm25Tokenize(doc.headings);
-  for (let r = 0; r < headingWeight; r++) out.push(...headings);
-  const title = bm25Tokenize(doc.title);
-  for (let r = 0; r < titleWeight; r++) out.push(...title);
-  return out;
-}
-function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
-  if (queryTerms.length < 2) return 0;
-  const q = new Set(queryTerms);
-  const hits = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (q.has(tok)) hits.push({ pos: i, term: tok });
-  }
-  if (hits.length < 2) return 0;
-  let close = 0;
-  for (let i = 1; i < hits.length; i++) {
-    if (hits[i].term !== hits[i - 1].term && hits[i].pos - hits[i - 1].pos <= window) close++;
-  }
-  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
-}
-function buildBm25Index(question, docs, opts = {}) {
-  const k1 = opts.k1 ?? 1.2;
-  const b = opts.b ?? 0.75;
-  const titleWeight = 3;
-  const headingWeight = 2;
-  const queryTerms = [...new Set(bm25Tokenize(question))];
-  const N = docs.length;
-  const df = /* @__PURE__ */ new Map();
-  let totalLen = 0;
-  for (const doc of docs) {
-    const toks = docTokens(doc, titleWeight, headingWeight);
-    totalLen += toks.length;
-    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-  const avgdl = N ? totalLen / N : 0;
-  const idf = /* @__PURE__ */ new Map();
-  for (const t of queryTerms) {
-    if (N < 3) {
-      idf.set(t, 1);
-      continue;
-    }
-    const dfi = df.get(t) ?? 0;
-    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
-  }
-  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
-}
-function bm25MatchedTerms(index, doc) {
-  if (!index.queryTerms.length) return [];
-  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
-  return index.queryTerms.filter((t) => present.has(t));
-}
-function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
-  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
-  const alphaTerms = queryTerms.filter(isAlpha);
-  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
-  const offTopic = (t) => {
-    const m = matchedOf(t);
-    return m.length === 0 || m.every((term) => !isAlpha(term));
-  };
-  const kept = [];
-  const dropped = [];
-  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
-  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
-  return { kept, dropped };
-}
-function bm25Score(index, doc) {
-  if (!index.queryTerms.length) return 0;
-  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
-  const dl = toks.length;
-  if (!dl) return 0;
-  const tf = /* @__PURE__ */ new Map();
-  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
-  const { k1, b, avgdl } = index;
-  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
-  let score = 0;
-  for (const term of index.queryTerms) {
-    const f = tf.get(term);
-    if (!f) continue;
-    const idf = index.idf.get(term) ?? 0;
-    score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
-  }
-  return score * (1 + proximityBonus(toks, index.queryTerms));
-}
-function recencyScore(meta, minYear, maxYear) {
-  const y = typeof meta?.year === "number" ? meta.year : void 0;
-  if (y === void 0 || maxYear <= minYear) return 0.5;
-  const clamped = Math.min(maxYear, Math.max(minYear, y));
-  return (clamped - minYear) / (maxYear - minYear);
-}
-var FNV_OFFSET = 0xcbf29ce484222325n;
-var FNV_PRIME = 0x100000001b3n;
-var MASK64 = (1n << 64n) - 1n;
-function fnv1a64(s) {
-  let h = FNV_OFFSET;
-  for (let i = 0; i < s.length; i++) {
-    h ^= BigInt(s.charCodeAt(i));
-    h = h * FNV_PRIME & MASK64;
-  }
-  return h;
-}
-function simhash(text) {
-  const toks = bm25Tokenize(text);
-  const shingles = [];
-  if (toks.length < 3) shingles.push(...toks);
-  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
-  if (!shingles.length) return 0n;
-  const v = new Array(64).fill(0);
-  for (const sh of shingles) {
-    const h = fnv1a64(sh);
-    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
-  }
-  let out = 0n;
-  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
-  return out;
-}
-function hammingDistance(a, b) {
-  let x = a ^ b;
-  let count = 0;
-  while (x) {
-    x &= x - 1n;
-    count++;
-  }
-  return count;
-}
-function betterSource(a, b) {
-  if (a.score !== b.score) return a.score > b.score;
-  return a.url.localeCompare(b.url) < 0;
-}
-function diversify(items, tokensOf, lambda = 0.75) {
-  if (items.length <= 2) return [...items];
-  const toks = new Map(items.map((it) => [it, tokensOf(it)]));
-  const max = Math.max(...items.map((it) => it.score), 1e-9);
-  const rel = (it) => it.score / max;
-  const jaccard2 = (a, b) => {
-    if (!a.size || !b.size) return 0;
-    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-    let inter = 0;
-    for (const t of small) if (large.has(t)) inter++;
-    return inter / (a.size + b.size - inter);
-  };
-  let simMax = 0;
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      const v = jaccard2(toks.get(items[i]), toks.get(items[j]));
-      if (v > simMax) simMax = v;
-    }
-  }
-  const sim = (a, b) => simMax > 0 ? jaccard2(toks.get(a), toks.get(b)) / simMax : 0;
-  const remaining = [...items];
-  const out = [];
-  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  out.push(remaining.shift());
-  const maxSim = new Map(remaining.map((it) => [it, sim(it, out[0])]));
-  while (remaining.length) {
-    let bestIdx = 0;
-    let bestVal = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < remaining.length; i++) {
-      const it = remaining[i];
-      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
-      if (val > bestVal || val === bestVal && it.url.localeCompare(remaining[bestIdx].url) < 0) {
-        bestVal = val;
-        bestIdx = i;
-      }
-    }
-    const picked = remaining.splice(bestIdx, 1)[0];
-    out.push(picked);
-    for (const it of remaining) {
-      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
-    }
-  }
-  return out;
-}
-function dedupeNearDuplicates(items, opts = {}) {
-  const maxBits = opts.maxBits ?? 3;
-  const minChars = opts.minChars ?? 500;
-  const kept = [];
-  let dropped = 0;
-  for (const it of items) {
-    const text = it.text || "";
-    const hash = text.length >= minChars ? simhash(text) : null;
-    if (hash !== null) {
-      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
-      if (dup) {
-        dropped++;
-        if (betterSource(it, dup.it)) {
-          dup.it = it;
-          dup.hash = hash;
-        }
-        continue;
-      }
-    }
-    kept.push({ it, hash });
-  }
-  return { items: kept.map((k) => k.it), dropped };
-}
-function sinceEpochSeconds(since) {
-  if (!since) return null;
-  const ms = Date.parse(since.length === 4 ? `${since}-01-01` : since);
-  return Number.isFinite(ms) ? Math.floor(ms / 1e3) : null;
-}
-function sinceDate(since) {
-  const secs = sinceEpochSeconds(since);
-  return secs === null ? null : new Date(secs * 1e3).toISOString().slice(0, 10);
-}
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (true) {
-      const idx = next++;
-      if (idx >= items.length) break;
-      results[idx] = await fn(items[idx], idx);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-// src/backends/pdf/native.ts
-import { inflateSync, inflateRawSync } from "zlib";
-function decodePdfString(tok) {
-  if (tok[0] !== "(") return "";
-  const inner = tok.slice(1, -1);
-  const simple = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
-  return inner.replace(/\\([nrtbf()\\])/g, (_m, c) => simple[c] ?? c).replace(/\\([0-7]{1,3})/g, (_m, o) => String.fromCharCode(parseInt(o, 8) & 255));
-}
-function decodeHexString(tok) {
-  const hex = tok.slice(1, -1).replace(/\s+/g, "");
-  let out = "";
-  for (let i = 0; i + 1 < hex.length; i += 2) out += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
-  if (hex.length % 2) out += String.fromCharCode(parseInt(hex[hex.length - 1] + "0", 16));
-  return out;
-}
-function decodeString(tok) {
-  return tok[0] === "<" ? decodeHexString(tok) : decodePdfString(tok);
-}
-function decodeTJArray(tok) {
-  let out = "";
-  const re = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|-?\d+(?:\.\d+)?/g;
-  let m;
-  while (m = re.exec(tok)) {
-    const t = m[0];
-    if (t[0] === "(" || t[0] === "<") out += decodeString(t);
-    else if (Number(t) <= -100) out += " ";
-  }
-  return out;
-}
-var TOKEN_RE = /\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|\[(?:\((?:\\.|[^\\()])*\)|<[0-9A-Fa-f\s]*>|[^\]])*\]|\bT\*|\bTd\b|\bTD\b|\bTj\b|\bTJ\b|'|"/g;
-function extractTextOps(content) {
-  let out = "";
-  let operands = [];
-  const take = () => {
-    for (let i = operands.length - 1; i >= 0; i--) {
-      const t = operands[i];
-      if (t[0] === "(" || t[0] === "<") return decodeString(t);
-      if (t[0] === "[") return decodeTJArray(t);
-    }
-    return "";
-  };
-  TOKEN_RE.lastIndex = 0;
-  let m;
-  while (m = TOKEN_RE.exec(content)) {
-    const tok = m[0];
-    const c = tok[0];
-    if (c === "(" || c === "<" || c === "[") {
-      operands.push(tok);
-      continue;
-    }
-    if (tok === "Tj" || tok === "TJ") out += take() + " ";
-    else if (tok === "'" || tok === '"') out += "\n" + take() + " ";
-    else if (tok === "T*") out += "\n";
-    operands = [];
-  }
-  return out;
-}
-function extractStreams(buf) {
-  const out = [];
-  const s = buf.toString("latin1");
-  const re = /stream\r?\n/g;
-  let m;
-  while (m = re.exec(s)) {
-    const start = m.index + m[0].length;
-    const end = s.indexOf("endstream", start);
-    if (end < 0) continue;
-    let stop = end;
-    if (s[stop - 1] === "\n") stop--;
-    if (s[stop - 1] === "\r") stop--;
-    const chunk = buf.subarray(start, stop);
-    let data;
-    try {
-      data = inflateSync(chunk);
-    } catch {
-      try {
-        data = inflateRawSync(chunk);
-      } catch {
-        data = chunk;
-      }
-    }
-    out.push(data.toString("latin1"));
-  }
-  return out;
-}
-function pdfToText(buf) {
-  let out = "";
-  try {
-    for (const stream of extractStreams(buf)) {
-      if (/\b(Tj|TJ)\b/.test(stream) || /\)\s*'/.test(stream)) out += extractTextOps(stream) + "\n";
-    }
-  } catch {
-  }
-  return out.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
-// src/backends/pdf/quality.ts
-var MIN_CHARS_FOR_SHAPE_CHECKS = 200;
-var CONTROL_RATIO_MAX = 5e-3;
-var REPLACEMENT_RATIO_MAX = 5e-3;
-var LONGEST_RUN_MAX = 300;
-var LETTER_RATIO_MIN = 0.5;
-function isControlCode(c) {
-  if (c === 9 || c === 10 || c === 13) return false;
-  return c < 32 || c >= 127 && c <= 159;
-}
-var REPLACEMENT_CODE = 65533;
-function scanRatios(t) {
-  let control = 0;
-  let replacement = 0;
-  for (let i = 0; i < t.length; i++) {
-    const c = t.charCodeAt(i);
-    if (c === REPLACEMENT_CODE) replacement++;
-    else if (isControlCode(c)) control++;
-  }
-  return { control: control / t.length, replacement: replacement / t.length };
-}
-function assessPdfText(text) {
-  return assessExtractedText(text, "no text layer (scanned or image-only PDF?)");
-}
-function assessExtractedText(text, emptyReason) {
-  const t = text.trim();
-  if (!t) return { ok: false, reason: emptyReason };
-  const { control, replacement } = scanRatios(t);
-  if (control > CONTROL_RATIO_MAX) {
-    return { ok: false, reason: "binary/control characters in the text (undecodable PDF stream)" };
-  }
-  if (replacement > REPLACEMENT_RATIO_MAX) {
-    return { ok: false, reason: "replacement characters throughout (wrong character map)" };
-  }
-  if (t.length < MIN_CHARS_FOR_SHAPE_CHECKS) return { ok: true };
-  let longestRun = 0;
-  for (const w of t.split(/\s+/)) if (w.length > longestRun) longestRun = w.length;
-  const letters = (t.match(new RegExp("\\p{L}|\\p{N}", "gu"))?.length ?? 0) / t.replace(/\s+/g, "").length;
-  if (longestRun > LONGEST_RUN_MAX && letters < LETTER_RATIO_MIN) {
-    return { ok: false, reason: "unreadable text layer (garbled glyph encoding)" };
-  }
-  return { ok: true };
-}
-
-// src/backends/pdf/ocr.ts
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-
-// src/backends/pdf/exec.ts
-import { spawn } from "child_process";
-var PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
-var ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
-var MAX_STDOUT_BYTES = 24 * 1024 * 1024;
-function binaryName(name) {
-  return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
-}
-function runWithInput(cmd, args, input, timeoutMs) {
-  return new Promise((resolve6) => {
-    let child;
-    try {
-      child = spawn(binaryName(cmd), args, { stdio: ["pipe", "pipe", "pipe"] });
-    } catch (e) {
-      resolve6({ ok: false, stdout: "", error: e.message });
-      return;
-    }
-    const chunks = [];
-    let size = 0;
-    let settled = false;
-    const done = (r) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve6(r);
-    };
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      done({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` });
-    }, timeoutMs);
-    child.stdout?.on("data", (d) => {
-      if (size >= MAX_STDOUT_BYTES) return;
-      size += d.length;
-      chunks.push(d);
-    });
-    child.stderr?.on("data", () => {
-    });
-    child.on("error", (e) => {
-      done({ ok: false, stdout: "", error: e.code === "ENOENT" ? "not installed" : e.message });
-    });
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(chunks).subarray(0, MAX_STDOUT_BYTES).toString("utf8");
-      if (code === 0) done({ ok: true, stdout });
-      else done({ ok: false, stdout, error: `exit ${code}` });
-    });
-    child.stdin?.on("error", () => {
-    });
-    child.stdin?.end(input);
-  });
-}
-
-// src/backends/pdf/ocr.ts
-var DEFAULT_TIMEOUT_MS = 3e5;
-var DEFAULT_MAX_DOCS = 3;
-var DEFAULT_LANG = "eng";
-function envInt(name, fallback) {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-var spent = 0;
-function ocrBudgetLeft() {
-  return Math.max(0, envInt("ULTRASEARCH_OCR_MAX", DEFAULT_MAX_DOCS) - spent);
-}
-async function ocrTools() {
-  const probe = async (cmd, args) => (await runWithInput(cmd, args, Buffer.alloc(0), 2e4)).ok;
-  const [copyablePdf, tesseract] = await Promise.all([probe("copyable-pdf", ["--help"]), probe("tesseract", ["--version"])]);
-  return { copyablePdf, tesseract };
-}
-async function ocrPdf(bytes) {
-  if (ocrBudgetLeft() <= 0) return void 0;
-  const { copyablePdf, tesseract } = await ocrTools();
-  if (!copyablePdf || !tesseract) return void 0;
-  const dir = mkdtempSync(join(tmpdir(), "ultrasearch-ocr-"));
-  try {
-    const input = join(dir, "in.pdf");
-    const output = join(dir, "out.pdf");
-    writeFileSync(input, bytes);
-    const lang = process.env.ULTRASEARCH_OCR_LANG?.trim() || DEFAULT_LANG;
-    const r = await runWithInput(
-      "copyable-pdf",
-      ["-o", output, "-m", "-l", lang, input],
-      Buffer.alloc(0),
-      envInt("ULTRASEARCH_OCR_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
-    );
-    spent++;
-    if (!r.ok) return void 0;
-    const md = output.replace(/\.pdf$/, ".md");
-    return existsSync(md) ? readFileSync(md, "utf8") : void 0;
-  } catch {
-    return void 0;
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-// src/backends/pdf/ladder.ts
-var PDF_EXTRACTORS = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"];
-var NPX_TIMEOUT_MS = 9e4;
-var PDFTOTEXT_TIMEOUT_MS = 6e4;
-var dead = /* @__PURE__ */ new Set();
-function enabledExtractors(engines) {
-  if (engines) return engines;
-  const forced = process.env.ULTRASEARCH_PDF_ENGINE?.trim();
-  if (forced && PDF_EXTRACTORS.includes(forced)) return [forced];
-  if (process.env.ULTRASEARCH_NO_NPX) return PDF_EXTRACTORS.filter((e) => e !== "pdf-inspector" && e !== "anydoc");
-  return PDF_EXTRACTORS;
-}
-async function viaAnydoc(bytes) {
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "-", "--format", "pdf"], bytes, NPX_TIMEOUT_MS);
-  return r.ok ? r.stdout : void 0;
-}
-async function viaPdfInspector(bytes) {
-  const r = await runWithInput("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "-"], bytes, NPX_TIMEOUT_MS);
-  return r.ok ? r.stdout : void 0;
-}
-async function viaPdftotext(bytes) {
-  const r = await runWithInput("pdftotext", ["-layout", "-", "-"], bytes, PDFTOTEXT_TIMEOUT_MS);
-  return r.ok ? r.stdout : void 0;
-}
-async function extractPdf(bytes, opts = {}) {
-  let lastReason;
-  for (const id of enabledExtractors(opts.engines)) {
-    if (dead.has(id)) continue;
-    if (id === "ocr" && ocrBudgetLeft() <= 0) {
-      lastReason = "scanned PDF, and this run's OCR budget is spent (raise ULTRASEARCH_OCR_MAX)";
-      continue;
-    }
-    let text;
-    try {
-      if (id === "pdf-inspector") text = await viaPdfInspector(bytes);
-      else if (id === "anydoc") text = await viaAnydoc(bytes);
-      else if (id === "pdftotext") text = await viaPdftotext(bytes);
-      else if (id === "firecrawl") text = opts.firecrawl ? await opts.firecrawl() : void 0;
-      else if (id === "ocr") text = await ocrPdf(bytes);
-      else text = pdfToText(bytes);
-    } catch {
-      text = void 0;
-    }
-    if (text === void 0) {
-      if (id !== "firecrawl") dead.add(id);
-      continue;
-    }
-    const verdict = assessPdfText(text);
-    if (verdict.ok) return { text: text.trim(), via: id };
-    lastReason = verdict.reason;
-  }
-  return { text: "", reason: lastReason ?? "no PDF extractor available" };
-}
-
-// src/backends/doc/formats.ts
-var BINARY = { textFallback: false };
-var CSV = { format: "csv", textFallback: true };
-var BY_EXTENSION = {
-  // Word
-  doc: BINARY,
-  docx: BINARY,
-  docm: BINARY,
-  odt: BINARY,
-  rtf: BINARY,
-  // PowerPoint
-  ppt: BINARY,
-  pps: BINARY,
-  pot: BINARY,
-  pptx: BINARY,
-  pptm: BINARY,
-  ppsx: BINARY,
-  ppsm: BINARY,
-  odp: BINARY,
-  // Excel
-  xls: BINARY,
-  xlsx: BINARY,
-  xlsm: BINARY,
-  xlsb: BINARY,
-  ods: BINARY,
-  // Everything else the converter reads
-  epub: BINARY,
-  csv: CSV
-};
-var BY_CONTENT_TYPE = {
-  "application/msword": BINARY,
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": BINARY,
-  "application/vnd.ms-word.document.macroenabled.12": BINARY,
-  "application/vnd.oasis.opendocument.text": BINARY,
-  "application/rtf": BINARY,
-  "text/rtf": BINARY,
-  "application/vnd.ms-powerpoint": BINARY,
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": BINARY,
-  "application/vnd.oasis.opendocument.presentation": BINARY,
-  "application/vnd.ms-excel": BINARY,
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": BINARY,
-  "application/vnd.ms-excel.sheet.binary.macroenabled.12": BINARY,
-  "application/vnd.oasis.opendocument.spreadsheet": BINARY,
-  "application/epub+zip": BINARY,
-  "text/csv": CSV
-};
-var DOC_EXTENSIONS = Object.keys(BY_EXTENSION);
-function docFormatForUrl(url) {
-  const m = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
-  return m ? BY_EXTENSION[m[1].toLowerCase()] : void 0;
-}
-function docFormatForContentType(contentType) {
-  const type = contentType.split(";")[0]?.trim().toLowerCase();
-  return type ? BY_CONTENT_TYPE[type] : void 0;
-}
-
-// src/backends/doc/ladder.ts
-var DOC_EXTRACTORS = ["anydoc", "firecrawl"];
-var NPX_TIMEOUT_MS2 = 9e4;
-var dead2 = /* @__PURE__ */ new Set();
-function enabledDocExtractors(engines) {
-  if (engines) return engines;
-  const forced = process.env.ULTRASEARCH_DOC_ENGINE?.trim();
-  if (forced === "none") return [];
-  if (forced && DOC_EXTRACTORS.includes(forced)) return [forced];
-  if (process.env.ULTRASEARCH_NO_NPX) return DOC_EXTRACTORS.filter((e) => e !== "anydoc");
-  return DOC_EXTRACTORS;
-}
-async function viaAnydoc2(bytes, format) {
-  const args = ["-y", "--prefer-offline", ANYDOC_SPEC, "-"];
-  if (format) args.push("--format", format);
-  const r = await runWithInput("npx", args, bytes, NPX_TIMEOUT_MS2);
-  return r.ok ? r.stdout : void 0;
-}
-async function extractDocument(bytes, fmt, opts = {}) {
-  let lastReason;
-  for (const id of enabledDocExtractors(opts.engines)) {
-    if (dead2.has(id)) continue;
-    let text;
-    try {
-      if (id === "anydoc") text = await viaAnydoc2(bytes, fmt.format);
-      else text = opts.firecrawl ? await opts.firecrawl() : void 0;
-    } catch {
-      text = void 0;
-    }
-    if (text === void 0) {
-      if (id !== "firecrawl") dead2.add(id);
-      continue;
-    }
-    const verdict = assessExtractedText(text, "the converter produced no text");
-    if (verdict.ok) return { text: text.trim(), via: id };
-    lastReason = verdict.reason;
-  }
-  return { text: "", reason: lastReason ?? "no document converter available" };
-}
-
-// src/backends/firecrawl.ts
 var FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
 var PROBE_TIMEOUT_MS = 2e3;
 var SCRAPE_TIMEOUT_MS = 45e3;
 var SEARCH_TIMEOUT_MS = 3e4;
 var SCRAPE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function firecrawlBase(opts = {}) {
-  const raw = (opts.firecrawl ?? process.env.ULTRASEARCH_FIRECRAWL ?? FIRECRAWL_DEFAULT_BASE).trim();
+  const raw = (opts.firecrawl ?? env("FIRECRAWL") ?? FIRECRAWL_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
   return raw.replace(/\/+$/, "");
 }
 function firecrawlIsExplicit(opts = {}) {
-  return !!(opts.firecrawl ?? process.env.ULTRASEARCH_FIRECRAWL);
+  return !!(opts.firecrawl ?? env("FIRECRAWL"));
 }
 function authHeaders() {
-  const key = process.env.ULTRASEARCH_FIRECRAWL_KEY?.trim();
+  const key = env("FIRECRAWL_KEY");
   return key ? { authorization: `Bearer ${key}` } : void 0;
 }
 var probeCache = /* @__PURE__ */ new Map();
@@ -1558,7 +1170,7 @@ async function scrapeViaFirecrawl(url, opts = {}) {
 }
 async function searchViaFirecrawl(query, limit, opts = {}) {
   const base = firecrawlBase(opts);
-  if (!base) return { why: `Firecrawl disabled (--firecrawl off / ULTRASEARCH_FIRECRAWL=off). Skipping.` };
+  if (!base) return { why: `Firecrawl disabled (--firecrawl off / ${envName("FIRECRAWL")}=off). Skipping.` };
   if (!await probeFirecrawl(base, firecrawlIsExplicit(opts))) {
     return { why: `Firecrawl not reachable at ${base} (bring it up with \`docker compose --profile search --profile extract up -d --wait\`). Skipping.` };
   }
@@ -1569,39 +1181,23 @@ async function searchViaFirecrawl(query, limit, opts = {}) {
   }
   return { hits: mapSearchResponse(r.data) };
 }
-var firecrawlBackend = async (ctx) => {
-  const { hits, why } = await searchViaFirecrawl(ctx.question, ctx.options.perSource * 2, ctx.options);
-  if (!hits) return { backend: "firecrawl", items: [], notes: [why ?? "Firecrawl search returned nothing."] };
-  const items = hits.slice(0, ctx.options.perSource * 2).map((h, i) => ({
-    url: h.url,
-    title: h.title,
-    backend: "firecrawl",
-    score: hits.length - i,
-    snippet: h.description,
-    // Firecrawl only returns page markdown with a search hit when asked to
-    // scrape each result; when it does, the gatherer skips re-fetching the page.
-    ...h.markdown ? { text: h.markdown } : {},
-    lang: ctx.options.lang
-  }));
-  return {
-    backend: "firecrawl",
-    items,
-    notes: items.length ? [`Firecrawl search returned ${items.length} result(s).`] : [`Firecrawl search returned no results.`]
-  };
-};
-
-// src/backends/fetch.ts
-var BROWSER_UA = process.env.ULTRASEARCH_UA || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-var CONTACT_UA = "ultrasearch/1.x (+https://github.com/maxgfr/ultrasearch)";
-var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
-function envInt2(name, def, min, max) {
-  const v = Number(process.env[name]);
-  return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.floor(v))) : def;
+var DEFAULT_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+function browserUa() {
+  return env("UA") || DEFAULT_BROWSER_UA;
 }
-var MAX_ATTEMPTS = envInt2("ULTRASEARCH_MAX_ATTEMPTS", 2, 1, 5);
-var DEFAULT_RETRY_MS = envInt2("ULTRASEARCH_RETRY_MS", 600, 0, 5e3);
-var PAGE_DELAY_MS = envInt2("ULTRASEARCH_PAGE_DELAY_MS", 350, 0, 5e3);
-var POLITE_DELAY_MS = envInt2("ULTRASEARCH_POLITE_DELAY_MS", 400, 0, 5e3);
+function contactUa() {
+  const b = brand();
+  return `${b.name}/1.x (+${b.contactUrl ?? `https://github.com/maxgfr/${b.name}`})`;
+}
+var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
+var maxAttempts = () => envInt("MAX_ATTEMPTS", 2, 1, 5);
+var defaultRetryMs = () => envInt("RETRY_MS", 600, 0, 5e3);
+function pageDelayMs() {
+  return envInt("PAGE_DELAY_MS", 350, 0, 5e3);
+}
+function politeDelayMs() {
+  return envInt("POLITE_DELAY_MS", 400, 0, 5e3);
+}
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -1610,15 +1206,15 @@ function retryDelayMs(retryAfter) {
     const secs = Number(retryAfter);
     if (Number.isFinite(secs)) return Math.min(Math.max(secs * 1e3, 0), 5e3);
   }
-  return DEFAULT_RETRY_MS;
+  return defaultRetryMs();
 }
 async function httpGet(url, opts = {}) {
   let last = { ok: false, status: 0, body: "", contentType: "", url };
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
-      const headers = { "user-agent": opts.userAgent ?? BROWSER_UA, accept: opts.accept ?? "*/*" };
+      const headers = { "user-agent": opts.userAgent ?? browserUa(), accept: opts.accept ?? "*/*" };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       const res = await fetch(url, {
         signal: ctrl.signal,
@@ -1636,7 +1232,7 @@ async function httpGet(url, opts = {}) {
         contentType: res.headers.get("content-type") ?? "",
         url: res.url || url
       };
-      if (RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers.get("retry-after")));
         continue;
@@ -1644,7 +1240,7 @@ async function httpGet(url, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, body: "", contentType: "", url, error: e.message };
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(DEFAULT_RETRY_MS);
+      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1653,14 +1249,14 @@ async function httpGet(url, opts = {}) {
 }
 async function httpJson(method, url, body, opts = {}) {
   let last = { ok: false, status: 0, data: void 0 };
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
       const headers = {
         "content-type": "application/json",
         accept: opts.accept ?? "application/json",
-        "user-agent": opts.userAgent ?? BROWSER_UA
+        "user-agent": opts.userAgent ?? browserUa()
       };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
@@ -1678,7 +1274,7 @@ async function httpJson(method, url, body, opts = {}) {
         data = text;
       }
       const result = { ok: res.ok, status: res.status, data };
-      if (RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers.get("retry-after")));
         continue;
@@ -1686,7 +1282,7 @@ async function httpJson(method, url, body, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, data: void 0, error: e.message };
-      if (attempt < MAX_ATTEMPTS - 1) await sleep(DEFAULT_RETRY_MS);
+      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1968,9 +1564,9 @@ async function fetchAndExtract(url, opts = {}) {
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
-  if (process.env.ULTRASEARCH_NO_WAYBACK) return void 0;
+  if (envFlag("NO_WAYBACK")) return void 0;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
-  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: CONTACT_UA });
+  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa() });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
   if (snap?.available !== true || typeof snap.url !== "string") return void 0;
   const got = await fetchAndExtract(snap.url, opts);
@@ -2044,6 +1640,505 @@ function capExtract(text, depth) {
   const slice = text.slice(0, cap);
   const lastNl = slice.lastIndexOf("\n");
   return (lastNl > cap * 0.6 ? slice.slice(0, lastNl) : slice) + "\n\n\u2026 [truncated]";
+}
+var TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|mc_|ref$|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$)/i;
+function canonicalizeUrl(raw) {
+  try {
+    const u = new URL(raw.trim());
+    const proto = u.protocol.toLowerCase();
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    let port = u.port;
+    if (proto === "http:" && port === "80" || proto === "https:" && port === "443") port = "";
+    const path = u.pathname.replace(/\/+$/, "");
+    const keep = [];
+    for (const [k, v] of u.searchParams) {
+      if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
+    }
+    keep.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+    const search = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
+    return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
+  } catch {
+    return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
+  }
+}
+function normalizeDoi(doi) {
+  return doi.trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "");
+}
+function domainOf(raw) {
+  try {
+    const u = new URL(raw);
+    if (u.protocol === "file:") return LOCAL_FILE_DOMAIN;
+    return u.hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+var LOCAL_FILE_DOMAIN = "local file";
+var FNV_OFFSET = 0xcbf29ce484222325n;
+var FNV_PRIME = 0x100000001b3n;
+var MASK64 = (1n << 64n) - 1n;
+function fnv1a64(s) {
+  let h = FNV_OFFSET;
+  for (let i = 0; i < s.length; i++) {
+    h ^= BigInt(s.charCodeAt(i));
+    h = h * FNV_PRIME & MASK64;
+  }
+  return h;
+}
+var flagged = false;
+function setNoWrite(on) {
+  flagged = on;
+}
+function isNoWrite() {
+  return flagged || envFlag("NO_WRITE");
+}
+var collected = [];
+function ensureDir(dir) {
+  if (isNoWrite()) return;
+  mkdirSync(dir, { recursive: true });
+}
+function writeArtifact(path, content) {
+  if (isNoWrite()) {
+    const at = collected.findIndex((a) => a.path === path);
+    if (at !== -1) collected[at] = { path, content };
+    else collected.push({ path, content });
+    return path;
+  }
+  writeFileSync2(path, content);
+  return path;
+}
+function takeArtifacts() {
+  return collected.splice(0, collected.length);
+}
+var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
+function cacheDir() {
+  return env("CACHE_DIR") ?? brand().cacheDir ?? join2(tmpdir2(), brand().name, "cache");
+}
+function cachePath(url, acceptLanguage = "", extractor = "native") {
+  const canon = canonicalizeUrl(url);
+  const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
+  return join2(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
+}
+var PDF_CACHE_NS = "pdf";
+var DOC_CACHE_NS = "doc";
+async function currentExtractor(opts, url) {
+  if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
+  if (docFormatForUrl(url)) return DOC_CACHE_NS;
+  const base = firecrawlBase(opts);
+  return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
+}
+function ttlMs() {
+  return envInt("CACHE_TTL_MS", DEFAULT_TTL_MS);
+}
+function readCache(url, now, acceptLanguage = "", extractor = "native") {
+  const p = cachePath(url, acceptLanguage, extractor);
+  if (!existsSync2(p)) return void 0;
+  try {
+    const entry = JSON.parse(readFileSync2(p, "utf8"));
+    if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
+    if (!entry.text?.trim()) return void 0;
+    return entry;
+  } catch {
+    return void 0;
+  }
+}
+function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
+  if (isNoWrite()) return;
+  try {
+    mkdirSync2(cacheDir(), { recursive: true });
+    const entry = { ...res, cachedAt: now };
+    writeFileSync3(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
+  } catch {
+  }
+}
+async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
+  if (!enabled) return fetchAndExtract(url, opts);
+  const lang = opts.acceptLanguage ?? "";
+  const ns = await currentExtractor(opts, url);
+  const hit = readCache(url, now, lang, ns);
+  if (hit) return { ...hit, cached: true };
+  const res = await fetchAndExtract(url, opts);
+  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+  return res;
+}
+var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+var LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+var MAX_BODY_BYTES = 4 * 1024 * 1024;
+var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
+
+// src/engine.ts
+configure({
+  name: "ultrasearch",
+  envPrefix: "ULTRASEARCH",
+  cli: "ultrasearch",
+  contactUrl: "https://github.com/maxgfr/ultrasearch"
+});
+
+// src/util.ts
+function titleFromText(text) {
+  const heading = /^\s*#{1,6}\s+(.+?)\s*#*\s*$/m.exec(text.split(/\n\s*\n/)[0] ?? "");
+  if (heading) return heading[1].trim().slice(0, 200);
+  const paras = text.split(/\n\s*\n/).map((p) => p.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const lead = paras[0] ?? "";
+  const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
+  const pick = (bibliographic ? paras[1] : lead) || lead;
+  return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
+}
+function shq(s) {
+  return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
+}
+function slugify(input) {
+  return input.toLowerCase().replace(/^https?:\/\//, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "run";
+}
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+function runId(d = /* @__PURE__ */ new Date()) {
+  return `run-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+var BACKEND_TRUST = {
+  arxiv: 0.9,
+  crossref: 0.9,
+  openalex: 0.9,
+  semanticscholar: 0.9,
+  europepmc: 0.9,
+  pubmed: 0.9,
+  dblp: 0.9,
+  standards: 0.9,
+  wikipedia: 0.85,
+  github: 0.8,
+  // General-web discovery engines (searxng, duckduckgo, ddglite, mojeek,
+  // marginalia, firecrawl) deliberately get NO authority floor: they surface
+  // arbitrary pages, so trust must come from the domain alone. `firecrawl` is
+  // spelled out at 0 (identical to being absent) so the omission reads as a
+  // decision rather than an oversight — its /search proxies the same open web.
+  firecrawl: 0,
+  stackexchange: 0.72,
+  hackernews: 0.5,
+  // A file the user named on the command line. No floor, for the same reason the
+  // discovery engines get none: the route says the operator chose it, not that
+  // the document is authoritative. Spelled out at the neutral value so the
+  // omission reads as a decision.
+  file: 0.5
+};
+var NEUTRAL_TRUST = 0.5;
+function trustScore(_url, backend) {
+  return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
+}
+function rrf(lists, keyOf, k = 60) {
+  const score = /* @__PURE__ */ new Map();
+  for (const list of lists) {
+    list.forEach((item, idx) => {
+      const key = keyOf(item);
+      score.set(key, (score.get(key) ?? 0) + 1 / (k + idx + 1));
+    });
+  }
+  return score;
+}
+function arxivIdFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1].toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1].toLowerCase();
+  return void 0;
+}
+function doiFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
+  return void 0;
+}
+function identityKey(item) {
+  const doi = item.meta?.doi;
+  if (doi) return "doi:" + normalizeDoi(String(doi));
+  const arxiv = item.meta?.arxivId;
+  if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
+  const urlDoi = doiFromUrl(item.url);
+  if (urlDoi) return "doi:" + urlDoi;
+  const urlArxiv = arxivIdFromUrl(item.url);
+  if (urlArxiv) return "arxiv:" + urlArxiv;
+  return canonicalizeUrl(item.url);
+}
+function extractIdentifiers(question) {
+  const out = /* @__PURE__ */ new Set();
+  const add = (re, group = 0) => {
+    for (const m of question.matchAll(re)) {
+      const v = (m[group] ?? m[0]).trim();
+      if (v) out.add(v);
+    }
+  };
+  add(/\bv?\d+(?:\.\d+){1,}\b/g);
+  add(/\b10\.\d{4,}\/\S+/g);
+  add(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g);
+  add(/\b[a-z]+(?:[A-Z][a-z0-9]+)+\b/g);
+  add(/\b[A-Za-z]+_[A-Za-z0-9_]+\b/g);
+  add(/\b\d{3,}\b/g);
+  add(/"([^"\n]{3,})"/g, 1);
+  return [...out];
+}
+function planVariants(question, depth) {
+  const base = question.trim();
+  const variants = base ? [base] : [];
+  const kw = rankedKeywords(question).slice(0, 8).join(" ");
+  if (kw && kw.toLowerCase() !== base.toLowerCase()) variants.push(kw);
+  const idents = extractIdentifiers(question);
+  if (idents.length) variants.push(idents.join(" "));
+  const ordered = keywords(question);
+  if (ordered.length >= 2) variants.push(`"${ordered.slice(0, 4).join(" ")}"`);
+  if (idents.length && ordered.length) variants.push([ordered[0], ...idents].join(" "));
+  const seen = /* @__PURE__ */ new Set();
+  const uniq = [];
+  for (const v of variants) {
+    const key = v.toLowerCase();
+    if (v && !seen.has(key)) {
+      seen.add(key);
+      uniq.push(v);
+    }
+  }
+  const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
+  return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
+}
+function bm25Tokenize(text) {
+  if (!text) return [];
+  const out = [];
+  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
+    if (raw.length < 2) continue;
+    if (isStopword(raw)) continue;
+    const t = foldTerm(raw);
+    if (t.length >= 2) out.push(t);
+  }
+  return out;
+}
+function docTokens(doc, titleWeight, headingWeight) {
+  const out = bm25Tokenize(doc.body);
+  const headings = bm25Tokenize(doc.headings);
+  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  const title = bm25Tokenize(doc.title);
+  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  return out;
+}
+function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
+  if (queryTerms.length < 2) return 0;
+  const q = new Set(queryTerms);
+  const hits = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (q.has(tok)) hits.push({ pos: i, term: tok });
+  }
+  if (hits.length < 2) return 0;
+  let close = 0;
+  for (let i = 1; i < hits.length; i++) {
+    if (hits[i].term !== hits[i - 1].term && hits[i].pos - hits[i - 1].pos <= window) close++;
+  }
+  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
+}
+function buildBm25Index(question, docs, opts = {}) {
+  const k1 = opts.k1 ?? 1.2;
+  const b = opts.b ?? 0.75;
+  const titleWeight = 3;
+  const headingWeight = 2;
+  const queryTerms = [...new Set(bm25Tokenize(question))];
+  const N = docs.length;
+  const df = /* @__PURE__ */ new Map();
+  let totalLen = 0;
+  for (const doc of docs) {
+    const toks = docTokens(doc, titleWeight, headingWeight);
+    totalLen += toks.length;
+    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const avgdl = N ? totalLen / N : 0;
+  const idf = /* @__PURE__ */ new Map();
+  for (const t of queryTerms) {
+    if (N < 3) {
+      idf.set(t, 1);
+      continue;
+    }
+    const dfi = df.get(t) ?? 0;
+    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
+  }
+  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+function bm25MatchedTerms(index, doc) {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
+  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
+  const offTopic = (t) => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept = [];
+  const dropped = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
+  return { kept, dropped };
+}
+function bm25Score(index, doc) {
+  if (!index.queryTerms.length) return 0;
+  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
+  const dl = toks.length;
+  if (!dl) return 0;
+  const tf = /* @__PURE__ */ new Map();
+  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+  const { k1, b, avgdl } = index;
+  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
+  let score = 0;
+  for (const term of index.queryTerms) {
+    const f = tf.get(term);
+    if (!f) continue;
+    const idf = index.idf.get(term) ?? 0;
+    score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
+  }
+  return score * (1 + proximityBonus(toks, index.queryTerms));
+}
+function recencyScore(meta, minYear, maxYear) {
+  const y = typeof meta?.year === "number" ? meta.year : void 0;
+  if (y === void 0 || maxYear <= minYear) return 0.5;
+  const clamped = Math.min(maxYear, Math.max(minYear, y));
+  return (clamped - minYear) / (maxYear - minYear);
+}
+function simhash(text) {
+  const toks = bm25Tokenize(text);
+  const shingles = [];
+  if (toks.length < 3) shingles.push(...toks);
+  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
+  if (!shingles.length) return 0n;
+  const v = new Array(64).fill(0);
+  for (const sh of shingles) {
+    const h = fnv1a64(sh);
+    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
+  }
+  let out = 0n;
+  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
+  return out;
+}
+function hammingDistance(a, b) {
+  let x = a ^ b;
+  let count = 0;
+  while (x) {
+    x &= x - 1n;
+    count++;
+  }
+  return count;
+}
+function betterSource(a, b) {
+  if (a.score !== b.score) return a.score > b.score;
+  return a.url.localeCompare(b.url) < 0;
+}
+function diversify(items, tokensOf, lambda = 0.75) {
+  if (items.length <= 2) return [...items];
+  const toks = new Map(items.map((it) => [it, tokensOf(it)]));
+  const max = Math.max(...items.map((it) => it.score), 1e-9);
+  const rel = (it) => it.score / max;
+  const jaccard2 = (a, b) => {
+    if (!a.size || !b.size) return 0;
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let inter = 0;
+    for (const t of small) if (large.has(t)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  let simMax = 0;
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const v = jaccard2(toks.get(items[i]), toks.get(items[j]));
+      if (v > simMax) simMax = v;
+    }
+  }
+  const sim = (a, b) => simMax > 0 ? jaccard2(toks.get(a), toks.get(b)) / simMax : 0;
+  const remaining = [...items];
+  const out = [];
+  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  out.push(remaining.shift());
+  const maxSim = new Map(remaining.map((it) => [it, sim(it, out[0])]));
+  while (remaining.length) {
+    let bestIdx = 0;
+    let bestVal = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < remaining.length; i++) {
+      const it = remaining[i];
+      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
+      if (val > bestVal || val === bestVal && it.url.localeCompare(remaining[bestIdx].url) < 0) {
+        bestVal = val;
+        bestIdx = i;
+      }
+    }
+    const picked = remaining.splice(bestIdx, 1)[0];
+    out.push(picked);
+    for (const it of remaining) {
+      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
+    }
+  }
+  return out;
+}
+function dedupeNearDuplicates(items, opts = {}) {
+  const maxBits = opts.maxBits ?? 3;
+  const minChars = opts.minChars ?? 500;
+  const kept = [];
+  let dropped = 0;
+  for (const it of items) {
+    const text = it.text || "";
+    const hash = text.length >= minChars ? simhash(text) : null;
+    if (hash !== null) {
+      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
+      if (dup) {
+        dropped++;
+        if (betterSource(it, dup.it)) {
+          dup.it = it;
+          dup.hash = hash;
+        }
+        continue;
+      }
+    }
+    kept.push({ it, hash });
+  }
+  return { items: kept.map((k) => k.it), dropped };
+}
+function sinceEpochSeconds(since) {
+  if (!since) return null;
+  const ms = Date.parse(since.length === 4 ? `${since}-01-01` : since);
+  return Number.isFinite(ms) ? Math.floor(ms / 1e3) : null;
+}
+function sinceDate(since) {
+  const secs = sinceEpochSeconds(since);
+  return secs === null ? null : new Date(secs * 1e3).toISOString().slice(0, 10);
+}
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) break;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 // src/locale.ts
@@ -2189,7 +2284,7 @@ var searxngBackend = async (ctx) => {
       found.push({ url: x.url, title: String(x.title || x.url), snippet: String(x.content ?? "").slice(0, 360) });
     }
     if (found.length === before) break;
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -2207,6 +2302,28 @@ var searxngBackend = async (ctx) => {
     notes: items.length ? [`SearXNG returned ${items.length} result(s).${blocked}`] : [
       throttled.length ? `SearXNG returned no results \u2014 its upstream engines are throttling this instance, which is transient.${blocked} The cascade fell through to the other engines; retry in a few minutes for SearXNG's own recall.` : `SearXNG returned no results.`
     ]
+  };
+};
+
+// src/backends/firecrawl.ts
+var firecrawlBackend = async (ctx) => {
+  const { hits, why } = await searchViaFirecrawl(ctx.question, ctx.options.perSource * 2, ctx.options);
+  if (!hits) return { backend: "firecrawl", items: [], notes: [why ?? "Firecrawl search returned nothing."] };
+  const items = hits.slice(0, ctx.options.perSource * 2).map((h, i) => ({
+    url: h.url,
+    title: h.title,
+    backend: "firecrawl",
+    score: hits.length - i,
+    snippet: h.description,
+    // Firecrawl only returns page markdown with a search hit when asked to
+    // scrape each result; when it does, the gatherer skips re-fetching the page.
+    ...h.markdown ? { text: h.markdown } : {},
+    lang: ctx.options.lang
+  }));
+  return {
+    backend: "firecrawl",
+    items,
+    notes: items.length ? [`Firecrawl search returned ${items.length} result(s).`] : [`Firecrawl search returned no results.`]
   };
 };
 
@@ -2263,7 +2380,7 @@ var duckduckgoBackend = async (ctx) => {
       found.push(f);
     }
     if (found.length === before) break;
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -2320,7 +2437,7 @@ var ddgliteBackend = async (ctx) => {
       found.push(f);
     }
     if (found.length === before) break;
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -2377,7 +2494,7 @@ var mojeekBackend = async (ctx) => {
       found.push(f);
     }
     if (found.length === before) break;
-    if (p < pages - 1 && PAGE_DELAY_MS) await sleep(PAGE_DELAY_MS);
+    if (p < pages - 1 && pageDelayMs()) await sleep(pageDelayMs());
   }
   const items = found.map((f, i) => ({
     url: f.url,
@@ -2670,7 +2787,7 @@ function tag(block, name) {
 var arxivBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
-  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: CONTACT_UA });
+  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: contactUa() });
   if (!r.ok || !r.body) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
     return { backend: "arxiv", items: [], notes: [`arXiv search ${why}.`] };
@@ -2710,7 +2827,7 @@ var crossrefBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` + (since ? `&filter=from-pub-date:${since}` : "");
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3, userAgent: CONTACT_UA });
+  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3, userAgent: contactUa() });
   const items0 = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
     return { backend: "crossref", items: [], notes: [`Crossref search failed or empty (status ${r.status}).`] };
@@ -3044,7 +3161,7 @@ async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
   const out = [];
   for (let i = 0; i < variants.length; i++) {
-    if (i > 0 && POLITE_DELAY_MS) await sleep(POLITE_DELAY_MS);
+    if (i > 0 && politeDelayMs()) await sleep(politeDelayMs());
     out.push(await handler({ ...ctx, question: variants[i] }));
   }
   return out;
@@ -3092,96 +3209,6 @@ async function runBackends(kinds, ctx) {
     }
   });
   return Promise.all(tasks);
-}
-
-// src/cache.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "fs";
-import { join as join2 } from "path";
-import { tmpdir as tmpdir2 } from "os";
-
-// src/no-write.ts
-import { mkdirSync, writeFileSync as writeFileSync2 } from "fs";
-var flagged = false;
-function setNoWrite(on) {
-  flagged = on;
-}
-function isNoWrite() {
-  return flagged || process.env.ULTRASEARCH_NO_WRITE === "1";
-}
-var collected = [];
-function ensureDir(dir) {
-  if (isNoWrite()) return;
-  mkdirSync(dir, { recursive: true });
-}
-function writeArtifact(path, content) {
-  if (isNoWrite()) {
-    const at = collected.findIndex((a) => a.path === path);
-    if (at !== -1) collected[at] = { path, content };
-    else collected.push({ path, content });
-    return path;
-  }
-  writeFileSync2(path, content);
-  return path;
-}
-function takeArtifacts() {
-  return collected.splice(0, collected.length);
-}
-
-// src/cache.ts
-function envInt3(name, def) {
-  const v = Number(process.env[name]);
-  return Number.isFinite(v) && v >= 0 ? Math.floor(v) : def;
-}
-var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
-function cacheDir() {
-  return process.env.ULTRASEARCH_CACHE_DIR || join2(tmpdir2(), "ultrasearch", "cache");
-}
-function cachePath(url, acceptLanguage = "", extractor = "native") {
-  const canon = canonicalizeUrl(url);
-  const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  return join2(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
-}
-var PDF_CACHE_NS = "pdf";
-var DOC_CACHE_NS = "doc";
-async function currentExtractor(opts, url) {
-  if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
-  if (docFormatForUrl(url)) return DOC_CACHE_NS;
-  const base = firecrawlBase(opts);
-  return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
-}
-function ttlMs() {
-  return envInt3("ULTRASEARCH_CACHE_TTL_MS", DEFAULT_TTL_MS);
-}
-function readCache(url, now, acceptLanguage = "", extractor = "native") {
-  const p = cachePath(url, acceptLanguage, extractor);
-  if (!existsSync2(p)) return void 0;
-  try {
-    const entry = JSON.parse(readFileSync2(p, "utf8"));
-    if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
-    if (!entry.text?.trim()) return void 0;
-    return entry;
-  } catch {
-    return void 0;
-  }
-}
-function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
-  if (isNoWrite()) return;
-  try {
-    mkdirSync2(cacheDir(), { recursive: true });
-    const entry = { ...res, cachedAt: now };
-    writeFileSync3(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
-  } catch {
-  }
-}
-async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
-  if (!enabled) return fetchAndExtract(url, opts);
-  const lang = opts.acceptLanguage ?? "";
-  const ns = await currentExtractor(opts, url);
-  const hit = readCache(url, now, lang, ns);
-  if (hit) return { ...hit, cached: true };
-  const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
-  return res;
 }
 
 // src/providers.ts
@@ -6857,17 +6884,17 @@ function handleRead(args, run) {
 }
 
 // src/mcp/protocol.ts
-var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
-var LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+var PROTOCOL_VERSIONS2 = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
+var LATEST_PROTOCOL2 = PROTOCOL_VERSIONS2[PROTOCOL_VERSIONS2.length - 1];
 var ASSUMED_HTTP_PROTOCOL = "2025-03-26";
 var ANNOTATIONS_SINCE = "2025-03-26";
 var RICH_TOOLS_SINCE = "2025-06-18";
 var DEFAULT_MAX_RESPONSE_BYTES = 1e6;
 function isProtocolVersion(v) {
-  return typeof v === "string" && PROTOCOL_VERSIONS.includes(v);
+  return typeof v === "string" && PROTOCOL_VERSIONS2.includes(v);
 }
 function negotiateProtocol(requested) {
-  return isProtocolVersion(requested) ? requested : LATEST_PROTOCOL;
+  return isProtocolVersion(requested) ? requested : LATEST_PROTOCOL2;
 }
 function validateArgs(schema, args) {
   for (const key of schema.required) {
@@ -7458,7 +7485,7 @@ var ERR_INTERNAL = -32603;
 function createServer(opts = {}) {
   const serverInfo = { name: opts.serverName ?? "ultrasearch", version: VERSION };
   const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-  let protocol = LATEST_PROTOCOL;
+  let protocol = LATEST_PROTOCOL2;
   const cancelled = /* @__PURE__ */ new Set();
   const CANCELLED_MAX = 1024;
   const listTools = () => toolsFor(protocol, { defaultRun: opts.defaultRun, allowWrite: opts.allowWrite });
@@ -7663,7 +7690,7 @@ function reportInternal(send) {
 // src/mcp/http.ts
 import { createServer as createHttpServer } from "http";
 var MCP_PATH = "/mcp";
-var MAX_BODY_BYTES = 4 * 1024 * 1024;
+var MAX_BODY_BYTES2 = 4 * 1024 * 1024;
 var CORS_HEADERS = "content-type, accept, mcp-protocol-version, mcp-session-id, authorization, last-event-id";
 var LOOPBACK_BIND = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
 function startHttpServer(opts = {}) {
@@ -7758,7 +7785,7 @@ async function route(req, res, opts) {
     raw = await readBody(req);
   } catch (e) {
     if (e.message === "too large") {
-      sendJson(res, 413, { error: `request body exceeds ${MAX_BODY_BYTES} bytes` }, origin);
+      sendJson(res, 413, { error: `request body exceeds ${MAX_BODY_BYTES2} bytes` }, origin);
       return;
     }
     sendJson(res, 400, { error: `could not read request body: ${e.message}` }, origin);
@@ -7801,24 +7828,24 @@ function sendJson(res, status, body, origin, extra = {}) {
   });
   res.end(text);
 }
-var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
+var DRAIN_LIMIT2 = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
   return new Promise((resolve6, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
     const declared = Number(req.headers["content-length"]);
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) over = true;
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES2) over = true;
     req.on("data", (c) => {
       size += c.length;
       if (over) {
-        if (size > DRAIN_LIMIT) {
+        if (size > DRAIN_LIMIT2) {
           req.destroy();
           reject(new Error("too large"));
         }
         return;
       }
-      if (size > MAX_BODY_BYTES) {
+      if (size > MAX_BODY_BYTES2) {
         over = true;
         chunks.length = 0;
         return;
