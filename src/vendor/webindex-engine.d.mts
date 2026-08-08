@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.11.1";
+declare const ENGINE_VERSION = "1.12.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -707,7 +707,7 @@ declare const SERVICE_PROFILES: Record<string, string[]>;
  * because not having Docker is a normal state for this tool: everything the
  * stack provides is optional and degrades to a note.
  */
-declare function stackControl(service: string, action: string, deps?: StackDeps): StackResult;
+declare function stackControl(service: string | string[], action: string, deps?: StackDeps): StackResult;
 
 declare function withRunLock<T>(slug: string, fn: () => Promise<T>): Promise<T>;
 declare function resetRunLocks(): void;
