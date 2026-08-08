@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.3.0";
+declare const ENGINE_VERSION = "1.6.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -22,6 +22,20 @@ interface Brand {
      * the shared engine underneath.
      */
     contactUrl?: string;
+    /**
+     * Words this consumer wants dropped on top of the engine's list.
+     *
+     * The shared list is question scaffolding — "what", "is", "the", plus the
+     * French equivalents. What counts as noise BEYOND that is domain knowledge the
+     * engine cannot have: a documentation tool reading source repositories sees
+     * "test" and "request" in almost every file, so keeping them as keywords
+     * scores every document alike. A market-research tool would say the opposite.
+     *
+     * This exists so adopting the shared matcher is not an all-or-nothing choice.
+     * Without it a consumer with two extra words has to keep its own copy of the
+     * whole keyword machinery — which is exactly the duplication being removed.
+     */
+    extraStopwords?: string[];
 }
 /**
  * Declare the consuming skill's identity. Call once, as early as possible in
@@ -483,9 +497,34 @@ declare function accentPattern(text: string): string;
 interface KeywordMatcher {
     expanded: ExpandedKeyword[];
     canonicals: string[];
+    /**
+     * The compiled pattern sources, each with the keyword it attributes to.
+     *
+     * What makes the matcher usable by something other than this process: a
+     * consumer can hand these to ripgrep or any external scanner and still map
+     * the hits back to canonicals. Without them the matcher only works line by
+     * line in memory, which is the wrong shape for searching a whole repository.
+     */
+    patterns: {
+        source: string;
+        canonical: string;
+    }[];
+    /** Map a matched span — as an external scanner reports it — back to its keyword. */
+    canonicalOf(span: string): string | undefined;
+    /** Which canonicals does this line of text cover? */
     matchLine(line: string): Set<string>;
 }
 declare function buildMatcher(question: string, max?: number): KeywordMatcher;
+/**
+ * A matcher over raw tokens, skipping keyword extraction.
+ *
+ * The fallback for a question with no distinctive keywords left after stopword
+ * removal — "what is it for?" reduces to nothing, and a matcher that matches
+ * nothing highlights nothing. Searching the words as given is worse than a good
+ * query and much better than an empty one. Still accent-folded and
+ * subtoken-expanded, so attribution stays consistent with buildMatcher.
+ */
+declare function matcherFromTokens(tokens: string[], max?: number): KeywordMatcher;
 
 declare function canonicalizeUrl(raw: string): string;
 declare function normalizeDoi(doi: string): string;
@@ -703,4 +742,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Brand, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type ResourceContents, type ResourceDecl, ResourceError, type RunningHttpServer, type ScrapeAttempt, type ServerOptions, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, apiPrefix, assessExtractedText, assessPdfText, bestExcerpt, brand, browserUa, buildMatcher, cacheDir, cachePath, cachedFetchAndExtract, canonicalizeUrl, capExtract, capResponse, cleanInline, configure, contactUa, createServer, deaccent, decodeEntities, docFormatForContentType, docFormatForUrl, domainOf, enabledDocExtractors, enabledExtractors, ensureDir, env, envFlag, envInt, envName, escapeRegExp, expandTokens, extractDocument, extractMainHtml, extractPdf, fetchAndExtract, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keywords, listResources, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, mapScrapeResponse, mapSearchResponse, nearestHeading, negotiateProtocol, normalizeDoi, ocrBudgetLeft, ocrPdf, ocrTools, pageDelayMs, pdfToText, politeDelayMs, probeFirecrawl, rankedKeywords, readResource, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resolveSkillRoot, runStdioServer, runWithInput, scrapeViaFirecrawl, searchViaFirecrawl, setNoWrite, skillName, sleep, startHttpServer, structuredContentFor, subtokens, takeArtifacts, validateArgs, writeArtifact };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Brand, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type ResourceContents, type ResourceDecl, ResourceError, type RunningHttpServer, type ScrapeAttempt, type ServerOptions, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, apiPrefix, assessExtractedText, assessPdfText, bestExcerpt, brand, browserUa, buildMatcher, cacheDir, cachePath, cachedFetchAndExtract, canonicalizeUrl, capExtract, capResponse, cleanInline, configure, contactUa, createServer, deaccent, decodeEntities, docFormatForContentType, docFormatForUrl, domainOf, enabledDocExtractors, enabledExtractors, ensureDir, env, envFlag, envInt, envName, escapeRegExp, expandTokens, extractDocument, extractMainHtml, extractPdf, fetchAndExtract, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keywords, listResources, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, mapScrapeResponse, mapSearchResponse, matcherFromTokens, nearestHeading, negotiateProtocol, normalizeDoi, ocrBudgetLeft, ocrPdf, ocrTools, pageDelayMs, pdfToText, politeDelayMs, probeFirecrawl, rankedKeywords, readResource, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resolveSkillRoot, runStdioServer, runWithInput, scrapeViaFirecrawl, searchViaFirecrawl, setNoWrite, skillName, sleep, startHttpServer, structuredContentFor, subtokens, takeArtifacts, validateArgs, writeArtifact };

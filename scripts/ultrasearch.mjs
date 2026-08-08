@@ -913,7 +913,10 @@ var STOPWORDS = /* @__PURE__ */ new Set([
   "ne"
 ]);
 function isStopword(term) {
-  return STOPWORDS.has(term.toLowerCase());
+  const t = term.toLowerCase();
+  if (STOPWORDS.has(t)) return true;
+  const extra = brand().extraStopwords;
+  return extra ? extra.some((w) => w.toLowerCase() === t) : false;
 }
 function keywords(question) {
   const seen = /* @__PURE__ */ new Set();
@@ -922,7 +925,7 @@ function keywords(question) {
     if (!raw) continue;
     const lower = raw.toLowerCase();
     if (raw.length < 2) continue;
-    if (STOPWORDS.has(lower)) continue;
+    if (isStopword(lower)) continue;
     if (seen.has(lower)) continue;
     seen.add(lower);
     out.push(raw);
@@ -990,7 +993,7 @@ function subtokens(raw) {
   const out = [];
   for (const p of parts) {
     const lower = p.toLowerCase();
-    if (lower.length < 3 || STOPWORDS.has(lower)) continue;
+    if (lower.length < 3 || isStopword(lower)) continue;
     if (!out.includes(lower)) out.push(lower);
     if (out.length >= 4) break;
   }
@@ -1040,9 +1043,12 @@ function makeMatcher(expanded) {
       regexes.push({ re: new RegExp(accentPattern(v.text), "i"), canonical: ek.canonical });
     }
   }
+  const patterns = expanded.flatMap((ek) => ek.variants.map((v) => ({ source: accentPattern(v.text), canonical: ek.canonical })));
   return {
     expanded,
     canonicals: expanded.map((e) => e.canonical),
+    patterns,
+    canonicalOf: (span) => regexes.find(({ re }) => new RegExp(`^(?:${re.source})$`, "i").test(span))?.canonical,
     matchLine: (line) => {
       const hit = /* @__PURE__ */ new Set();
       for (const { re, canonical } of regexes) {
