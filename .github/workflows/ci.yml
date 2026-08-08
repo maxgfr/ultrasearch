@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Dispatched by engine-repin.yml — see the note in release.yml.
+  workflow_dispatch: {}
 
 jobs:
   build-test:

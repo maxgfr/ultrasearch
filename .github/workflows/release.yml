@@ -12,6 +12,11 @@ name: Release
 on:
   push:
     branches: [main]
+  # Required by engine-repin.yml. A push authenticated with GITHUB_TOKEN does
+  # NOT fire another workflow's `on: push`, so the re-pin job dispatches this
+  # one explicitly — and a workflow with no dispatch trigger answers HTTP 422.
+  # Without this the daily re-pin lands the bump and never releases it.
+  workflow_dispatch: {}
 
 permissions:
   contents: write # push the bump commit + tag, create the release
