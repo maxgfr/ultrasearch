@@ -44,12 +44,13 @@ export interface HandlerDefaults {
 // Thrown for anything the caller can fix by calling again differently. The
 // server turns it into an `isError` tool result, never a JSON-RPC error: the
 // tool ran, the request was wrong or the world didn't cooperate.
-export class ToolError extends Error {}
+// Re-exported from the engine: the server distinguishes a tool failure from a
+// protocol error by INSTANCE, so both halves must use the same class.
+export { ToolError } from "../engine.js";
+import { ToolError } from "../engine.js";
 
-export interface ToolOutcome {
-  text: string;
-  artifact?: string;
-}
+export type { ToolOutcome } from "../engine.js";
+import type { ToolOutcome } from "../engine.js";
 
 const MAX_READ_LINES = 2000;
 const MAX_READ_BYTES = 8 * 1024 * 1024;

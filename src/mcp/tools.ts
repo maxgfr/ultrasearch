@@ -1,19 +1,13 @@
 import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_WEB_ENGINES } from "../types.js";
-import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "./protocol.js";
+import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "../engine.js";
 import { isNoWrite } from "../no-write.js";
 
 // What the server advertises. Pure data — nothing here imports the retrieval
 // pipeline, so the declarations can be asserted in a test without reaching the
 // network. handlers.ts is where these names become work.
 
-export interface ToolDecl {
-  name: string;
-  description: string;
-  inputSchema: JsonSchema;
-  title?: string;
-  outputSchema?: JsonSchema;
-  annotations?: Record<string, boolean>;
-}
+export type { ToolDecl } from "../engine.js";
+import type { ToolDecl } from "../engine.js";
 
 // Every spelling the engine accepts, so a model that writes a valid token is
 // never rejected by schema validation for something the engine understood.

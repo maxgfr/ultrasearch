@@ -1,6 +1,7 @@
 import { PassThrough, Readable } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { runStdioServer } from "../src/mcp/stdio.js";
+import { ultrasearchAdapter } from "../src/mcp/adapter.js";
+import { runStdioServer } from "../src/engine.js";
 
 // The stdio transport driven IN-PROCESS, through injected streams.
 //
@@ -19,7 +20,7 @@ async function run(lines: string[], opts: Record<string, unknown> = {}): Promise
   const chunks: string[] = [];
   output.on("data", (c: Buffer) => chunks.push(c.toString("utf8")));
 
-  await runStdioServer({ input, output, captureStdout: true, ...opts });
+  await runStdioServer(ultrasearchAdapter(opts), { input, output, captureStdout: true, ...opts });
 
   return chunks
     .join("")
@@ -158,7 +159,7 @@ describe("the stdout guard", () => {
     let guardedWrite: typeof process.stdout.write | undefined;
     try {
       const input = new PassThrough();
-      const done = runStdioServer({ input });
+      const done = runStdioServer(ultrasearchAdapter(), { input });
       // Mid-session: the guard is up, so this must NOT reach stdout.
       guardedWrite = process.stdout.write;
       process.stdout.write("a stray line\n");

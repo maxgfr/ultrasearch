@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ultrasearchAdapter } from "../src/mcp/adapter.js";
 import {
   PROTOCOL_VERSIONS,
   LATEST_PROTOCOL,
@@ -9,7 +10,7 @@ import {
   structuredContentFor,
   isOriginAllowed,
   type JsonSchema,
-} from "../src/mcp/protocol.js";
+} from "../src/engine.js";
 
 describe("negotiateProtocol", () => {
   it("echoes every version we advertise", () => {
@@ -78,15 +79,20 @@ describe("validateArgs", () => {
   });
 });
 
+// The per-tool narrowing advice is the adapter's now — the engine detects the
+// overflow, only the skill knows which argument shrinks the result. Feed it the
+// real table so these still assert what ultrasearch actually tells a model.
+const ADVICE = ultrasearchAdapter().capAdvice;
+
 describe("capResponse", () => {
   it("returns the payload untouched when it fits", () => {
     const text = '{"ok":true}';
-    expect(capResponse(text, "ultrasearch_gather", 1000)).toBe(text);
+    expect(capResponse(text, "ultrasearch_gather", 1000, undefined, ADVICE)).toBe(text);
   });
 
   it("withholds an oversized payload and says how to ask for less", () => {
     const big = JSON.stringify({ pad: "x".repeat(5000) });
-    const out = capResponse(big, "ultrasearch_gather", 100);
+    const out = capResponse(big, "ultrasearch_gather", 100, undefined, ADVICE);
     expect(out).not.toContain("xxxx");
     const parsed = JSON.parse(out);
     expect(parsed.truncated).toBe(true);
@@ -96,12 +102,12 @@ describe("capResponse", () => {
   });
 
   it("points at the on-disk artifact when there is one", () => {
-    const out = capResponse("x".repeat(500), "ultrasearch_gather", 10, "/tmp/run/EVIDENCE.md");
+    const out = capResponse("x".repeat(500), "ultrasearch_gather", 10, "/tmp/run/EVIDENCE.md", ADVICE);
     expect(JSON.parse(out).artifact).toBe("/tmp/run/EVIDENCE.md");
   });
 
   it("still gives a generic hint for a tool with no tailored one", () => {
-    expect(JSON.parse(capResponse("x".repeat(500), "ultrasearch_modes", 10)).narrower).toBe("narrow the request and call again");
+    expect(JSON.parse(capResponse("x".repeat(500), "ultrasearch_modes", 10, undefined, ADVICE)).narrower).toBe("narrow the request and call again");
   });
 });
 

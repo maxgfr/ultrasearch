@@ -8,13 +8,15 @@ describe("prompt declarations", () => {
     for (const p of PROMPTS) {
       expect(p.name, p.name).toMatch(/^[a-z][a-z0-9_]*$/);
       expect(p.title, p.name).toBeTruthy();
-      expect(p.description.length, p.name).toBeGreaterThan(60);
+      expect(p.description, p.name).toBeTruthy();
+      expect(p.description?.length ?? 0, p.name).toBeGreaterThan(60);
     }
   });
 
   it("documents every argument", () => {
     for (const p of PROMPTS) {
-      for (const a of p.arguments) {
+      expect(p.arguments, p.name).toBeTruthy();
+      for (const a of p.arguments ?? []) {
         expect(a.description, `${p.name}.${a.name}`).toBeTruthy();
         expect(a.name, `${p.name}.${a.name}`).toMatch(/^[a-z][a-z0-9_]*$/);
       }

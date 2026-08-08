@@ -1,4 +1,6 @@
 import { TOOLS, WRITE_TOOLS } from "./tools.js";
+export type { PromptDecl, PromptResult } from "../engine.js";
+import type { PromptDecl, PromptResult } from "../engine.js";
 
 // The workflows, as MCP prompts.
 //
@@ -12,30 +14,13 @@ import { TOOLS, WRITE_TOOLS } from "./tools.js";
 // Each prompt says three things, in this order: the contract, the exact tool
 // sequence, and what the gate does on failure.
 
-export interface PromptArgument {
-  name: string;
-  description: string;
-  required?: boolean;
-}
-
-export interface PromptDecl {
-  name: string;
-  title?: string;
-  description: string;
-  arguments: PromptArgument[];
-}
-
 export interface PromptMessage {
   role: "user" | "assistant";
   content: { type: "text"; text: string };
 }
 
-export interface PromptResult {
-  description: string;
-  messages: PromptMessage[];
-}
-
-export class PromptError extends Error {}
+export { PromptError } from "../engine.js";
+import { PromptError } from "../engine.js";
 
 export const PROMPTS: PromptDecl[] = [
   {
@@ -74,7 +59,7 @@ export function getPrompt(name: string, args: Record<string, unknown> = {}): Pro
   const decl = PROMPTS.find((p) => p.name === name);
   if (!decl) throw new PromptError(`unknown prompt: ${name || "(none given)"}`);
 
-  for (const arg of decl.arguments) {
+  for (const arg of decl.arguments ?? []) {
     if (arg.required && !str(args[arg.name])) throw new PromptError(`\`${arg.name}\` is required for prompt "${name}"`);
   }
 

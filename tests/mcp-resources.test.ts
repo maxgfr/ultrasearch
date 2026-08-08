@@ -2,10 +2,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, it, expect } from "vitest";
-import { listResources, readResource, resolveSkillRoot, ResourceError, SKILL_NAME } from "../src/mcp/resources.js";
+import { listResources, readResource, resolveSkillRoot, ResourceError, skillName } from "../src/engine.js";
 
 const REPO_ROOT = resolve(__dirname, "..");
-const PAYLOAD = join(REPO_ROOT, "skills", SKILL_NAME);
+const PAYLOAD = join(REPO_ROOT, "skills", skillName());
 
 const temps: string[] = [];
 function tmp(): string {
@@ -30,7 +30,7 @@ describe("skill root resolution", () => {
 
   it("finds the payload from a repo-root bundle (<repo>/scripts/x.mjs)", () => {
     const repo = tmp();
-    const payload = join(repo, "skills", SKILL_NAME);
+    const payload = join(repo, "skills", skillName());
     mkdirSync(join(repo, "scripts"), { recursive: true });
     mkdirSync(payload, { recursive: true });
     writeFileSync(join(payload, "SKILL.md"), "# skill\n\nBody.\n");

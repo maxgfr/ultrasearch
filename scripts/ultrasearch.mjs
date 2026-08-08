@@ -168,7 +168,7 @@ var websearchBackend = async (ctx) => {
 };
 
 // src/gather.ts
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 import { tmpdir as tmpdir3 } from "os";
 
 // src/modes/topic.ts
@@ -350,6 +350,11 @@ import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as rea
 import { join as join2 } from "path";
 import { tmpdir as tmpdir2 } from "os";
 import { mkdirSync, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync3, realpathSync, statSync } from "fs";
+import { basename, dirname, join as join3, resolve, sep } from "path";
+import { fileURLToPath } from "url";
+import { createInterface } from "readline";
+import { createServer as createHttpServer } from "http";
 var DEFAULT_BRAND = {
   name: "webindex",
   envPrefix: "WEBINDEX",
@@ -1763,8 +1768,540 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
 }
 var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 var LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
+var ASSUMED_HTTP_PROTOCOL = "2025-03-26";
+var ANNOTATIONS_SINCE = "2025-03-26";
+var RICH_TOOLS_SINCE = "2025-06-18";
+var DEFAULT_MAX_RESPONSE_BYTES = 1e6;
+function isProtocolVersion(v) {
+  return typeof v === "string" && PROTOCOL_VERSIONS.includes(v);
+}
+function negotiateProtocol(requested) {
+  return isProtocolVersion(requested) ? requested : LATEST_PROTOCOL;
+}
+function validateArgs(schema, args) {
+  for (const key of schema.required) {
+    const v = args[key];
+    if (v === void 0 || v === null || v === "") return `\`${key}\` is required`;
+  }
+  for (const [key, value] of Object.entries(args)) {
+    if (value === void 0 || value === null) continue;
+    const spec = schema.properties[key];
+    if (!spec?.type) continue;
+    const actual = Array.isArray(value) ? "array" : typeof value;
+    if (spec.type === "number") {
+      if (actual === "number") continue;
+      if (actual === "string" && value.trim() !== "" && Number.isFinite(Number(value))) continue;
+      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
+    }
+    if (spec.type === "array") {
+      if (actual !== "array") return `\`${key}\` must be an array, got ${actual}`;
+      const arr = value;
+      if (spec.items?.type === "string" && !arr.every((x) => typeof x === "string")) {
+        return `\`${key}\` must be an array of strings`;
+      }
+      if (spec.enum) {
+        const bad = arr.find((x) => typeof x === "string" && !spec.enum.includes(x));
+        if (bad !== void 0) return `\`${key}\` contains "${String(bad)}" \u2014 allowed: ${spec.enum.join(", ")}`;
+      }
+      continue;
+    }
+    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
+    if (spec.enum && typeof value === "string" && !spec.enum.includes(value)) {
+      return `\`${key}\` must be one of: ${spec.enum.join(", ")}`;
+    }
+  }
+  return void 0;
+}
+function capResponse(text, tool, maxBytes, artifact, advice = {}) {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes <= maxBytes) return text;
+  return JSON.stringify(
+    {
+      truncated: true,
+      tool,
+      bytes,
+      maxBytes,
+      reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
+      narrower: advice[tool] ?? "narrow the request and call again",
+      ...artifact ? { artifact, artifactNote: "The full result is on disk here \u2014 read it directly if you need all of it." } : {}
+    },
+    null,
+    2
+  ) + "\n";
+}
+function structuredContentFor(text, capped, hasSchema) {
+  if (capped || !hasSchema) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return void 0;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
+  return parsed;
+}
+var LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+function isOriginAllowed(origin, allowed = []) {
+  if (origin === void 0) return true;
+  const o = origin.trim();
+  if (o === "" || o === "null") return true;
+  if (LOOPBACK_ORIGIN.test(o)) return true;
+  return allowed.some((a) => a === "*" || a.toLowerCase() === o.toLowerCase());
+}
+var skillName = () => brand().name;
+var URI_SCHEME = "skill://";
+function resolveSkillRoot(moduleDir) {
+  const here = moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  const name = brand().name;
+  const candidates = [resolve(here, ".."), resolve(here, "..", "skills", name), resolve(here, "..", "..", "skills", name)];
+  return candidates.find((dir) => existsSync3(join3(dir, "SKILL.md")));
+}
+function listResources(moduleDir) {
+  const root = resolveSkillRoot(moduleDir);
+  if (!root) return [];
+  const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
+  const refDir = join3(root, "references");
+  if (!existsSync3(refDir)) return out;
+  for (const file of readdirSync(refDir).sort()) {
+    if (!file.endsWith(".md")) continue;
+    out.push(describe(root, join3("references", file), `${skillName()} reference: ${basename(file, ".md")}`));
+  }
+  return out;
+}
+function readResource(uri, moduleDir) {
+  if (!uri.startsWith(URI_SCHEME)) {
+    throw new ResourceError(`unknown resource scheme in "${uri}" (expected ${URI_SCHEME}\u2026)`);
+  }
+  const root = resolveSkillRoot(moduleDir);
+  if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
+  const rel = uri.slice(URI_SCHEME.length);
+  if (!rel) throw new ResourceError("empty resource path");
+  const target = resolve(root, rel);
+  const rootReal = realpathSync(root);
+  let targetReal;
+  try {
+    targetReal = realpathSync(target);
+  } catch {
+    throw new ResourceError(`no such resource: ${uri}`);
+  }
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep)) {
+    throw new ResourceError(`resource path escapes the skill root: ${uri}`);
+  }
+  if (!statSync(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync3(targetReal, "utf8") };
+}
+var ResourceError = class extends Error {
+};
+function describe(root, rel, fallbackTitle) {
+  const decl = {
+    uri: `${URI_SCHEME}${rel.split(sep).join("/")}`,
+    name: rel.split(sep).join("/"),
+    title: fallbackTitle,
+    mimeType: "text/markdown"
+  };
+  const summary = firstProse(join3(root, rel));
+  if (summary) decl.description = summary;
+  return decl;
+}
+function firstProse(file) {
+  let text;
+  try {
+    text = readFileSync3(file, "utf8");
+  } catch {
+    return void 0;
+  }
+  const body = text.startsWith("---\n") ? text.slice(text.indexOf("\n---", 3) + 4) : text;
+  for (const block of body.split(/\n\s*\n/)) {
+    const line = block.trim();
+    if (!line || line.startsWith("#") || line.startsWith(">") || line.startsWith("|") || line.startsWith("```")) continue;
+    const flat = line.replace(/\s+/g, " ").replace(/[*`]/g, "");
+    return flat.length > 300 ? `${flat.slice(0, 297)}\u2026` : flat;
+  }
+  return void 0;
+}
+var ToolError = class extends Error {
+};
+var PromptError = class extends Error {
+};
+var ERR_INVALID_REQUEST = -32600;
+var ERR_METHOD_NOT_FOUND = -32601;
+var ERR_INVALID_PARAMS = -32602;
+var ERR_INTERNAL = -32603;
+function createServer(adapter, opts = {}) {
+  const serverInfo = { name: opts.serverName ?? brand().name, version: adapter.version };
+  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  let protocol = LATEST_PROTOCOL;
+  const cancelled = /* @__PURE__ */ new Set();
+  const CANCELLED_MAX = 1024;
+  const listTools = () => adapter.listTools(protocol);
+  const prompts = () => adapter.prompts ?? [];
+  async function handle(msg, send) {
+    if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
+      send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
+      return;
+    }
+    if (msg.id === void 0 || msg.id === null) {
+      if (msg.method === "notifications/cancelled") {
+        const target = msg.params?.requestId;
+        if (typeof target === "string" || typeof target === "number") {
+          if (cancelled.size >= CANCELLED_MAX) cancelled.delete(cancelled.values().next().value);
+          cancelled.add(String(target));
+        }
+      }
+      return;
+    }
+    const id = msg.id;
+    const reply = (out) => {
+      if (cancelled.delete(String(id))) return;
+      send({ jsonrpc: "2.0", id, ...out });
+    };
+    try {
+      switch (msg.method) {
+        case "initialize": {
+          protocol = negotiateProtocol(msg.params?.protocolVersion);
+          reply({
+            result: {
+              protocolVersion: protocol,
+              // Three primitives, because a skill is three things: the engine
+              // (tools), the method (prompts) and the documentation the method
+              // refers to (resources). A client given only the first has to
+              // invent the other two.
+              capabilities: {
+                tools: { listChanged: false },
+                resources: { subscribe: false, listChanged: false },
+                prompts: { listChanged: false }
+              },
+              serverInfo
+            }
+          });
+          return;
+        }
+        case "ping":
+          reply({ result: {} });
+          return;
+        case "tools/list":
+          reply({ result: { tools: listTools() } });
+          return;
+        case "tools/call":
+          await handleToolCall(msg, reply);
+          return;
+        case "resources/list":
+          reply({ result: { resources: listResources(opts.skillDir) } });
+          return;
+        case "resources/read": {
+          const uri = typeof msg.params?.uri === "string" ? msg.params.uri : "";
+          if (!uri) {
+            reply({ error: { code: ERR_INVALID_PARAMS, message: "`uri` is required" } });
+            return;
+          }
+          try {
+            reply({ result: { contents: [readResource(uri, opts.skillDir)] } });
+          } catch (e) {
+            if (e instanceof ResourceError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
+            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+          }
+          return;
+        }
+        case "prompts/list":
+          reply({ result: { prompts: prompts() } });
+          return;
+        case "prompts/get": {
+          const name = typeof msg.params?.name === "string" ? msg.params.name : "";
+          const args = msg.params?.arguments ?? {};
+          try {
+            if (!adapter.getPrompt) throw new PromptError(`unknown prompt: ${name || "(none given)"}`);
+            reply({ result: adapter.getPrompt(name, args) });
+          } catch (e) {
+            if (e instanceof PromptError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
+            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+          }
+          return;
+        }
+        default:
+          reply({ error: { code: ERR_METHOD_NOT_FOUND, message: `method not found: ${String(msg.method)}` } });
+          return;
+      }
+    } catch (e) {
+      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+    }
+  }
+  async function handleToolCall(msg, reply) {
+    const params = msg.params ?? {};
+    const name = typeof params.name === "string" ? params.name : "";
+    const args = params.arguments ?? {};
+    const decl = listTools().find((t) => t.name === name);
+    if (!decl) {
+      reply({ error: { code: ERR_INVALID_PARAMS, message: `unknown tool: ${name || "(none given)"}` } });
+      return;
+    }
+    const invalid = validateArgs(decl.inputSchema, args);
+    if (invalid) {
+      reply({ error: { code: ERR_INVALID_PARAMS, message: invalid } });
+      return;
+    }
+    try {
+      const { text: raw, artifact } = await adapter.callTool(name, args);
+      const text = capResponse(raw, name, maxBytes, artifact, adapter.capAdvice);
+      const capped = text !== raw;
+      const structured = protocol >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, decl.outputSchema !== void 0) : void 0;
+      reply({ result: { content: [{ type: "text", text }], ...structured ? { structuredContent: structured } : {} } });
+    } catch (e) {
+      if (e instanceof ToolError) {
+        reply({ result: { content: [{ type: "text", text: e.message }], isError: true } });
+        return;
+      }
+      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+    }
+  }
+  return {
+    handle,
+    protocolVersion: () => protocol,
+    setProtocolVersion: (v) => {
+      protocol = v;
+    },
+    tools: listTools
+  };
+}
+function errMessage(e) {
+  return e instanceof Error ? e.message : String(e);
+}
+var MAX_IN_FLIGHT = 4;
+async function runStdioServer(adapter, opts = {}) {
+  const input = opts.input ?? process.stdin;
+  const output = opts.output ?? process.stdout;
+  const emit = output.write.bind(output);
+  let restore;
+  if (!opts.captureStdout && output === process.stdout) {
+    const original = process.stdout.write;
+    process.stdout.write = ((chunk, ...rest) => process.stderr.write(chunk, ...rest));
+    restore = () => {
+      process.stdout.write = original;
+    };
+  }
+  const server = createServer(adapter, opts);
+  const send = (msg) => {
+    emit(JSON.stringify(msg) + "\n");
+  };
+  const inFlight = /* @__PURE__ */ new Set();
+  const track = (p) => {
+    inFlight.add(p);
+    void p.finally(() => inFlight.delete(p));
+    return p;
+  };
+  const drainToLimit = async () => {
+    while (inFlight.size >= MAX_IN_FLIGHT) await Promise.race(inFlight);
+  };
+  const rl = createInterface({ input, terminal: false });
+  try {
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed;
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+        continue;
+      }
+      await drainToLimit();
+      if (Array.isArray(parsed)) {
+        track(
+          (async () => {
+            const out = [];
+            await Promise.all(parsed.map((m) => server.handle(m, (r) => void out.push(r))));
+            if (out.length) emit(JSON.stringify(out) + "\n");
+          })().catch(reportInternal(send))
+        );
+        continue;
+      }
+      if (parsed === null || typeof parsed !== "object") {
+        send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
+        continue;
+      }
+      track(server.handle(parsed, send).catch(reportInternal(send)));
+    }
+    await Promise.all(inFlight);
+  } finally {
+    rl.close();
+    restore?.();
+  }
+}
+function reportInternal(send) {
+  return (e) => {
+    send({ jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+  };
+}
+var MCP_PATH = "/mcp";
 var MAX_BODY_BYTES = 4 * 1024 * 1024;
+var CORS_HEADERS = "content-type, accept, mcp-protocol-version, mcp-session-id, authorization, last-event-id";
+var LOOPBACK_BIND = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+function startHttpServer(adapter, opts = {}) {
+  const bind = opts.bind ?? "127.0.0.1";
+  if (!LOOPBACK_BIND.has(bind) && !opts.allowRemote) {
+    return Promise.reject(
+      new Error(
+        `refusing to bind ${bind}: ${brand().name}'s MCP server fetches arbitrary URLs and reads local files. Pass --allow-remote if that is really what you want.`
+      )
+    );
+  }
+  const server = createHttpServer((req, res) => {
+    void route(req, res, adapter, opts).catch((e) => {
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      sendJson(res, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
+    });
+  });
+  server.requestTimeout = 0;
+  server.headersTimeout = 6e4;
+  server.keepAliveTimeout = 12e4;
+  return new Promise((resolve22, reject) => {
+    server.once("error", reject);
+    server.listen(opts.port ?? 0, bind, () => {
+      server.removeListener("error", reject);
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
+      const host = bind.includes(":") ? `[${bind}]` : bind;
+      resolve22({
+        server,
+        port,
+        url: `http://${host}:${port}${MCP_PATH}`,
+        close: () => new Promise((done) => {
+          server.closeAllConnections?.();
+          server.close(() => done());
+        })
+      });
+    });
+  });
+}
+async function route(req, res, adapter, opts) {
+  const path = (req.url ?? "").split("?")[0];
+  const origin = header(req, "origin");
+  if (!isOriginAllowed(origin, opts.allowOrigin)) {
+    sendJson(res, 403, { error: "origin not allowed", origin });
+    return;
+  }
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, {
+      ...corsHeaders(origin),
+      "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
+      "access-control-allow-headers": CORS_HEADERS,
+      "access-control-max-age": "86400"
+    });
+    res.end();
+    return;
+  }
+  if (path !== MCP_PATH) {
+    sendJson(res, 404, { error: `not found: ${path} (the MCP endpoint is ${MCP_PATH})` }, origin);
+    return;
+  }
+  if (req.method === "GET" || req.method === "DELETE") {
+    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
+    res.end(JSON.stringify({ error: `${req.method} is not supported: this server is stateless and offers no server-initiated stream` }));
+    return;
+  }
+  if (req.method !== "POST") {
+    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
+    res.end(JSON.stringify({ error: `${req.method} is not supported` }));
+    return;
+  }
+  const contentType = (header(req, "content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (contentType && contentType !== "application/json") {
+    sendJson(res, 415, { error: `unsupported content-type "${contentType}" \u2014 send application/json` }, origin);
+    return;
+  }
+  const accept = (header(req, "accept") ?? "").toLowerCase();
+  if (accept && !/application\/json|text\/event-stream|\*\/\*/.test(accept)) {
+    sendJson(res, 406, { error: "this endpoint replies with application/json" }, origin);
+    return;
+  }
+  const declared = header(req, "mcp-protocol-version");
+  if (declared !== void 0 && !isProtocolVersion(declared)) {
+    sendJson(res, 400, { error: `unsupported MCP-Protocol-Version: ${declared}` }, origin);
+    return;
+  }
+  const protocol = declared ?? ASSUMED_HTTP_PROTOCOL;
+  let raw;
+  try {
+    raw = await readBody(req);
+  } catch (e) {
+    if (e.message === "too large") {
+      sendJson(res, 413, { error: `request body exceeds ${MAX_BODY_BYTES} bytes` }, origin);
+      return;
+    }
+    sendJson(res, 400, { error: `could not read request body: ${e.message}` }, origin);
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    sendJson(res, 200, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, origin);
+    return;
+  }
+  const mcp = createServer(adapter, opts);
+  mcp.setProtocolVersion(protocol);
+  const out = [];
+  const collect = (m) => void out.push(m);
+  const messages = Array.isArray(parsed) ? parsed : [parsed];
+  for (const m of messages) await mcp.handle(m, collect);
+  if (out.length === 0) {
+    res.writeHead(202, corsHeaders(origin));
+    res.end();
+    return;
+  }
+  sendJson(res, 200, Array.isArray(parsed) ? out : out[0], origin);
+}
+function header(req, name) {
+  const v = req.headers[name];
+  return Array.isArray(v) ? v[0] : v;
+}
+function corsHeaders(origin) {
+  return origin ? { "access-control-allow-origin": origin, vary: "origin" } : {};
+}
+function sendJson(res, status, body, origin, extra = {}) {
+  const text = JSON.stringify(body);
+  res.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": String(Buffer.byteLength(text, "utf8")),
+    ...corsHeaders(origin),
+    ...extra
+  });
+  res.end(text);
+}
 var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
+function readBody(req) {
+  return new Promise((resolve22, reject) => {
+    const chunks = [];
+    let size = 0;
+    let over = false;
+    const declared = Number(req.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) over = true;
+    req.on("data", (c) => {
+      size += c.length;
+      if (over) {
+        if (size > DRAIN_LIMIT) {
+          req.destroy();
+          reject(new Error("too large"));
+        }
+        return;
+      }
+      if (size > MAX_BODY_BYTES) {
+        over = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (over) reject(new Error("too large"));
+      else resolve22(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+    req.on("aborted", () => reject(new Error("client aborted the request")));
+  });
+}
 
 // src/engine.ts
 configure({
@@ -3262,8 +3799,8 @@ function resolveEutils(raw, op) {
 }
 
 // src/dossier.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
+import { join as join4 } from "path";
 
 // src/citable.ts
 var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
@@ -3411,7 +3948,7 @@ var CITATION_RULES_NO_WRITE = [
 function readJson(path, what) {
   let raw;
   try {
-    raw = readFileSync3(path, "utf8");
+    raw = readFileSync4(path, "utf8");
   } catch (e) {
     throw new Error(`${what} could not be read (${path}): ${e.message}`);
   }
@@ -3469,20 +4006,20 @@ function renderSourceExtract(s, text, depth) {
   return head + capExtract(text, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join3(dir, s.extract);
-  if (!existsSync3(p)) return s.snippet ?? "";
-  const lines = readFileSync3(p, "utf8").split("\n");
+  const p = join4(dir, s.extract);
+  if (!existsSync4(p)) return s.snippet ?? "";
+  const lines = readFileSync4(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth) {
-  writeArtifact(join3(dir, s.extract), renderSourceExtract(s, text, depth));
+  writeArtifact(join4(dir, s.extract), renderSourceExtract(s, text, depth));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join3(dir, "sources.json");
-  const dossierMd = join3(dir, "DOSSIER.md");
-  const manifestJson = join3(dir, "manifest.json");
+  const sourcesJson = join4(dir, "sources.json");
+  const dossierMd = join4(dir, "DOSSIER.md");
+  const manifestJson = join4(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
@@ -3490,10 +4027,10 @@ function writeDossierIndex(dir, sources, manifest, template) {
 }
 function writeBibtex(dir, sources, extras) {
   if (!extras.includes("bibtex")) return;
-  writeArtifact(join3(dir, "refs.bib"), toBibtex(sources));
+  writeArtifact(join4(dir, "refs.bib"), toBibtex(sources));
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join3(dir, "sources"));
+  ensureDir(join4(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
@@ -3593,18 +4130,18 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson(join3(dir, "sources.json"), "sources.json");
+  const sources = readJson(join4(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
-  const manifest = readJson(join3(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson(join4(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
 // src/services.ts
-import { existsSync as existsSync4 } from "fs";
-import { dirname, join as join4 } from "path";
-import { fileURLToPath } from "url";
+import { existsSync as existsSync5 } from "fs";
+import { dirname as dirname2, join as join5 } from "path";
+import { fileURLToPath as fileURLToPath2 } from "url";
 import { spawn as spawn2 } from "child_process";
 var VERSION_PROBE_TIMEOUT_MS = 2e4;
 async function toolVersion(cmd, args) {
@@ -3722,10 +4259,10 @@ function describeWebSearchLane(manifest) {
   };
 }
 function composeFile() {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const root of [join4(here, ".."), join4(here, "..", "..")]) {
-    const p = join4(root, "docker-compose.yml");
-    if (existsSync4(p)) return p;
+  const here = dirname2(fileURLToPath2(import.meta.url));
+  for (const root of [join5(here, ".."), join5(here, "..", "..")]) {
+    const p = join5(root, "docker-compose.yml");
+    if (existsSync5(p)) return p;
   }
   return void 0;
 }
@@ -3771,7 +4308,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode, question, d) {
-  return join5(tmpdir3(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
+  return join6(tmpdir3(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -4231,8 +4768,8 @@ async function runGather(options) {
 }
 
 // src/enrich.ts
-import { existsSync as existsSync5, readFileSync as readFileSync4, statSync } from "fs";
-import { basename, resolve } from "path";
+import { existsSync as existsSync6, readFileSync as readFileSync5, statSync as statSync2 } from "fs";
+import { basename as basename2, resolve as resolve2 } from "path";
 import { pathToFileURL } from "url";
 async function addSources(dir, hits, opts = {}) {
   const results = [];
@@ -4251,7 +4788,7 @@ var TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log
 async function addFiles(dir, paths, opts = {}) {
   const results = [];
   for (const p of paths) {
-    const abs = resolve(p);
+    const abs = resolve2(p);
     const url = pathToFileURL(abs).href;
     results.push({ ...await addFile(dir, abs, opts), url });
   }
@@ -4263,15 +4800,15 @@ async function addFiles(dir, paths, opts = {}) {
 }
 async function addFile(dir, abs, opts) {
   const url = pathToFileURL(abs).href;
-  if (!existsSync5(abs) || !statSync(abs).isFile()) {
+  if (!existsSync6(abs) || !statSync2(abs).isFile()) {
     return { id: "", added: false, note: `${abs} is not a readable file` };
   }
   const { sources, manifest } = readDossier(dir);
   const question = opts.question ?? manifest.question;
   const existing = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(url));
   if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
-  const bytes = readFileSync4(abs);
-  const name = basename(abs);
+  const bytes = readFileSync5(abs);
+  const name = basename2(abs);
   let text;
   let extractor;
   const docFmt = docFormatForUrl(url);
@@ -4427,8 +4964,8 @@ async function addSource(dir, url, opts = {}) {
 }
 
 // src/render.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5 } from "fs";
-import { join as join6 } from "path";
+import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+import { join as join7 } from "path";
 
 // src/claims.ts
 var TOKEN_RE2 = /\[([^\]\n]+)\](?!\()/g;
@@ -4812,17 +5349,17 @@ li.s-uncited{opacity:.6}
 function citedAcrossTiers(dir) {
   const cited = /* @__PURE__ */ new Set();
   for (const t of TIERS) {
-    const p = join6(dir, t.file);
-    if (!existsSync6(p)) continue;
-    for (const id of citedSourceIds(readFileSync5(p, "utf8"))) cited.add(id);
+    const p = join7(dir, t.file);
+    if (!existsSync7(p)) continue;
+    for (const id of citedSourceIds(readFileSync6(p, "utf8"))) cited.add(id);
   }
   return cited;
 }
 function readVerify(dir) {
-  const p = join6(dir, "VERIFY.json");
-  if (!existsSync6(p)) return void 0;
+  const p = join7(dir, "VERIFY.json");
+  if (!existsSync7(p)) return void 0;
   try {
-    return JSON.parse(readFileSync5(p, "utf8"));
+    return JSON.parse(readFileSync6(p, "utf8"));
   } catch {
     return void 0;
   }
@@ -4838,11 +5375,11 @@ function worstBySource(verify) {
 }
 function renderHtml(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync6(join6(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync7(join7(dir, t.file)));
   const verify = readVerify(dir);
   const verdicts = worstBySource(verify);
   const rendered = present.map((t) => {
-    const md = readFileSync5(join6(dir, t.file), "utf8");
+    const md = readFileSync6(join7(dir, t.file), "utf8");
     const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
@@ -4941,7 +5478,7 @@ function sourcesSection(sources, cited) {
 }
 function writeHtml(dir, out) {
   const html = renderHtml(dir);
-  const path = out ?? join6(dir, "index.html");
+  const path = out ?? join7(dir, "index.html");
   return writeArtifact(path, html);
 }
 function mdLinkText(s) {
@@ -4973,12 +5510,12 @@ function verificationMarkdown(r) {
 }
 function buildReportMarkdown(dir) {
   const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync6(join6(dir, t.file)));
+  const present = TIERS.filter((t) => existsSync7(join7(dir, t.file)));
   const verify = readVerify(dir);
   const meta = `> ${manifest.mode} \xB7 depth ${manifest.depth} \xB7 ${sources.length} sources${manifest.lang ? ` \xB7 lang ${manifest.lang}` : ""}${manifest.region ? `/${manifest.region}` : ""} \xB7 ${manifest.builtAt} \xB7 generated by ultrasearch`;
   const parts = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
   for (const t of present) {
-    const body = readFileSync5(join6(dir, t.file), "utf8").trim();
+    const body = readFileSync6(join7(dir, t.file), "utf8").trim();
     if (!body) continue;
     parts.push("---", "", `## ${t.label}`, "", body, "");
   }
@@ -5002,17 +5539,17 @@ function buildReportMarkdown(dir) {
 }
 function writeReportMarkdown(dir, out) {
   const md = buildReportMarkdown(dir);
-  const path = out ?? join6(dir, "index.md");
+  const path = out ?? join7(dir, "index.md");
   return writeArtifact(path, md);
 }
 
 // src/check.ts
-import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
-import { join as join8 } from "path";
+import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { join as join9 } from "path";
 
 // src/verify.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
-import { join as join7 } from "path";
+import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { join as join8 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function claimStrings(text) {
@@ -5024,7 +5561,7 @@ function claimStrings(text) {
   return out;
 }
 function buildWorklist(dir, opts = {}) {
-  const sources = readJson(join7(dir, "sources.json"), "sources.json");
+  const sources = readJson(join8(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
@@ -5050,9 +5587,9 @@ function buildWorklist(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
-    const p = join7(dir, file);
-    if (!existsSync7(p)) continue;
-    const text = readFileSync6(p, "utf8");
+    const p = join8(dir, file);
+    if (!existsSync8(p)) continue;
+    const text = readFileSync7(p, "utf8");
     for (const claim of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
@@ -5094,8 +5631,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeArtifact(join7(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join7(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join8(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join8(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -5157,7 +5694,7 @@ function applyVerdicts(dir, verdictsPath) {
   }
   const verdicts = [...merged.values()];
   const result = reduceVerdicts(verdicts);
-  writeArtifact(join7(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join8(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -5299,15 +5836,15 @@ function analyzeFile(file, text) {
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
-  const p = join8(dir, "VERIFY.json");
-  if (!existsSync8(p)) {
+  const p = join9(dir, "VERIFY.json");
+  if (!existsSync9(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
   let stored;
   try {
-    stored = JSON.parse(readFileSync7(p, "utf8"));
+    stored = JSON.parse(readFileSync8(p, "utf8"));
   } catch (e) {
     result.ok = false;
     result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
@@ -5356,7 +5893,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync7(join8(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync8(join9(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -5364,13 +5901,13 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join8(dir, "sources.json");
-  if (!existsSync8(sourcesPath)) {
+  const sourcesPath = join9(dir, "sources.json");
+  if (!existsSync9(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync7(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync8(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
@@ -5378,11 +5915,11 @@ function runCheck(dir, opts = {}) {
     return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync8(join8(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync9(join9(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync7(join8(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync8(join9(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -5432,7 +5969,7 @@ function runCheck(dir, opts = {}) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
     try {
-      if (!existsSync8(join8(dir, s.extract))) continue;
+      if (!existsSync9(join9(dir, s.extract))) continue;
       const wall = looksLikeJunkExtraction(readSourceText(dir, s));
       if (wall) walled.push(`${s.id} (${wall})`);
     } catch {
@@ -5456,7 +5993,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync8(join8(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
+        t = s && existsSync9(join9(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
       } catch {
         t = null;
       }
@@ -5466,7 +6003,7 @@ function runCheck(dir, opts = {}) {
   };
   for (const f of present) {
     if (!HARD_FILES2.includes(f)) continue;
-    for (const u of unitsOfFile(readFileSync7(join8(dir, f), "utf8"))) {
+    for (const u of unitsOfFile(readFileSync8(join9(dir, f), "utf8"))) {
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -5647,7 +6184,7 @@ function refreshed(manifest, sources) {
 }
 
 // src/plan.ts
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -5884,12 +6421,12 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join9(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join10(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join9(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join10(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -5931,7 +6468,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -6038,8 +6575,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join10(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join10(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join11(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join11(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -6148,11 +6685,11 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
-import { join as join12, resolve as resolve2 } from "path";
+import { existsSync as existsSync10, readFileSync as readFileSync9 } from "fs";
+import { join as join13, resolve as resolve3 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -6202,7 +6739,7 @@ var VERIFY_SCHEMA = {
   }
 };
 function mergeHint(engineAbs, ph, runAbs) {
-  const outs = ph.plan ? ph.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())) : [`${join11(runAbs, "q1")},\u2026`];
+  const outs = ph.plan ? ph.plan.subQuestions.map((s) => s.out ?? join12(runAbs, s.id.toLowerCase())) : [`${join12(runAbs, "q1")},\u2026`];
   const q = ph.plan ? ph.plan.question : "<question>";
   const mode = ph.plan ? ph.plan.mode : "<mode>";
   return [
@@ -6234,7 +6771,7 @@ var PHASE_SPECS = {
     applyHint: (engine, _ph, run) => [
       `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
       `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-      `save each returned fragment as ${join11(run, "verdicts.<i>.json")} then reassemble + gate:`,
+      `save each returned fragment as ${join12(run, "verdicts.<i>.json")} then reassemble + gate:`,
       `node ${shq(engine)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
     ]
   }
@@ -6251,7 +6788,7 @@ function toBatches(ids, batchSize) {
 }
 function phaseWorkflowScript(ph, runAbs, engineAbs, smallWorklist) {
   const spec = phaseSpec(ph.name);
-  const scriptPath = join11(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
+  const scriptPath = join12(runAbs, "orchestration", `${ph.name}.workflow.mjs`);
   const meta = { name: `ultrasearch-${ph.name}`, description: spec.description(ph.items), phases: [{ title: spec.title }] };
   const batches = ph.items <= spec.collapseFloor(smallWorklist) ? [ph.ids] : toBatches(ph.ids, spec.batchSize);
   const hint = spec.applyHint(engineAbs, ph, runAbs);
@@ -6298,7 +6835,7 @@ function agentContracts(runAbs, engineAbs) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join11(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join12(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
@@ -6321,7 +6858,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join11(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join12(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -6346,7 +6883,7 @@ function runbookMd(phases, runAbs, engineAbs) {
   const status = phases.map((p) => `| ${p.name} | \`${cell(p.worklist)}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${cell(p.prerequisite)}\` |`).join("\n");
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
-  const outs = gather?.plan ? shq(gather.plan.subQuestions.map((s) => s.out ?? join11(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gather?.plan ? shq(gather.plan.subQuestions.map((s) => s.out ?? join12(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gather?.plan ? shq(gather.plan.question) : '"<question>"';
   const mode = gather?.plan ? gather.plan.mode : "<m>";
   const run = shq(runAbs);
@@ -6367,15 +6904,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join11(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join11(runAbs, "PLAN.json")}\`, apply \`${join11(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join12(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join12(runAbs, "PLAN.json")}\`, apply \`${join12(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join11(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join11(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join11(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join12(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join12(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join12(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join11(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join12(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `;
 }
 
@@ -6383,23 +6920,23 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 var PHASES = ["gather", "verify"];
 var SMALL_WORKLIST = 3;
 function listPhases(runDir, engineAbs) {
-  const run = resolve2(runDir);
-  const planPath = join12(run, "PLAN.json");
+  const run = resolve3(runDir);
+  const planPath = join13(run, "PLAN.json");
   let plan;
-  if (existsSync9(planPath)) {
+  if (existsSync10(planPath)) {
     try {
-      const f = JSON.parse(readFileSync8(planPath, "utf8"));
+      const f = JSON.parse(readFileSync9(planPath, "utf8"));
       if (f && Array.isArray(f.subQuestions)) plan = f;
     } catch {
     }
   }
   const planIds = plan ? plan.subQuestions.map((s) => s.id) : [];
-  const verPath = join12(run, "VERIFY.todo.json");
+  const verPath = join13(run, "VERIFY.todo.json");
   let verIds = [];
   let verReady = false;
-  if (existsSync9(verPath)) {
+  if (existsSync10(verPath)) {
     try {
-      const f = JSON.parse(readFileSync8(verPath, "utf8"));
+      const f = JSON.parse(readFileSync9(verPath, "utf8"));
       if (f && Array.isArray(f.pairs)) {
         verReady = true;
         verIds = f.pairs.map((p) => `${p.claimId}:${p.sourceId}`);
@@ -6432,8 +6969,8 @@ function listPhases(runDir, engineAbs) {
   ];
 }
 function orchestrateRun(runDir, engineAbs, opts = {}) {
-  const run = resolve2(runDir);
-  if (!existsSync9(run)) {
+  const run = resolve3(runDir);
+  if (!existsSync10(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
   const phases = listPhases(run, engineAbs);
@@ -6460,14 +6997,14 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join12(run, "orchestration");
-  const agentsDir = join12(orchDir, "agents");
-  ensureDir(join12(orchDir, "out"));
+  const orchDir = join13(run, "orchestration");
+  const agentsDir = join13(orchDir, "agents");
+  ensureDir(join13(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(agentContracts(run, engineAbs))) {
-    const p = join12(agentsDir, `${name}.md`);
+    const p = join13(agentsDir, `${name}.md`);
     writeArtifact(p, content);
     written.push(p);
   }
@@ -6480,23 +7017,20 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
       if (ph.items <= phaseSpec(ph.name).collapseFloor(SMALL_WORKLIST)) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      const p = join12(orchDir, `${ph.name}.workflow.mjs`);
+      const p = join13(orchDir, `${ph.name}.workflow.mjs`);
       writeArtifact(p, phaseWorkflowScript(ph, run, engineAbs, SMALL_WORKLIST));
       written.push(p);
     }
   }
-  const rb = join12(orchDir, "RUNBOOK.md");
+  const rb = join13(orchDir, "RUNBOOK.md");
   writeArtifact(rb, runbookMd(phases, run, engineAbs));
   written.push(rb);
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 
-// src/mcp/stdio.ts
-import { createInterface } from "readline";
-
 // src/mcp/handlers.ts
-import { existsSync as existsSync10, readFileSync as readFileSync9, realpathSync, statSync as statSync2 } from "fs";
-import { isAbsolute, join as join13, relative, resolve as resolve3, sep } from "path";
+import { existsSync as existsSync11, readFileSync as readFileSync10, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
+import { isAbsolute, join as join14, relative, resolve as resolve4, sep as sep2 } from "path";
 
 // src/run-lock.ts
 var chains = /* @__PURE__ */ new Map();
@@ -6514,8 +7048,6 @@ function noop() {
 }
 
 // src/mcp/handlers.ts
-var ToolError = class extends Error {
-};
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -6564,8 +7096,8 @@ function requiredRun(args, defaults) {
   const run = str(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute(run)) throw new ToolError("`run` must be an absolute path.");
-  const abs = resolve3(run);
-  if (!existsSync10(join13(abs, "manifest.json"))) {
+  const abs = resolve4(run);
+  if (!existsSync11(join14(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -6716,9 +7248,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join13(res.dir, "DOSSIER.md"),
+    dossier_md: join14(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join13(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join14(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -6756,14 +7288,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync10(join13(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync11(join14(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str(args.master);
   if (master !== void 0 && !isAbsolute(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str(args.question), mode: str(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join13(res.dir, "DOSSIER.md"),
+    dossier_md: join14(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -6853,21 +7385,21 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute(raw) ? raw : join13(run, raw);
+  const target = isAbsolute(raw) ? raw : join14(run, raw);
   let real;
   try {
-    real = realpathSync(target);
+    real = realpathSync2(target);
   } catch {
     throw new ToolError(`no such file: ${raw}`);
   }
-  const root = realpathSync(run);
-  if (real !== root && !real.startsWith(root + sep)) {
+  const root = realpathSync2(run);
+  if (real !== root && !real.startsWith(root + sep2)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
-  const st = statSync2(real);
+  const st = statSync3(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync9(real, "utf8").split("\n");
+  const lines = readFileSync10(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
@@ -6881,98 +7413,6 @@ function handleRead(args, run) {
     truncated: end < Math.min(total, requestedEnd),
     content: lines.slice(start - 1, end).join("\n")
   };
-}
-
-// src/mcp/protocol.ts
-var PROTOCOL_VERSIONS2 = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
-var LATEST_PROTOCOL2 = PROTOCOL_VERSIONS2[PROTOCOL_VERSIONS2.length - 1];
-var ASSUMED_HTTP_PROTOCOL = "2025-03-26";
-var ANNOTATIONS_SINCE = "2025-03-26";
-var RICH_TOOLS_SINCE = "2025-06-18";
-var DEFAULT_MAX_RESPONSE_BYTES = 1e6;
-function isProtocolVersion(v) {
-  return typeof v === "string" && PROTOCOL_VERSIONS2.includes(v);
-}
-function negotiateProtocol(requested) {
-  return isProtocolVersion(requested) ? requested : LATEST_PROTOCOL2;
-}
-function validateArgs(schema, args) {
-  for (const key of schema.required) {
-    const v = args[key];
-    if (v === void 0 || v === null || v === "") return `\`${key}\` is required`;
-  }
-  for (const [key, value] of Object.entries(args)) {
-    if (value === void 0 || value === null) continue;
-    const spec = schema.properties[key];
-    if (!spec?.type) continue;
-    const actual = Array.isArray(value) ? "array" : typeof value;
-    if (spec.type === "number") {
-      if (actual === "number") continue;
-      if (actual === "string" && value.trim() !== "" && Number.isFinite(Number(value))) continue;
-      return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
-    }
-    if (spec.type === "array") {
-      if (actual !== "array") return `\`${key}\` must be an array, got ${actual}`;
-      const arr = value;
-      if (spec.items?.type === "string" && !arr.every((x) => typeof x === "string")) {
-        return `\`${key}\` must be an array of strings`;
-      }
-      if (spec.enum) {
-        const bad = arr.find((x) => typeof x === "string" && !spec.enum.includes(x));
-        if (bad !== void 0) return `\`${key}\` contains "${String(bad)}" \u2014 allowed: ${spec.enum.join(", ")}`;
-      }
-      continue;
-    }
-    if (actual !== spec.type) return `\`${key}\` must be a ${spec.type}, got ${actual}`;
-    if (spec.enum && typeof value === "string" && !spec.enum.includes(value)) {
-      return `\`${key}\` must be one of: ${spec.enum.join(", ")}`;
-    }
-  }
-  return void 0;
-}
-var NARROWER = {
-  ultrasearch_gather: 'lower `max_sources` or `per_source`, or drop to `depth: "summary"`',
-  ultrasearch_search: "lower `max_sources`",
-  ultrasearch_merge: "merge fewer `runs`, or read the merged DOSSIER.md instead of inlining it",
-  ultrasearch_verify: "lower `max_verify`, or split the worklist with `shards`/`shard`",
-  ultrasearch_check: "the report is very large; check it in pieces",
-  ultrasearch_read: "pass `start_line`/`end_line` to read a window instead of the whole file"
-};
-function capResponse(text, tool, maxBytes, artifact) {
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes <= maxBytes) return text;
-  return JSON.stringify(
-    {
-      truncated: true,
-      tool,
-      bytes,
-      maxBytes,
-      reason: "This response exceeds the configured limit and was withheld rather than sent as an unusable partial payload.",
-      narrower: NARROWER[tool] ?? "narrow the request and call again",
-      ...artifact ? { artifact, artifactNote: "The full result is on disk here \u2014 read it directly if you need all of it." } : {}
-    },
-    null,
-    2
-  ) + "\n";
-}
-function structuredContentFor(text, capped, hasSchema) {
-  if (capped || !hasSchema) return void 0;
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return void 0;
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return void 0;
-  return parsed;
-}
-var LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
-function isOriginAllowed(origin, allowed = []) {
-  if (origin === void 0) return true;
-  const o = origin.trim();
-  if (o === "" || o === "null") return true;
-  if (LOOPBACK_ORIGIN.test(o)) return true;
-  return allowed.some((a) => a === "*" || a.toLowerCase() === o.toLowerCase());
 }
 
 // src/mcp/tools.ts
@@ -7289,8 +7729,6 @@ function applyDefaultRun(schema, defaultRun) {
 }
 
 // src/mcp/prompts.ts
-var PromptError = class extends Error {
-};
 var PROMPTS = [
   {
     name: "research_topic",
@@ -7320,7 +7758,7 @@ var PROMPTS = [
 function getPrompt(name, args = {}) {
   const decl = PROMPTS.find((p) => p.name === name);
   if (!decl) throw new PromptError(`unknown prompt: ${name || "(none given)"}`);
-  for (const arg of decl.arguments) {
+  for (const arg of decl.arguments ?? []) {
     if (arg.required && !str2(args[arg.name])) throw new PromptError(`\`${arg.name}\` is required for prompt "${name}"`);
   }
   const text = name === "research_topic" ? researchTopic(args) : name === "debug_error" ? debugError(args) : literatureReview(args);
@@ -7402,463 +7840,24 @@ function str2(v) {
 }
 var DECLARED = new Set([...TOOLS, ...WRITE_TOOLS].map((t) => t.name));
 
-// src/mcp/resources.ts
-import { existsSync as existsSync11, readdirSync, readFileSync as readFileSync10, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
-import { basename as basename2, dirname as dirname2, join as join14, resolve as resolve4, sep as sep2 } from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
-var SKILL_NAME = "ultrasearch";
-var URI_SCHEME = "skill://";
-function resolveSkillRoot(moduleDir) {
-  const here = moduleDir ?? dirname2(fileURLToPath2(import.meta.url));
-  const candidates = [resolve4(here, ".."), resolve4(here, "..", "skills", SKILL_NAME), resolve4(here, "..", "..", "skills", SKILL_NAME)];
-  return candidates.find((dir) => existsSync11(join14(dir, "SKILL.md")));
-}
-function listResources(moduleDir) {
-  const root = resolveSkillRoot(moduleDir);
-  if (!root) return [];
-  const out = [describe(root, "SKILL.md", `${SKILL_NAME}: the skill`)];
-  const refDir = join14(root, "references");
-  if (!existsSync11(refDir)) return out;
-  for (const file of readdirSync(refDir).sort()) {
-    if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join14("references", file), `${SKILL_NAME} reference: ${basename2(file, ".md")}`));
-  }
-  return out;
-}
-function readResource(uri, moduleDir) {
-  if (!uri.startsWith(URI_SCHEME)) {
-    throw new ResourceError(`unknown resource scheme in "${uri}" (expected ${URI_SCHEME}\u2026)`);
-  }
-  const root = resolveSkillRoot(moduleDir);
-  if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
-  const rel = uri.slice(URI_SCHEME.length);
-  if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve4(root, rel);
-  const rootReal = realpathSync2(root);
-  let targetReal;
-  try {
-    targetReal = realpathSync2(target);
-  } catch {
-    throw new ResourceError(`no such resource: ${uri}`);
-  }
-  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
-    throw new ResourceError(`resource path escapes the skill root: ${uri}`);
-  }
-  if (!statSync3(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync10(targetReal, "utf8") };
-}
-var ResourceError = class extends Error {
+// src/mcp/adapter.ts
+var CAP_ADVICE = {
+  ultrasearch_gather: 'lower `max_sources` or `per_source`, or drop to `depth: "summary"`',
+  ultrasearch_search: "lower `max_sources`",
+  ultrasearch_merge: "merge fewer `runs`, or read the merged DOSSIER.md instead of inlining it",
+  ultrasearch_verify: "lower `max_verify`, or split the worklist with `shards`/`shard`",
+  ultrasearch_check: "the report is very large; check it in pieces",
+  ultrasearch_read: "pass `start_line`/`end_line` to read a window instead of the whole file"
 };
-function describe(root, rel, fallbackTitle) {
-  const decl = {
-    uri: `${URI_SCHEME}${rel.split(sep2).join("/")}`,
-    name: rel.split(sep2).join("/"),
-    title: fallbackTitle,
-    mimeType: "text/markdown"
-  };
-  const summary = firstProse(join14(root, rel));
-  if (summary) decl.description = summary;
-  return decl;
-}
-function firstProse(file) {
-  let text;
-  try {
-    text = readFileSync10(file, "utf8");
-  } catch {
-    return void 0;
-  }
-  const body = text.startsWith("---\n") ? text.slice(text.indexOf("\n---", 3) + 4) : text;
-  for (const block of body.split(/\n\s*\n/)) {
-    const line = block.trim();
-    if (!line || line.startsWith("#") || line.startsWith(">") || line.startsWith("|") || line.startsWith("```")) continue;
-    const flat = line.replace(/\s+/g, " ").replace(/[*`]/g, "");
-    return flat.length > 300 ? `${flat.slice(0, 297)}\u2026` : flat;
-  }
-  return void 0;
-}
-
-// src/mcp/server.ts
-var ERR_INVALID_REQUEST = -32600;
-var ERR_METHOD_NOT_FOUND = -32601;
-var ERR_INVALID_PARAMS = -32602;
-var ERR_INTERNAL = -32603;
-function createServer(opts = {}) {
-  const serverInfo = { name: opts.serverName ?? "ultrasearch", version: VERSION };
-  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-  let protocol = LATEST_PROTOCOL2;
-  const cancelled = /* @__PURE__ */ new Set();
-  const CANCELLED_MAX = 1024;
-  const listTools = () => toolsFor(protocol, { defaultRun: opts.defaultRun, allowWrite: opts.allowWrite });
-  async function handle(msg, send) {
-    if (msg === null || typeof msg !== "object" || Array.isArray(msg)) {
-      send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
-      return;
-    }
-    if (msg.id === void 0 || msg.id === null) {
-      if (msg.method === "notifications/cancelled") {
-        const target = msg.params?.requestId;
-        if (typeof target === "string" || typeof target === "number") {
-          if (cancelled.size >= CANCELLED_MAX) cancelled.delete(cancelled.values().next().value);
-          cancelled.add(String(target));
-        }
-      }
-      return;
-    }
-    const id = msg.id;
-    const reply = (out) => {
-      if (cancelled.delete(String(id))) return;
-      send({ jsonrpc: "2.0", id, ...out });
-    };
-    try {
-      switch (msg.method) {
-        case "initialize": {
-          protocol = negotiateProtocol(msg.params?.protocolVersion);
-          reply({
-            result: {
-              protocolVersion: protocol,
-              // Three primitives, because a skill is three things: the engine
-              // (tools), the method (prompts) and the documentation the method
-              // refers to (resources). A client given only the first has to
-              // invent the other two.
-              capabilities: {
-                tools: { listChanged: false },
-                resources: { subscribe: false, listChanged: false },
-                prompts: { listChanged: false }
-              },
-              serverInfo
-            }
-          });
-          return;
-        }
-        case "ping":
-          reply({ result: {} });
-          return;
-        case "tools/list":
-          reply({ result: { tools: listTools() } });
-          return;
-        case "tools/call":
-          await handleToolCall(msg, reply);
-          return;
-        case "resources/list":
-          reply({ result: { resources: listResources(opts.skillDir) } });
-          return;
-        case "resources/read": {
-          const uri = typeof msg.params?.uri === "string" ? msg.params.uri : "";
-          if (!uri) {
-            reply({ error: { code: ERR_INVALID_PARAMS, message: "`uri` is required" } });
-            return;
-          }
-          try {
-            reply({ result: { contents: [readResource(uri, opts.skillDir)] } });
-          } catch (e) {
-            if (e instanceof ResourceError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
-            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
-          }
-          return;
-        }
-        case "prompts/list":
-          reply({ result: { prompts: PROMPTS } });
-          return;
-        case "prompts/get": {
-          const name = typeof msg.params?.name === "string" ? msg.params.name : "";
-          const args = msg.params?.arguments ?? {};
-          try {
-            reply({ result: getPrompt(name, args) });
-          } catch (e) {
-            if (e instanceof PromptError) reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
-            else reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
-          }
-          return;
-        }
-        default:
-          reply({ error: { code: ERR_METHOD_NOT_FOUND, message: `method not found: ${String(msg.method)}` } });
-          return;
-      }
-    } catch (e) {
-      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
-    }
-  }
-  async function handleToolCall(msg, reply) {
-    const params = msg.params ?? {};
-    const name = typeof params.name === "string" ? params.name : "";
-    const args = params.arguments ?? {};
-    const decl = listTools().find((t) => t.name === name);
-    if (!decl) {
-      reply({ error: { code: ERR_INVALID_PARAMS, message: `unknown tool: ${name || "(none given)"}` } });
-      return;
-    }
-    const invalid = validateArgs(decl.inputSchema, args);
-    if (invalid) {
-      reply({ error: { code: ERR_INVALID_PARAMS, message: invalid } });
-      return;
-    }
-    try {
-      const { text: raw, artifact } = await callTool(name, args, { defaultRun: opts.defaultRun, allowWrite: opts.allowWrite });
-      const text = capResponse(raw, name, maxBytes, artifact);
-      const capped = text !== raw;
-      const structured = protocol >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, decl.outputSchema !== void 0) : void 0;
-      reply({ result: { content: [{ type: "text", text }], ...structured ? { structuredContent: structured } : {} } });
-    } catch (e) {
-      if (e instanceof ToolError) {
-        reply({ result: { content: [{ type: "text", text: e.message }], isError: true } });
-        return;
-      }
-      reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
-    }
-  }
+function ultrasearchAdapter(opts = {}) {
   return {
-    handle,
-    protocolVersion: () => protocol,
-    setProtocolVersion: (v) => {
-      protocol = v;
-    },
-    tools: listTools
+    version: VERSION,
+    listTools: (protocol) => toolsFor(protocol, opts),
+    callTool: (name, args) => callTool(name, args, opts),
+    capAdvice: CAP_ADVICE,
+    prompts: PROMPTS,
+    getPrompt
   };
-}
-function errMessage(e) {
-  return e instanceof Error ? e.message : String(e);
-}
-
-// src/mcp/stdio.ts
-var MAX_IN_FLIGHT = 4;
-async function runStdioServer(opts = {}) {
-  const input = opts.input ?? process.stdin;
-  const output = opts.output ?? process.stdout;
-  const emit = output.write.bind(output);
-  let restore;
-  if (!opts.captureStdout && output === process.stdout) {
-    const original = process.stdout.write;
-    process.stdout.write = ((chunk, ...rest) => process.stderr.write(chunk, ...rest));
-    restore = () => {
-      process.stdout.write = original;
-    };
-  }
-  const server = createServer(opts);
-  const send = (msg) => {
-    emit(JSON.stringify(msg) + "\n");
-  };
-  const inFlight = /* @__PURE__ */ new Set();
-  const track = (p) => {
-    inFlight.add(p);
-    void p.finally(() => inFlight.delete(p));
-    return p;
-  };
-  const drainToLimit = async () => {
-    while (inFlight.size >= MAX_IN_FLIGHT) await Promise.race(inFlight);
-  };
-  const rl = createInterface({ input, terminal: false });
-  try {
-    for await (const line of rl) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let parsed;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
-        send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
-        continue;
-      }
-      await drainToLimit();
-      if (Array.isArray(parsed)) {
-        track(
-          (async () => {
-            const out = [];
-            await Promise.all(parsed.map((m) => server.handle(m, (r) => void out.push(r))));
-            if (out.length) emit(JSON.stringify(out) + "\n");
-          })().catch(reportInternal(send))
-        );
-        continue;
-      }
-      if (parsed === null || typeof parsed !== "object") {
-        send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
-        continue;
-      }
-      track(server.handle(parsed, send).catch(reportInternal(send)));
-    }
-    await Promise.all(inFlight);
-  } finally {
-    rl.close();
-    restore?.();
-  }
-}
-function reportInternal(send) {
-  return (e) => {
-    send({ jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
-  };
-}
-
-// src/mcp/http.ts
-import { createServer as createHttpServer } from "http";
-var MCP_PATH = "/mcp";
-var MAX_BODY_BYTES2 = 4 * 1024 * 1024;
-var CORS_HEADERS = "content-type, accept, mcp-protocol-version, mcp-session-id, authorization, last-event-id";
-var LOOPBACK_BIND = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
-function startHttpServer(opts = {}) {
-  const bind = opts.bind ?? "127.0.0.1";
-  if (!LOOPBACK_BIND.has(bind) && !opts.allowRemote) {
-    return Promise.reject(
-      new Error(
-        `refusing to bind ${bind}: ultrasearch's MCP server clones arbitrary git URLs and reads local files. Pass --allow-remote if that is really what you want.`
-      )
-    );
-  }
-  const server = createHttpServer((req, res) => {
-    void route(req, res, opts).catch((e) => {
-      if (res.headersSent) {
-        res.destroy();
-        return;
-      }
-      sendJson(res, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
-    });
-  });
-  server.requestTimeout = 0;
-  server.headersTimeout = 6e4;
-  server.keepAliveTimeout = 12e4;
-  return new Promise((resolve6, reject) => {
-    server.once("error", reject);
-    server.listen(opts.port ?? 0, bind, () => {
-      server.removeListener("error", reject);
-      const addr = server.address();
-      const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
-      const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve6({
-        server,
-        port,
-        url: `http://${host}:${port}${MCP_PATH}`,
-        close: () => new Promise((done) => {
-          server.closeAllConnections?.();
-          server.close(() => done());
-        })
-      });
-    });
-  });
-}
-async function route(req, res, opts) {
-  const path = (req.url ?? "").split("?")[0];
-  const origin = header(req, "origin");
-  if (!isOriginAllowed(origin, opts.allowOrigin)) {
-    sendJson(res, 403, { error: "origin not allowed", origin });
-    return;
-  }
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      ...corsHeaders(origin),
-      "access-control-allow-methods": "POST, GET, DELETE, OPTIONS",
-      "access-control-allow-headers": CORS_HEADERS,
-      "access-control-max-age": "86400"
-    });
-    res.end();
-    return;
-  }
-  if (path !== MCP_PATH) {
-    sendJson(res, 404, { error: `not found: ${path} (the MCP endpoint is ${MCP_PATH})` }, origin);
-    return;
-  }
-  if (req.method === "GET" || req.method === "DELETE") {
-    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
-    res.end(JSON.stringify({ error: `${req.method} is not supported: this server is stateless and offers no server-initiated stream` }));
-    return;
-  }
-  if (req.method !== "POST") {
-    res.writeHead(405, { allow: "POST, OPTIONS", ...corsHeaders(origin) });
-    res.end(JSON.stringify({ error: `${req.method} is not supported` }));
-    return;
-  }
-  const contentType = (header(req, "content-type") ?? "").split(";")[0].trim().toLowerCase();
-  if (contentType && contentType !== "application/json") {
-    sendJson(res, 415, { error: `unsupported content-type "${contentType}" \u2014 send application/json` }, origin);
-    return;
-  }
-  const accept = (header(req, "accept") ?? "").toLowerCase();
-  if (accept && !/application\/json|text\/event-stream|\*\/\*/.test(accept)) {
-    sendJson(res, 406, { error: "this endpoint replies with application/json" }, origin);
-    return;
-  }
-  const declared = header(req, "mcp-protocol-version");
-  if (declared !== void 0 && !isProtocolVersion(declared)) {
-    sendJson(res, 400, { error: `unsupported MCP-Protocol-Version: ${declared}` }, origin);
-    return;
-  }
-  const protocol = declared ?? ASSUMED_HTTP_PROTOCOL;
-  let raw;
-  try {
-    raw = await readBody(req);
-  } catch (e) {
-    if (e.message === "too large") {
-      sendJson(res, 413, { error: `request body exceeds ${MAX_BODY_BYTES2} bytes` }, origin);
-      return;
-    }
-    sendJson(res, 400, { error: `could not read request body: ${e.message}` }, origin);
-    return;
-  }
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    sendJson(res, 200, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }, origin);
-    return;
-  }
-  const mcp = createServer(opts);
-  mcp.setProtocolVersion(protocol);
-  const out = [];
-  const collect = (m) => void out.push(m);
-  const messages = Array.isArray(parsed) ? parsed : [parsed];
-  for (const m of messages) await mcp.handle(m, collect);
-  if (out.length === 0) {
-    res.writeHead(202, corsHeaders(origin));
-    res.end();
-    return;
-  }
-  sendJson(res, 200, Array.isArray(parsed) ? out : out[0], origin);
-}
-function header(req, name) {
-  const v = req.headers[name];
-  return Array.isArray(v) ? v[0] : v;
-}
-function corsHeaders(origin) {
-  return origin ? { "access-control-allow-origin": origin, vary: "origin" } : {};
-}
-function sendJson(res, status, body, origin, extra = {}) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json",
-    "content-length": String(Buffer.byteLength(text, "utf8")),
-    ...corsHeaders(origin),
-    ...extra
-  });
-  res.end(text);
-}
-var DRAIN_LIMIT2 = MAX_BODY_BYTES2 * 8;
-function readBody(req) {
-  return new Promise((resolve6, reject) => {
-    const chunks = [];
-    let size = 0;
-    let over = false;
-    const declared = Number(req.headers["content-length"]);
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES2) over = true;
-    req.on("data", (c) => {
-      size += c.length;
-      if (over) {
-        if (size > DRAIN_LIMIT2) {
-          req.destroy();
-          reject(new Error("too large"));
-        }
-        return;
-      }
-      if (size > MAX_BODY_BYTES2) {
-        over = true;
-        chunks.length = 0;
-        return;
-      }
-      chunks.push(c);
-    });
-    req.on("end", () => {
-      if (over) reject(new Error("too large"));
-      else resolve6(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-    req.on("aborted", () => reject(new Error("client aborted the request")));
-  });
 }
 
 // src/cli.ts
@@ -8795,7 +8794,7 @@ ${formatServices(rows)}
         maxResponseBytes
       };
       if (transport === "stdio") {
-        await runStdioServer(options);
+        await runStdioServer(ultrasearchAdapter(options), options);
         return;
       }
       const port = p.values.port ? Number(p.values.port) : 7339;
@@ -8803,7 +8802,13 @@ ${formatServices(rows)}
       const allowOrigin = p.values["allow-origin"] ? p.values["allow-origin"].split(",").map((s) => s.trim()).filter(Boolean) : void 0;
       let running;
       try {
-        running = await startHttpServer({ ...options, port, bind: p.values.bind, allowOrigin, allowRemote: p.bools.has("allow-remote") });
+        running = await startHttpServer(ultrasearchAdapter(options), {
+          ...options,
+          port,
+          bind: p.values.bind,
+          allowOrigin,
+          allowRemote: p.bools.has("allow-remote")
+        });
       } catch (e) {
         fail(e.message);
       }

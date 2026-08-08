@@ -22,8 +22,8 @@ import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
-import { runStdioServer } from "./mcp/stdio.js";
-import { startHttpServer } from "./mcp/http.js";
+import { runStdioServer, startHttpServer } from "./engine.js";
+import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, compose, describeWebSearchLane } from "./services.js";
 
@@ -1109,7 +1109,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (transport === "stdio") {
         // Nothing is written to stdout here: from this point stdout carries
         // JSON-RPC frames only, and runStdioServer guards that.
-        await runStdioServer(options);
+        await runStdioServer(ultrasearchAdapter(options), options);
         return;
       }
 
@@ -1123,7 +1123,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         : undefined;
       let running: Awaited<ReturnType<typeof startHttpServer>>;
       try {
-        running = await startHttpServer({ ...options, port, bind: p.values.bind, allowOrigin, allowRemote: p.bools.has("allow-remote") });
+        running = await startHttpServer(ultrasearchAdapter(options), {
+          ...options,
+          port,
+          bind: p.values.bind,
+          allowOrigin,
+          allowRemote: p.bools.has("allow-remote"),
+        });
       } catch (e) {
         fail((e as Error).message);
       }

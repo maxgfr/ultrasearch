@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { startHttpServer, type RunningHttpServer } from "../src/mcp/http.js";
+import { ultrasearchAdapter } from "../src/mcp/adapter.js";
+import { startHttpServer, type RunningHttpServer } from "../src/engine.js";
 
 // The Streamable HTTP transport, exercised over a real socket on port 0. This
 // is loopback, not network: nothing here reaches outside the machine.
 
 let running: RunningHttpServer;
 beforeAll(async () => {
-  running = await startHttpServer({ port: 0 });
+  running = await startHttpServer(ultrasearchAdapter(), { port: 0 });
 });
 afterAll(async () => {
   await running.close();
@@ -158,7 +159,7 @@ describe("DNS-rebinding defense", () => {
   });
 
   it("honours an explicit allow-list", async () => {
-    const alt = await startHttpServer({ port: 0, allowOrigin: ["https://app.example.com"] });
+    const alt = await startHttpServer(ultrasearchAdapter(), { port: 0, allowOrigin: ["https://app.example.com"] });
     try {
       const res = await fetch(alt.url, {
         method: "POST",
@@ -172,7 +173,7 @@ describe("DNS-rebinding defense", () => {
   });
 
   it("refuses to bind a non-loopback address without --allow-remote", async () => {
-    await expect(startHttpServer({ port: 0, bind: "0.0.0.0" })).rejects.toThrow(/refusing to bind/);
+    await expect(startHttpServer(ultrasearchAdapter(), { port: 0, bind: "0.0.0.0" })).rejects.toThrow(/refusing to bind/);
   });
 });
 
