@@ -28,12 +28,13 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "verify:bundle": "node scripts/verify-skill-bundle.mjs",
-    "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs && node scripts/sync-engine.mjs --check && git diff --exit-code -- assets tests/__snapshots__",
+    "check:build": "tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/ultrasearch.mjs skills/ultrasearch/scripts/ultrasearch.mjs && node scripts/verify-skill-bundle.mjs && node scripts/sync-engine.mjs --check && git diff --exit-code -- assets tests/__snapshots__ && node scripts/verify-engine-usage.mjs",
     "demo": "node scripts/ultrasearch.mjs gather --q \"what is rate limiting\" --mode topic --backends fixture --out /tmp/ultrasearch-demo",
     "eval": "node evals/run.mjs --suite offline",
     "eval:network": "node evals/run.mjs --suite network",
     "bench:pdf": "ULTRASEARCH_BENCH=1 vitest run tests/bench-pdf.test.ts",
-    "release": "semantic-release"
+    "release": "semantic-release",
+    "verify:engine": "node scripts/verify-engine-usage.mjs"
   },
   "keywords": [
     "skills",

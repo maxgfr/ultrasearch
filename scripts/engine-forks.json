@@ -1,0 +1,4 @@
+{
+  "_comment": "Declarations in this repo that shadow a webindex export, with why they have not been adopted. A ratchet: entries may leave, never arrive. Anything not listed fails verify-engine-usage, so the next fork is an argued decision rather than a quiet copy. An entry that no longer matches anything also fails, so the list cannot rot.",
+  "forks": {}
+}
