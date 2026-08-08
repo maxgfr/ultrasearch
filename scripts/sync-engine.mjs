@@ -30,6 +30,15 @@ const vendorDir = join(root, "src", "vendor");
 const ENGINES = {
   webindex: {
     repo: "maxgfr/webindex",
+    // The oldest engine release this repo's SOURCE is written against. Bump it in
+    // the SAME commit that deletes a local copy in favour of an engine export.
+    //
+    // Why this exists: --check re-hashes the vendored bytes against the pin, so it
+    // catches a TAMPERED vendor but not a STALE one. A repo pinned three releases
+    // back passes cleanly — and because tsup INLINES the vendored bundle, it then
+    // ships the old behaviour with every test green, measuring the wrong code.
+    // This turns that silence into a failed build.
+    minRef: "v1.3.0",
     meta: "engine.meta.json",
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },
@@ -37,6 +46,17 @@ const ENGINES = {
     ],
   },
 };
+
+// Compare two `vX.Y.Z` tags. Returns <0, 0, >0 like a sort comparator.
+// Numeric per component — "v1.10.0" is NEWER than "v1.9.0", which a string
+// compare gets backwards, and getting it backwards here would silently disarm
+// the staleness gate at exactly the release where it starts to matter.
+function cmpTag(a, b) {
+  const parts = (t) => String(t).replace(/^v/, "").split(".").map((n) => Number.parseInt(n, 10) || 0);
+  const [x, y] = [parts(a), parts(b)];
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+  return 0;
+}
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const args = process.argv.slice(2);
@@ -70,7 +90,7 @@ function selected() {
 if (args[0] === "--check") {
   let ok = true;
   for (const name of Object.keys(ENGINES)) {
-    const { meta: metaFile, files } = ENGINES[name];
+    const { meta: metaFile, files, minRef } = ENGINES[name];
     let meta;
     try {
       meta = JSON.parse(readFileSync(join(vendorDir, metaFile), "utf8"));
@@ -86,6 +106,11 @@ if (args[0] === "--check") {
         console.error(`sync-engine: DRIFT in src/vendor/${f.local} — vendored bytes differ from the ${meta.tag} pin`);
         engineOk = false;
       }
+    }
+    if (engineOk && cmpTag(meta.tag, minRef) < 0) {
+      console.error(`sync-engine: STALE ${name} pin — vendored ${meta.tag}, but this repo's source needs at least ${minRef}.`);
+      console.error(`  run: node scripts/sync-engine.mjs --engine ${name} --ref ${minRef}   (or newer)`);
+      engineOk = false;
     }
     if (engineOk) console.log(`sync-engine: ${name} matches the ${meta.tag} pin (${meta.engineVersion})`);
     ok &&= engineOk;
