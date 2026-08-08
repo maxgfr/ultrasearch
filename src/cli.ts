@@ -25,7 +25,7 @@ import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
 import { runStdioServer, startHttpServer } from "./engine.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
-import { probeServices, formatServices, compose, describeWebSearchLane } from "./services.js";
+import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -692,7 +692,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         if (down.length) {
           process.stderr.write(
             `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.\n` +
-              `             Start it:  docker compose --profile search --profile extract up -d --wait\n` +
+              `             Start it:  ultrasearch firecrawl up\n` +
               `             Continuing without it — the run will say what it lost.\n`,
           );
         }
@@ -810,8 +810,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       if (action !== "up" && action !== "down") {
         fail(`${p.command}: unknown action '${action}' (expected up | down | status)`);
       }
-      const code = await compose(p.command, action);
-      if (code !== 0) process.exit(code);
+      const r = stackControl(p.command, action);
+      process.stdout.write(r.message + "\n");
+      if (r.code !== 0) process.exit(r.code);
       // `up --wait` returns as soon as the healthchecks pass; report what the
       // engine will actually see, which is the only thing that matters here.
       if (action === "up") {

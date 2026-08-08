@@ -137,8 +137,9 @@ file, marked `⚠ snippet only`).
 
 ## Optional self-hosted containers
 
-Two things can run locally, both keyless, both optional, both behind a docker
-compose **profile** (a bare `docker compose up -d` starts nothing):
+Two things can run locally, both keyless, both optional. The compose file is
+embedded in the engine and written out on demand, so these work from any install
+— there is nothing to clone and no file to find:
 
 ```bash
 ultrasearch searxng up      # SearXNG on :8888          (compose profile `search`)

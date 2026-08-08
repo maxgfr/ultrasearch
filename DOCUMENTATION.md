@@ -187,12 +187,13 @@ extracts, so it costs no extra retrieval. See
 
 ## Optional self-hosted stack
 
-`docker-compose.yml` carries two **profiles**; a bare `docker compose up -d`
-starts nothing:
+The compose file lives in the engine, not this repo — `ultrasearch searxng up`
+and `ultrasearch firecrawl up` write it out and drive it, so they work from any
+install rather than only from a clone. Two **profiles**:
 
-- `search` → SearXNG on `:8888` (JSON output enabled in
-  `docker/searxng/settings.yml`, `limiter: false` because the bot-detection
-  middleware answers 403 to `format=json`), backing the `searxng` backend.
+- `search` → SearXNG on `:8888` (JSON output enabled, `limiter: false` because
+  the bot-detection middleware answers 403 to `format=json`), backing the
+  `searxng` backend.
 - `extract` → the Firecrawl stack on `:3002` (api + playwright + redis +
   rabbitmq + nuq-postgres), keyless via `USE_DB_AUTHENTICATION=false`. Kept out
   of `all` because it is ~3 GB of images. Firecrawl's own `/search` is pointed at

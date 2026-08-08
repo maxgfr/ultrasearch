@@ -126,9 +126,10 @@ a caller from redirecting stdout into a file.
 
 ## Optional local containers
 
-Everything ultrasearch talks to is keyless; two of them can be **self-hosted**,
-and both live behind a docker compose profile. A bare `docker compose up -d`
-starts **nothing**.
+Everything ultrasearch talks to is keyless; two of them can be **self-hosted**.
+The compose file lives inside the engine and is written out on demand, so the
+commands below work from any install — there is nothing to clone and no file to
+find. Each service sits behind its own profile, so neither pays for the other.
 
 | Profile | Brings up | Cost | What it buys |
 |---|---|---|---|
@@ -136,8 +137,8 @@ starts **nothing**.
 | `extract` | Firecrawl + playwright/redis/rabbitmq/postgres on `:3002` | ~3 GB images, ~4 GB RAM | Browser-rendered main-content markdown instead of the built-in HTML stripper, plus the `firecrawl` search backend. |
 
 ```bash
-docker compose --profile search up -d --wait                    # discovery only
-docker compose --profile search --profile extract up -d --wait  # + extraction
+ultrasearch searxng up                    # discovery only
+ultrasearch firecrawl up  # + extraction
 ```
 
 Firecrawl needs no configuration: the default base is `http://localhost:3002`,
@@ -183,7 +184,7 @@ around them:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own WebSearch + `fetch --url`. Stop after two empty attempts and report the gap. |
-| `searxng` backend skipped after a `docker compose up` | Every compose service is behind a profile now — a bare `up` starts nothing | `docker compose --profile search up -d --wait` |
+| `searxng` backend skipped although containers are running | A bare `docker compose up` on some other stack starts nothing here — every service is behind a profile | `ultrasearch searxng up` |
 | Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
 | Extracts look truncated since enabling Firecrawl | Its markdown is richer, so it reaches the 4k/8k `--depth` cap sooner | Use `--depth deep` (uncapped extracts), or read `sources/S#.md` directly. |
 | Thin dossier every time | Query too narrow, or a niche/commercial topic | Add `--queries` variants, raise `--web-breadth`/`--pages`, add `--seed-domains` for hosts you know. |

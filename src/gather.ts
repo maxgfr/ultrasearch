@@ -774,7 +774,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
             : []),
           ...(services.firecrawl.pages === 0
             ? [
-                `⚠ max asked for Firecrawl and no page came back through it — the stack is down. Start it: \`docker compose --profile search --profile extract up -d --wait\`. ` +
+                `⚠ max asked for Firecrawl and no page came back through it — the stack is down. Start it: \`ultrasearch firecrawl up\`. ` +
                   `Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`,
               ]
             : []),

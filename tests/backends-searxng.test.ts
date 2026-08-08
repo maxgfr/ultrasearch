@@ -28,7 +28,7 @@ describe("searxngBackend", () => {
   });
 
   // SearXNG used to be opt-in: with no flag and no env it skipped outright, so
-  // `docker compose --profile search up -d` brought the container up and nothing
+  // `ultrasearch searxng up` brought the container up and nothing
   // ever queried it. It now defaults to localhost, gated by a probe.
   it("defaults to localhost:8888 when nothing is configured", async () => {
     vi.stubEnv("ULTRASEARCH_SEARXNG", undefined); // tests/setup.ts pins it to "off"

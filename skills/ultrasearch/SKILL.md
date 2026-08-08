@@ -429,7 +429,7 @@ in `references/operations.md`.
   the dossier and in anything rendered from it. `doctor` shows which converters
   are available (`references/backend-apis.md`).
 - **Extraction quality**: an optional self-hosted Firecrawl
-  (`docker compose --profile search --profile extract up -d --wait`) extracts
+  (`ultrasearch firecrawl up`) extracts
   HTML with a real browser instead of the built-in stripper, and re-reads the
   consent-wall / anti-bot pages that would otherwise land as `⚠ snippet only`.
   Zero config — it is used when it answers on `http://localhost:3002` and

@@ -62,7 +62,7 @@ What the lane gets, and what it deliberately does not:
   of the ceiling, 188 after.
 - **`--depth deep`**, unless you pinned a depth yourself.
 
-It wants the whole stack (`docker compose --profile search --profile extract up
+It wants the whole stack (`ultrasearch firecrawl up
 -d --wait`). A preflight warns before the run, and the dossier names whatever
 was missing — a max run that silently degraded to full is the worst outcome
 here, because it *looks* exhaustive.
@@ -108,9 +108,9 @@ which engines were tried/fused, so you can see where results came from.
 
 1. **SearXNG (local).** If reachable (default `http://localhost:8888`, override
    with `--searxng` or `ULTRASEARCH_SEARXNG`), queried over its JSON API
-   (`/search?format=json`). Self-hosted metasearch, no key. Bring one up with the
-   repo's `docker compose --profile search up -d` (a bare `docker compose up`
-   starts nothing — every service is behind a profile). Public instances usually
+   (`/search?format=json`). Self-hosted metasearch, no key. Bring one up with
+   `ultrasearch searxng up`, which writes out the engine's embedded compose file
+   and starts just that profile. Public instances usually
    disable JSON output.
 2. **DuckDuckGo HTML.** Scrapes `html.duckduckgo.com/html` and decodes the real
    URLs from DDG's redirector. Autonomous and keyless; fragile if DDG changes
@@ -180,7 +180,7 @@ default — the built-in reader is not a fallback of last resort, it is adequate
 for most pages.
 
 ```
-docker compose --profile search --profile extract up -d --wait
+ultrasearch firecrawl up
 ```
 
 Once it answers on `http://localhost:3002` (override with `--firecrawl <url>` or

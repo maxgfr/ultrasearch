@@ -6,7 +6,7 @@ honest notes in the dossier.
 
 | Backend | Endpoint | Notes / limits |
 |---------|----------|----------------|
-| `searxng` | `GET {base}/search?q=…&format=json` | base = `--searxng` / `ULTRASEARCH_SEARXNG` / `http://localhost:8888`. **Public instances usually disable `format=json`** (returns 403/HTML) — run your own (`docker compose --profile search up -d`; a bare `docker compose up` starts nothing). Skips silently when unreachable. |
+| `searxng` | `GET {base}/search?q=…&format=json` | base = `--searxng` / `ULTRASEARCH_SEARXNG` / `http://localhost:8888`. **Public instances usually disable `format=json`** (returns 403/HTML) — run your own (`ultrasearch searxng up`; no clone needed — the compose file ships inside the engine). Skips silently when unreachable. |
 | `firecrawl` | `POST {base}/v2/search` (falls back to `/v1` on 404) | Self-hosted Firecrawl, keyless (`USE_DB_AUTHENTICATION=false`); base = `--firecrawl` / `ULTRASEARCH_FIRECRAWL` / `http://localhost:3002`, `off` disables. Its own cascade is Fire-Engine → SearXNG → DuckDuckGo. **Explicit only** — never in the `auto` cascade. Gated by a memoised 2s probe of `GET /`. |
 | `duckduckgo` | `GET https://html.duckduckgo.com/html/?q=…` | HTML scrape; decodes the real URL from the `uddg` redirector param. Fragile if DDG changes markup and can rate-limit — the WebSearch bridge is the real workhorse. |
 | `ddglite` | `GET https://lite.duckduckgo.com/lite/?q=…` | HTML scrape of DDG's flat "lite" results table; simpler/sturdier markup than the main endpoint. First cascade fallback for `duckduckgo`. |
@@ -115,7 +115,7 @@ honest notes in the dossier.
 
   PDFs never take this path — they have their own ladder, with rungs this one
   does not have.
-- When a self-hosted **Firecrawl** answers (`docker compose --profile search
+- When a self-hosted **Firecrawl** answers (`ultrasearch searxng up
   --profile extract up -d`), HTML pages are extracted through it FIRST — a real
   headless browser returning main-content markdown via `POST {base}/v2/scrape`
   (`formats:["markdown"], onlyMainContent, blockAds, removeBase64Images`, plus a

@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.7.2";
+declare const ENGINE_VERSION = "1.11.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -261,7 +261,7 @@ declare function browserUa(): string;
  * The polite, identifying User-Agent for well-behaved JSON/XML APIs (arXiv,
  * Crossref, OpenAlex, Europe PMC). Naming ourselves is what lets them
  * attribute and throttle us courteously instead of blocking outright — so it
- * names the consuming SKILL, not the shared engine underneath.
+ * names the consuming tool, not the shared engine underneath.
  */
 declare function contactUa(): string;
 /**
@@ -471,11 +471,11 @@ declare function escapeRegExp(s: string): string;
  * Is this term question scaffolding rather than content?
  *
  * Exported because a consumer's own scorer must agree with buildMatcher on what
- * a term IS. ultrasearch's BM25 tokeniser drops the same words and applies the
- * same folding, so a document ranks against the same vocabulary the excerpt
- * matcher highlights. Two lists that drift apart make the two disagree, and the
- * symptom — a source that scores well but shows an excerpt with no highlight —
- * looks like a bug in neither.
+ * a term IS. A caller's own ranking tokeniser should drop the same words and
+ * apply the same folding, so a document ranks against the same vocabulary the
+ * excerpt matcher highlights. Two lists that drift apart make the two disagree,
+ * and the symptom — a source that scores well but shows an excerpt with no
+ * highlight — looks like a bug in neither.
  */
 declare function isStopword(term: string): boolean;
 declare function keywords(question: string): string[];
@@ -532,6 +532,185 @@ declare function domainOf(raw: string): string;
 /** The `domain` a local file is filed under. Not a host, and deliberately not one. */
 declare const LOCAL_FILE_DOMAIN = "local file";
 declare function fnv1a64(s: string): bigint;
+
+declare function isApiEndpoint(url: string): boolean;
+/**
+ * How many documents a URL addresses, when it says so in its query string.
+ * 0 means "it doesn't say" — the normal case for an ordinary page.
+ */
+declare function addressedIdCount(url: string): number;
+/** A url fit to appear in a report: parseable, http(s), and not an API endpoint. */
+declare function isCitableUrl(url: string): boolean;
+/**
+ * Does the URL ITSELF carry a persistent identifier?
+ *
+ * `deriveCitableUrl` reads identifiers out of a document's text, which misses
+ * the commonest case in scholarly work: the address IS the identifier
+ * (`arxiv.org/pdf/2408.05636`, `doi.org/10.1145/…`). A PDF makes that worse —
+ * extraction drops hyperlinks, so the text can carry none at all. Measured: two
+ * arXiv papers were flagged "thin attribution" purely because nothing looked at
+ * their own URL.
+ *
+ * Identifier SYNTAX only (DOI, arXiv id). No hostnames.
+ */
+declare function urlDeclaresIdentity(url: string): boolean;
+/**
+ * Derive a citable URL from what a fetch returned, for the case where the URL we
+ * fetched is not itself citable. Reads the document's own identifiers, in
+ * descending order of authority:
+ *
+ *   1. the canonical link the page declares (`<link rel=canonical>` / `og:url`),
+ *   2. a DOI — the identifier publishers agree on,
+ *   3. an arXiv id, 4. a PMID.
+ *
+ * Returns undefined when the payload names no document, which is the honest
+ * answer: the caller then refuses or asks the agent for the page.
+ */
+declare function deriveCitableUrl(text: string, canonical?: string): string | undefined;
+
+interface ResolvedProvider {
+    citeUrl: string;
+    textUrl?: string;
+    reject?: string;
+    preferText?: true;
+}
+declare function pubmedAbstractUrl(pmid: string): string;
+declare function resolveProvider(url: string): ResolvedProvider;
+
+declare function baseLang(lang: string | undefined): string;
+declare function resolveRegion(lang: string | undefined, region?: string): string;
+declare function ddgRegion(lang: string | undefined, region?: string): string;
+declare function acceptLanguageHeader(lang: string | undefined, region?: string): string;
+
+/** The docker stack publishes SearXNG here. */
+declare const SEARXNG_DEFAULT_BASE = "http://localhost:8888";
+interface SearchHit {
+    url: string;
+    title: string;
+    snippet: string;
+    /** Which engine produced it. */
+    via: "searxng" | "firecrawl";
+}
+interface SearchOptions {
+    /** Base URL, or "off" to disable. Defaults to `<PREFIX>_SEARXNG` then localhost. */
+    searxng?: string;
+    /** Base URL, or "off" to disable. */
+    firecrawl?: string;
+    /** How many hits to aim for. */
+    limit?: number;
+    /** BCP-47 language tag, e.g. "fr-FR". */
+    lang?: string;
+    region?: string;
+    /** Result pages to walk. SearXNG paginates with `&pageno=`. */
+    pages?: number;
+}
+interface SearchResult {
+    hits: SearchHit[];
+    /** What degraded, in words a caller can show a user. Never an exception. */
+    notes: string[];
+}
+/**
+ * Resolve the SearXNG base: an explicit option wins, else `<PREFIX>_SEARXNG`,
+ * else the localhost default. The literal `off` from either source disables it.
+ */
+declare function searxngBase(opts?: SearchOptions): string | null;
+/** True when the base came from the caller rather than the default. */
+declare function searxngIsExplicit(opts?: SearchOptions): boolean;
+/** Test seam: forget memoised probe verdicts. */
+declare function resetSearxngProbeCache(): void;
+/**
+ * Is a SearXNG instance answering at `base`? A single `GET {base}/healthz` with
+ * a hard 2s ceiling; ANY HTTP response counts as up, because a 404 from a proxy
+ * in front of it still proves something is listening. Memoised per base, so the
+ * whole cost of an absent instance is one refused connection per process.
+ *
+ * Deliberately bypasses httpGet, whose retry-with-backoff would turn a 2s
+ * ceiling into roughly 4.6s on a blackholed host. A probe wants a single shot.
+ */
+declare function probeSearxng(base: string): Promise<boolean>;
+/**
+ * Query a SearXNG instance's keyless JSON API.
+ *
+ * Most PUBLIC instances disable `format=json`, which is exactly why the stack
+ * ships a local one. Returns candidates — title, snippet, URL — never page
+ * text: hydrating a hit is `fetchAndExtract`'s job.
+ */
+declare function searchViaSearxng(query: string, opts?: SearchOptions): Promise<SearchResult>;
+/**
+ * Search the local stack: SearXNG first, Firecrawl as the fallback.
+ *
+ * SearXNG leads because it is the cheaper of the two and Firecrawl's own
+ * keyless `/search` delegates to it anyway — going straight to Firecrawl would
+ * pay for a browser stack to reach the same index.
+ *
+ * Never throws. When nothing is reachable the result is empty hits plus notes
+ * saying which piece was missing and how to start it, because "no results" and
+ * "no search engine running" are different facts and a caller that cannot tell
+ * them apart will report the wrong one.
+ */
+declare function search(query: string, opts?: SearchOptions): Promise<SearchResult>;
+
+declare const COMPOSE_YAML = "# Optional, fully-local, no-API-key stack for a semantic mode, web\n# search and content extraction. Start it with `{{CLI}} semantic up` (or\n# `docker compose --profile all up -d`). The published bundle stays\n# dependency-free \u2014 it only speaks HTTP to these containers on localhost;\n# nothing here is required for Tier-1 retrieval.\n#\n# Profiles let you start subsets:\n#   --profile semantic  \u2192 qdrant + ollama (vector search)\n#   --profile search    \u2192 searxng (web discovery)\n#   --profile all       \u2192 everything above\n#   --profile extract   \u2192 firecrawl (content cleaning; `{{CLI}} firecrawl up`)\n# \u2500\u2500 One stack, however many tools use it \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n# Any tool needing SearXNG or Firecrawl binds the SAME host ports. Run two from\n# separate compose projects and only one can ever be up: the second fails with\n# \"port is already allocated\", after leaving its sidecars running.\n#\n# So this file uses one fixed project name, one set of container names and one\n# set of volumes. A second tool bringing the stack up is a no-op against the\n# containers already running, and the whole thing costs one machine's worth of\n# RAM rather than one per tool.\n#\n# WARNING: any tool shipping its own copy of these service blocks must keep them\n# byte-identical. Docker compares the RESOLVED config, so a divergence makes an\n# up from one recreate the other's running containers.\n\nname: skills\n\nservices:\n  # Vector database \u2014 Apache-2.0, self-hosted, no key.\n  qdrant:\n    image: qdrant/qdrant:v1.18.2\n    container_name: skills-qdrant\n    ports:\n      - \"6333:6333\"\n    volumes:\n      - qdrant:/qdrant/storage\n    restart: unless-stopped\n    profiles: [\"semantic\", \"all\"]\n    healthcheck:\n      # The image ships no curl/wget \u2014 probe the REST port over bash's /dev/tcp.\n      test: [\"CMD-SHELL\", \"bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 15s\n\n  # Local embedding server \u2014 no key, no data leaves the machine. Pull the model\n  # once: `docker compose exec ollama ollama pull nomic-embed-text`\n  # (`{{CLI}} semantic up` does this for you).\n  ollama:\n    image: ollama/ollama:0.30.7\n    container_name: skills-ollama\n    ports:\n      - \"11434:11434\"\n    volumes:\n      - ollama:/root/.ollama\n    restart: unless-stopped\n    profiles: [\"semantic\", \"all\"]\n    healthcheck:\n      test: [\"CMD\", \"ollama\", \"list\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 15s\n\n  # Self-hosted metasearch for keyless web discovery. JSON output is enabled in\n  # docker/searxng/settings.yml so the engine can be queried programmatically.\n  # Also backs Firecrawl's keyless /search through SEARXNG_ENDPOINT.\n  searxng:\n    image: searxng/searxng:2026.6.11-a1490676e\n    container_name: skills-searxng\n    ports:\n      - \"8888:8080\"\n    environment:\n      - SEARXNG_BASE_URL=http://localhost:8888/\n    volumes:\n      - ./docker/searxng:/etc/searxng:rw\n    restart: unless-stopped\n    profiles: [\"search\", \"all\"]\n    healthcheck:\n      # busybox wget is in the image; /healthz answers on the container port.\n      test: [\"CMD-SHELL\", \"wget -qO- http://localhost:8080/healthz || exit 1\"]\n      interval: 30s\n      timeout: 5s\n      retries: 3\n      start_period: 15s\n\n  # Self-hosted Firecrawl \u2014 keyless content cleaning. Fetches a page with a real\n  # browser and returns main-content markdown, which beats the built-in regex\n  # HTML stripper on nav/cookie chrome and is the only way JS-rendered pages\n  # yield any text at all. Keyless because USE_DB_AUTHENTICATION=false; see\n  # docker/firecrawl/firecrawl.env for the tunables.\n  #\n  # Deliberately NOT in the \"all\" profile: it is ~3 GB of images and 5\n  # containers, and `{{CLI}} semantic up` must stay cheap.\n  #\n  #   docker compose --profile search --profile extract up -d --wait\n  firecrawl:\n    image: ghcr.io/firecrawl/firecrawl:2.10.5@sha256:8ce1af201332e1de046d70d5d516fbfe7f0f6229820d271d880873eeca531ea6\n    container_name: skills-firecrawl\n    ports:\n      - \"3002:3002\"\n    env_file:\n      - ./docker/firecrawl/firecrawl.env\n    environment:\n      # Wiring lives here; tunables live in the env file above.\n      - HOST=0.0.0.0\n      - PORT=3002\n      - ENV=local\n      - REDIS_URL=redis://firecrawl-redis:6379\n      - REDIS_RATE_LIMIT_URL=redis://firecrawl-redis:6379\n      - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000/scrape\n      - POSTGRES_HOST=firecrawl-postgres\n      - NUQ_RABBITMQ_URL=amqp://firecrawl-rabbitmq:5672\n      # Keeps /search keyless by delegating to the searxng service above.\n      # Unreachable when the `search` profile is down \u2014 Firecrawl then falls\n      # back to DuckDuckGo on its own.\n      - SEARXNG_ENDPOINT=http://searxng:8080\n    command: node dist/src/harness.js --start-docker\n    depends_on:\n      firecrawl-redis:\n        condition: service_started\n      firecrawl-playwright:\n        condition: service_started\n      firecrawl-postgres:\n        condition: service_started\n      firecrawl-rabbitmq:\n        condition: service_healthy\n    restart: unless-stopped\n    profiles: [\"extract\"]\n    # The image ships no curl/wget, but it is a Node image \u2014 probe with node.\n    healthcheck:\n      test: [\"CMD\", \"node\", \"-e\", \"fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))\"]\n      interval: 15s\n      timeout: 5s\n      retries: 10\n      start_period: 60s\n    # Trimmed for a 16 GB laptop; upstream asks for 4 CPU / 8 GB. Measured at\n    # 2.3 GB steady under 5 concurrent scrapes, so 3 GB was too tight a cap \u2014\n    # MAX_RAM=0.8 in the env file makes Firecrawl self-throttle at ~3.2 GB.\n    cpus: 2.0\n    mem_limit: 4g\n    memswap_limit: 4g\n\n  # Headless-browser sidecar \u2014 this is what makes JS-rendered pages extractable.\n  firecrawl-playwright:\n    image: ghcr.io/firecrawl/playwright-service:latest@sha256:8c50add7293201e575110e6c7489fa383a9dfc46f168936526a458e06ffc5c28\n    container_name: skills-firecrawl-playwright\n    environment:\n      - PORT=3000\n      - BLOCK_MEDIA=true\n      - MAX_CONCURRENT_PAGES=4\n    restart: unless-stopped\n    profiles: [\"extract\"]\n    cpus: 1.5\n    mem_limit: 2g\n    memswap_limit: 2g\n    tmpfs:\n      - /tmp/.cache:noexec,nosuid,size=512m\n\n  firecrawl-redis:\n    image: redis:alpine\n    container_name: skills-firecrawl-redis\n    command: redis-server --bind 0.0.0.0\n    restart: unless-stopped\n    profiles: [\"extract\"]\n\n  firecrawl-rabbitmq:\n    image: rabbitmq:3-management\n    container_name: skills-firecrawl-rabbitmq\n    restart: unless-stopped\n    profiles: [\"extract\"]\n    healthcheck:\n      test: [\"CMD\", \"rabbitmq-diagnostics\", \"-q\", \"check_running\"]\n      interval: 10s\n      timeout: 5s\n      retries: 5\n      start_period: 20s\n\n  firecrawl-postgres:\n    image: ghcr.io/firecrawl/nuq-postgres:latest@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6\n    container_name: skills-firecrawl-postgres\n    environment:\n      - POSTGRES_USER=postgres\n      - POSTGRES_PASSWORD=postgres\n      - POSTGRES_DB=postgres\n    volumes:\n      - firecrawl_pg:/var/lib/postgresql/data\n    restart: unless-stopped\n    profiles: [\"extract\"]\n\nvolumes:\n  qdrant:\n  ollama:\n  firecrawl_pg:\n";
+declare const SEARXNG_SETTINGS_YAML = "# Minimal SearXNG config for keyless, self-hosted web discovery. The important\n# bit is enabling the JSON output format so the CLI can query it\n# programmatically (`/search?format=json`) \u2014 most PUBLIC instances disable it,\n# which is why a local one ships here.\n#\n# The service names and ports below are deliberately stable, so several tools on\n# one machine share a single container rather than each starting their own.\nuse_default_settings: true\n\nserver:\n  # Override with a real random secret if you expose this beyond localhost.\n  secret_key: \"searxng-local-dev-change-me\"\n  # The limiter/bot-detection middleware answers 403 to format=json requests.\n  limiter: false\n  image_proxy: false\n\nsearch:\n  safe_search: 0\n  autocomplete: \"\"\n  formats:\n    - html\n    - json\n";
+declare const FIRECRAWL_ENV = "# Tunables for the self-hosted Firecrawl stack (docker compose --profile extract).\n# Wiring (hostnames, ports, SEARXNG_ENDPOINT) lives in docker-compose.yml and\n# overrides anything set here.\n\n# THIS is what makes the API keyless. Turning it on would require a Supabase\n# project; there is no reason to for a localhost stack.\nUSE_DB_AUTHENTICATION=false\n\n# Firecrawl's Rust PDF extractor, which is OFF by default upstream. Without it\n# Firecrawl falls back to pdf-parse (JS) for PDFs. Still keyless: this is the\n# local Rust path, not the MinerU / Fire PDF routes, which need API credentials.\n# Reached as a rung of the PDF ladder when the built-in reader finds no text.\nPDF_RUST_EXTRACT_ENABLE=true\n\n# Postgres credentials for the bundled nuq-postgres container. It is not\n# published on a host port, so these never leave the compose network.\nPOSTGRES_USER=postgres\nPOSTGRES_PASSWORD=postgres\nPOSTGRES_DB=postgres\nPOSTGRES_PORT=5432\n\n# Admin queue dashboard at http://localhost:3002/admin/CHANGEME/queues\nBULL_AUTH_KEY=CHANGEME\n\n# Concurrency, trimmed for a laptop. Upstream defaults are 8/5/5/10 and assume\n# a 4-CPU / 8-GB box; these keep the stack near ~4 GB total.\nNUM_WORKERS_PER_QUEUE=2\nMAX_CONCURRENT_JOBS=3\nBROWSER_POOL_SIZE=2\nCRAWL_CONCURRENT_REQUESTS=4\n\n# Back off before the host runs out of headroom.\nMAX_CPU=0.8\nMAX_RAM=0.8\n\nLOGGING_LEVEL=info\n";
+/**
+ * The embedded assets with `{{CLI}}` resolved to the consumer's command.
+ *
+ * The templates name a tool in their comments, and the tool they name is
+ * whoever wrote the file out — not this engine. A vendored copy that told the
+ * reader to run `webindex semantic up` would be naming a binary they do not
+ * have. Substituted at CALL time, per the lazy rule in src/brand.ts.
+ */
+declare function renderAsset(template: string): string;
+declare function ensureComposeMaterialized(): string;
+/** What one `docker` invocation produced. Mirrors the shape a caller can act on. */
+interface StackRun {
+    ok: boolean;
+    stdout: string;
+    stderr: string;
+    /** The binary was not on PATH — a different problem from a non-zero exit. */
+    missing?: boolean;
+}
+/**
+ * The two host effects `stackControl` needs, injectable so its orchestration is
+ * unit-testable without a Docker daemon. Both default to the real thing.
+ */
+interface StackDeps {
+    run?: (cmd: string, args: string[], opts: {
+        timeoutMs: number;
+        capture?: boolean;
+    }) => StackRun;
+    has?: (cmd: string) => boolean;
+}
+interface StackResult {
+    /** Ready to print. Multi-line for `up`, which reports what to do next. */
+    message: string;
+    code: number;
+}
+type StackAction = "up" | "down" | "status";
+/** The embedding model the `ollama` service is expected to serve. */
+declare function embedModel(): string;
+/** The services this stack knows how to drive. */
+declare const STACK_SERVICES: string[];
+/** Which compose profiles each service needs. */
+declare const SERVICE_PROFILES: Record<string, string[]>;
+/**
+ * Run `docker compose` for a service, against the embedded stack.
+ *
+ * Materialises the compose file first, so this works from any install — a
+ * global npm install, a Homebrew cellar, a vendored bundle — and not only from
+ * a checkout with docker-compose.yml beside the source. That last assumption is
+ * what made the equivalent command fail for everyone who installed the tool
+ * rather than cloned it.
+ *
+ * Never throws. Every failure comes back as a message and a non-zero code,
+ * because not having Docker is a normal state for this tool: everything the
+ * stack provides is optional and degrades to a note.
+ */
+declare function stackControl(service: string, action: string, deps?: StackDeps): StackResult;
+
+declare function withRunLock<T>(slug: string, fn: () => Promise<T>): Promise<T>;
+declare function resetRunLocks(): void;
 
 type Extract = Awaited<ReturnType<typeof fetchAndExtract>>;
 declare function cacheDir(): string;
@@ -597,7 +776,7 @@ declare function validateArgs(schema: JsonSchema, args: Record<string, unknown>)
  * names the narrowing argument gets a smaller second call. Which argument that
  * is depends entirely on the tool, so the map is supplied by the consuming
  * skill through McpAdapter.capAdvice — the engine knows a response is oversized,
- * only the skill knows how to make it smaller.
+ * only the consumer knows how to make it smaller.
  */
 type CapAdvice = Record<string, string>;
 declare function capResponse(text: string, tool: string, maxBytes: number, artifact?: string, advice?: CapAdvice): string;
@@ -720,8 +899,9 @@ interface RunningHttpServer {
 declare function startHttpServer(adapter: McpAdapter, opts?: HttpOptions): Promise<RunningHttpServer>;
 
 /**
- * Display name used in resource titles. Comes from the brand, so ultradoc's
- * resources say "ultradoc: the skill" and construct's say "construct: …".
+ * Display name used in resource titles. Comes from the brand, so a consumer
+ * called "reader" serves "reader: the skill" — SKILL.md is the file convention
+ * being served, not an assumption about who is serving it.
  */
 declare const skillName: () => string;
 interface ResourceDecl {
@@ -742,4 +922,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Brand, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type ResourceContents, type ResourceDecl, ResourceError, type RunningHttpServer, type ScrapeAttempt, type ServerOptions, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, apiPrefix, assessExtractedText, assessPdfText, bestExcerpt, brand, browserUa, buildMatcher, cacheDir, cachePath, cachedFetchAndExtract, canonicalizeUrl, capExtract, capResponse, cleanInline, configure, contactUa, createServer, deaccent, decodeEntities, docFormatForContentType, docFormatForUrl, domainOf, enabledDocExtractors, enabledExtractors, ensureDir, env, envFlag, envInt, envName, escapeRegExp, expandTokens, extractDocument, extractMainHtml, extractPdf, fetchAndExtract, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keywords, listResources, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, mapScrapeResponse, mapSearchResponse, matcherFromTokens, nearestHeading, negotiateProtocol, normalizeDoi, ocrBudgetLeft, ocrPdf, ocrTools, pageDelayMs, pdfToText, politeDelayMs, probeFirecrawl, rankedKeywords, readResource, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resolveSkillRoot, runStdioServer, runWithInput, scrapeViaFirecrawl, searchViaFirecrawl, setNoWrite, skillName, sleep, startHttpServer, structuredContentFor, subtokens, takeArtifacts, validateArgs, writeArtifact };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Brand, COMPOSE_YAML, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiPrefix, assessExtractedText, assessPdfText, baseLang, bestExcerpt, brand, browserUa, buildMatcher, cacheDir, cachePath, cachedFetchAndExtract, canonicalizeUrl, capExtract, capResponse, cleanInline, configure, contactUa, createServer, ddgRegion, deaccent, decodeEntities, deriveCitableUrl, docFormatForContentType, docFormatForUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureComposeMaterialized, ensureDir, env, envFlag, envInt, envName, escapeRegExp, expandTokens, extractDocument, extractMainHtml, extractPdf, fetchAndExtract, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isApiEndpoint, isCitableUrl, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keywords, listResources, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, mapScrapeResponse, mapSearchResponse, matcherFromTokens, nearestHeading, negotiateProtocol, normalizeDoi, ocrBudgetLeft, ocrPdf, ocrTools, pageDelayMs, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readResource, renderAsset, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRunLocks, resetSearxngProbeCache, resolveProvider, resolveRegion, resolveSkillRoot, runStdioServer, runWithInput, scrapeViaFirecrawl, search, searchViaFirecrawl, searchViaSearxng, searxngBase, searxngIsExplicit, setNoWrite, skillName, sleep, stackControl, startHttpServer, structuredContentFor, subtokens, takeArtifacts, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };

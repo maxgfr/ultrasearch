@@ -1,10 +1,7 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
-import { resolveSearxngBase, probeSearxng } from "./backends/searxng.js";
+import { probeSearxng } from "./backends/searxng.js";
+import { searxngBase } from "./engine.js";
 import { enabledExtractors, ocrTools, ocrBudgetLeft } from "./backends/pdf.js";
 import { enabledDocExtractors } from "./backends/doc.js";
 import type { ManifestServices } from "./types.js";
@@ -39,7 +36,7 @@ async function toolVersion(cmd: string, args: string[]): Promise<string | undefi
 export async function probeServices(opts: { firecrawl?: string; searxng?: string } = {}): Promise<ServiceStatus[]> {
   const out: ServiceStatus[] = [];
 
-  const sxBase = resolveSearxngBase({ options: { searxng: opts.searxng } });
+  const sxBase = searxngBase({ searxng: opts.searxng });
   if (!sxBase) out.push({ name: "searxng", ok: false, detail: "disabled (--searxng off)" });
   else {
     const up = await probeSearxng(sxBase);
@@ -185,45 +182,13 @@ export function describeWebSearchLane(manifest?: { webSearch?: { supplied: numbe
 }
 
 // --- container lifecycle ---------------------------------------------------
-
-// docker-compose.yml sits at the package root, two levels up from the bundle
-// (scripts/ultrasearch.mjs). A `npx skills add` install copies only
-// skills/<name>/, so there is no compose file there — hence the explicit
-// "not found" path rather than an obscure docker error.
-export function composeFile(): string | undefined {
-  const here = dirname(fileURLToPath(import.meta.url));
-  for (const root of [join(here, ".."), join(here, "..", "..")]) {
-    const p = join(root, "docker-compose.yml");
-    if (existsSync(p)) return p;
-  }
-  return undefined;
-}
-
-export const SERVICE_PROFILES: Record<string, string[]> = {
-  searxng: ["search"],
-  firecrawl: ["search", "extract"], // Firecrawl delegates its keyless /search to SearXNG
-};
-
-/** Run `docker compose` for a service's profiles. Resolves with its exit code. */
-export function compose(service: string, action: "up" | "down"): Promise<number> {
-  const file = composeFile();
-  if (!file) {
-    process.stderr.write(
-      `ultrasearch: docker-compose.yml not found next to the engine.\n` +
-        `             This copy of the skill ships the engine alone. Clone the repo\n` +
-        `             (or \`npm i -g ultrasearch\`) to manage the containers, or run:\n` +
-        `             docker compose --profile ${SERVICE_PROFILES[service]!.join(" --profile ")} ${action}${action === "up" ? " -d --wait" : ""}\n`,
-    );
-    return Promise.resolve(1);
-  }
-  const profiles = SERVICE_PROFILES[service]!.flatMap((p) => ["--profile", p]);
-  const args = ["compose", "-f", file, ...profiles, action, ...(action === "up" ? ["-d", "--wait"] : [])];
-  return new Promise((resolve) => {
-    const child = spawn("docker", args, { stdio: "inherit" });
-    child.on("error", (e: NodeJS.ErrnoException) => {
-      process.stderr.write(e.code === "ENOENT" ? "ultrasearch: docker not found on PATH.\n" : `ultrasearch: ${e.message}\n`);
-      resolve(1);
-    });
-    child.on("close", (code) => resolve(code ?? 1));
-  });
-}
+//
+// Driven by the engine, which embeds the compose file. `ultrasearch searxng up`
+// therefore works from any install — `npx skills add`, a curled bundle, a
+// Homebrew cellar — and not only from a checkout with docker-compose.yml beside
+// the source, which is where the previous version gave up with a "not found".
+//
+// `status` deliberately does NOT go through it: `docker compose ps` answers
+// whether a container is running, and what a run cares about is whether the
+// endpoint ANSWERS. probeServices above is the honest question.
+export { stackControl } from "./engine.js";

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
-import { probeServices, formatServices, describeServices, composeFile, compose, SERVICE_PROFILES } from "../src/services.js";
+import { probeServices, formatServices, describeServices, stackControl } from "../src/services.js";
 import { resetSearxngProbeCache } from "../src/backends/searxng.js";
 import { installFetchMock } from "./fetchmock.js";
 
@@ -122,26 +122,40 @@ describe("describeServices", () => {
 });
 
 describe("container lifecycle", () => {
-  it("finds the compose file from the engine's location", () => {
-    const p = composeFile();
-    expect(p).toBeDefined();
-    expect(existsSync(p!)).toBe(true);
+  // The compose file is embedded in the engine, so these cover the wiring this
+  // repo still owns: that the delegation happens at all, and that a machine
+  // without Docker gets an answer rather than a stack trace. The orchestration
+  // itself (pull-then-up, --wait, the model pull) is the engine's, and tested
+  // there against a fake docker.
+
+  it("drives the engine's embedded stack, so an installed copy works too", () => {
+    // The previous version looked for docker-compose.yml beside the bundle and
+    // gave up when it was not there — which is every install that is not a
+    // clone. There is no such file in this repo any more.
+    const calls: string[][] = [];
+    const r = stackControl("searxng", "up", {
+      has: () => true,
+      run: (cmd, args) => (calls.push([cmd, ...args]), { ok: true, stdout: "", stderr: "" }),
+    });
+    expect(r.code).toBe(0);
+    const file = calls[0]![calls[0]!.indexOf("-f") + 1]!;
+    expect(file).toMatch(/docker-compose\.yml$/);
+    expect(existsSync(file)).toBe(true); // materialised on demand
   });
 
   // Firecrawl delegates its keyless /search to SearXNG, so bringing it up has to
   // bring that profile too.
   it("brings SearXNG up alongside Firecrawl", () => {
-    expect(SERVICE_PROFILES.firecrawl).toContain("search");
-    expect(SERVICE_PROFILES.firecrawl).toContain("extract");
-    expect(SERVICE_PROFILES.searxng).toEqual(["search"]);
+    const calls: string[][] = [];
+    stackControl("firecrawl", "up", { has: () => true, run: (c, a) => (calls.push([c, ...a]), { ok: true, stdout: "", stderr: "" }) });
+    expect(calls[0]).toEqual(expect.arrayContaining(["--profile", "search", "--profile", "extract"]));
   });
 
-  it("fails with a non-zero code instead of throwing when docker is absent", async () => {
-    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    // Point PATH at nothing so `docker` cannot resolve — the ENOENT branch.
-    vi.stubEnv("PATH", "/nonexistent-ultrasearch-test");
-    const code = await compose("searxng", "down");
-    expect(code).not.toBe(0);
-    stderr.mockRestore();
+  it("says docker is missing instead of throwing", () => {
+    const r = stackControl("searxng", "down", { has: () => false });
+    expect(r.code).not.toBe(0);
+    expect(r.message).toContain("docker not found");
+    // The brand reaches the engine: this is ultrasearch's message, not webindex's.
+    expect(r.message.startsWith("ultrasearch searxng:")).toBe(true);
   });
 });

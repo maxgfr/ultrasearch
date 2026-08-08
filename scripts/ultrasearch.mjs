@@ -2,8 +2,8 @@
 
 // src/cli.ts
 import { basename as basename3, join as join15, relative as relative2, resolve as resolve5 } from "path";
-import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath3 } from "url";
-import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync11 } from "fs";
+import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
+import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync12 } from "fs";
 
 // src/types.ts
 var VERSION = "1.25.0";
@@ -169,7 +169,7 @@ var websearchBackend = async (ctx) => {
 
 // src/gather.ts
 import { join as join6 } from "path";
-import { tmpdir as tmpdir3 } from "os";
+import { tmpdir as tmpdir4 } from "os";
 
 // src/modes/topic.ts
 var topicMode = {
@@ -346,12 +346,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawn } from "child_process";
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync3 } from "fs";
-import { join as join2 } from "path";
+import { spawnSync } from "child_process";
+import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
-import { mkdirSync, writeFileSync as writeFileSync2 } from "fs";
-import { existsSync as existsSync3, readdirSync, readFileSync as readFileSync3, realpathSync, statSync } from "fs";
-import { basename, dirname, join as join3, resolve, sep } from "path";
+import { dirname, join as join2 } from "path";
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "fs";
+import { join as join3 } from "path";
+import { tmpdir as tmpdir3 } from "os";
+import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync4, readdirSync, readFileSync as readFileSync4, realpathSync, statSync } from "fs";
+import { basename, dirname as dirname2, join as join4, resolve, sep } from "path";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { createServer as createHttpServer } from "http";
@@ -1183,7 +1187,7 @@ async function searchViaFirecrawl(query, limit, opts = {}) {
   const base = firecrawlBase(opts);
   if (!base) return { why: `Firecrawl disabled (--firecrawl off / ${envName("FIRECRAWL")}=off). Skipping.` };
   if (!await probeFirecrawl(base, firecrawlIsExplicit(opts))) {
-    return { why: `Firecrawl not reachable at ${base} (bring it up with \`docker compose --profile search --profile extract up -d --wait\`). Skipping.` };
+    return { why: `Firecrawl not reachable at ${base} (bring it up with \`${brand().cli} firecrawl up\`). Skipping.` };
   }
   const r = await postJson(base, "/search", { query, limit, sources: ["web"] }, SEARCH_TIMEOUT_MS);
   if (!r.ok) {
@@ -1666,8 +1670,8 @@ function canonicalizeUrl(raw) {
       if (!TRACKING_PARAMS.test(k)) keep.push([k, v]);
     }
     keep.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
-    const search = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
-    return `${proto}//${host}${port ? ":" + port : ""}${path}${search}`.replace(/\/$/, "");
+    const search2 = keep.length ? "?" + keep.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&") : "";
+    return `${proto}//${host}${port ? ":" + port : ""}${path}${search2}`.replace(/\/$/, "");
   } catch {
     return raw.trim().replace(/#.*$/, "").replace(/\/$/, "");
   }
@@ -1696,6 +1700,568 @@ function fnv1a64(s) {
   }
   return h;
 }
+var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
+var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
+var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
+function isApiEndpoint(url) {
+  try {
+    const u = new URL(url);
+    if (API_HOSTS.has(u.hostname.toLowerCase().replace(/^www\./, ""))) return true;
+    if (API_PATHS.some((re) => re.test(u.pathname))) return true;
+    return API_FORMATS.test(u.search);
+  } catch {
+    return false;
+  }
+}
+var ID_PARAMS = ["id", "ids", "uid", "uids", "pmid", "doi", "identifier"];
+function addressedIdCount(url) {
+  try {
+    const params = new URL(url).searchParams;
+    for (const name of ID_PARAMS) {
+      const raw = params.get(name);
+      if (!raw) continue;
+      const ids = raw.split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
+      if (ids.length) return ids.length;
+    }
+  } catch {
+  }
+  return 0;
+}
+function isCitableUrl(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === "https:" || u.protocol === "http:") && !isApiEndpoint(url);
+  } catch {
+    return false;
+  }
+}
+var DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
+var ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
+var PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
+var ARXIV_ID_PATH_RE = /\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:$|[/?#])/;
+function urlDeclaresIdentity(url) {
+  return DOI_RE.test(url) || ARXIV_ID_PATH_RE.test(url);
+}
+function deriveCitableUrl(text, canonical) {
+  if (canonical && isCitableUrl(canonical)) return canonical;
+  const head = text.slice(0, 4e3);
+  const doi = head.match(DOI_RE)?.[1];
+  if (doi) return `https://doi.org/${doi.replace(/[.,;:)\]]+$/, "")}`;
+  const arxiv = head.match(ARXIV_RE)?.[1];
+  if (arxiv) return `https://arxiv.org/abs/${arxiv}`;
+  const pmid = head.match(PMID_RE)?.[1];
+  if (pmid) return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
+  return void 0;
+}
+var PUBMED_LANDING = /^https?:\/\/(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov\/(\d{4,9})\/?$/i;
+var PMC_LANDING = /^https?:\/\/(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov\/articles\/(PMC\d+)\/?$/i;
+var EUTILS = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/([a-z]+)\.fcgi/i;
+var ARXIV_PDF = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/pdf\/([^?#]+?)(?:\.pdf)?\/?$/i;
+function eutilsIds(raw) {
+  return (raw ?? "").split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
+}
+function pubmedAbstractUrl(pmid) {
+  return `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&rettype=abstract&retmode=text`;
+}
+function resolveProvider(url) {
+  const raw = url.trim();
+  const pubmed = raw.match(PUBMED_LANDING);
+  if (pubmed) {
+    const pmid = pubmed[1];
+    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, textUrl: pubmedAbstractUrl(pmid) };
+  }
+  const pmc = raw.match(PMC_LANDING);
+  if (pmc) return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmc[1].toUpperCase()}/` };
+  const eutils = raw.match(EUTILS);
+  if (eutils) return resolveEutils(raw, eutils[1].toLowerCase());
+  const arxiv = raw.match(ARXIV_PDF);
+  if (arxiv) return { citeUrl: `https://arxiv.org/abs/${arxiv[1]}`, textUrl: raw, preferText: true };
+  return { citeUrl: raw };
+}
+function resolveEutils(raw, op) {
+  let params;
+  try {
+    params = new URL(raw).searchParams;
+  } catch {
+    return { citeUrl: raw };
+  }
+  if (op === "esearch" || op === "egquery" || op === "espell") {
+    return { citeUrl: raw, reject: `${raw} is an E-utilities ${op} query, not a document \u2014 fetch the record it points at instead.` };
+  }
+  const db = (params.get("db") ?? "").toLowerCase();
+  const ids = eutilsIds(params.get("id"));
+  const id = ids[0];
+  if (!id) return { citeUrl: raw };
+  if (db === "pubmed" && /^\d+$/.test(id)) {
+    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: pubmedAbstractUrl(id) };
+  }
+  if (db === "pmc") {
+    const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
+    return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/` };
+  }
+  return { citeUrl: raw };
+}
+var LANG_COUNTRY = {
+  en: "us",
+  pt: "br",
+  ja: "jp",
+  zh: "cn",
+  ko: "kr",
+  sv: "se",
+  da: "dk",
+  cs: "cz",
+  el: "gr",
+  uk: "ua",
+  // Ukrainian language → Ukraine
+  ar: "xa",
+  // DuckDuckGo's "Arabia" region
+  he: "il",
+  hi: "in"
+};
+var REGION_ALIASES = {
+  gb: "uk",
+  en: "us"
+};
+function baseLang(lang) {
+  return (lang || "en").split("-")[0].toLowerCase();
+}
+function resolveRegion(lang, region) {
+  if (region?.trim()) return region.trim().toLowerCase();
+  const parts = (lang || "en").split("-");
+  if (parts.length > 1 && parts[1]) return parts[1].toLowerCase();
+  const l = baseLang(lang);
+  return LANG_COUNTRY[l] ?? l;
+}
+function ddgRegion(lang, region) {
+  const l = baseLang(lang);
+  let r = resolveRegion(lang, region);
+  r = REGION_ALIASES[r] ?? r;
+  return `${r}-${l}`;
+}
+function acceptLanguageHeader(lang, region) {
+  const l = baseLang(lang);
+  const R = resolveRegion(lang, region).toUpperCase();
+  if (l === "en") return `${l}-${R},${l};q=0.9`;
+  return `${l}-${R},${l};q=0.9,en;q=0.5`;
+}
+var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
+var PROBE_TIMEOUT_MS2 = 2e3;
+function searxngBase(opts = {}) {
+  const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
+  if (!raw || raw.toLowerCase() === "off") return null;
+  return raw.replace(/\/+$/, "");
+}
+function searxngIsExplicit(opts = {}) {
+  return !!(opts.searxng ?? env("SEARXNG"));
+}
+var probeCache2 = /* @__PURE__ */ new Map();
+function probeSearxng(base) {
+  let p = probeCache2.get(base);
+  if (!p) {
+    p = (async () => {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS2);
+      try {
+        const res = await fetch(`${base}/healthz`, { signal: ctrl.signal });
+        await res.text().catch(() => "");
+        return true;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(t);
+      }
+    })();
+    probeCache2.set(base, p);
+  }
+  return p;
+}
+var COMPOSE_YAML = `# Optional, fully-local, no-API-key stack for a semantic mode, web
+# search and content extraction. Start it with \`{{CLI}} semantic up\` (or
+# \`docker compose --profile all up -d\`). The published bundle stays
+# dependency-free \u2014 it only speaks HTTP to these containers on localhost;
+# nothing here is required for Tier-1 retrieval.
+#
+# Profiles let you start subsets:
+#   --profile semantic  \u2192 qdrant + ollama (vector search)
+#   --profile search    \u2192 searxng (web discovery)
+#   --profile all       \u2192 everything above
+#   --profile extract   \u2192 firecrawl (content cleaning; \`{{CLI}} firecrawl up\`)
+# \u2500\u2500 One stack, however many tools use it \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+# Any tool needing SearXNG or Firecrawl binds the SAME host ports. Run two from
+# separate compose projects and only one can ever be up: the second fails with
+# "port is already allocated", after leaving its sidecars running.
+#
+# So this file uses one fixed project name, one set of container names and one
+# set of volumes. A second tool bringing the stack up is a no-op against the
+# containers already running, and the whole thing costs one machine's worth of
+# RAM rather than one per tool.
+#
+# WARNING: any tool shipping its own copy of these service blocks must keep them
+# byte-identical. Docker compares the RESOLVED config, so a divergence makes an
+# up from one recreate the other's running containers.
+
+name: skills
+
+services:
+  # Vector database \u2014 Apache-2.0, self-hosted, no key.
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    container_name: skills-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant:/qdrant/storage
+    restart: unless-stopped
+    profiles: ["semantic", "all"]
+    healthcheck:
+      # The image ships no curl/wget \u2014 probe the REST port over bash's /dev/tcp.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Local embedding server \u2014 no key, no data leaves the machine. Pull the model
+  # once: \`docker compose exec ollama ollama pull nomic-embed-text\`
+  # (\`{{CLI}} semantic up\` does this for you).
+  ollama:
+    image: ollama/ollama:0.30.7
+    container_name: skills-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    profiles: ["semantic", "all"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Self-hosted metasearch for keyless web discovery. JSON output is enabled in
+  # docker/searxng/settings.yml so the engine can be queried programmatically.
+  # Also backs Firecrawl's keyless /search through SEARXNG_ENDPOINT.
+  searxng:
+    image: searxng/searxng:2026.6.11-a1490676e
+    container_name: skills-searxng
+    ports:
+      - "8888:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    volumes:
+      - ./docker/searxng:/etc/searxng:rw
+    restart: unless-stopped
+    profiles: ["search", "all"]
+    healthcheck:
+      # busybox wget is in the image; /healthz answers on the container port.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Self-hosted Firecrawl \u2014 keyless content cleaning. Fetches a page with a real
+  # browser and returns main-content markdown, which beats the built-in regex
+  # HTML stripper on nav/cookie chrome and is the only way JS-rendered pages
+  # yield any text at all. Keyless because USE_DB_AUTHENTICATION=false; see
+  # docker/firecrawl/firecrawl.env for the tunables.
+  #
+  # Deliberately NOT in the "all" profile: it is ~3 GB of images and 5
+  # containers, and \`{{CLI}} semantic up\` must stay cheap.
+  #
+  #   docker compose --profile search --profile extract up -d --wait
+  firecrawl:
+    image: ghcr.io/firecrawl/firecrawl:2.10.5@sha256:8ce1af201332e1de046d70d5d516fbfe7f0f6229820d271d880873eeca531ea6
+    container_name: skills-firecrawl
+    ports:
+      - "3002:3002"
+    env_file:
+      - ./docker/firecrawl/firecrawl.env
+    environment:
+      # Wiring lives here; tunables live in the env file above.
+      - HOST=0.0.0.0
+      - PORT=3002
+      - ENV=local
+      - REDIS_URL=redis://firecrawl-redis:6379
+      - REDIS_RATE_LIMIT_URL=redis://firecrawl-redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://firecrawl-playwright:3000/scrape
+      - POSTGRES_HOST=firecrawl-postgres
+      - NUQ_RABBITMQ_URL=amqp://firecrawl-rabbitmq:5672
+      # Keeps /search keyless by delegating to the searxng service above.
+      # Unreachable when the \`search\` profile is down \u2014 Firecrawl then falls
+      # back to DuckDuckGo on its own.
+      - SEARXNG_ENDPOINT=http://searxng:8080
+    command: node dist/src/harness.js --start-docker
+    depends_on:
+      firecrawl-redis:
+        condition: service_started
+      firecrawl-playwright:
+        condition: service_started
+      firecrawl-postgres:
+        condition: service_started
+      firecrawl-rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    profiles: ["extract"]
+    # The image ships no curl/wget, but it is a Node image \u2014 probe with node.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    # Trimmed for a 16 GB laptop; upstream asks for 4 CPU / 8 GB. Measured at
+    # 2.3 GB steady under 5 concurrent scrapes, so 3 GB was too tight a cap \u2014
+    # MAX_RAM=0.8 in the env file makes Firecrawl self-throttle at ~3.2 GB.
+    cpus: 2.0
+    mem_limit: 4g
+    memswap_limit: 4g
+
+  # Headless-browser sidecar \u2014 this is what makes JS-rendered pages extractable.
+  firecrawl-playwright:
+    image: ghcr.io/firecrawl/playwright-service:latest@sha256:8c50add7293201e575110e6c7489fa383a9dfc46f168936526a458e06ffc5c28
+    container_name: skills-firecrawl-playwright
+    environment:
+      - PORT=3000
+      - BLOCK_MEDIA=true
+      - MAX_CONCURRENT_PAGES=4
+    restart: unless-stopped
+    profiles: ["extract"]
+    cpus: 1.5
+    mem_limit: 2g
+    memswap_limit: 2g
+    tmpfs:
+      - /tmp/.cache:noexec,nosuid,size=512m
+
+  firecrawl-redis:
+    image: redis:alpine
+    container_name: skills-firecrawl-redis
+    command: redis-server --bind 0.0.0.0
+    restart: unless-stopped
+    profiles: ["extract"]
+
+  firecrawl-rabbitmq:
+    image: rabbitmq:3-management
+    container_name: skills-firecrawl-rabbitmq
+    restart: unless-stopped
+    profiles: ["extract"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  firecrawl-postgres:
+    image: ghcr.io/firecrawl/nuq-postgres:latest@sha256:aed86f62858f29bd971abddcdeb301c12888098d2cf5d33c1ba42b053bc460f6
+    container_name: skills-firecrawl-postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=postgres
+    volumes:
+      - firecrawl_pg:/var/lib/postgresql/data
+    restart: unless-stopped
+    profiles: ["extract"]
+
+volumes:
+  qdrant:
+  ollama:
+  firecrawl_pg:
+`;
+var SEARXNG_SETTINGS_YAML = `# Minimal SearXNG config for keyless, self-hosted web discovery. The important
+# bit is enabling the JSON output format so the CLI can query it
+# programmatically (\`/search?format=json\`) \u2014 most PUBLIC instances disable it,
+# which is why a local one ships here.
+#
+# The service names and ports below are deliberately stable, so several tools on
+# one machine share a single container rather than each starting their own.
+use_default_settings: true
+
+server:
+  # Override with a real random secret if you expose this beyond localhost.
+  secret_key: "searxng-local-dev-change-me"
+  # The limiter/bot-detection middleware answers 403 to format=json requests.
+  limiter: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  formats:
+    - html
+    - json
+`;
+var FIRECRAWL_ENV = `# Tunables for the self-hosted Firecrawl stack (docker compose --profile extract).
+# Wiring (hostnames, ports, SEARXNG_ENDPOINT) lives in docker-compose.yml and
+# overrides anything set here.
+
+# THIS is what makes the API keyless. Turning it on would require a Supabase
+# project; there is no reason to for a localhost stack.
+USE_DB_AUTHENTICATION=false
+
+# Firecrawl's Rust PDF extractor, which is OFF by default upstream. Without it
+# Firecrawl falls back to pdf-parse (JS) for PDFs. Still keyless: this is the
+# local Rust path, not the MinerU / Fire PDF routes, which need API credentials.
+# Reached as a rung of the PDF ladder when the built-in reader finds no text.
+PDF_RUST_EXTRACT_ENABLE=true
+
+# Postgres credentials for the bundled nuq-postgres container. It is not
+# published on a host port, so these never leave the compose network.
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=postgres
+POSTGRES_PORT=5432
+
+# Admin queue dashboard at http://localhost:3002/admin/CHANGEME/queues
+BULL_AUTH_KEY=CHANGEME
+
+# Concurrency, trimmed for a laptop. Upstream defaults are 8/5/5/10 and assume
+# a 4-CPU / 8-GB box; these keep the stack near ~4 GB total.
+NUM_WORKERS_PER_QUEUE=2
+MAX_CONCURRENT_JOBS=3
+BROWSER_POOL_SIZE=2
+CRAWL_CONCURRENT_REQUESTS=4
+
+# Back off before the host runs out of headroom.
+MAX_CPU=0.8
+MAX_RAM=0.8
+
+LOGGING_LEVEL=info
+`;
+function renderAsset(template) {
+  return template.replaceAll("{{CLI}}", brand().cli);
+}
+function ensureComposeMaterialized() {
+  const base = join2(brand().cacheDir ?? join2(tmpdir2(), brand().name), "compose");
+  const composePath = join2(base, "docker-compose.yml");
+  const settingsPath = join2(base, "docker", "searxng", "settings.yml");
+  const firecrawlEnvPath = join2(base, "docker", "firecrawl", "firecrawl.env");
+  writeIfChanged(composePath, renderAsset(COMPOSE_YAML));
+  writeIfChanged(settingsPath, renderAsset(SEARXNG_SETTINGS_YAML));
+  writeIfChanged(firecrawlEnvPath, renderAsset(FIRECRAWL_ENV));
+  return composePath;
+}
+function writeIfChanged(path, content) {
+  try {
+    if (existsSync2(path) && readFileSync2(path, "utf8") === content) return;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync2(path, content);
+  } catch {
+  }
+}
+var DEFAULT_PULL_TIMEOUT_MS = 12e5;
+var UP_TIMEOUT_MS = 3e5;
+var DOWN_TIMEOUT_MS = 12e4;
+var PS_TIMEOUT_MS = 3e4;
+var MODEL_PULL_TIMEOUT_MS = 6e5;
+function pullTimeoutMs() {
+  return envInt("DOCKER_PULL_TIMEOUT_MS", DEFAULT_PULL_TIMEOUT_MS);
+}
+function embedModel() {
+  return env("EMBED_MODEL") ?? "nomic-embed-text";
+}
+function defaultRun(cmd, args, opts) {
+  const res = spawnSync(cmd, args, {
+    encoding: "utf8",
+    timeout: opts.timeoutMs,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: opts.capture ? "pipe" : "inherit"
+  });
+  const missing = !!res.error && res.error.code === "ENOENT";
+  return {
+    ok: !res.error && res.status === 0,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? (res.error ? String(res.error.message) : ""),
+    missing
+  };
+}
+function defaultHas(cmd) {
+  const probe = defaultRun(process.platform === "win32" ? "where" : "which", [cmd], { timeoutMs: 1e4, capture: true });
+  return probe.ok && probe.stdout.trim().length > 0;
+}
+var STACKS = {
+  searxng: {
+    profiles: ["search"],
+    summary: "SearXNG is up (:8888) \u2014 keyless discovery, JSON API enabled."
+  },
+  firecrawl: {
+    profiles: ["search", "extract"],
+    summary: "Firecrawl is up (:3002 \xB7 playwright \xB7 redis \xB7 rabbitmq \xB7 postgres), with SearXNG behind it.",
+    postUp: () => [
+      "  keyless: USE_DB_AUTHENTICATION=false \u2014 no API key is sent or needed.",
+      "  effect:  pages are now cleaned by a real browser; --firecrawl off opts out."
+    ]
+  },
+  semantic: {
+    profiles: ["semantic"],
+    summary: "Qdrant (:6333) and Ollama (:11434) are up.",
+    postUp: (file, run) => {
+      const model = embedModel();
+      const pull = run("docker", ["compose", "-f", file, "exec", "-T", "ollama", "ollama", "pull", model], { timeoutMs: MODEL_PULL_TIMEOUT_MS, capture: true });
+      return [pull.ok ? `  model:   ${model} ready` : `  model:   pull it yourself: docker compose -f ${file} exec ollama ollama pull ${model}`];
+    }
+  },
+  all: {
+    profiles: ["all", "extract"],
+    summary: "The whole stack is up (Qdrant \xB7 Ollama \xB7 SearXNG \xB7 Firecrawl).",
+    postUp: (file, run) => STACKS.semantic.postUp(file, run)
+  }
+};
+var STACK_SERVICES = Object.keys(STACKS);
+var SERVICE_PROFILES = Object.fromEntries(Object.entries(STACKS).map(([k, v]) => [k, v.profiles]));
+function stackControl(service, action, deps = {}) {
+  const run = deps.run ?? defaultRun;
+  const has = deps.has ?? defaultHas;
+  const tag2 = `${brand().cli} ${service}`;
+  const spec = STACKS[service];
+  if (!spec) return { message: `${brand().cli}: unknown service "${service}" \u2014 expected one of ${STACK_SERVICES.join(", ")}`, code: 1 };
+  if (action !== "up" && action !== "down" && action !== "status") {
+    return { message: `${tag2}: unknown action "${action}" (use: up | down | status)`, code: 1 };
+  }
+  if (!has("docker")) {
+    return { message: `${tag2}: docker not found on PATH. The stack is optional \u2014 everything it provides degrades to a note.`, code: 1 };
+  }
+  const file = ensureComposeMaterialized();
+  const profiles = spec.profiles.flatMap((p) => ["--profile", p]);
+  if (action === "down") {
+    const r = run("docker", ["compose", "-f", file, ...profiles, "down"], { timeoutMs: DOWN_TIMEOUT_MS, capture: true });
+    return { message: r.ok ? `${tag2}: stopped.` : `${tag2}: down failed.
+${r.stderr}`, code: r.ok ? 0 : 1 };
+  }
+  if (action === "status") {
+    const r = run("docker", ["compose", "-f", file, ...profiles, "ps"], { timeoutMs: PS_TIMEOUT_MS, capture: true });
+    return { message: r.ok ? r.stdout.trim() || `${tag2}: no services running.` : `${tag2}: status failed.
+${r.stderr}`, code: 0 };
+  }
+  const pulled = run("docker", ["compose", "-f", file, ...profiles, "pull"], { timeoutMs: pullTimeoutMs() });
+  if (!pulled.ok) {
+    return {
+      message: `${tag2}: pulling the images failed (they are large \u2014 raise ${envName("DOCKER_PULL_TIMEOUT_MS")}, currently ${pullTimeoutMs()}ms).` + (pulled.stderr ? `
+${pulled.stderr}` : ""),
+      code: 1
+    };
+  }
+  const up = run("docker", ["compose", "-f", file, ...profiles, "up", "-d", "--wait"], { timeoutMs: UP_TIMEOUT_MS });
+  if (!up.ok) return { message: `${tag2}: up failed.${up.stderr ? `
+${up.stderr}` : ""}`, code: 1 };
+  return { message: [`${tag2}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
+}
+var chains = /* @__PURE__ */ new Map();
+function withRunLock(slug, fn) {
+  const prev = chains.get(slug) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.then(noop, noop);
+  chains.set(slug, tail);
+  tail.then(() => {
+    if (chains.get(slug) === tail) chains.delete(slug);
+  }, noop);
+  return next;
+}
+function noop() {
+}
 var flagged = false;
 function setNoWrite(on) {
   flagged = on;
@@ -1706,7 +2272,7 @@ function isNoWrite() {
 var collected = [];
 function ensureDir(dir) {
   if (isNoWrite()) return;
-  mkdirSync(dir, { recursive: true });
+  mkdirSync2(dir, { recursive: true });
 }
 function writeArtifact(path, content) {
   if (isNoWrite()) {
@@ -1715,7 +2281,7 @@ function writeArtifact(path, content) {
     else collected.push({ path, content });
     return path;
   }
-  writeFileSync2(path, content);
+  writeFileSync3(path, content);
   return path;
 }
 function takeArtifacts() {
@@ -1723,12 +2289,12 @@ function takeArtifacts() {
 }
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return env("CACHE_DIR") ?? brand().cacheDir ?? join2(tmpdir2(), brand().name, "cache");
+  return env("CACHE_DIR") ?? brand().cacheDir ?? join3(tmpdir3(), brand().name, "cache");
 }
 function cachePath(url, acceptLanguage = "", extractor = "native") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  return join2(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
+  return join3(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
 }
 var PDF_CACHE_NS = "pdf";
 var DOC_CACHE_NS = "doc";
@@ -1743,9 +2309,9 @@ function ttlMs() {
 }
 function readCache(url, now, acceptLanguage = "", extractor = "native") {
   const p = cachePath(url, acceptLanguage, extractor);
-  if (!existsSync2(p)) return void 0;
+  if (!existsSync3(p)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync2(p, "utf8"));
+    const entry = JSON.parse(readFileSync3(p, "utf8"));
     if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
     if (!entry.text?.trim()) return void 0;
     return entry;
@@ -1756,9 +2322,9 @@ function readCache(url, now, acceptLanguage = "", extractor = "native") {
 function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   if (isNoWrite()) return;
   try {
-    mkdirSync2(cacheDir(), { recursive: true });
+    mkdirSync3(cacheDir(), { recursive: true });
     const entry = { ...res, cachedAt: now };
-    writeFileSync3(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
+    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
   } catch {
   }
 }
@@ -1857,20 +2423,20 @@ function isOriginAllowed(origin, allowed = []) {
 var skillName = () => brand().name;
 var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
-  const here = moduleDir ?? dirname(fileURLToPath(import.meta.url));
+  const here = moduleDir ?? dirname2(fileURLToPath(import.meta.url));
   const name = brand().name;
   const candidates = [resolve(here, ".."), resolve(here, "..", "skills", name), resolve(here, "..", "..", "skills", name)];
-  return candidates.find((dir) => existsSync3(join3(dir, "SKILL.md")));
+  return candidates.find((dir) => existsSync4(join4(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join3(root, "references");
-  if (!existsSync3(refDir)) return out;
+  const refDir = join4(root, "references");
+  if (!existsSync4(refDir)) return out;
   for (const file of readdirSync(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join3("references", file), `${skillName()} reference: ${basename(file, ".md")}`));
+    out.push(describe(root, join4("references", file), `${skillName()} reference: ${basename(file, ".md")}`));
   }
   return out;
 }
@@ -1894,7 +2460,7 @@ function readResource(uri, moduleDir) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
   if (!statSync(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync3(targetReal, "utf8") };
+  return { uri, mimeType: "text/markdown", text: readFileSync4(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
 };
@@ -1905,14 +2471,14 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join3(root, rel));
+  const summary = firstProse(join4(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
 function firstProse(file) {
   let text;
   try {
-    text = readFileSync3(file, "utf8");
+    text = readFileSync4(file, "utf8");
   } catch {
     return void 0;
   }
@@ -2684,85 +3250,9 @@ async function mapLimit(items, limit, fn) {
   return results;
 }
 
-// src/locale.ts
-var LANG_COUNTRY = {
-  en: "us",
-  pt: "br",
-  ja: "jp",
-  zh: "cn",
-  ko: "kr",
-  sv: "se",
-  da: "dk",
-  cs: "cz",
-  el: "gr",
-  uk: "ua",
-  // Ukrainian language → Ukraine
-  ar: "xa",
-  // DuckDuckGo's "Arabia" region
-  he: "il",
-  hi: "in"
-};
-var REGION_ALIASES = {
-  gb: "uk",
-  en: "us"
-};
-function baseLang(lang) {
-  return (lang || "en").split("-")[0].toLowerCase();
-}
-function resolveRegion(lang, region) {
-  if (region?.trim()) return region.trim().toLowerCase();
-  const parts = (lang || "en").split("-");
-  if (parts.length > 1 && parts[1]) return parts[1].toLowerCase();
-  const l = baseLang(lang);
-  return LANG_COUNTRY[l] ?? l;
-}
-function ddgRegion(lang, region) {
-  const l = baseLang(lang);
-  let r = resolveRegion(lang, region);
-  r = REGION_ALIASES[r] ?? r;
-  return `${r}-${l}`;
-}
-function acceptLanguageHeader(lang, region) {
-  const l = baseLang(lang);
-  const R = resolveRegion(lang, region).toUpperCase();
-  if (l === "en") return `${l}-${R},${l};q=0.9`;
-  return `${l}-${R},${l};q=0.9,en;q=0.5`;
-}
-
 // src/backends/searxng.ts
-var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
-var PROBE_TIMEOUT_MS2 = 2e3;
-function resolveSearxngBase(ctx) {
-  const raw = (ctx.options.searxng ?? process.env.ULTRASEARCH_SEARXNG ?? SEARXNG_DEFAULT_BASE).trim();
-  if (!raw || raw.toLowerCase() === "off") return null;
-  return raw.replace(/\/+$/, "");
-}
-function searxngIsExplicit(ctx) {
-  return !!(ctx.options.searxng ?? process.env.ULTRASEARCH_SEARXNG);
-}
-var probeCache2 = /* @__PURE__ */ new Map();
-function probeSearxng(base) {
-  let p = probeCache2.get(base);
-  if (!p) {
-    p = (async () => {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS2);
-      try {
-        const res = await fetch(`${base}/healthz`, { signal: ctrl.signal });
-        await res.text().catch(() => "");
-        return true;
-      } catch {
-        return false;
-      } finally {
-        clearTimeout(t);
-      }
-    })();
-    probeCache2.set(base, p);
-  }
-  return p;
-}
 var searxngBackend = async (ctx) => {
-  const base = resolveSearxngBase(ctx);
+  const base = searxngBase({ searxng: ctx.options.searxng });
   if (!base) {
     return {
       backend: "searxng",
@@ -2775,7 +3265,7 @@ var searxngBackend = async (ctx) => {
       backend: "searxng",
       items: [],
       notes: [
-        searxngIsExplicit(ctx) ? `SearXNG not reachable at ${base}. Skipping; consider your own WebSearch.` : `SearXNG not running at ${base} \u2014 start it with \`ultrasearch searxng up\` (or \`docker compose --profile search up -d\`) for a local, keyless discovery backend. Skipping.`
+        searxngIsExplicit({ searxng: ctx.options.searxng }) ? `SearXNG not reachable at ${base}. Skipping; consider your own WebSearch.` : `SearXNG not running at ${base} \u2014 start it with \`ultrasearch searxng up\` for a local, keyless discovery backend. Skipping.`
       ]
     };
   }
@@ -3754,114 +4244,9 @@ async function runBackends(kinds, ctx) {
   return Promise.all(tasks);
 }
 
-// src/providers.ts
-var PUBMED_LANDING = /^https?:\/\/(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov\/(\d{4,9})\/?$/i;
-var PMC_LANDING = /^https?:\/\/(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov\/articles\/(PMC\d+)\/?$/i;
-var EUTILS = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/([a-z]+)\.fcgi/i;
-var ARXIV_PDF = /^https?:\/\/(?:www\.|export\.)?arxiv\.org\/pdf\/([^?#]+?)(?:\.pdf)?\/?$/i;
-function eutilsIds(raw) {
-  return (raw ?? "").split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
-}
-function pubmedAbstractUrl(pmid) {
-  return `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${pmid}&rettype=abstract&retmode=text`;
-}
-function resolveProvider(url) {
-  const raw = url.trim();
-  const pubmed = raw.match(PUBMED_LANDING);
-  if (pubmed) {
-    const pmid = pubmed[1];
-    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`, textUrl: pubmedAbstractUrl(pmid) };
-  }
-  const pmc = raw.match(PMC_LANDING);
-  if (pmc) return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmc[1].toUpperCase()}/` };
-  const eutils = raw.match(EUTILS);
-  if (eutils) return resolveEutils(raw, eutils[1].toLowerCase());
-  const arxiv = raw.match(ARXIV_PDF);
-  if (arxiv) return { citeUrl: `https://arxiv.org/abs/${arxiv[1]}`, textUrl: raw, preferText: true };
-  return { citeUrl: raw };
-}
-function resolveEutils(raw, op) {
-  let params;
-  try {
-    params = new URL(raw).searchParams;
-  } catch {
-    return { citeUrl: raw };
-  }
-  if (op === "esearch" || op === "egquery" || op === "espell") {
-    return { citeUrl: raw, reject: `${raw} is an E-utilities ${op} query, not a document \u2014 fetch the record it points at instead.` };
-  }
-  const db = (params.get("db") ?? "").toLowerCase();
-  const ids = eutilsIds(params.get("id"));
-  const id = ids[0];
-  if (!id) return { citeUrl: raw };
-  if (db === "pubmed" && /^\d+$/.test(id)) {
-    return { citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: pubmedAbstractUrl(id) };
-  }
-  if (db === "pmc") {
-    const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
-    return { citeUrl: `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid}/` };
-  }
-  return { citeUrl: raw };
-}
-
 // src/dossier.ts
-import { existsSync as existsSync4, readFileSync as readFileSync4 } from "fs";
-import { join as join4 } from "path";
-
-// src/citable.ts
-var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
-var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
-var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
-function isApiEndpoint(url) {
-  try {
-    const u = new URL(url);
-    if (API_HOSTS.has(u.hostname.toLowerCase().replace(/^www\./, ""))) return true;
-    if (API_PATHS.some((re) => re.test(u.pathname))) return true;
-    return API_FORMATS.test(u.search);
-  } catch {
-    return false;
-  }
-}
-var ID_PARAMS = ["id", "ids", "uid", "uids", "pmid", "doi", "identifier"];
-function addressedIdCount(url) {
-  try {
-    const params = new URL(url).searchParams;
-    for (const name of ID_PARAMS) {
-      const raw = params.get(name);
-      if (!raw) continue;
-      const ids = raw.split(/[,\s+]+/).map((s) => s.trim()).filter(Boolean);
-      if (ids.length) return ids.length;
-    }
-  } catch {
-  }
-  return 0;
-}
-function isCitableUrl(url) {
-  try {
-    const u = new URL(url);
-    return (u.protocol === "https:" || u.protocol === "http:") && !isApiEndpoint(url);
-  } catch {
-    return false;
-  }
-}
-var DOI_RE = /\b(10\.\d{4,9}\/[^\s"'<>()[\],;]+)/;
-var ARXIV_RE = /\barxiv[:\s/]+((?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?)/i;
-var PMID_RE = /\bPMID:?\s*(\d{4,9})\b/i;
-var ARXIV_ID_PATH_RE = /\/(\d{4}\.\d{4,5}(?:v\d+)?)(?:$|[/?#])/;
-function urlDeclaresIdentity(url) {
-  return DOI_RE.test(url) || ARXIV_ID_PATH_RE.test(url);
-}
-function deriveCitableUrl(text, canonical) {
-  if (canonical && isCitableUrl(canonical)) return canonical;
-  const head = text.slice(0, 4e3);
-  const doi = head.match(DOI_RE)?.[1];
-  if (doi) return `https://doi.org/${doi.replace(/[.,;:)\]]+$/, "")}`;
-  const arxiv = head.match(ARXIV_RE)?.[1];
-  if (arxiv) return `https://arxiv.org/abs/${arxiv}`;
-  const pmid = head.match(PMID_RE)?.[1];
-  if (pmid) return `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
-  return void 0;
-}
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { join as join5 } from "path";
 
 // src/authority.ts
 var URL_IN_TEXT = /https?:\/\/[a-z0-9.-]+/gi;
@@ -3954,7 +4339,7 @@ var CITATION_RULES_NO_WRITE = [
 function readJson(path, what) {
   let raw;
   try {
-    raw = readFileSync4(path, "utf8");
+    raw = readFileSync5(path, "utf8");
   } catch (e) {
     throw new Error(`${what} could not be read (${path}): ${e.message}`);
   }
@@ -4012,20 +4397,20 @@ function renderSourceExtract(s, text, depth) {
   return head + capExtract(text, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join4(dir, s.extract);
-  if (!existsSync4(p)) return s.snippet ?? "";
-  const lines = readFileSync4(p, "utf8").split("\n");
+  const p = join5(dir, s.extract);
+  if (!existsSync5(p)) return s.snippet ?? "";
+  const lines = readFileSync5(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth) {
-  writeArtifact(join4(dir, s.extract), renderSourceExtract(s, text, depth));
+  writeArtifact(join5(dir, s.extract), renderSourceExtract(s, text, depth));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join4(dir, "sources.json");
-  const dossierMd = join4(dir, "DOSSIER.md");
-  const manifestJson = join4(dir, "manifest.json");
+  const sourcesJson = join5(dir, "sources.json");
+  const dossierMd = join5(dir, "DOSSIER.md");
+  const manifestJson = join5(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
@@ -4033,10 +4418,10 @@ function writeDossierIndex(dir, sources, manifest, template) {
 }
 function writeBibtex(dir, sources, extras) {
   if (!extras.includes("bibtex")) return;
-  writeArtifact(join4(dir, "refs.bib"), toBibtex(sources));
+  writeArtifact(join5(dir, "refs.bib"), toBibtex(sources));
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join4(dir, "sources"));
+  ensureDir(join5(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
@@ -4136,19 +4521,15 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson(join4(dir, "sources.json"), "sources.json");
+  const sources = readJson(join5(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
-  const manifest = readJson(join4(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson(join5(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
 // src/services.ts
-import { existsSync as existsSync5 } from "fs";
-import { dirname as dirname2, join as join5 } from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import { spawn as spawn2 } from "child_process";
 var VERSION_PROBE_TIMEOUT_MS = 2e4;
 async function toolVersion(cmd, args) {
   const r = await runWithInput(cmd, args, Buffer.alloc(0), VERSION_PROBE_TIMEOUT_MS);
@@ -4157,7 +4538,7 @@ async function toolVersion(cmd, args) {
 }
 async function probeServices(opts = {}) {
   const out = [];
-  const sxBase = resolveSearxngBase({ options: { searxng: opts.searxng } });
+  const sxBase = searxngBase({ searxng: opts.searxng });
   if (!sxBase) out.push({ name: "searxng", ok: false, detail: "disabled (--searxng off)" });
   else {
     const up = await probeSearxng(sxBase);
@@ -4264,43 +4645,6 @@ function describeWebSearchLane(manifest) {
     detail: `${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}${manifest.searchProfile ? `, --search ${manifest.searchProfile}` : ""}`
   };
 }
-function composeFile() {
-  const here = dirname2(fileURLToPath2(import.meta.url));
-  for (const root of [join5(here, ".."), join5(here, "..", "..")]) {
-    const p = join5(root, "docker-compose.yml");
-    if (existsSync5(p)) return p;
-  }
-  return void 0;
-}
-var SERVICE_PROFILES = {
-  searxng: ["search"],
-  firecrawl: ["search", "extract"]
-  // Firecrawl delegates its keyless /search to SearXNG
-};
-function compose(service, action) {
-  const file = composeFile();
-  if (!file) {
-    process.stderr.write(
-      `ultrasearch: docker-compose.yml not found next to the engine.
-             This copy of the skill ships the engine alone. Clone the repo
-             (or \`npm i -g ultrasearch\`) to manage the containers, or run:
-             docker compose --profile ${SERVICE_PROFILES[service].join(" --profile ")} ${action}${action === "up" ? " -d --wait" : ""}
-`
-    );
-    return Promise.resolve(1);
-  }
-  const profiles = SERVICE_PROFILES[service].flatMap((p) => ["--profile", p]);
-  const args = ["compose", "-f", file, ...profiles, action, ...action === "up" ? ["-d", "--wait"] : []];
-  return new Promise((resolve6) => {
-    const child = spawn2("docker", args, { stdio: "inherit" });
-    child.on("error", (e) => {
-      process.stderr.write(e.code === "ENOENT" ? "ultrasearch: docker not found on PATH.\n" : `ultrasearch: ${e.message}
-`);
-      resolve6(1);
-    });
-    child.on("close", (code) => resolve6(code ?? 1));
-  });
-}
 
 // src/gather.ts
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
@@ -4314,7 +4658,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode, question, d) {
-  return join6(tmpdir3(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
+  return join6(tmpdir4(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -4719,7 +5063,7 @@ async function runGather(options) {
         `\u26A0 max asked for SearXNG and it contributed nothing. Its own note above says why (a stopped container, or its upstream engines throttling). \`ultrasearch doctor\` tells the two apart.`
       ] : [],
       ...services.firecrawl.pages === 0 ? [
-        `\u26A0 max asked for Firecrawl and no page came back through it \u2014 the stack is down. Start it: \`docker compose --profile search --profile extract up -d --wait\`. Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`
+        `\u26A0 max asked for Firecrawl and no page came back through it \u2014 the stack is down. Start it: \`ultrasearch firecrawl up\`. Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`
       ] : []
     ] : [],
     ...profile === "light" && !explicit ? [
@@ -4774,7 +5118,7 @@ async function runGather(options) {
 }
 
 // src/enrich.ts
-import { existsSync as existsSync6, readFileSync as readFileSync5, statSync as statSync2 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync6, statSync as statSync2 } from "fs";
 import { basename as basename2, resolve as resolve2 } from "path";
 import { pathToFileURL } from "url";
 async function addSources(dir, hits, opts = {}) {
@@ -4813,7 +5157,7 @@ async function addFile(dir, abs, opts) {
   const question = opts.question ?? manifest.question;
   const existing = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(url));
   if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
-  const bytes = readFileSync5(abs);
+  const bytes = readFileSync6(abs);
   const name = basename2(abs);
   let text;
   let extractor;
@@ -4970,7 +5314,7 @@ async function addSource(dir, url, opts = {}) {
 }
 
 // src/render.ts
-import { existsSync as existsSync7, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
 import { join as join7 } from "path";
 
 // src/claims.ts
@@ -5357,7 +5701,7 @@ function citedAcrossTiers(dir) {
   for (const t of TIERS) {
     const p = join7(dir, t.file);
     if (!existsSync7(p)) continue;
-    for (const id of citedSourceIds(readFileSync6(p, "utf8"))) cited.add(id);
+    for (const id of citedSourceIds(readFileSync7(p, "utf8"))) cited.add(id);
   }
   return cited;
 }
@@ -5365,7 +5709,7 @@ function readVerify(dir) {
   const p = join7(dir, "VERIFY.json");
   if (!existsSync7(p)) return void 0;
   try {
-    return JSON.parse(readFileSync6(p, "utf8"));
+    return JSON.parse(readFileSync7(p, "utf8"));
   } catch {
     return void 0;
   }
@@ -5385,7 +5729,7 @@ function renderHtml(dir) {
   const verify = readVerify(dir);
   const verdicts = worstBySource(verify);
   const rendered = present.map((t) => {
-    const md = readFileSync6(join7(dir, t.file), "utf8");
+    const md = readFileSync7(join7(dir, t.file), "utf8");
     const { html, headings } = mdToHtml(md, t.id, { verdicts });
     return { ...t, html, headings };
   });
@@ -5521,7 +5865,7 @@ function buildReportMarkdown(dir) {
   const meta = `> ${manifest.mode} \xB7 depth ${manifest.depth} \xB7 ${sources.length} sources${manifest.lang ? ` \xB7 lang ${manifest.lang}` : ""}${manifest.region ? `/${manifest.region}` : ""} \xB7 ${manifest.builtAt} \xB7 generated by ultrasearch`;
   const parts = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
   for (const t of present) {
-    const body = readFileSync6(join7(dir, t.file), "utf8").trim();
+    const body = readFileSync7(join7(dir, t.file), "utf8").trim();
     if (!body) continue;
     parts.push("---", "", `## ${t.label}`, "", body, "");
   }
@@ -5550,11 +5894,11 @@ function writeReportMarkdown(dir, out) {
 }
 
 // src/check.ts
-import { existsSync as existsSync9, readFileSync as readFileSync8 } from "fs";
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
 import { join as join9 } from "path";
 
 // src/verify.ts
-import { existsSync as existsSync8, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
 import { join as join8 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
@@ -5595,7 +5939,7 @@ function buildWorklist(dir, opts = {}) {
   for (const file of HARD_FILES) {
     const p = join8(dir, file);
     if (!existsSync8(p)) continue;
-    const text = readFileSync7(p, "utf8");
+    const text = readFileSync8(p, "utf8");
     for (const claim of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
@@ -5850,7 +6194,7 @@ function applySemantic(dir, result, requireVerify) {
   }
   let stored;
   try {
-    stored = JSON.parse(readFileSync8(p, "utf8"));
+    stored = JSON.parse(readFileSync9(p, "utf8"));
   } catch (e) {
     result.ok = false;
     result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
@@ -5899,7 +6243,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync8(join9(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync9(join9(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -5913,7 +6257,7 @@ function runCheck(dir, opts = {}) {
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync8(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync9(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
@@ -5925,7 +6269,7 @@ function runCheck(dir, opts = {}) {
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync8(join9(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync9(join9(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -6009,7 +6353,7 @@ function runCheck(dir, opts = {}) {
   };
   for (const f of present) {
     if (!HARD_FILES2.includes(f)) continue;
-    for (const u of unitsOfFile(readFileSync8(join9(dir, f), "utf8"))) {
+    for (const u of unitsOfFile(readFileSync9(join9(dir, f), "utf8"))) {
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -6691,7 +7035,7 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { existsSync as existsSync10, readFileSync as readFileSync9 } from "fs";
+import { existsSync as existsSync10, readFileSync as readFileSync10 } from "fs";
 import { join as join13, resolve as resolve3 } from "path";
 
 // src/orchestrate-templates.ts
@@ -6931,7 +7275,7 @@ function listPhases(runDir, engineAbs) {
   let plan;
   if (existsSync10(planPath)) {
     try {
-      const f = JSON.parse(readFileSync9(planPath, "utf8"));
+      const f = JSON.parse(readFileSync10(planPath, "utf8"));
       if (f && Array.isArray(f.subQuestions)) plan = f;
     } catch {
     }
@@ -6942,7 +7286,7 @@ function listPhases(runDir, engineAbs) {
   let verReady = false;
   if (existsSync10(verPath)) {
     try {
-      const f = JSON.parse(readFileSync9(verPath, "utf8"));
+      const f = JSON.parse(readFileSync10(verPath, "utf8"));
       if (f && Array.isArray(f.pairs)) {
         verReady = true;
         verIds = f.pairs.map((p) => `${p.claimId}:${p.sourceId}`);
@@ -7035,25 +7379,8 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync11, readFileSync as readFileSync10, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
+import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
 import { isAbsolute, join as join14, relative, resolve as resolve4, sep as sep2 } from "path";
-
-// src/run-lock.ts
-var chains = /* @__PURE__ */ new Map();
-function withRunLock(slug, fn) {
-  const prev = chains.get(slug) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  const tail = next.then(noop, noop);
-  chains.set(slug, tail);
-  tail.then(() => {
-    if (chains.get(slug) === tail) chains.delete(slug);
-  }, noop);
-  return next;
-}
-function noop() {
-}
-
-// src/mcp/handlers.ts
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -7405,7 +7732,7 @@ function handleRead(args, run) {
   const st = statSync3(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync10(real, "utf8").split("\n");
+  const lines = readFileSync11(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
@@ -7721,14 +8048,14 @@ function toolsFor(protocolVersion, opts = {}) {
     return decl;
   });
 }
-function applyDefaultRun(schema, defaultRun) {
+function applyDefaultRun(schema, defaultRun2) {
   const existing = schema.properties.run;
-  if (!defaultRun || !existing) return schema;
+  if (!defaultRun2 || !existing) return schema;
   return {
     type: "object",
     properties: {
       ...schema.properties,
-      run: { ...existing, description: `${existing.description} Optional \u2014 defaults to ${defaultRun}.` }
+      run: { ...existing, description: `${existing.description} Optional \u2014 defaults to ${defaultRun2}.` }
     },
     required: schema.required.filter((r) => r !== "run")
   };
@@ -8233,7 +8560,7 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync11(0, "utf8");
+      return readFileSync12(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
@@ -8241,7 +8568,7 @@ function readWebResultsPayload(spec) {
   const abs = resolve5(spec);
   if (!existsSync12(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync11(abs, "utf8");
+    return readFileSync12(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -8417,7 +8744,7 @@ async function main(argv = process.argv.slice(2)) {
         if (down.length) {
           process.stderr.write(
             `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.
-             Start it:  docker compose --profile search --profile extract up -d --wait
+             Start it:  ultrasearch firecrawl up
              Continuing without it \u2014 the run will say what it lost.
 `
           );
@@ -8501,7 +8828,7 @@ async function main(argv = process.argv.slice(2)) {
         const mf = join15(resolve5(runDir), "manifest.json");
         if (!existsSync12(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync11(mf, "utf8"));
+          manifest = JSON.parse(readFileSync12(mf, "utf8"));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -8522,17 +8849,18 @@ ${formatServices(rows)}
     case "firecrawl": {
       const action = p.positional[0] ?? "status";
       if (action === "status") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r2) => r2.name === p.command);
         process.stdout.write(formatServices(rows) + "\n");
         return;
       }
       if (action !== "up" && action !== "down") {
         fail(`${p.command}: unknown action '${action}' (expected up | down | status)`);
       }
-      const code = await compose(p.command, action);
-      if (code !== 0) process.exit(code);
+      const r = stackControl(p.command, action);
+      process.stdout.write(r.message + "\n");
+      if (r.code !== 0) process.exit(r.code);
       if (action === "up") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r2) => r2.name === p.command);
         process.stdout.write("\n" + formatServices(rows) + "\n");
       }
       return;
@@ -8751,7 +9079,7 @@ ${formatServices(rows)}
         process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
         process.exit(2);
       }
-      const engineAbs = realpathSync3(fileURLToPath3(import.meta.url));
+      const engineAbs = realpathSync3(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
         if (!existsSync12(resolve5(dir))) {
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve5(dir)}
@@ -8905,7 +9233,7 @@ ${formatServices(rows)}
 function isInvokedDirectly() {
   const argv1 = process.argv[1];
   if (argv1 === void 0) return false;
-  const modulePath = fileURLToPath3(import.meta.url);
+  const modulePath = fileURLToPath2(import.meta.url);
   try {
     if (realpathSync3(argv1) === realpathSync3(modulePath)) return true;
   } catch {
