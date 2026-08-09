@@ -1,5 +1,5 @@
 // src/version.ts
-var ENGINE_VERSION = "1.13.0";
+var ENGINE_VERSION = "1.14.0";
 
 // src/brand.ts
 var DEFAULT_BRAND = {
@@ -23,6 +23,14 @@ function brand() {
 }
 function resetBrand() {
   current = { ...DEFAULT_BRAND };
+}
+function countFetch(bytes, cached = false) {
+  const hook = current.onFetch;
+  if (!hook) return;
+  try {
+    hook(bytes, cached);
+  } catch {
+  }
 }
 function envName(suffix) {
   return `${current.envPrefix}_${suffix}`;
@@ -465,7 +473,60 @@ function decodeBody(bytes, contentType = "") {
   if (meta && meta !== "utf-8" && meta !== "utf8") return decodeWith(bytes, meta);
   return bytes.toString("utf8");
 }
+var CP1252_C1 = [
+  8364,
+  129,
+  8218,
+  402,
+  8222,
+  8230,
+  8224,
+  8225,
+  710,
+  8240,
+  352,
+  8249,
+  338,
+  141,
+  381,
+  143,
+  144,
+  8216,
+  8217,
+  8220,
+  8221,
+  8226,
+  8211,
+  8212,
+  732,
+  8482,
+  353,
+  8250,
+  339,
+  157,
+  382,
+  376
+];
+var CP1252_LABELS = /* @__PURE__ */ new Set([
+  "windows-1252",
+  "cp1252",
+  "cp-1252",
+  "x-cp1252",
+  "ansi_x3.4-1968",
+  "iso-8859-1",
+  "iso8859-1",
+  "latin1",
+  "l1",
+  "us-ascii",
+  "ascii"
+]);
+function decodeCp1252(bytes) {
+  let out = "";
+  for (const b of bytes) out += String.fromCharCode(b >= 128 && b <= 159 ? CP1252_C1[b - 128] : b);
+  return out;
+}
 function decodeWith(bytes, encoding) {
+  if (CP1252_LABELS.has(encoding)) return decodeCp1252(bytes);
   try {
     return new TextDecoder(encoding, { fatal: false }).decode(bytes);
   } catch {
@@ -783,6 +844,52 @@ function buildMatcher(question, max = 8) {
 function matcherFromTokens(tokens, max = 8) {
   return makeMatcher(expandTokens(tokens.filter(Boolean), max));
 }
+function nearestHeading(lines, anchor) {
+  let heading;
+  let inFence = false;
+  for (let i = 0; i <= anchor && i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (m) heading = m[1].trim();
+  }
+  return heading;
+}
+function excerptWindows(text, question, opts = {}) {
+  const lines = text.split("\n");
+  const before = opts.before ?? 3;
+  const after = opts.after ?? 12;
+  const maxChars = opts.maxChars ?? 1500;
+  const perDoc = Math.max(1, opts.perDoc ?? 2);
+  const matchers = (Array.isArray(question) ? question : [question]).filter((q) => q.trim()).map((q) => buildMatcher(q));
+  const hits = [];
+  for (let i = 0; i < lines.length; i++) {
+    let score = 0;
+    for (const m of matchers) {
+      const cov = m.matchLine(lines[i]).size;
+      if (cov > score) score = cov;
+    }
+    if (score > 0) hits.push({ anchor: i, score });
+  }
+  hits.sort((a, b) => b.score - a.score || a.anchor - b.anchor);
+  const take = hits.length ? hits : [{ anchor: 0, score: 0 }];
+  const out = [];
+  for (const h of take) {
+    if (out.length >= perDoc) break;
+    const start = Math.max(0, h.anchor - before);
+    const end = Math.min(lines.length, h.anchor + after);
+    if (out.some((w) => start < w.end && end > w.start)) continue;
+    const snippet = lines.slice(start, end).join("\n").slice(0, maxChars);
+    if (!snippet.trim()) continue;
+    const heading = nearestHeading(lines, h.anchor);
+    out.push({ start, end, anchor: h.anchor, score: h.score, ...heading ? { heading } : {}, snippet });
+  }
+  return out;
+}
 function slugify(input, opts = {}) {
   const s = input.toLowerCase().replace(/^https?:\/\//, "").replace(/^git@/, "").replace(/\.git$/, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, opts.max ?? 120);
   return s || (opts.fallback ?? "");
@@ -809,6 +916,9 @@ function authHeaders() {
 var probeCache = /* @__PURE__ */ new Map();
 function resetFirecrawlProbeCache() {
   probeCache.clear();
+}
+function markFirecrawlDown(base) {
+  for (const explicit of [true, false]) probeCache.set(`${base}|${explicit}`, Promise.resolve(false));
 }
 function looksLikeFirecrawl(contentType, body) {
   if (/firecrawl/i.test(body.slice(0, 4096))) return true;
@@ -931,7 +1041,10 @@ function browserUa() {
 }
 function contactUa() {
   const b = brand();
-  return `${b.name}/1.x (+${b.contactUrl ?? `https://github.com/maxgfr/${b.name}`})`;
+  return `${b.name}/${b.version ?? "1.x"} (+${b.contactUrl ?? `https://github.com/maxgfr/${b.name}`})`;
+}
+function defaultUa() {
+  return brand().defaultUa === "contact" ? contactUa() : browserUa();
 }
 var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
 var maxAttempts = () => envInt("MAX_ATTEMPTS", 2, 1, 5);
@@ -961,6 +1074,9 @@ function parseRetryAfter(headers, capMs = 5e3) {
 function retryDelayMs(headers) {
   return parseRetryAfter(headers) ?? defaultRetryMs();
 }
+function attemptsFor(retries) {
+  return retries === void 0 ? maxAttempts() : Math.min(4, Math.max(0, Math.trunc(retries))) + 1;
+}
 async function readCapped(res, max) {
   return (await readCappedBytes(res, max)).toString("utf8");
 }
@@ -987,12 +1103,13 @@ async function readCappedBytes(res, max) {
   return Buffer.concat(chunks);
 }
 async function httpGet(url, opts = {}) {
+  const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, body: "", contentType: "", url };
-  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
-      const headers = { "user-agent": opts.userAgent ?? browserUa(), accept: opts.accept ?? "*/*" };
+      const headers = { "user-agent": opts.userAgent ?? defaultUa(), accept: opts.accept ?? "*/*" };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
       const res = await fetch(url, {
@@ -1015,6 +1132,7 @@ async function httpGet(url, opts = {}) {
         return { ok: false, status: res.status, body: "", ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
       }
       const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
+      countFetch(bytes.length, false);
       const result = {
         ok: res.ok,
         status: res.status,
@@ -1025,7 +1143,7 @@ async function httpGet(url, opts = {}) {
         bytes: opts.binary ? bytes : void 0,
         ...meta
       };
-      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers));
         continue;
@@ -1033,7 +1151,7 @@ async function httpGet(url, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, body: "", contentType: "", url, error: e.message };
-      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1041,15 +1159,16 @@ async function httpGet(url, opts = {}) {
   return last;
 }
 async function httpJson(method, url, body, opts = {}) {
+  const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, data: void 0 };
-  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
       const headers = {
         "content-type": "application/json",
         accept: opts.accept ?? "application/json",
-        "user-agent": opts.userAgent ?? browserUa()
+        "user-agent": opts.userAgent ?? defaultUa()
       };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
@@ -1060,6 +1179,7 @@ async function httpJson(method, url, body, opts = {}) {
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
       const text = await res.text();
+      countFetch(Buffer.byteLength(text), false);
       let data;
       try {
         data = text ? JSON.parse(text) : void 0;
@@ -1067,7 +1187,7 @@ async function httpJson(method, url, body, opts = {}) {
         data = text;
       }
       const result = { ok: res.ok, status: res.status, data };
-      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers));
         continue;
@@ -1075,7 +1195,7 @@ async function httpJson(method, url, body, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, data: void 0, error: e.message };
-      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1181,23 +1301,20 @@ var ENTITIES = {
   "&Uacute;": "\xDA",
   "&Uuml;": "\xDC"
 };
+var ENTITY_BY_NAME = new Map(Object.entries(ENTITIES).map(([k, v]) => [k.slice(1, -1), v]));
+var ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g;
 function decodeEntities(s) {
-  let out = s.replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => {
-    try {
-      return String.fromCodePoint(parseInt(h, 16));
-    } catch {
-      return " ";
+  return s.replace(ENTITY_RE, (m, ref) => {
+    if (ref[0] === "#") {
+      const n = ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+      try {
+        return Number.isFinite(n) ? String.fromCodePoint(n) : " ";
+      } catch {
+        return " ";
+      }
     }
+    return ENTITY_BY_NAME.get(ref) ?? m;
   });
-  out = out.replace(/&#(\d+);/g, (_m, n) => {
-    try {
-      return String.fromCodePoint(Number(n));
-    } catch {
-      return " ";
-    }
-  });
-  for (const [k, v] of Object.entries(ENTITIES)) out = out.split(k).join(v);
-  return out;
 }
 function cleanInline(s) {
   return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -1207,7 +1324,8 @@ function htmlToText(html) {
   s = s.replace(/<!--[\s\S]*?-->/g, " ");
   s = s.replace(/<(script|style|noscript|head|nav|footer|svg|template)[\s\S]*?<\/\1>/gi, " ");
   s = s.replace(/<h([1-6])(?:\s[^>]*)?>/gi, (_m, n) => "\n" + "#".repeat(Number(n)) + " ");
-  s = s.replace(/<\/(p|div|section|article|li|tr|h[1-6]|pre|blockquote|br)>/gi, "\n");
+  s = s.replace(/<\/(p|div|section|article|li|tr|td|th|ul|ol|h[1-6]|pre|blockquote|br)>/gi, "\n");
+  s = s.replace(/<(p|div|section|article|li|tr|td|th|ul|ol|pre|blockquote|table)\b[^>]*>/gi, "\n");
   s = s.replace(/<(br|hr)\s*\/?>/gi, "\n");
   s = s.replace(/<[^>]+>/g, " ");
   s = decodeEntities(s);
@@ -1307,7 +1425,10 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const base = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
   const fetchOpts = opts.headers ? { ...base, headers: opts.headers } : base;
-  const res = await httpGet(url, fetchOpts);
+  let res = await httpGet(url, fetchOpts);
+  if (!res.ok && brand().defaultUa === "contact" && (res.status === 403 || res.status === 429)) {
+    res = await httpGet(url, { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" });
+  }
   if (res.status === 304) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
   }
@@ -1357,10 +1478,12 @@ async function fetchAndExtract(url, opts = {}) {
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
-  const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
+  const stripped = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
+  const text = isHtml && opts.stripConsent ? stripConsentBoilerplate(stripped).text : stripped;
   const title = isHtml ? htmlTitle(res.body) : void 0;
   const canonical = isHtml ? htmlCanonicalUrl(res.body) : void 0;
-  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
+  const metaDescription = isHtml ? metaDescriptionOf(res.body) : void 0;
+  return { text, title, canonical, metaDescription, finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
@@ -1420,21 +1543,6 @@ function metaDescriptionOf(html) {
   const m = /<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']description["']/i.exec(html) || /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html);
   const d = m?.[1]?.replace(/\s+/g, " ").trim();
   return d ? decodeEntities(d) : void 0;
-}
-function nearestHeading(lines, anchor) {
-  let heading;
-  let inFence = false;
-  for (let i = 0; i <= anchor && i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-    if (m) heading = m[1].trim();
-  }
-  return heading;
 }
 function focusedSnippet(text, question, opts = {}) {
   const maxChars = opts.maxChars ?? 360;
@@ -1945,6 +2053,7 @@ function acceptLanguageHeader(lang, region) {
 // src/exec.ts
 import { spawn as spawn2, spawnSync } from "child_process";
 var STDOUT_CAP = 24 * 1024 * 1024;
+var defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3);
 function toResult(status, stdout, stderr, err) {
   const missing = err?.code === "ENOENT";
   return {
@@ -1960,7 +2069,7 @@ function have(cmd) {
   let hit = havePresence.get(cmd);
   if (hit === void 0) {
     const probe = spawnSync(process.platform === "win32" ? "where" : "which", [cmd], { encoding: "utf8" });
-    hit = probe.status === 0;
+    hit = probe.status === 0 && (probe.stdout ?? "").trim().length > 0;
     havePresence.set(cmd, hit);
   }
   return hit;
@@ -1972,7 +2081,7 @@ function sh(cmd, args, opts = {}) {
   const r = spawnSync(cmd, args, {
     cwd: opts.cwd,
     input: opts.input,
-    timeout: opts.timeoutMs ?? 6e4,
+    timeout: opts.timeoutMs ?? defaultTimeoutMs(),
     encoding: "utf8",
     maxBuffer: STDOUT_CAP,
     env: opts.env ?? process.env
@@ -1980,6 +2089,7 @@ function sh(cmd, args, opts = {}) {
   return toResult(r.status, r.stdout ?? "", r.stderr ?? "", r.error);
 }
 function shAsync(cmd, args, opts = {}) {
+  const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs();
   return new Promise((resolve3) => {
     let settled = false;
     const done = (r) => {
@@ -1999,8 +2109,8 @@ function shAsync(cmd, args, opts = {}) {
     });
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      done({ ok: false, status: 124, stdout, stderr: stderr || `timed out after ${opts.timeoutMs ?? 6e4}ms` });
-    }, opts.timeoutMs ?? 6e4);
+      done({ ok: false, status: 124, stdout, stderr: stderr || `timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
     child.on("error", (e) => done(toResult(null, stdout, stderr, e)));
     child.on("close", (code) => done(toResult(code, stdout, stderr)));
   });
@@ -2011,10 +2121,11 @@ import { existsSync as existsSync2, mkdirSync, readdirSync, rmSync as rmSync2, s
 import { tmpdir as tmpdir2 } from "os";
 import { basename, join as join2, resolve } from "path";
 function repoCacheRoot() {
-  return env("REPO_DIR") ?? join2(tmpdir2(), brand().name, "repos");
+  return env("REPO_DIR") ?? brand().repoDir ?? join2(tmpdir2(), brand().name, "repos");
 }
 var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3);
 var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3);
+var historyTimeoutMs = () => envInt("GIT_HISTORY_TIMEOUT_MS", 3e5, 1e3);
 function resolveRepo(raw) {
   const trimmed = raw.trim();
   if (trimmed) {
@@ -2111,14 +2222,35 @@ async function ensureClone(ref, opts = {}) {
   if (!existsSync2(dir) || readdirSync(dir).length === 0) throw new Error(`clone produced an empty tree at ${dir}`);
   return dir;
 }
+var deepened = /* @__PURE__ */ new Map();
+function resetHistoryDepthCache() {
+  deepened.clear();
+}
 async function ensureHistoryDepth(dir, opts = {}) {
-  if (!have("git")) return { ok: false, note: "git is not installed \u2014 history is unavailable" };
-  const shallow = existsSync2(join2(dir, ".git", "shallow"));
-  if (!shallow) return { ok: true };
-  const full = await shAsync("git", ["-C", dir, "fetch", "--unshallow", "--filter=blob:none"], { timeoutMs: fetchTimeoutMs() });
+  const cached = deepened.get(dir);
+  if (cached) return cached;
+  const out = await computeHistoryDepth(dir, opts);
+  deepened.set(dir, out);
+  return out;
+}
+async function computeHistoryDepth(dir, opts) {
+  if (!have("git")) return { ok: false, note: "git is not installed \u2014 no commit history available." };
+  const probe = await shAsync("git", ["-C", dir, "rev-parse", "--is-shallow-repository"], { timeoutMs: 1e4 });
+  if (!probe.ok) return { ok: false, note: "Not a git working tree \u2014 no commit history available." };
+  const filter = await shAsync("git", ["-C", dir, "config", "remote.origin.partialclonefilter"], { timeoutMs: 1e4 });
+  const shallow = probe.stdout.trim() === "true";
+  const partial = filter.ok && filter.stdout.trim() !== "";
+  if (!shallow && !partial) return { ok: true };
+  if (partial) await shAsync("git", ["-C", dir, "config", "remote.origin.partialclonefilter", ""], { timeoutMs: 1e4 });
+  const full = await shAsync("git", ["-C", dir, "fetch", "--quiet", ...partial ? ["--refetch"] : [], ...shallow ? ["--unshallow"] : [], "origin"], {
+    timeoutMs: historyTimeoutMs()
+  });
   if (full.ok) return { ok: true };
-  const deepen = await shAsync("git", ["-C", dir, "fetch", `--deepen=${opts.deepen ?? 500}`], { timeoutMs: fetchTimeoutMs() });
-  return deepen.ok ? { ok: true } : { ok: false, note: `could not deepen the shallow clone at ${dir}: ${deepen.stderr.trim() || `exit ${deepen.status}`}` };
+  if (shallow && !partial) {
+    const deepen = await shAsync("git", ["-C", dir, "fetch", "--quiet", `--deepen=${opts.deepen ?? 500}`, "origin"], { timeoutMs: fetchTimeoutMs() });
+    return deepen.ok ? { ok: true, note: `History deepened to ~${opts.deepen ?? 500} commits (full unshallow failed); older changes may be missing.` } : { ok: false, note: "Shallow clone could not be deepened (offline?); history is limited to the latest commit." };
+  }
+  return { ok: false, note: "Could not fetch full history (offline, or the repo is too large); history results may be incomplete." };
 }
 function headCommit(dir) {
   const r = sh("git", ["-C", dir, "rev-parse", "HEAD"], { timeoutMs: 1e4 });
@@ -2128,8 +2260,12 @@ function originUrl(dir) {
   const r = sh("git", ["-C", dir, "remote", "get-url", "origin"], { timeoutMs: 1e4 });
   return r.ok ? r.stdout.trim() || void 0 : void 0;
 }
+var MIN_ABBREV = 7;
 function sameCommit(a, b) {
-  return !!a && !!b && a === b;
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= MIN_ABBREV && long.startsWith(short);
 }
 
 // src/forge.ts
@@ -2142,10 +2278,11 @@ function forgeKind(host) {
 }
 function apiBase(ref, opts = {}) {
   if (opts.apiBase) return opts.apiBase.replace(/\/+$/, "");
-  const kind = forgeKind(ref.host);
-  if (kind === "github") return ref.host === "github.com" ? "https://api.github.com" : `https://${ref.host}/api/v3`;
-  if (kind === "gitlab") return `https://${ref.host}/api/v4`;
-  return `https://${ref.host}/api/v1`;
+  const host = typeof ref === "string" ? ref : ref.host;
+  const kind = forgeKind(host);
+  if (kind === "github") return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
+  if (kind === "gitlab") return `https://${host}/api/v4`;
+  return `https://${host}/api/v1`;
 }
 function forgeAuthHeaders(kind) {
   if (kind === "github") {
@@ -2190,13 +2327,40 @@ function mapGithubIssues(raw, kind) {
     score: typeof it.score === "number" ? it.score : void 0
   }));
 }
+var canonCache = /* @__PURE__ */ new Map();
+function resetCanonicalRepoCache() {
+  canonCache.clear();
+}
+function ghUsable(host) {
+  return /(^|\.)github\.com$/i.test(host) && !envFlag("NO_GH") && have("gh");
+}
+function splitSlug(full, fallback) {
+  const i = full.indexOf("/");
+  return i > 0 ? { owner: full.slice(0, i), repo: full.slice(i + 1) } : fallback;
+}
+function canonicalRepoRef(ref, opts = {}) {
+  const fallback = { owner: ref.owner ?? "", repo: ref.repo ?? "" };
+  if (!ref.owner || !ref.repo || forgeKind(ref.host) !== "github") return Promise.resolve(fallback);
+  const key = `${ref.host}/${ref.owner}/${ref.repo}`;
+  let hit = canonCache.get(key);
+  if (!hit) {
+    hit = (async () => {
+      if (ghUsable(ref.host)) {
+        const r2 = await shAsync("gh", ["api", `repos/${ref.owner}/${ref.repo}`, "--jq", ".full_name"], { timeoutMs: opts.timeoutMs ?? 15e3 });
+        if (r2.ok && r2.stdout.includes("/")) return splitSlug(r2.stdout.trim(), fallback);
+      }
+      const r = await httpJson("GET", `${apiBase(ref, opts)}/repos/${ref.owner}/${ref.repo}`, void 0, reqOpts("github", opts));
+      const full = r.ok ? r.data?.full_name : void 0;
+      return typeof full === "string" && full.includes("/") ? splitSlug(full, fallback) : fallback;
+    })();
+    canonCache.set(key, hit);
+  }
+  return hit;
+}
 async function canonicalRepo(ref, opts = {}) {
   if (!ref.owner || !ref.repo) return void 0;
-  const kind = forgeKind(ref.host);
-  if (kind !== "github") return `${ref.owner}/${ref.repo}`;
-  const r = await httpJson("GET", `${apiBase(ref, opts)}/repos/${ref.owner}/${ref.repo}`, void 0, reqOpts(kind, opts));
-  const full = r.ok ? r.data?.full_name : void 0;
-  return typeof full === "string" ? full : `${ref.owner}/${ref.repo}`;
+  const { owner, repo } = await canonicalRepoRef(ref, opts);
+  return `${owner}/${repo}`;
 }
 async function searchIssues(ref, terms, kind, opts = {}) {
   const forge = forgeKind(ref.host);
@@ -3426,11 +3590,32 @@ async function currentExtractor(opts, url) {
   const base = firecrawlBase(opts);
   return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
+var WRITTEN_NAMESPACES = ["native", "firecrawl", PDF_CACHE_NS, DOC_CACHE_NS];
+function readAnyNamespace(url, acceptLanguage) {
+  let best;
+  for (const ns of WRITTEN_NAMESPACES) {
+    const hit = readCache(url, acceptLanguage, ns);
+    if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
+  }
+  return best;
+}
 function ttlMs() {
-  return envInt("CACHE_TTL_MS", DEFAULT_TTL_MS);
+  const fallback = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
+  if (env("CACHE_TTL_HOURS") !== void 0) return envInt("CACHE_TTL_HOURS", fallback / 36e5, 0) * 36e5;
+  return envInt("CACHE_TTL_MS", fallback);
+}
+var mode = { refresh: false, offline: false };
+function setCacheMode(next) {
+  mode = { ...mode, ...next };
+}
+function cacheMode() {
+  return { ...mode };
+}
+function resetCacheMode() {
+  mode = { refresh: false, offline: false };
 }
 function isCacheFresh(entry, now = Date.now()) {
-  return typeof entry.cachedAt === "number" && now - entry.cachedAt <= ttlMs();
+  return typeof entry.cachedAt === "number" && now - entry.cachedAt < ttlMs();
 }
 function revalidationHeaders(entry) {
   const h = {};
@@ -3438,46 +3623,59 @@ function revalidationHeaders(entry) {
   if (entry.lastModified) h["if-modified-since"] = entry.lastModified;
   return h;
 }
+function entryPaths(url, acceptLanguage, extractor) {
+  const meta = cachePath(url, acceptLanguage, extractor);
+  return { meta, body: meta.replace(/\.json$/, ".body") };
+}
 function readCache(url, acceptLanguage = "", extractor = "native") {
-  const p = cachePath(url, acceptLanguage, extractor);
-  if (!existsSync4(p)) return void 0;
+  const { meta, body } = entryPaths(url, acceptLanguage, extractor);
+  if (!existsSync4(meta)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync3(p, "utf8"));
+    const entry = JSON.parse(readFileSync3(meta, "utf8"));
     if (typeof entry.cachedAt !== "number") return void 0;
-    if (!entry.text?.trim()) return void 0;
-    return entry;
+    const text = existsSync4(body) ? readFileSync3(body, "utf8") : entry.text;
+    if (!text?.trim()) return void 0;
+    return { ...entry, text };
   } catch {
     return void 0;
-  }
-}
-function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
-  if (isNoWrite()) return;
-  try {
-    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify({ ...entry, cachedAt: now }));
-  } catch {
   }
 }
 function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   if (isNoWrite()) return;
   try {
     mkdirSync4(cacheDir(), { recursive: true });
-    const entry = { ...res, cachedAt: now };
-    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
+    const { meta, body } = entryPaths(url, acceptLanguage, extractor);
+    const { text, ...rest } = res;
+    writeFileSync4(body, text ?? "");
+    writeFileSync4(meta, JSON.stringify({ ...rest, cachedAt: now }));
   } catch {
   }
 }
+function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
+  writeCache(url, entry, now, acceptLanguage, extractor);
+}
 async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
-  if (!enabled) return fetchAndExtract(url, opts);
+  const { refresh, offline } = mode;
+  if (!enabled && !offline) return fetchAndExtract(url, opts);
   const lang = opts.acceptLanguage ?? "";
+  const served = (entry, note) => {
+    countFetch(Buffer.byteLength(entry.text), true);
+    return { ...entry, cached: true, ...note ? { note } : {} };
+  };
+  if (offline) {
+    const stored = readAnyNamespace(url, lang);
+    if (stored) return served(stored);
+    return { text: "", finalUrl: url, status: 0, note: `Offline: ${url} is not in the cache (drop --offline, or warm it with a normal run).` };
+  }
   const ns = await currentExtractor(opts, url);
-  const hit = readCache(url, lang, ns);
-  if (hit && isCacheFresh(hit, now)) return { ...hit, cached: true };
+  const hit = refresh ? void 0 : readCache(url, lang, ns);
+  if (hit && isCacheFresh(hit, now)) return served(hit);
   const revalidate = hit ? revalidationHeaders(hit) : {};
   if (hit && Object.keys(revalidate).length) {
     const probe = await fetchAndExtract(url, { ...opts, headers: revalidate });
     if (probe.status === 304) {
       touchCache(url, hit, now, lang, ns);
-      return { ...hit, cached: true };
+      return served(hit);
     }
     if (probe.text?.trim()) {
       writeCache(url, probe, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : probe.extractor ?? "native");
@@ -3485,7 +3683,12 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     }
   }
   const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+  if (res.text?.trim()) {
+    writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+    return res;
+  }
+  const stale = hit ?? readAnyNamespace(url, lang);
+  if (stale) return served(stale, `${url} returned ${res.status || "no response"}; served the cached copy from ${new Date(stale.cachedAt).toISOString()}.`);
   return res;
 }
 function cacheStats(now = Date.now()) {
@@ -3495,10 +3698,13 @@ function cacheStats(now = Date.now()) {
   let oldest = Number.POSITIVE_INFINITY;
   let newest = 0;
   for (const name of readdirSync2(dir)) {
-    if (!name.endsWith(".json")) continue;
     const abs = join4(dir, name);
     try {
       out.bytes += statSync2(abs).size;
+    } catch {
+    }
+    if (!name.endsWith(".json")) continue;
+    try {
       const entry = JSON.parse(readFileSync3(abs, "utf8"));
       if (typeof entry.cachedAt !== "number") continue;
       out.entries++;
@@ -3534,6 +3740,7 @@ function cacheClean(all = false, now = Date.now()) {
     if (!drop) continue;
     try {
       rmSync3(abs, { force: true });
+      rmSync3(abs.replace(/\.json$/, ".body"), { force: true });
       removed++;
     } catch {
     }
@@ -4142,10 +4349,12 @@ export {
   buildMatcher,
   cacheClean,
   cacheDir,
+  cacheMode,
   cachePath,
   cacheStats,
   cachedFetchAndExtract,
   canonicalRepo,
+  canonicalRepoRef,
   canonicalizeUrl,
   capExtract,
   capResponse,
@@ -4163,6 +4372,7 @@ export {
   decodeEntities,
   dedupeByUrl,
   dedupeNearDuplicates,
+  defaultUa,
   deriveCitableUrl,
   detectRateLimited,
   discoverFeeds,
@@ -4183,6 +4393,7 @@ export {
   envInt,
   envName,
   escapeRegExp,
+  excerptWindows,
   expandTokens,
   externalHosts,
   extractDocument,
@@ -4231,6 +4442,7 @@ export {
   mapLimit,
   mapScrapeResponse,
   mapSearchResponse,
+  markFirecrawlDown,
   matcherFromTokens,
   metaDescriptionOf,
   nearestHeading,
@@ -4265,9 +4477,12 @@ export {
   repoFacts,
   rescueViaWayback,
   resetBrand,
+  resetCacheMode,
+  resetCanonicalRepoCache,
   resetDocLadderCache,
   resetFirecrawlProbeCache,
   resetHaveCache,
+  resetHistoryDepthCache,
   resetNoWrite,
   resetOcrBudget,
   resetPdfLadderCache,
@@ -4292,6 +4507,7 @@ export {
   searchViaSearxng,
   searxngBase,
   searxngIsExplicit,
+  setCacheMode,
   setNoWrite,
   sh,
   shAsync,

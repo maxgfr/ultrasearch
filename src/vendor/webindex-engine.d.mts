@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.13.0";
+declare const ENGINE_VERSION = "1.14.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -10,8 +10,55 @@ interface Brand {
     envPrefix: string;
     /** The command users type, used when a note tells them what to run. */
     cli: string;
+    /**
+     * The consumer's own release version, for the polite User-Agent.
+     *
+     * Without it every consumer identifies as `<name>/1.x`, which is the one
+     * thing that header exists to avoid being: a maintainer looking at their logs
+     * to decide whether to throttle a client cannot tell one release from another,
+     * and cannot tell a fixed version from the one that was hammering them.
+     */
+    version?: string;
     /** Root for on-disk caches. Defaults to `<tmpdir>/<name>` when unset. */
     cacheDir?: string;
+    /**
+     * Root for cloned working trees. Defaults to `<tmpdir>/<name>/repos`.
+     *
+     * Exists because a consumer that already had its own clone cache cannot adopt
+     * `ensureClone` without it: the engine would key clones somewhere else, which
+     * orphans every checkout the tool has already made and splits one cache in
+     * two. Declaring the directory it already uses makes adoption free.
+     */
+    repoDir?: string;
+    /**
+     * How long a cached page stays fresh. Defaults to 24h.
+     *
+     * A per-consumer decision, not a universal one: a research tool that re-runs
+     * the same question all day wants a week, a search tool wants a day. It was
+     * the reason one consumer kept its own cache rather than adopt this one.
+     */
+    cacheTtlMs?: number;
+    /**
+     * Which User-Agent unlabelled requests carry.
+     *
+     * `browser` (the default, and the historical behaviour) sends a realistic
+     * desktop UA, because several keyless endpoints serve 403 or empty to obvious
+     * bots. `contact` sends the polite identifying one instead and falls back to
+     * the browser UA exactly once, on a 403/429 — the "identify honestly, disguise
+     * only when refused" policy one consumer chose deliberately and would have
+     * lost by adopting this layer.
+     */
+    defaultUa?: "browser" | "contact";
+    /**
+     * Called once per response body read: bytes, and whether the cache served it.
+     *
+     * The observability seam. Without it a consumer that instruments retrieval —
+     * attributing bytes to the concurrent angle that issued the request — has to
+     * keep its own `httpGet` to keep counting, which is the whole duplication this
+     * engine exists to remove. Never throws into the caller: a failing counter must
+     * not fail a fetch.
+     */
+    onFetch?: (bytes: number, cached: boolean) => void;
     /**
      * Where a rate-limited API maintainer can find out who is calling.
      *
@@ -265,6 +312,17 @@ declare function browserUa(): string;
  */
 declare function contactUa(): string;
 /**
+ * The User-Agent an unlabelled request carries, per the brand's declared policy.
+ *
+ * Two defensible policies, and the choice belongs to the consuming tool rather
+ * than to this layer. `browser` (the default) optimises for getting the page:
+ * several keyless endpoints serve 403 or empty to anything that admits to being
+ * a script. `contact` optimises for being a good citizen — it names the tool and
+ * where to complain about it — and pays for that with the occasional refusal,
+ * which `fetchAndExtract` answers by retrying once as a browser.
+ */
+declare function defaultUa(): string;
+/**
  * Polite pause between successive result-page fetches to the same web engine
  * (multi-page pagination). Keyless engines block aggressive scraping, so pages
  * are fetched sequentially with a small gap. Tunable; 0 disables.
@@ -332,6 +390,10 @@ declare function httpGet(url: string, opts?: {
     /** Extra request headers, lower-cased. The escape hatch for conditional GET
      *  (`if-none-match`, `if-modified-since`) and for an API that wants auth. */
     headers?: Record<string, string>;
+    /** Extra attempts on a transient failure, overriding `<PREFIX>_MAX_ATTEMPTS`.
+     *  Per-call because the right number is per-endpoint: a probe wants 0, a
+     *  paper download off a flaky mirror wants 2. */
+    retries?: number;
 }): Promise<HttpResult>;
 declare function httpJson(method: string, url: string, body?: unknown, opts?: {
     timeoutMs?: number;
@@ -339,12 +401,28 @@ declare function httpJson(method: string, url: string, body?: unknown, opts?: {
     acceptLanguage?: string;
     userAgent?: string;
     headers?: Record<string, string>;
+    retries?: number;
 }): Promise<{
     ok: boolean;
     status: number;
     data: any;
     error?: string;
 }>;
+/**
+ * Decode the common named entities plus decimal/hex numeric references, in ONE
+ * non-rescanning pass.
+ *
+ * The pass count is the whole design. Decoding numeric refs and then walking the
+ * named table with split/join re-reads its own output, so `&amp;lt;` — which is
+ * how a document writes the literal text "&lt;" — becomes "&lt;" and then "<".
+ * The page said one thing and the extract says another, which for a page
+ * documenting markup is most of its content. One pass cannot do that: each
+ * reference is replaced exactly once, from the original text.
+ *
+ * Names are matched case-SENSITIVELY, because case is meaningful here: `&dagger;`
+ * is † and `&Dagger;` is ‡. An unknown name is left exactly as written rather
+ * than guessed at or blanked.
+ */
 declare function decodeEntities(s: string): string;
 declare function cleanInline(s: string): string;
 declare function htmlToText(html: string): string;
@@ -372,6 +450,16 @@ interface ExtractResult {
     status: number;
     extractor?: ExtractorId;
     canonical?: string;
+    /**
+     * The page's own one-line summary (`<meta name=description>`, else
+     * `og:description`).
+     *
+     * Worth carrying because extraction drops `<head>` entirely, so a caller that
+     * finds nothing in the body matching its question has no second-best left —
+     * and citing a nav bar is worse than citing the summary the page wrote about
+     * itself. Only ever set on the HTML path.
+     */
+    metaDescription?: string;
     etag?: string;
     lastModified?: string;
 }
@@ -382,6 +470,15 @@ declare function fetchAndExtract(url: string, opts?: {
      *  `if-none-match` / `if-modified-since`. Firecrawl does its own fetching and
      *  ignores these, which is why a revalidating caller skips it. */
     headers?: Record<string, string>;
+    /**
+     * Drop consent-banner lines from the extracted text.
+     *
+     * Opt-in, and applied to the BUILT-IN extractor's HTML only. Never to
+     * Firecrawl markdown: main-content extraction has already removed the
+     * banner, so all the heuristic could still do there is damage — on a page
+     * documenting HTTP cookies it would eat the article.
+     */
+    stripConsent?: boolean;
 }): Promise<ExtractResult>;
 declare const DEAD_LINK_STATUS: Set<number>;
 declare function rescueViaWayback(url: string, opts?: {
@@ -414,7 +511,6 @@ declare function stripConsentBoilerplate(text: string): {
  * — better than citing a nav bar.
  */
 declare function metaDescriptionOf(html: string): string | undefined;
-declare function nearestHeading(lines: string[], anchor: number): string | undefined;
 declare function focusedSnippet(text: string, question: string, opts?: {
     maxChars?: number;
     maxSentences?: number;
@@ -445,6 +541,17 @@ declare function firecrawlIsExplicit(opts?: FirecrawlOptions): boolean;
  * resetPdfLadderCache and resetDocLadderCache.
  */
 declare function resetFirecrawlProbeCache(): void;
+/**
+ * Record that `base` stopped answering, so the rest of this run skips it.
+ *
+ * The probe runs once and is then trusted for the process — which is right for
+ * "it was never there" and wrong for "the container died at page 4 of 40". A
+ * caller that sees a request abort with no status knows something the memoised
+ * verdict does not, and without this every remaining page pays the timeout again.
+ * Both probe modes are marked down: the instance is gone whether or not the user
+ * named it.
+ */
+declare function markFirecrawlDown(base: string): void;
 /**
  * Decide whether the thing that answered `GET {base}/` is actually Firecrawl.
  *
@@ -589,6 +696,62 @@ declare function buildMatcher(question: string, max?: number): KeywordMatcher;
  * subtoken-expanded, so attribution stays consistent with buildMatcher.
  */
 declare function matcherFromTokens(tokens: string[], max?: number): KeywordMatcher;
+/**
+ * The markdown heading a line sits under, ignoring heading-lookalikes inside
+ * fenced code blocks. `anchor` is a 0-based line index.
+ *
+ * Lives here rather than with the HTTP layer because it is a fact about text:
+ * the extractor happens to be what usually produces the markdown, but a caller
+ * reading a `.md` off disk has exactly the same question.
+ */
+declare function nearestHeading(lines: string[], anchor: number): string | undefined;
+/** A passage of a document, chosen because it answers the question. */
+interface ExcerptWindow {
+    /** First line kept, 0-based. */
+    start: number;
+    /** One past the last line kept. */
+    end: number;
+    /** The line the window was centred on. */
+    anchor: number;
+    /**
+     * How many DISTINCT question keywords the anchor line covered.
+     *
+     * Zero is meaningful and is not an error: it is the top-of-page fallback,
+     * emitted when nothing in the document matched. A caller that ranks evidence
+     * wants to know it is looking at boilerplate rather than at an answer.
+     */
+    score: number;
+    /** The markdown section the anchor sits under, when there is one. */
+    heading?: string;
+    snippet: string;
+}
+/**
+ * Find the passages of `text` that answer `question`.
+ *
+ * This is the half of "turn a page into excerpts" that is the same everywhere:
+ * score each line against the question, take the best ones, widen each into a
+ * readable window, and stop windows from overlapping. What an excerpt then IS —
+ * a citation, an evidence item, a snippet with a section title — is the caller's
+ * model and stays with the caller.
+ *
+ * Three decisions, each taken from whichever copy had it right:
+ *
+ * - Scoring goes through `buildMatcher`, so accents, plurals and camelCase
+ *   subtokens all match. A raw `line.includes(keyword)` misses "Générateur" for
+ *   "generateur" and "parseQuery" for "query".
+ * - `question` may be a LIST, and a line scores by its best single-question
+ *   coverage rather than by the union. A page then gets excerpted around the one
+ *   claim it actually supports instead of around a diluted average of all of them.
+ * - Windows are de-duplicated by RANGE OVERLAP, not by bucketing line numbers.
+ *   Fixed buckets let two near-identical excerpts straddle a boundary and both
+ *   survive, which is how the same paragraph ends up quoted twice.
+ */
+declare function excerptWindows(text: string, question: string | string[], opts?: {
+    perDoc?: number;
+    before?: number;
+    after?: number;
+    maxChars?: number;
+}): ExcerptWindow[];
 /**
  * Turn an arbitrary identifier into a filesystem-safe slug —
  * `github.com/expressjs/express` → `github.com-expressjs-express`.
@@ -872,7 +1035,16 @@ interface RepoRef {
     /** Stable, filesystem-safe identity — the on-disk cache key. */
     slug: string;
 }
-/** Where clones live. `<PREFIX>_REPO_DIR` overrides. */
+/**
+ * Where clones live: `<PREFIX>_REPO_DIR`, then the brand's declared `repoDir`,
+ * then `<tmpdir>/<name>/repos`.
+ *
+ * The brand tier is what lets a consumer that already had a clone cache adopt
+ * this module at all. Without it, adopting moves every checkout: the clones the
+ * tool made yesterday are orphaned under the old path and re-fetched under the
+ * new one, and the cache commands still reading the old path report an empty
+ * cache that is not empty.
+ */
 declare function repoCacheRoot(): string;
 /**
  * Parse any repository identifier into a `RepoRef`. Accepts a local directory,
@@ -900,9 +1072,26 @@ declare function ensureClone(ref: RepoRef, opts?: {
     refresh?: boolean;
     branch?: string;
 }): Promise<string>;
+/** Test seam: forget which working trees were deepened. */
+declare function resetHistoryDepthCache(): void;
 /**
- * Deepen a shallow clone so history-walking commands (`git log`, pickaxe
- * searches) have something to walk.
+ * Make a clone usable for history-walking commands (`git log -S/-G`, blame).
+ *
+ * There are TWO things to undo, and missing either one leaves the caller with a
+ * repository that answers slowly and wrongly:
+ *
+ *   --depth 1          no history to walk
+ *   --filter=blob:none no blob CONTENT to diff
+ *
+ * `ensureClone` above sets both. An earlier version of this function only looked
+ * for `.git/shallow` and only passed `--unshallow`, which produced the worst
+ * case of all: a full commit graph over a blobless object database, where every
+ * pickaxe comparison triggers a per-blob promisor fetch over the network. So the
+ * filter is cleared and `--refetch` re-pulls the objects in one transfer.
+ *
+ * Shallowness is read from `git rev-parse --is-shallow-repository` rather than
+ * from the presence of `.git/shallow`, which is git's private bookkeeping and not
+ * a contract.
  *
  * Returns a note rather than throwing when it cannot: a shallow clone still
  * answers every question about the CURRENT state, so failing the whole call
@@ -918,7 +1107,17 @@ declare function ensureHistoryDepth(dir: string, opts?: {
 declare function headCommit(dir: string): string | undefined;
 /** Its `origin` remote, or undefined when it has none. */
 declare function originUrl(dir: string): string | undefined;
-/** Two commits are the same, tolerating one being absent. */
+/**
+ * Two commits are the same, tolerating one being absent — and tolerating either
+ * being an ABBREVIATION of the other.
+ *
+ * The abbreviation half is load-bearing, not politeness. A stored artifact
+ * records the commit it was built against, and git abbreviates a SHA almost
+ * everywhere it prints one, so strict equality answers "different" to a full SHA
+ * compared against its own 7-character prefix. Downstream, that means every
+ * stored citation silently stops being re-validated against the working tree —
+ * a check that reports success while checking nothing.
+ */
 declare function sameCommit(a: string | undefined, b: string | undefined): boolean;
 
 type ForgeKind = "github" | "gitlab" | "gitea";
@@ -954,8 +1153,13 @@ declare function forgeKind(host: string): ForgeKind | undefined;
  * GitHub Enterprise is the awkward one: github.com serves `api.github.com`,
  * while a self-hosted install serves `<host>/api/v3`. Getting this wrong is a
  * 404 that reads like "no such repository".
+ *
+ * Takes a bare host string as well as a ref, because a provider layer routinely
+ * knows the host before it has resolved anything into a `RepoRef` — and having to
+ * fabricate one just to ask this question is exactly why a second copy of this
+ * function grew downstream.
  */
-declare function apiBase(ref: RepoRef, opts?: ForgeOptions): string;
+declare function apiBase(ref: Pick<RepoRef, "host"> | string, opts?: ForgeOptions): string;
 /** Auth headers when a token is in the environment; none when it is not. */
 declare function forgeAuthHeaders(kind: ForgeKind): Record<string, string>;
 /**
@@ -966,13 +1170,29 @@ declare function forgeAuthHeaders(kind: ForgeKind): Record<string, string>;
  * element is filtered first so one bad entry cannot throw away the whole page.
  */
 declare function mapGithubIssues(raw: unknown[], kind: "issue" | "pr"): ForgeItem[];
+/** Test seam: forget which repositories were resolved. */
+declare function resetCanonicalRepoCache(): void;
 /**
- * The repository's canonical `owner/repo`, following renames.
+ * The repository's canonical owner and repo, following renames.
  *
- * A moved repository still answers on its old name through a redirect, but every
- * subsequent search keyed on the old name silently returns nothing — so this is
- * resolved once and the answer used everywhere after.
+ * A moved repository (calcom/cal.com → calcom/cal.diy) still answers on its old
+ * name through a redirect, but every subsequent SEARCH keyed on the old name
+ * fails with a 422 that reads like a malformed query. So this is resolved once
+ * and the answer used everywhere after.
+ *
+ * Prefers the `gh` CLI when it is installed and the host is github.com: it is
+ * already authenticated, so it resolves against a quota far above the anonymous
+ * one this would otherwise spend. Falls back to the keyless REST call — `gh` is
+ * a bonus, never a requirement.
+ *
+ * Returns the parts rather than a slug because a provider layer builds URLs from
+ * them; `canonicalRepo` below joins them for the callers that want the string.
  */
+declare function canonicalRepoRef(ref: RepoRef, opts?: ForgeOptions): Promise<{
+    owner: string;
+    repo: string;
+}>;
+/** The same answer as `canonicalRepoRef`, as an `owner/repo` slug. */
 declare function canonicalRepo(ref: RepoRef, opts?: ForgeOptions): Promise<string | undefined>;
 /**
  * Search a repository's issues or pull requests.
@@ -1448,7 +1668,32 @@ declare function cachePath(url: string, acceptLanguage?: string, extractor?: Cac
 declare const PDF_CACHE_NS: "pdf";
 declare const DOC_CACHE_NS: "doc";
 type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS | typeof DOC_CACHE_NS;
-/** Is this entry still inside the TTL? */
+/** How the cache behaves for this run. Both default to off. */
+interface CacheMode {
+    /** Ignore any stored entry and re-fetch. The fresh result is still written. */
+    refresh: boolean;
+    /**
+     * Never touch the network. Serve what is on disk however stale, and return an
+     * honest note on a genuine miss rather than an empty page — a hole the caller
+     * cannot distinguish from "this URL has nothing on it" is worse than a refusal.
+     */
+    offline: boolean;
+}
+/** Declare `--refresh` / `--offline` for this process. */
+declare function setCacheMode(next: Partial<CacheMode>): void;
+/** What the two switches are set to right now. */
+declare function cacheMode(): CacheMode;
+/** Test seam: back to plain caching. */
+declare function resetCacheMode(): void;
+/**
+ * Is this entry still inside the TTL?
+ *
+ * Strictly less-than, so a TTL of 0 means what it is documented to mean: always
+ * stale, always refetch. With `<=` it instead meant "fresh for the millisecond
+ * it was written in", which is indistinguishable from working until two calls
+ * land in the same tick — and then the entry is served and the refetch the
+ * operator asked for silently does not happen.
+ */
 declare function isCacheFresh(entry: CacheEntry, now?: number): boolean;
 /**
  * Conditional-request headers for a stale entry, so revalidating it costs a
@@ -1461,6 +1706,7 @@ declare function revalidationHeaders(entry: Pick<CacheEntry, "etag" | "lastModif
 declare function cachedFetchAndExtract(url: string, opts?: {
     acceptLanguage?: string;
     firecrawl?: string;
+    stripConsent?: boolean;
 }, enabled?: boolean, now?: number): Promise<Extract & {
     cached?: boolean;
 }>;
@@ -1689,4 +1935,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, type CacheEntry, type CacheStats, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type EngineHit, type EngineResult, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type Feed, type FeedItem, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PackageFacts, type PageMetadata, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, applyRelevanceFloor, arxivIdFromUrl, assessExtractedText, assessPdfText, baseLang, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, cleanInline, configure, contactUa, contentCoverage, createServer, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, dedupeByUrl, dedupeNearDuplicates, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFormatForContentType, docFormatForUrl, doiFromUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureClone, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, expandTokens, externalHosts, extractDocument, extractJsonLd, extractMainHtml, extractMetaTags, extractPdf, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, hammingDistance, have, headCommit, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keylessEngines, keywords, listReleases, listResources, listTags, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, matcherFromTokens, metaDescriptionOf, nearestHeading, negotiateProtocol, normalizeDoi, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, originUrl, pageDelayMs, pageMetadata, parseDdgHtml, parseDdgLite, parseFeed, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readCapped, readCappedBytes, readResource, recencyScore, renderAsset, repoCacheRoot, repoFacts, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resolvePackage, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runStdioServer, runWithInput, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searxngBase, searxngIsExplicit, setNoWrite, sh, shAsync, simhash, skillName, sleep, slugify, stackControl, startHttpServer, stripConsentBoilerplate, stripTags, structuredContentFor, subtokens, takeArtifacts, throttleReason, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type Feed, type FeedItem, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PackageFacts, type PageMetadata, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, applyRelevanceFloor, arxivIdFromUrl, assessExtractedText, assessPdfText, baseLang, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, cleanInline, configure, contactUa, contentCoverage, createServer, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, dedupeByUrl, dedupeNearDuplicates, defaultUa, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFormatForContentType, docFormatForUrl, doiFromUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureClone, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractDocument, extractJsonLd, extractMainHtml, extractMetaTags, extractPdf, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, hammingDistance, have, headCommit, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keylessEngines, keywords, listReleases, listResources, listTags, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, matcherFromTokens, metaDescriptionOf, nearestHeading, negotiateProtocol, normalizeDoi, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, originUrl, pageDelayMs, pageMetadata, parseDdgHtml, parseDdgLite, parseFeed, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readCapped, readCappedBytes, readResource, recencyScore, renderAsset, repoCacheRoot, repoFacts, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resolvePackage, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runStdioServer, runWithInput, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searxngBase, searxngIsExplicit, setCacheMode, setNoWrite, sh, shAsync, simhash, skillName, sleep, slugify, stackControl, startHttpServer, stripConsentBoilerplate, stripTags, structuredContentFor, subtokens, takeArtifacts, throttleReason, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };

@@ -43,7 +43,13 @@ const ENGINES = {
     // needs the folded multi-service call plus the fix that materialises the
     // compose under <PREFIX>_CACHE_DIR. It sat at v1.3.0 while the pin was
     // v1.12.1 — nine releases of drift the STALE check could not fire on.
-    minRef: "v1.12.1",
+    // v1.14.0: this repo has NO webindex forks left (scripts/engine-forks.json
+    // is empty), and every one of them was retired against something that
+    // release added — Brand.repoDir / cacheTtlMs / defaultUa / onFetch, a cache
+    // body stored beside its metadata, offline+refresh, apiBase on a bare host,
+    // canonicalRepoRef, excerptWindows. Vendoring anything older typechecks
+    // against the old declarations and then fails on names that are not there.
+    minRef: "v1.14.0",
     meta: "engine.meta.json",
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },

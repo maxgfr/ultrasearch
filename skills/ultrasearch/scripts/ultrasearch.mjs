@@ -378,6 +378,14 @@ function configure(next) {
 function brand() {
   return current;
 }
+function countFetch(bytes, cached = false) {
+  const hook = current.onFetch;
+  if (!hook) return;
+  try {
+    hook(bytes, cached);
+  } catch {
+  }
+}
 function envName(suffix) {
   return `${current.envPrefix}_${suffix}`;
 }
@@ -786,7 +794,60 @@ function decodeBody(bytes, contentType = "") {
   if (meta && meta !== "utf-8" && meta !== "utf8") return decodeWith(bytes, meta);
   return bytes.toString("utf8");
 }
+var CP1252_C1 = [
+  8364,
+  129,
+  8218,
+  402,
+  8222,
+  8230,
+  8224,
+  8225,
+  710,
+  8240,
+  352,
+  8249,
+  338,
+  141,
+  381,
+  143,
+  144,
+  8216,
+  8217,
+  8220,
+  8221,
+  8226,
+  8211,
+  8212,
+  732,
+  8482,
+  353,
+  8250,
+  339,
+  157,
+  382,
+  376
+];
+var CP1252_LABELS = /* @__PURE__ */ new Set([
+  "windows-1252",
+  "cp1252",
+  "cp-1252",
+  "x-cp1252",
+  "ansi_x3.4-1968",
+  "iso-8859-1",
+  "iso8859-1",
+  "latin1",
+  "l1",
+  "us-ascii",
+  "ascii"
+]);
+function decodeCp1252(bytes) {
+  let out = "";
+  for (const b of bytes) out += String.fromCharCode(b >= 128 && b <= 159 ? CP1252_C1[b - 128] : b);
+  return out;
+}
 function decodeWith(bytes, encoding) {
+  if (CP1252_LABELS.has(encoding)) return decodeCp1252(bytes);
   try {
     return new TextDecoder(encoding, { fatal: false }).decode(bytes);
   } catch {
@@ -1099,6 +1160,21 @@ function makeMatcher(expanded) {
 function buildMatcher(question, max = 8) {
   return makeMatcher(expandTokens(keywords(question), max));
 }
+function nearestHeading(lines, anchor) {
+  let heading;
+  let inFence = false;
+  for (let i = 0; i <= anchor && i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (m) heading = m[1].trim();
+  }
+  return heading;
+}
 function slugify(input, opts = {}) {
   const s = input.toLowerCase().replace(/^https?:\/\//, "").replace(/^git@/, "").replace(/\.git$/, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, opts.max ?? 120);
   return s || (opts.fallback ?? "");
@@ -1240,7 +1316,10 @@ function browserUa() {
 }
 function contactUa() {
   const b = brand();
-  return `${b.name}/1.x (+${b.contactUrl ?? `https://github.com/maxgfr/${b.name}`})`;
+  return `${b.name}/${b.version ?? "1.x"} (+${b.contactUrl ?? `https://github.com/maxgfr/${b.name}`})`;
+}
+function defaultUa() {
+  return brand().defaultUa === "contact" ? contactUa() : browserUa();
 }
 var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
 var maxAttempts = () => envInt("MAX_ATTEMPTS", 2, 1, 5);
@@ -1270,6 +1349,9 @@ function parseRetryAfter(headers, capMs = 5e3) {
 function retryDelayMs(headers) {
   return parseRetryAfter(headers) ?? defaultRetryMs();
 }
+function attemptsFor(retries) {
+  return retries === void 0 ? maxAttempts() : Math.min(4, Math.max(0, Math.trunc(retries))) + 1;
+}
 async function readCappedBytes(res, max) {
   const reader = res.body?.getReader?.();
   if (!reader) return Buffer.from(await res.arrayBuffer()).subarray(0, max);
@@ -1293,12 +1375,13 @@ async function readCappedBytes(res, max) {
   return Buffer.concat(chunks);
 }
 async function httpGet(url, opts = {}) {
+  const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, body: "", contentType: "", url };
-  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
-      const headers = { "user-agent": opts.userAgent ?? browserUa(), accept: opts.accept ?? "*/*" };
+      const headers = { "user-agent": opts.userAgent ?? defaultUa(), accept: opts.accept ?? "*/*" };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
       const res = await fetch(url, {
@@ -1321,6 +1404,7 @@ async function httpGet(url, opts = {}) {
         return { ok: false, status: res.status, body: "", ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
       }
       const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
+      countFetch(bytes.length, false);
       const result = {
         ok: res.ok,
         status: res.status,
@@ -1331,7 +1415,7 @@ async function httpGet(url, opts = {}) {
         bytes: opts.binary ? bytes : void 0,
         ...meta
       };
-      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers));
         continue;
@@ -1339,7 +1423,7 @@ async function httpGet(url, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, body: "", contentType: "", url, error: e.message };
-      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1347,15 +1431,16 @@ async function httpGet(url, opts = {}) {
   return last;
 }
 async function httpJson(method, url, body, opts = {}) {
+  const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, data: void 0 };
-  for (let attempt = 0; attempt < maxAttempts(); attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
     try {
       const headers = {
         "content-type": "application/json",
         accept: opts.accept ?? "application/json",
-        "user-agent": opts.userAgent ?? browserUa()
+        "user-agent": opts.userAgent ?? defaultUa()
       };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
@@ -1366,6 +1451,7 @@ async function httpJson(method, url, body, opts = {}) {
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
       const text = await res.text();
+      countFetch(Buffer.byteLength(text), false);
       let data;
       try {
         data = text ? JSON.parse(text) : void 0;
@@ -1373,7 +1459,7 @@ async function httpJson(method, url, body, opts = {}) {
         data = text;
       }
       const result = { ok: res.ok, status: res.status, data };
-      if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
+      if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers));
         continue;
@@ -1381,7 +1467,7 @@ async function httpJson(method, url, body, opts = {}) {
       return result;
     } catch (e) {
       last = { ok: false, status: 0, data: void 0, error: e.message };
-      if (attempt < maxAttempts() - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleep(defaultRetryMs());
     } finally {
       clearTimeout(t);
     }
@@ -1487,23 +1573,20 @@ var ENTITIES = {
   "&Uacute;": "\xDA",
   "&Uuml;": "\xDC"
 };
+var ENTITY_BY_NAME = new Map(Object.entries(ENTITIES).map(([k, v]) => [k.slice(1, -1), v]));
+var ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g;
 function decodeEntities(s) {
-  let out = s.replace(/&#x([0-9a-fA-F]+);/g, (_m, h) => {
-    try {
-      return String.fromCodePoint(parseInt(h, 16));
-    } catch {
-      return " ";
+  return s.replace(ENTITY_RE, (m, ref) => {
+    if (ref[0] === "#") {
+      const n = ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+      try {
+        return Number.isFinite(n) ? String.fromCodePoint(n) : " ";
+      } catch {
+        return " ";
+      }
     }
+    return ENTITY_BY_NAME.get(ref) ?? m;
   });
-  out = out.replace(/&#(\d+);/g, (_m, n) => {
-    try {
-      return String.fromCodePoint(Number(n));
-    } catch {
-      return " ";
-    }
-  });
-  for (const [k, v] of Object.entries(ENTITIES)) out = out.split(k).join(v);
-  return out;
 }
 function cleanInline(s) {
   return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -1513,7 +1596,8 @@ function htmlToText(html) {
   s = s.replace(/<!--[\s\S]*?-->/g, " ");
   s = s.replace(/<(script|style|noscript|head|nav|footer|svg|template)[\s\S]*?<\/\1>/gi, " ");
   s = s.replace(/<h([1-6])(?:\s[^>]*)?>/gi, (_m, n) => "\n" + "#".repeat(Number(n)) + " ");
-  s = s.replace(/<\/(p|div|section|article|li|tr|h[1-6]|pre|blockquote|br)>/gi, "\n");
+  s = s.replace(/<\/(p|div|section|article|li|tr|td|th|ul|ol|h[1-6]|pre|blockquote|br)>/gi, "\n");
+  s = s.replace(/<(p|div|section|article|li|tr|td|th|ul|ol|pre|blockquote|table)\b[^>]*>/gi, "\n");
   s = s.replace(/<(br|hr)\s*\/?>/gi, "\n");
   s = s.replace(/<[^>]+>/g, " ");
   s = decodeEntities(s);
@@ -1613,7 +1697,10 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const base = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
   const fetchOpts = opts.headers ? { ...base, headers: opts.headers } : base;
-  const res = await httpGet(url, fetchOpts);
+  let res = await httpGet(url, fetchOpts);
+  if (!res.ok && brand().defaultUa === "contact" && (res.status === 403 || res.status === 429)) {
+    res = await httpGet(url, { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" });
+  }
   if (res.status === 304) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
   }
@@ -1663,10 +1750,12 @@ async function fetchAndExtract(url, opts = {}) {
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
-  const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
+  const stripped = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
+  const text = isHtml && opts.stripConsent ? stripConsentBoilerplate(stripped).text : stripped;
   const title = isHtml ? htmlTitle(res.body) : void 0;
   const canonical = isHtml ? htmlCanonicalUrl(res.body) : void 0;
-  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
+  const metaDescription = isHtml ? metaDescriptionOf(res.body) : void 0;
+  return { text, title, canonical, metaDescription, finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
@@ -1699,20 +1788,33 @@ function looksLikeJunkExtraction(text) {
   for (const [re, reason] of JUNK_PATTERNS) if (re.test(head)) return reason;
   return void 0;
 }
-function nearestHeading(lines, anchor) {
-  let heading;
-  let inFence = false;
-  for (let i = 0; i <= anchor && i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*(```|~~~)/.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (inFence) continue;
-    const m = line.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-    if (m) heading = m[1].trim();
-  }
-  return heading;
+var CONSENT_PATTERNS = [
+  /\bcookies?\b/i,
+  /\bconsent\b/i,
+  /\bgdpr\b/i,
+  /\bccpa\b/i,
+  /accept all\b/i,
+  /reject all\b/i,
+  /manage (?:preferences|choices|cookies|settings)/i,
+  /privacy (?:policy|preferences|choices)/i,
+  /tracking technolog/i,
+  /advertising partners/i,
+  /legitimate interest/i
+];
+function stripConsentBoilerplate(text) {
+  let dropped = 0;
+  const kept = text.split("\n").filter((line) => {
+    const hits = CONSENT_PATTERNS.reduce((n, re) => n + (re.test(line) ? 1 : 0), 0);
+    const isBanner = hits >= 2 || hits === 1 && line.trim().length < 120;
+    if (isBanner) dropped++;
+    return !isBanner;
+  });
+  return { text: kept.join("\n"), dropped };
+}
+function metaDescriptionOf(html) {
+  const m = /<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']description["']/i.exec(html) || /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html);
+  const d = m?.[1]?.replace(/\s+/g, " ").trim();
+  return d ? decodeEntities(d) : void 0;
 }
 function focusedSnippet(text, question, opts = {}) {
   const maxChars = opts.maxChars ?? 360;
@@ -2694,11 +2796,23 @@ async function currentExtractor(opts, url) {
   const base = firecrawlBase(opts);
   return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
-function ttlMs() {
-  return envInt("CACHE_TTL_MS", DEFAULT_TTL_MS);
+var WRITTEN_NAMESPACES = ["native", "firecrawl", PDF_CACHE_NS, DOC_CACHE_NS];
+function readAnyNamespace(url, acceptLanguage) {
+  let best;
+  for (const ns of WRITTEN_NAMESPACES) {
+    const hit = readCache(url, acceptLanguage, ns);
+    if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
+  }
+  return best;
 }
+function ttlMs() {
+  const fallback = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
+  if (env("CACHE_TTL_HOURS") !== void 0) return envInt("CACHE_TTL_HOURS", fallback / 36e5, 0) * 36e5;
+  return envInt("CACHE_TTL_MS", fallback);
+}
+var mode = { refresh: false, offline: false };
 function isCacheFresh(entry, now = Date.now()) {
-  return typeof entry.cachedAt === "number" && now - entry.cachedAt <= ttlMs();
+  return typeof entry.cachedAt === "number" && now - entry.cachedAt < ttlMs();
 }
 function revalidationHeaders(entry) {
   const h = {};
@@ -2706,46 +2820,59 @@ function revalidationHeaders(entry) {
   if (entry.lastModified) h["if-modified-since"] = entry.lastModified;
   return h;
 }
+function entryPaths(url, acceptLanguage, extractor) {
+  const meta = cachePath(url, acceptLanguage, extractor);
+  return { meta, body: meta.replace(/\.json$/, ".body") };
+}
 function readCache(url, acceptLanguage = "", extractor = "native") {
-  const p = cachePath(url, acceptLanguage, extractor);
-  if (!existsSync4(p)) return void 0;
+  const { meta, body } = entryPaths(url, acceptLanguage, extractor);
+  if (!existsSync4(meta)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync3(p, "utf8"));
+    const entry = JSON.parse(readFileSync3(meta, "utf8"));
     if (typeof entry.cachedAt !== "number") return void 0;
-    if (!entry.text?.trim()) return void 0;
-    return entry;
+    const text = existsSync4(body) ? readFileSync3(body, "utf8") : entry.text;
+    if (!text?.trim()) return void 0;
+    return { ...entry, text };
   } catch {
     return void 0;
-  }
-}
-function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
-  if (isNoWrite()) return;
-  try {
-    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify({ ...entry, cachedAt: now }));
-  } catch {
   }
 }
 function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   if (isNoWrite()) return;
   try {
     mkdirSync4(cacheDir(), { recursive: true });
-    const entry = { ...res, cachedAt: now };
-    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
+    const { meta, body } = entryPaths(url, acceptLanguage, extractor);
+    const { text, ...rest } = res;
+    writeFileSync4(body, text ?? "");
+    writeFileSync4(meta, JSON.stringify({ ...rest, cachedAt: now }));
   } catch {
   }
 }
+function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
+  writeCache(url, entry, now, acceptLanguage, extractor);
+}
 async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date.now()) {
-  if (!enabled) return fetchAndExtract(url, opts);
+  const { refresh, offline } = mode;
+  if (!enabled && !offline) return fetchAndExtract(url, opts);
   const lang = opts.acceptLanguage ?? "";
+  const served = (entry, note) => {
+    countFetch(Buffer.byteLength(entry.text), true);
+    return { ...entry, cached: true, ...note ? { note } : {} };
+  };
+  if (offline) {
+    const stored = readAnyNamespace(url, lang);
+    if (stored) return served(stored);
+    return { text: "", finalUrl: url, status: 0, note: `Offline: ${url} is not in the cache (drop --offline, or warm it with a normal run).` };
+  }
   const ns = await currentExtractor(opts, url);
-  const hit = readCache(url, lang, ns);
-  if (hit && isCacheFresh(hit, now)) return { ...hit, cached: true };
+  const hit = refresh ? void 0 : readCache(url, lang, ns);
+  if (hit && isCacheFresh(hit, now)) return served(hit);
   const revalidate = hit ? revalidationHeaders(hit) : {};
   if (hit && Object.keys(revalidate).length) {
     const probe = await fetchAndExtract(url, { ...opts, headers: revalidate });
     if (probe.status === 304) {
       touchCache(url, hit, now, lang, ns);
-      return { ...hit, cached: true };
+      return served(hit);
     }
     if (probe.text?.trim()) {
       writeCache(url, probe, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : probe.extractor ?? "native");
@@ -2753,7 +2880,12 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     }
   }
   const res = await fetchAndExtract(url, opts);
-  if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+  if (res.text?.trim()) {
+    writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+    return res;
+  }
+  const stale = hit ?? readAnyNamespace(url, lang);
+  if (stale) return served(stale, `${url} returned ${res.status || "no response"}; served the cached copy from ${new Date(stale.cachedAt).toISOString()}.`);
   return res;
 }
 var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
@@ -4794,8 +4926,8 @@ function headingLines(text) {
 }
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
-function defaultRunDir(mode, question, d) {
-  return join6(tmpdir2(), "ultrasearch", `${mode}-${slugify(question, RUN_SLUG)}`, runId(d));
+function defaultRunDir(mode2, question, d) {
+  return join6(tmpdir2(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -4862,9 +4994,9 @@ function termCoverage(items, queryTerms, top = 10) {
 function underCovered(cov) {
   return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);
 }
-function resolveBackends(options, mode) {
+function resolveBackends(options, mode2) {
   if (options.backends?.length) return [...new Set(options.backends)];
-  const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
+  const base = options.depth === "deep" ? [...mode2.backends, ...mode2.deepOnly] : [...mode2.backends];
   const withEngine = applyWebEngine(base, options.webEngine);
   const profile = resolveSearchProfile(options);
   const discovery = profile === "light" ? withEngine.filter((k) => !DISCOVERY.includes(k)) : withEngine;
@@ -4926,8 +5058,8 @@ function resolveVariants(options) {
 }
 async function runGather(options) {
   const t0 = Date.now();
-  const mode = getMode(options.mode);
-  const backends = resolveBackends(options, mode);
+  const mode2 = getMode(options.mode);
+  const backends = resolveBackends(options, mode2);
   const profile = resolveSearchProfile(options);
   if (profile === "max") {
     options.pages ??= MAX_PROFILE_KNOBS.pages;
@@ -4940,7 +5072,7 @@ async function runGather(options) {
   options.pages = effPages;
   const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
   const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
-  const ctx = { question: options.question, mode, options, variants };
+  const ctx = { question: options.question, mode: mode2, options, variants };
   const explicit = !!options.backends?.length;
   const webBackends = backends.filter((b) => DISCOVERY.includes(b));
   let results;
@@ -5240,7 +5372,7 @@ async function runGather(options) {
     builtAt: (/* @__PURE__ */ new Date()).toISOString(),
     slug: `${options.mode}-${slugify(options.question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
-    extras: mode.extras,
+    extras: mode2.extras,
     notes,
     timings,
     ...thin ? { recallFloor: { count: merged.length, floor } } : {},
@@ -5249,8 +5381,8 @@ async function runGather(options) {
     services
   };
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
-  const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  writeBibtex(dir, sources, mode.extras);
+  const { sources } = writeDossier(dir, merged, manifest, mode2.template);
+  writeBibtex(dir, sources, mode2.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
@@ -6872,7 +7004,7 @@ function templateFacets(question, template) {
   }
   return out;
 }
-function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runRoot, depth) {
+function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, runRoot, depth) {
   const q = question.trim();
   let subs;
   if (override?.length) {
@@ -6881,7 +7013,7 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     subs = [];
     const idents = extractIdentifiers(q);
     if (idents.length) subs.push(mk(`${q} ${idents.join(" ")}`, "identifier", `identifiers: ${idents.join(", ")}`));
-    subs.push(...templateFacets(q, getMode(mode).template));
+    subs.push(...templateFacets(q, getMode(mode2).template));
     if (subs.length < 3) {
       for (const term of rankedKeywords(q).slice(0, 3 - subs.length)) {
         subs.push(mk(`${q} ${term}`, "keyword", `distinctive term: ${term}`));
@@ -6910,7 +7042,7 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
     s.id = `Q${i + 1}`;
     if (runRoot) s.out = join10(runRoot, s.id.toLowerCase());
   });
-  const result = { question: q, mode, ...depth ? { depth } : {}, subQuestions: uniq };
+  const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
     writeArtifact(join10(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
@@ -6922,7 +7054,7 @@ function runPlan(question, mode, override, cap = DEEP_CAPS.maxSubQuestions, runR
 var TARGET_PER_DEPTH = { summary: 2, standard: 4, deep: 8 };
 function planQueries(opts) {
   const lang = opts.lang ?? "en";
-  const mode = getMode(opts.mode);
+  const mode2 = getMode(opts.mode);
   const target = TARGET_PER_DEPTH[opts.depth];
   return {
     question: opts.question,
@@ -6931,7 +7063,7 @@ function planQueries(opts) {
     lang,
     target,
     planned: planVariants(opts.question, opts.depth),
-    angles: mode.searchAngles.slice(0, target),
+    angles: mode2.searchAngles.slice(0, target),
     next: `Run your own WebSearch once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`
   };
 }
@@ -7017,8 +7149,8 @@ function buildUserQuestions(angles, signals) {
   }
   return qs.slice(0, 4);
 }
-function buildCandidateQuestions(question, mode, angles) {
-  const headings = getMode(mode).template.split("\n").map((l) => /^##\s+(.+?)\s*$/.exec(l.trim())?.[1]?.trim()).filter((h) => !!h && !/^(tl;?dr|abstract|executive summary|sources|references)/i.test(h)).slice(0, 2);
+function buildCandidateQuestions(question, mode2, angles) {
+  const headings = getMode(mode2).template.split("\n").map((l) => /^##\s+(.+?)\s*$/.exec(l.trim())?.[1]?.trim()).filter((h) => !!h && !/^(tl;?dr|abstract|executive summary|sources|references)/i.test(h)).slice(0, 2);
   const subjects = [subjectOf(question), ...angles.map((a) => a.label)];
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -7035,9 +7167,9 @@ function buildCandidateQuestions(question, mode, angles) {
   return out;
 }
 async function runBrainstorm(options) {
-  const mode = getMode(options.mode);
+  const mode2 = getMode(options.mode);
   const backends = options.backends?.length ? options.backends : PROBE_BACKENDS;
-  const ctx = { question: options.question, mode, options: { ...options, perSource: 5 }, variants: [options.question] };
+  const ctx = { question: options.question, mode: mode2, options: { ...options, perSource: 5 }, variants: [options.question] };
   const backendResults = await runBackends(backends, ctx);
   const notes = backendResults.flatMap((r) => r.notes);
   const fused = fuse(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
@@ -7138,7 +7270,7 @@ function runMerge(options) {
   }
   const question = options.question ?? dossiers[0].manifest.question;
   const modeName = options.mode ?? dossiers[0].manifest.mode;
-  const mode = getMode(modeName);
+  const mode2 = getMode(modeName);
   const builtAt = dossiers.map((d) => d.manifest.builtAt).sort().at(-1) ?? dossiers[0].manifest.builtAt;
   const subQuestions = dossiers.map((d, i) => ({ id: `Q${i + 1}`, question: d.manifest.question }));
   const rank = (d) => ALL_DEPTHS.indexOf(d);
@@ -7156,7 +7288,7 @@ function runMerge(options) {
     builtAt,
     slug: `${modeName}-${slugify(question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
-    extras: mode.extras,
+    extras: mode2.extras,
     notes: [
       `Merged ${dossiers.length} sub-dossier(s) \u2192 ${merged.length} source(s) (${deduped.dropped} near-duplicate(s) collapsed).`,
       "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic."
@@ -7166,8 +7298,8 @@ function runMerge(options) {
     subQuestions
   };
   const dir = options.master ?? defaultRunDir(modeName, question);
-  const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  writeBibtex(dir, sources, mode.extras);
+  const { sources } = writeDossier(dir, merged, manifest, mode2.template);
+  writeBibtex(dir, sources, mode2.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
@@ -7228,9 +7360,9 @@ var VERIFY_SCHEMA = {
 function mergeHint(engineAbs, ph, runAbs) {
   const outs = ph.plan ? ph.plan.subQuestions.map((s) => s.out ?? join12(runAbs, s.id.toLowerCase())) : [`${join12(runAbs, "q1")},\u2026`];
   const q = ph.plan ? ph.plan.question : "<question>";
-  const mode = ph.plan ? ph.plan.mode : "<mode>";
+  const mode2 = ph.plan ? ph.plan.mode : "<mode>";
   return [
-    `node ${shq(engineAbs)} merge --runs ${shq(outs.join(","))} --master ${shq(runAbs)} --q ${shq(q)} --mode ${mode}`,
+    `node ${shq(engineAbs)} merge --runs ${shq(outs.join(","))} --master ${shq(runAbs)} --q ${shq(q)} --mode ${mode2}`,
     `then write SUMMARY.md/REPORT.md against the MASTER [S#] ids, and feed any NEW sub-questions into the next round.`
   ];
 }
@@ -7372,7 +7504,7 @@ function runbookMd(phases, runAbs, engineAbs) {
   const gather = phases.find((p) => p.name === "gather");
   const outs = gather?.plan ? shq(gather.plan.subQuestions.map((s) => s.out ?? join12(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gather?.plan ? shq(gather.plan.question) : '"<question>"';
-  const mode = gather?.plan ? gather.plan.mode : "<m>";
+  const mode2 = gather?.plan ? gather.plan.mode : "<m>";
   const run = shq(runAbs);
   return `# ultrasearch \u2014 sequential RUNBOOK (eco / no-subagent fallback)
 
@@ -7393,7 +7525,7 @@ ${status}
 
 1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join12(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
 2. **Gather per sub-question** \u2014 for EVERY entry in \`${join12(runAbs, "PLAN.json")}\`, apply \`${join12(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
-3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode}\`. Cite only the MASTER \`[S#]\` ids from here.
+3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
 5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join12(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join12(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join12(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
@@ -7743,10 +7875,10 @@ function artifactMap(dir) {
 }
 function handlePlan(args) {
   const question = requiredStr(args, "question", "the umbrella question to decompose.");
-  const mode = oneOf(str(args.mode), ALL_MODES, "mode", "topic");
+  const mode2 = oneOf(str(args.mode), ALL_MODES, "mode", "topic");
   const runRoot = str(args.run_root);
   if (runRoot !== void 0 && !isAbsolute(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
-  const res = runPlan(question, mode, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
+  const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
   if (isNoWrite()) takeArtifacts();
   return {
     ...res,
@@ -8807,7 +8939,7 @@ function gatherReport(r, options) {
 function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
-  const mode = oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
+  const mode2 = oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
   const askedMax = p.values.search === "max";
   const depth = oneOf2("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
@@ -8824,7 +8956,7 @@ function buildGatherOptions(p, opts = {}) {
   }
   return {
     question,
-    mode,
+    mode: mode2,
     depth,
     backends: p.values.backends ? parseBackends(p.values.backends) : void 0,
     queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : void 0,
@@ -9052,12 +9184,12 @@ ${formatServices(rows)}
       const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve5(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
       for (const d of runs) if (!existsSync12(d)) fail(`run dir not found: ${d}`);
-      const mode = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
+      const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
         master: p.values.master ? resolve5(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
-        mode
+        mode: mode2
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
