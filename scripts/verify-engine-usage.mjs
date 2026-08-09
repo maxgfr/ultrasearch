@@ -122,11 +122,14 @@ for (const f of files) {
 // Raise this when a layer lands. Never lower it to make a red run pass — a drop
 // means a layer stopped being used, which is a decision, not a detail.
 //
-// 125 against a real 129. It was 75 while the counter could not see `./engine.js`
+// 148 against a real 152, after adopting the v1.13 ranking layer.
+//
+// It was 125 against 129 before that, and 75 against a fiction before the
+// counter could see `./engine.js` at all. It was 75 while the counter could not see `./engine.js`
 // — met by src/backends/ and src/mcp/ alone, so all nine root shims could have
 // been re-forked without moving the number. The point of a floor is to sit just
 // under the truth; 75 sat under a fiction.
-const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 125);
+const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 148);
 
 let ok = true;
 
