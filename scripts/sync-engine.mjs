@@ -20,8 +20,8 @@
 // re-pinning one never disturbs the other's recorded hashes, and --check
 // re-hashes every vendored file against them.
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -48,14 +48,15 @@ const ENGINES = {
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },
       { remote: "scripts/engine.d.mts", local: "webindex-engine.d.mts" },
-      // No reference docs are synced here, deliberately. `dest` exists (see
-      // destOf) and ultradoc and construct use it, because their copies of
-      // web-discovery.md and provider-apis.md were near-identical descriptions
-      // of the ENGINE that had drifted apart. This repo's web-discovery.md is
-      // not that document: it is 287 lines about ultrasearch's own cascade and
-      // its --web-engine values, and verify-skill-bundle asserts that list
-      // against ALL_WEB_ENGINES. Overwriting it with the engine's generic one
-      // fails that gate, correctly.
+      // Only the engine's CODE is vendored, never its docs — that was tried and
+      // reverted. webindex ships a references/ of its own (served over MCP), and
+      // three skills each have a web-discovery.md, and those look like four
+      // copies of one document until you read them: each skill's names ITS OWN
+      // flags, env prefix and commands. Overwriting them with the engine's
+      // generic version deletes exactly the part an agent needed.
+      //
+      // Similar is not duplicated. The engine owns the implementation; each
+      // skill owns the sentence that tells its agent which flag to pass.
     ],
   },
 };
@@ -100,19 +101,6 @@ function selected() {
   return [name];
 }
 
-/**
- * Where a synced file lands.
- *
- * The engine bundle goes to src/vendor/ because a bundler inlines it. The
- * engine's REFERENCE DOCS do not: they are read by an agent, so they belong
- * beside the skill that ships them. Both are pinned by the same sha256, for the
- * same reason — `references/web-discovery.md` existed in two skills with
- * different bytes, describing one engine, and nothing noticed.
- */
-function destOf(f) {
-  return f.dest ? join(root, f.dest) : join(vendorDir, f.local);
-}
-
 if (args[0] === "--check") {
   let ok = true;
   for (const name of Object.keys(ENGINES)) {
@@ -127,22 +115,9 @@ if (args[0] === "--check") {
     }
     let engineOk = true;
     for (const f of files) {
-      const path = destOf(f);
-      // A file the current pin never carried is not drift — it is a file added
-      // to the table since. The next `--ref` picks it up and pins it; failing
-      // here would mean a doc could never be added without breaking the build
-      // it is meant to protect.
-      if (meta.sha256[f.local] === undefined) {
-        console.log(`sync-engine: ${f.local} is not in the ${meta.tag} pin yet — re-pin to fetch it`);
-        continue;
-      }
-      if (!existsSync(path)) {
-        console.error(`sync-engine: MISSING ${relative(root, path)} — the ${meta.tag} pin lists it`);
-        engineOk = false;
-        continue;
-      }
-      if (sha256(readFileSync(path)) !== meta.sha256[f.local]) {
-        console.error(`sync-engine: DRIFT in ${relative(root, path)} — bytes differ from the ${meta.tag} pin`);
+      const actual = sha256(readFileSync(join(vendorDir, f.local)));
+      if (actual !== meta.sha256[f.local]) {
+        console.error(`sync-engine: DRIFT in src/vendor/${f.local} — vendored bytes differ from the ${meta.tag} pin`);
         engineOk = false;
       }
     }
@@ -176,11 +151,9 @@ for (const name of selected()) {
       process.exit(1);
     }
     const buf = Buffer.from(await res.arrayBuffer());
-    const path = destOf(f);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, buf);
+    writeFileSync(join(vendorDir, f.local), buf);
     sums[f.local] = sha256(buf);
-    console.log(`sync-engine: ${relative(root, path)} (${buf.length} bytes)`);
+    console.log(`sync-engine: src/vendor/${f.local} (${buf.length} bytes)`);
   }
 
   // The bundle embeds its version greppably — refuse a tag/content mismatch.
