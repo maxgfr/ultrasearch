@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.25.2](https://github.com/maxgfr/ultrasearch/compare/v1.25.1...v1.25.2) (2026-08-09)
+
+
+### Bug Fixes
+
+* **engine:** ship the v1.14.0 extraction fixes to installed skills ([db476d6](https://github.com/maxgfr/ultrasearch/commit/db476d6544685b8775124b5d35d30bc7c95b88bd))
+
+
+### Reverts
+
+* **engine:** do not vendor the engine's reference docs ([2e39463](https://github.com/maxgfr/ultrasearch/commit/2e3946329438dc9d71247a67a57106e54ab2133a))
+
 ## [1.25.1](https://github.com/maxgfr/ultrasearch/compare/v1.25.0...v1.25.1) (2026-08-09)
 
 
