@@ -1,12 +1,20 @@
 import type { BackendKind, Depth, RawSource, SourceMeta } from "./types.js";
 
-// URL identity, keyword extraction and matching, and the FNV hash now live in
-// the vendored webindex engine — they were three drifting copies of the same
-// code across this repo, construct and ultradoc. Re-exported from here so every
-// existing `from "./util.js"` keeps working; what remains below is the part
-// that is genuinely ultrasearch's: ranking, dedup, diversification and the
-// dossier-shaped helpers.
-import { canonicalizeUrl, foldTerm, fnv1a64, isStopword, keywords, normalizeDoi, rankedKeywords, type KeywordMatcher } from "./engine.js";
+// URL identity, keyword extraction and matching, the FNV hash — and, since
+// webindex v1.13, the whole RANKING layer — live in the vendored engine. They
+// were the same code written two or three times across this repo, construct and
+// ultradoc, drifting apart in each: `rrf` was byte-identical in two of them,
+// BM25 existed here in full and in ultradoc reduced, and `slugify` had three
+// versions that disagreed about length and normalisation, which for an on-disk
+// cache key means one repository under three names.
+//
+// Re-exported from here so every existing `from "./util.js"` keeps working —
+// not one call site changed when 427 lines left this file.
+//
+// What remains below is the part that is genuinely ultrasearch's: identity and
+// trust keyed on ITS evidence model, query planning, and the dossier-shaped
+// helpers. The engine ranks; it does not know what a source is.
+import { canonicalizeUrl, keywords, normalizeDoi, rankedKeywords, arxivIdFromUrl, doiFromUrl } from "./engine.js";
 
 export {
   escapeRegExp,
@@ -27,6 +35,26 @@ export {
   type ExpandedKeyword,
   isStopword,
   type KeywordMatcher,
+  // Ranking, as of webindex v1.13.
+  slugify,
+  dedupeByUrl,
+  rrf,
+  arxivIdFromUrl,
+  doiFromUrl,
+  contentCoverage,
+  type Bm25Doc,
+  type Bm25Index,
+  bm25Tokenize,
+  buildBm25Index,
+  bm25MatchedTerms,
+  applyRelevanceFloor,
+  bm25Score,
+  recencyScore,
+  simhash,
+  hammingDistance,
+  diversify,
+  dedupeNearDuplicates,
+  mapLimit,
 } from "./engine.js";
 
 // A plain-text payload (an E-utilities abstract, a .txt spec) has no <title>,
@@ -55,19 +83,6 @@ export function titleFromText(text: string): string {
 // collapsed to spaces so an emitted command line stays one line.
 export function shq(s: string): string {
   return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
-}
-
-// Turn an arbitrary identifier into a filesystem-safe slug, e.g.
-// "How does HTTP rate limiting work?" -> "how-does-http-rate-limiting-work".
-export function slugify(input: string): string {
-  return (
-    input
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/[^a-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "run"
-  );
 }
 
 // Two-digit zero pad for the readable run id.
@@ -145,26 +160,6 @@ export function trustScore(_url: string, backend: BackendKind): number {
   return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
 }
 
-// Drop duplicate sources by canonical URL, keeping the best-scored copy (ties
-// broken by the earlier item). Preserves input order of survivors.
-export function dedupeByUrl(items: RawSource[]): { items: RawSource[]; dropped: number } {
-  const best = new Map<string, RawSource>();
-  const order: string[] = [];
-  let dropped = 0;
-  for (const it of items) {
-    const key = canonicalizeUrl(it.url);
-    const prev = best.get(key);
-    if (!prev) {
-      best.set(key, it);
-      order.push(key);
-    } else {
-      dropped++;
-      if (it.score > prev.score) best.set(key, it);
-    }
-  }
-  return { items: order.map((k) => best.get(k)!), dropped };
-}
-
 // ---------------------------------------------------------------------------
 // Keyword extraction + matching (ported from ultradoc): used to score fetched
 // page text against the question so excerpts carry the relevant lines.
@@ -172,63 +167,6 @@ export function dedupeByUrl(items: RawSource[]): { items: RawSource[]; dropped: 
 // fold accents/plurals, split camelCase/snake_case, compile accent-insensitive
 // patterns. Deterministic, no LLM, no deps.
 // ---------------------------------------------------------------------------
-
-// Reciprocal Rank Fusion: merge several ranked lists into one robust ranking
-// without comparable cross-list scores. `k` damps low ranks.
-export function rrf<T>(lists: T[][], keyOf: (item: T) => string, k = 60): Map<string, number> {
-  const score = new Map<string, number>();
-  for (const list of lists) {
-    list.forEach((item, idx) => {
-      const key = keyOf(item);
-      score.set(key, (score.get(key) ?? 0) + 1 / (k + idx + 1));
-    });
-  }
-  return score;
-}
-
-// Pull an arXiv id out of a URL — so abs/pdf/html variants of the SAME paper
-// (surfaced by a web backend with no `meta.arxivId`) still collapse to one key.
-// Handles modern ids (2405.12345) and legacy ids (math.GT/0309136), any
-// arxiv.org subdomain, and strips the version suffix and a trailing .pdf.
-export function arxivIdFromUrl(url: string): string | undefined {
-  let host: string;
-  let path: string;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return undefined;
-  }
-  if (!/(^|\.)arxiv\.org$/.test(host)) return undefined;
-  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (modern) return modern[1]!.toLowerCase();
-  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (legacy) return legacy[1]!.toLowerCase();
-  return undefined;
-}
-
-// Pull a DOI out of a URL — doi.org resolver links AND publisher landing pages
-// that carry the DOI in their path (dl.acm.org/doi/…, /doi/full/…, /doi/pdf/…).
-// Returns the normalized DOI so a DOI-in-path collapses with a bare DOI.
-export function doiFromUrl(url: string): string | undefined {
-  let host: string;
-  let path: string;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return undefined;
-  }
-  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
-    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
-    return /^10\.\d{4,9}\//.test(doi) ? doi : undefined;
-  }
-  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
-  if (m) return normalizeDoi(decodeURIComponent(m[1]!).replace(/\/+$/, ""));
-  return undefined;
-}
 
 // Identity key for de-duplication that is stronger than URL: the same work
 // surfaced as an arXiv abstract, a DOI URL and a journal landing page (across
@@ -302,18 +240,6 @@ export function planVariants(question: string, depth: Depth): string[] {
   return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
 }
 
-// What fraction of the question's distinctive keywords appear in a body of
-// text — used to re-rank fetched candidates by actual content relevance.
-export function contentCoverage(matcher: KeywordMatcher, text: string): number {
-  if (!matcher.canonicals.length || !text) return 0;
-  const hit = new Set<string>();
-  for (const line of text.split("\n")) {
-    for (const c of matcher.matchLine(line)) hit.add(c);
-    if (hit.size === matcher.canonicals.length) break;
-  }
-  return hit.size / matcher.canonicals.length;
-}
-
 // ---------------------------------------------------------------------------
 // BM25F lexical relevance — the content-aware re-ranking signal. Scores a
 // fetched document against the question with TF saturation + IDF computed over
@@ -325,321 +251,12 @@ export function contentCoverage(matcher: KeywordMatcher, text: string): number {
 // above is kept for snippet selection and back-compat.
 // ---------------------------------------------------------------------------
 
-export interface Bm25Doc {
-  id: string;
-  title: string;
-  headings: string;
-  body: string;
-}
-
-export interface Bm25Index {
-  idf: Map<string, number>;
-  avgdl: number;
-  N: number;
-  queryTerms: string[];
-  k1: number;
-  b: number;
-  titleWeight: number;
-  headingWeight: number;
-}
-
-// Tokenize text into canonical (deaccented, plural-folded, stopword-free) terms
-// WITH repetition so term frequency is preserved. Uses the same `foldTerm`
-// canonicalization as `buildMatcher`, so the two scorers agree on what a term
-// is (e.g. "requests" and "request" collapse, accents are folded).
-export function bm25Tokenize(text: string): string[] {
-  if (!text) return [];
-  const out: string[] = [];
-  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
-    if (raw.length < 2) continue;
-    if (isStopword(raw)) continue;
-    const t = foldTerm(raw);
-    if (t.length >= 2) out.push(t);
-  }
-  return out;
-}
-
-// Field-weighted token stream: body once, heading terms `headingWeight`× and
-// title terms `titleWeight`× — so a query term in the title/headings carries
-// more weight than the same term buried in the body.
-function docTokens(doc: Bm25Doc, titleWeight: number, headingWeight: number): string[] {
-  const out = bm25Tokenize(doc.body);
-  const headings = bm25Tokenize(doc.headings);
-  for (let r = 0; r < headingWeight; r++) out.push(...headings);
-  const title = bm25Tokenize(doc.title);
-  for (let r = 0; r < titleWeight; r++) out.push(...title);
-  return out;
-}
-
-// Bounded phrase-proximity bonus in [0, cap]: rewards query terms that occur
-// close together in the field-weighted token stream (so "token bucket" adjacent
-// beats the two words scattered far apart). Returns a multiplier addend.
-function proximityBonus(tokens: string[], queryTerms: string[], window = 6, cap = 0.1): number {
-  if (queryTerms.length < 2) return 0;
-  const q = new Set(queryTerms);
-  const hits: { pos: number; term: string }[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i]!;
-    if (q.has(tok)) hits.push({ pos: i, term: tok });
-  }
-  if (hits.length < 2) return 0;
-  let close = 0;
-  for (let i = 1; i < hits.length; i++) {
-    if (hits[i]!.term !== hits[i - 1]!.term && hits[i]!.pos - hits[i - 1]!.pos <= window) close++;
-  }
-  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
-}
-
-// Build the BM25 index over the candidate pool: IDF per query term (the pool IS
-// the corpus), average field-weighted document length, and the distinct query
-// terms. On a tiny pool (N<3) IDF is too noisy to trust, so it degrades to a
-// uniform IDF (pure TF scoring).
-export function buildBm25Index(question: string, docs: Bm25Doc[], opts: { k1?: number; b?: number } = {}): Bm25Index {
-  const k1 = opts.k1 ?? 1.2;
-  const b = opts.b ?? 0.75;
-  const titleWeight = 3;
-  const headingWeight = 2;
-  const queryTerms = [...new Set(bm25Tokenize(question))];
-  const N = docs.length;
-  const df = new Map<string, number>();
-  let totalLen = 0;
-  for (const doc of docs) {
-    const toks = docTokens(doc, titleWeight, headingWeight);
-    totalLen += toks.length;
-    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-  const avgdl = N ? totalLen / N : 0;
-  const idf = new Map<string, number>();
-  for (const t of queryTerms) {
-    if (N < 3) {
-      idf.set(t, 1);
-      continue;
-    }
-    const dfi = df.get(t) ?? 0;
-    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
-  }
-  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
-}
-
-// The distinct query terms that actually occur in a document's field-weighted
-// token stream — the overlap signal the relevance floor keys on (empty overlap
-// or an all-numeric overlap ⇒ off-topic). Shares tokenization with bm25Score so
-// the two agree on what a term is.
-export function bm25MatchedTerms(index: Bm25Index, doc: Bm25Doc): string[] {
-  if (!index.queryTerms.length) return [];
-  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
-  return index.queryTerms.filter((t) => present.has(t));
-}
-
-// Off-topic filter for the ranked candidate pool. A candidate is off-topic when
-// its query-term overlap is EMPTY (the "Venezuelan sanctions" class) or matched
-// ONLY on numeric terms (a year / PR-number false friend like a GitHub PR whose
-// number shares digits with the query). Only active when the query has ≥2 terms
-// including ≥1 alphabetic one — a single-term or all-numeric query has too weak
-// a signal to filter on. NEVER drops below `floor`: if dropping would leave
-// fewer than the floor, the highest-ranked "off-topic" ones are kept (a thin
-// genuine pool must survive its own filter). `ranked` must be best-first.
-export function applyRelevanceFloor<T>(ranked: T[], matchedOf: (t: T) => string[], queryTerms: string[], floor: number): { kept: T[]; dropped: T[] } {
-  const isAlpha = (t: string) => /\p{L}/u.test(t);
-  const alphaTerms = queryTerms.filter(isAlpha);
-  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
-  const offTopic = (t: T): boolean => {
-    const m = matchedOf(t);
-    return m.length === 0 || m.every((term) => !isAlpha(term));
-  };
-  const kept: T[] = [];
-  const dropped: T[] = [];
-  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
-  // Safety valve: never leave fewer than `floor`. Re-admit the best-ranked
-  // dropped candidates (they were appended in best-first order) until met.
-  while (kept.length < floor && dropped.length) kept.push(dropped.shift()!);
-  return { kept, dropped };
-}
-
-// BM25F score of one document against the index (raw, ≥0). Callers normalize by
-// the pool max (see gather.ts) the same way fusion rank is normalized.
-export function bm25Score(index: Bm25Index, doc: Bm25Doc): number {
-  if (!index.queryTerms.length) return 0;
-  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
-  const dl = toks.length;
-  if (!dl) return 0;
-  const tf = new Map<string, number>();
-  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
-  const { k1, b, avgdl } = index;
-  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
-  let score = 0;
-  for (const term of index.queryTerms) {
-    const f = tf.get(term);
-    if (!f) continue;
-    const idf = index.idf.get(term) ?? 0;
-    score += (idf * (f * (k1 + 1))) / (f + k1 * lenNorm);
-  }
-  return score * (1 + proximityBonus(toks, index.queryTerms));
-}
-
-// Pool-relative recency in 0..1 (newer = higher), neutral 0.5 when a source
-// carries no year or the pool has no year spread. Deliberately relative to the
-// result set (not wall-clock) so test/eval ordering stays stable over time.
-export function recencyScore(meta: SourceMeta | undefined, minYear: number, maxYear: number): number {
-  const y = typeof meta?.year === "number" ? meta.year : undefined;
-  if (y === undefined || maxYear <= minYear) return 0.5;
-  const clamped = Math.min(maxYear, Math.max(minYear, y));
-  return (clamped - minYear) / (maxYear - minYear);
-}
-
 // ---------------------------------------------------------------------------
 // SimHash near-duplicate detection. Identity dedup (DOI/arXiv/URL, see
 // identityKey + fuse) collapses the *same* resource; this catches the same
 // CONTENT syndicated across different URLs/domains (mirrored articles, scraper
 // copies) that would otherwise each eat a source slot. 64-bit, deterministic.
 // ---------------------------------------------------------------------------
-
-// 64-bit SimHash over 3-gram token shingles: near-duplicate documents land a
-// few bits apart, unrelated documents ~32 bits apart.
-export function simhash(text: string): bigint {
-  const toks = bm25Tokenize(text);
-  const shingles: string[] = [];
-  if (toks.length < 3) shingles.push(...toks);
-  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
-  if (!shingles.length) return 0n;
-  const v = new Array<number>(64).fill(0);
-  for (const sh of shingles) {
-    const h = fnv1a64(sh);
-    for (let b = 0; b < 64; b++) v[b]! += ((h >> BigInt(b)) & 1n) === 1n ? 1 : -1;
-  }
-  let out = 0n;
-  for (let b = 0; b < 64; b++) if (v[b]! > 0) out |= 1n << BigInt(b);
-  return out;
-}
-
-// Population count of the XOR — how many bits two SimHashes differ by.
-export function hammingDistance(a: bigint, b: bigint): number {
-  let x = a ^ b;
-  let count = 0;
-  while (x) {
-    x &= x - 1n;
-    count++;
-  }
-  return count;
-}
-
-function betterSource(a: RawSource, b: RawSource): boolean {
-  if (a.score !== b.score) return a.score > b.score;
-  return a.url.localeCompare(b.url) < 0;
-}
-
-/**
- * Re-order a ranked list so the top of it says several DIFFERENT things.
- *
- * The failure this fixes, measured on a real `topic` run: eight content-marketing
- * pages rewriting each other took ranks 6-20, while the WHATWG specification —
- * the only source saying something none of them said — sat at 57. They were not
- * near-duplicates (the SimHash collapse below correctly left them alone); they
- * were eight independent restatements. Relevance ranking has no defence against
- * that, because each one really is on topic.
- *
- * So: greedy Maximal Marginal Relevance. At each rank pick the candidate
- * maximising `λ·relevance − (1−λ)·(similarity to what is already ranked)`. The
- * fourth rewrite of an argument already covered loses to the first source that
- * covers new ground. Similarity is Jaccard over the tokens already computed for
- * BM25 — no new extraction, no model, deterministic.
- *
- * It REORDERS ONLY. Every input comes back, exactly once: this changes what you
- * read first, never what you have. That matters more since the source cap was
- * removed — nothing is cut, so reading order is the whole ranking product.
- *
- * λ = 0.75 keeps relevance dominant: diversity breaks ties and demotes
- * redundancy, it does not promote an off-topic page.
- */
-export function diversify(items: RawSource[], tokensOf: (it: RawSource) => Set<string>, lambda = 0.75): RawSource[] {
-  if (items.length <= 2) return [...items];
-  const toks = new Map<RawSource, Set<string>>(items.map((it) => [it, tokensOf(it)]));
-  // Relevance normalised to 0..1 across the pool, so λ trades off two
-  // commensurable quantities rather than a score against a ratio.
-  const max = Math.max(...items.map((it) => it.score), 1e-9);
-  const rel = (it: RawSource): number => it.score / max;
-
-  const jaccard = (a: Set<string>, b: Set<string>): number => {
-    if (!a.size || !b.size) return 0;
-    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-    let inter = 0;
-    for (const t of small) if (large.has(t)) inter++;
-    return inter / (a.size + b.size - inter);
-  };
-
-  // Normalise similarity WITHIN the pool. Raw Jaccard between two long
-  // documents is small even when they are redundant — measured on a real pool,
-  // eight content-marketing pages rewriting each other scored 0.25 to one
-  // another against 0.12 to everything else. The contrast is a clean 2×, but
-  // 0.25·0.25 ≈ 0.06 of penalty is lost against a relevance range of 0..1. So
-  // the scale, not the signal, was the problem: divide by the pool's own
-  // maximum and "as similar as anything here gets" becomes 1.
-  let simMax = 0;
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      const v = jaccard(toks.get(items[i]!)!, toks.get(items[j]!)!);
-      if (v > simMax) simMax = v;
-    }
-  }
-  const sim = (a: RawSource, b: RawSource): number => (simMax > 0 ? jaccard(toks.get(a)!, toks.get(b)!) / simMax : 0);
-
-  const remaining = [...items];
-  const out: RawSource[] = [];
-  // Best-scored source always leads: the most relevant result is never demoted
-  // for being similar to nothing.
-  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  out.push(remaining.shift()!);
-  // Running max-similarity to the selected set, updated incrementally — this is
-  // what keeps the whole pass O(n²) instead of O(n³).
-  const maxSim = new Map<RawSource, number>(remaining.map((it) => [it, sim(it, out[0]!)]));
-
-  while (remaining.length) {
-    let bestIdx = 0;
-    let bestVal = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < remaining.length; i++) {
-      const it = remaining[i]!;
-      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
-      // Ties broken by url so the order is reproducible run to run.
-      if (val > bestVal || (val === bestVal && it.url.localeCompare(remaining[bestIdx]!.url) < 0)) {
-        bestVal = val;
-        bestIdx = i;
-      }
-    }
-    const picked = remaining.splice(bestIdx, 1)[0]!;
-    out.push(picked);
-    for (const it of remaining) {
-      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
-    }
-  }
-  return out;
-}
-
-// Collapse near-duplicate sources by SimHash over their extracted text, keeping
-// the best-scored copy. Short texts are skipped (too little signal to trust).
-// Expects items pre-sorted best-first; preserves their order. Deterministic.
-export function dedupeNearDuplicates(items: RawSource[], opts: { maxBits?: number; minChars?: number } = {}): { items: RawSource[]; dropped: number } {
-  const maxBits = opts.maxBits ?? 3;
-  const minChars = opts.minChars ?? 500;
-  const kept: { it: RawSource; hash: bigint | null }[] = [];
-  let dropped = 0;
-  for (const it of items) {
-    const text = it.text || "";
-    const hash = text.length >= minChars ? simhash(text) : null;
-    if (hash !== null) {
-      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
-      if (dup) {
-        dropped++;
-        if (betterSource(it, dup.it)) {
-          dup.it = it;
-          dup.hash = hash;
-        }
-        continue;
-      }
-    }
-    kept.push({ it, hash });
-  }
-  return { items: kept.map((k) => k.it), dropped };
-}
 
 // Parse a --since value (any Date-parseable string, e.g. "2023" or
 // "2023-01-15") into epoch seconds / an ISO date, for backends with date
@@ -654,18 +271,14 @@ export function sinceDate(since?: string): string | null {
   return secs === null ? null : new Date(secs * 1000).toISOString().slice(0, 10);
 }
 
-// Bounded-concurrency async map (dependency-free) — keeps the hydrate step
-// polite (a handful of in-flight fetches) instead of firing dozens at once.
-export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (true) {
-      const idx = next++;
-      if (idx >= items.length) break;
-      results[idx] = await fn(items[idx]!, idx);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
+/**
+ * This repo's slug policy, passed explicitly at every call site.
+ *
+ * The engine's `slugify` is deliberately unopinionated: length and the
+ * empty-input fallback are the CALLER's, because a repository identity and a
+ * research question want different ones — 120 characters is right for
+ * `github.com/owner/repo` and truncates two distinct questions onto one
+ * directory. ultrasearch slugs questions, so 80 with a `run` fallback, which is
+ * what its own copy did before the engine owned the implementation.
+ */
+export const RUN_SLUG = { max: 80, fallback: "run" } as const;

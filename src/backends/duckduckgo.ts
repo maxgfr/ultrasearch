@@ -3,25 +3,12 @@ import { httpGet, decodeEntities, sleep, pageDelayMs } from "./fetch.js";
 import { canonicalizeUrl } from "../util.js";
 import { ddgRegion, acceptLanguageHeader } from "../locale.js";
 
-export function stripTags(s: string): string {
-  return decodeEntities(s.replace(/<[^>]+>/g, " "))
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Decode DDG's redirector link: the real URL rides in the `uddg` query param.
-// Shared by the DuckDuckGo HTML and Lite backends.
-export function realUrl(href: string): string {
-  const uddg = /[?&]uddg=([^&]+)/.exec(href);
-  if (uddg) {
-    try {
-      return decodeURIComponent(uddg[1]!);
-    } catch {
-      /* keep raw */
-    }
-  }
-  return href.startsWith("//") ? "https:" + href : href;
-}
+// Engine-owned since webindex v1.13. stripTags and the uddg redirector decode
+// are provider SHAPE, not policy — the same two functions existed here, in
+// construct and in ultradoc. `realUrl` is the engine's ddgRedirectTarget under
+// this repo's existing name, so no call site changes.
+export { stripTags, ddgRedirectTarget as realUrl } from "../engine.js";
+import { stripTags, ddgRedirectTarget as realUrl } from "../engine.js";
 
 // Discovery by scraping the keyless DuckDuckGo HTML endpoint (no Docker, no
 // key). HTML attribute order is arbitrary, so we match the whole result anchor

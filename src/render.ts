@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Manifest, Source, VerdictKind, VerifyResult } from "./types.js";
 import { readDossier } from "./dossier.js";
 import { citedSourceIds } from "./claims.js";
-import { slugify } from "./util.js";
+import { slugify, RUN_SLUG } from "./util.js";
 
 // Verdict severity (worst wins) for the per-source citation badge.
 const VERDICT_SEVERITY: Record<VerdictKind, number> = { supported: 0, partial: 1, unsupported: 2, refuted: 3 };
@@ -71,7 +71,7 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
   let i = 0;
 
   const headingId = (text: string): string => {
-    const base = `${idPrefix}-${slugify(text)}`;
+    const base = `${idPrefix}-${slugify(text, RUN_SLUG)}`;
     let id = base;
     let n = 2;
     while (usedIds.has(id)) id = `${base}-${n++}`;

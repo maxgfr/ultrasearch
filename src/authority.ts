@@ -44,18 +44,11 @@ export interface SourceSignals {
   notes: string[];
 }
 
-const URL_IN_TEXT = /https?:\/\/[a-z0-9.-]+/gi;
-
-/** Hosts an extract links to, excluding the source's own (and `www.` noise). */
-export function externalHosts(url: string, text: string): Set<string> {
-  const self = domainOf(url).replace(/^www\./, "");
-  const out = new Set<string>();
-  for (const m of text.match(URL_IN_TEXT) ?? []) {
-    const h = domainOf(m).replace(/^www\./, "");
-    if (h && h !== self) out.add(h);
-  }
-  return out;
-}
+// Engine-owned since webindex v1.13: "which hosts does this text link out to"
+// is URL identity, and the engine already owns domainOf and canonicalizeUrl.
+// Re-exported so `from "./authority.js"` keeps working for every caller.
+export { externalHosts } from "./engine.js";
+import { externalHosts } from "./engine.js";
 
 /**
  * Signals for one source. `trust` is the domain-class prior already computed

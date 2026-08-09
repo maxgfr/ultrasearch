@@ -2,7 +2,7 @@ import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from ".
 import { ALL_DEPTHS, VERSION } from "./types.js";
 import { readDossier, readSourceText, writeBibtex, writeDossier } from "./dossier.js";
 import { fuse, defaultRunDir } from "./gather.js";
-import { dedupeNearDuplicates, identityKey, slugify } from "./util.js";
+import { dedupeNearDuplicates, identityKey, slugify, RUN_SLUG } from "./util.js";
 import { getMode } from "./modes/registry.js";
 
 export interface MergeOptions {
@@ -111,7 +111,7 @@ export function runMerge(options: MergeOptions): MergeResult {
     sourceCount: merged.length,
     maxSources: merged.length,
     builtAt,
-    slug: `${modeName}-${slugify(question)}`,
+    slug: `${modeName}-${slugify(question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes: [

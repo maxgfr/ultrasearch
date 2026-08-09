@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   shq,
   slugify,
+  RUN_SLUG,
   runId,
   canonicalizeUrl,
   domainOf,
@@ -28,7 +29,10 @@ describe("slugify", () => {
   });
   it("strips protocol and never returns empty", () => {
     expect(slugify("https://example.com")).toBe("example.com");
-    expect(slugify("???")).toBe("run");
+    // The fallback is this repo's policy, not the engine's — a question that
+    // slugs to nothing still needs a directory name.
+    expect(slugify("???", RUN_SLUG)).toBe("run");
+    expect(slugify("x".repeat(200), RUN_SLUG).length).toBe(80);
   });
 });
 

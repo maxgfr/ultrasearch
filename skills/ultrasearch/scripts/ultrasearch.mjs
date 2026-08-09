@@ -3,7 +3,7 @@
 // src/cli.ts
 import { basename as basename3, join as join15, relative as relative2, resolve as resolve5 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync4, readdirSync as readdirSync2, readFileSync as readFileSync12 } from "fs";
+import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync5, readdirSync, readFileSync as readFileSync12 } from "fs";
 
 // src/types.ts
 var VERSION = "1.25.0";
@@ -169,7 +169,7 @@ var websearchBackend = async (ctx) => {
 
 // src/gather.ts
 import { join as join6 } from "path";
-import { tmpdir as tmpdir4 } from "os";
+import { tmpdir as tmpdir2 } from "os";
 
 // src/modes/topic.ts
 var topicMode = {
@@ -346,16 +346,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "fs
 import { join } from "path";
 import { tmpdir } from "os";
 import { spawn } from "child_process";
-import { spawnSync } from "child_process";
-import { existsSync as existsSync2, mkdirSync, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
-import { tmpdir as tmpdir2 } from "os";
-import { dirname, join as join2 } from "path";
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync4 } from "fs";
-import { join as join3 } from "path";
+import { spawnSync as spawnSync2 } from "child_process";
+import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync as writeFileSync2 } from "fs";
 import { tmpdir as tmpdir3 } from "os";
-import { mkdirSync as mkdirSync2, writeFileSync as writeFileSync3 } from "fs";
-import { existsSync as existsSync4, readdirSync, readFileSync as readFileSync4, realpathSync, statSync } from "fs";
-import { basename, dirname as dirname2, join as join4, resolve, sep } from "path";
+import { dirname, join as join3 } from "path";
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync2, rmSync as rmSync3, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
+import { join as join4 } from "path";
+import { tmpdir as tmpdir4 } from "os";
+import { mkdirSync as mkdirSync3, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync5, readdirSync as readdirSync3, readFileSync as readFileSync4, realpathSync, statSync as statSync3 } from "fs";
+import { basename as basename2, dirname as dirname2, join as join5, resolve as resolve2, sep } from "path";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { createServer as createHttpServer } from "http";
@@ -541,12 +541,12 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs) {
-  return new Promise((resolve22) => {
+  return new Promise((resolve32) => {
     let child;
     try {
       child = spawn(binaryName(cmd), args, { stdio: ["pipe", "pipe", "pipe"] });
     } catch (e) {
-      resolve22({ ok: false, stdout: "", error: e.message });
+      resolve32({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -556,7 +556,7 @@ function runWithInput(cmd, args, input, timeoutMs) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve22(r);
+      resolve32(r);
     };
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
@@ -758,6 +758,40 @@ async function extractDocument(bytes, fmt, opts = {}) {
     lastReason = verdict.reason;
   }
   return { text: "", reason: lastReason ?? "no document converter available" };
+}
+function bomEncoding(bytes) {
+  if (bytes.length >= 3 && bytes[0] === 239 && bytes[1] === 187 && bytes[2] === 191) return { encoding: "utf-8", skip: 3 };
+  if (bytes.length >= 2 && bytes[0] === 255 && bytes[1] === 254) return { encoding: "utf-16le", skip: 2 };
+  if (bytes.length >= 2 && bytes[0] === 254 && bytes[1] === 255) return { encoding: "utf-16be", skip: 2 };
+  return void 0;
+}
+var CHARSET_IN_CONTENT_TYPE = /charset\s*=\s*["']?([a-z0-9_:.+-]+)/i;
+function charsetFromContentType(contentType) {
+  return CHARSET_IN_CONTENT_TYPE.exec(contentType ?? "")?.[1]?.toLowerCase();
+}
+function charsetFromHtml(head) {
+  const window = head.slice(0, 4096);
+  const direct = /<meta[^>]+charset\s*=\s*["']?([a-z0-9_:.+-]+)/i.exec(window);
+  if (direct) return direct[1].toLowerCase();
+  const httpEquiv = /<meta[^>]+http-equiv\s*=\s*["']?content-type["']?[^>]*content\s*=\s*["'][^"']*charset\s*=\s*([a-z0-9_:.+-]+)/i.exec(window);
+  return httpEquiv?.[1]?.toLowerCase();
+}
+function decodeBody(bytes, contentType = "") {
+  const bom = bomEncoding(bytes);
+  if (bom) return decodeWith(bytes.subarray(bom.skip), bom.encoding);
+  const declared = charsetFromContentType(contentType);
+  if (declared && declared !== "utf-8" && declared !== "utf8") return decodeWith(bytes, declared);
+  if (declared) return bytes.toString("utf8");
+  const meta = charsetFromHtml(bytes.subarray(0, 4096).toString("latin1"));
+  if (meta && meta !== "utf-8" && meta !== "utf8") return decodeWith(bytes, meta);
+  return bytes.toString("utf8");
+}
+function decodeWith(bytes, encoding) {
+  try {
+    return new TextDecoder(encoding, { fatal: false }).decode(bytes);
+  } catch {
+    return bytes.toString("utf8");
+  }
 }
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1065,6 +1099,10 @@ function makeMatcher(expanded) {
 function buildMatcher(question, max = 8) {
   return makeMatcher(expandTokens(keywords(question), max));
 }
+function slugify(input, opts = {}) {
+  const s = input.toLowerCase().replace(/^https?:\/\//, "").replace(/^git@/, "").replace(/\.git$/, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, opts.max ?? 120);
+  return s || (opts.fallback ?? "");
+}
 var FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
 var PROBE_TIMEOUT_MS = 2e3;
 var SCRAPE_TIMEOUT_MS = 45e3;
@@ -1216,12 +1254,43 @@ function politeDelayMs() {
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
-function retryDelayMs(retryAfter) {
-  if (retryAfter) {
-    const secs = Number(retryAfter);
-    if (Number.isFinite(secs)) return Math.min(Math.max(secs * 1e3, 0), 5e3);
+function detectRateLimited(status, headers) {
+  if (status === 429) return true;
+  return status === 403 && headers.get("x-ratelimit-remaining") === "0";
+}
+function parseRetryAfter(headers, capMs = 5e3) {
+  const h = headers.get("retry-after");
+  if (!h) return void 0;
+  const secs = Number(h);
+  if (Number.isFinite(secs)) return Math.min(Math.max(0, secs) * 1e3, capMs);
+  const when = Date.parse(h);
+  if (Number.isFinite(when)) return Math.min(Math.max(0, when - Date.now()), capMs);
+  return void 0;
+}
+function retryDelayMs(headers) {
+  return parseRetryAfter(headers) ?? defaultRetryMs();
+}
+async function readCappedBytes(res, max) {
+  const reader = res.body?.getReader?.();
+  if (!reader) return Buffer.from(await res.arrayBuffer()).subarray(0, max);
+  const chunks = [];
+  let total = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value?.byteLength) continue;
+    const chunk = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+    const remaining = max - total;
+    if (chunk.length >= remaining) {
+      chunks.push(chunk.subarray(0, remaining));
+      await reader.cancel().catch(() => {
+      });
+      break;
+    }
+    chunks.push(chunk);
+    total += chunk.length;
   }
-  return defaultRetryMs();
+  return Buffer.concat(chunks);
 }
 async function httpGet(url, opts = {}) {
   let last = { ok: false, status: 0, body: "", contentType: "", url };
@@ -1231,25 +1300,40 @@ async function httpGet(url, opts = {}) {
     try {
       const headers = { "user-agent": opts.userAgent ?? browserUa(), accept: opts.accept ?? "*/*" };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
+      for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
       const res = await fetch(url, {
         signal: ctrl.signal,
         redirect: "follow",
         headers
       });
-      const buf = Buffer.from(await res.arrayBuffer());
       const max = opts.maxBytes ?? 4 * 1024 * 1024;
-      const capped = buf.subarray(0, max);
+      const meta = {
+        contentType: res.headers.get("content-type") ?? "",
+        url: res.url || url,
+        etag: res.headers.get("etag") ?? void 0,
+        lastModified: res.headers.get("last-modified") ?? void 0,
+        rateLimited: detectRateLimited(res.status, res.headers),
+        retryAfterMs: parseRetryAfter(res.headers)
+      };
+      const declared = Number(res.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > max) {
+        ctrl.abort();
+        return { ok: false, status: res.status, body: "", ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
+      }
+      const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
       const result = {
         ok: res.ok,
         status: res.status,
-        body: opts.binary ? "" : capped.toString("utf8"),
-        bytes: opts.binary ? capped : void 0,
-        contentType: res.headers.get("content-type") ?? "",
-        url: res.url || url
+        // Decoded per the response's own encoding, not assumed UTF-8. A
+        // Windows-1252 page used to come back with every accented character
+        // replaced by U+FFFD, and nothing anywhere noticed.
+        body: opts.binary ? "" : decodeBody(bytes, meta.contentType),
+        bytes: opts.binary ? bytes : void 0,
+        ...meta
       };
       if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
         last = result;
-        await sleep(retryDelayMs(res.headers.get("retry-after")));
+        await sleep(retryDelayMs(res.headers));
         continue;
       }
       return result;
@@ -1291,7 +1375,7 @@ async function httpJson(method, url, body, opts = {}) {
       const result = { ok: res.ok, status: res.status, data };
       if (RETRY_STATUS.has(res.status) && attempt < maxAttempts() - 1) {
         last = result;
-        await sleep(retryDelayMs(res.headers.get("retry-after")));
+        await sleep(retryDelayMs(res.headers));
         continue;
       }
       return result;
@@ -1527,12 +1611,17 @@ async function fetchAndExtract(url, opts = {}) {
     }
     firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} \u2014 fell back to the built-in extractor.` : fc.why;
   }
-  const fetchOpts = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
+  const base = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
+  const fetchOpts = opts.headers ? { ...base, headers: opts.headers } : base;
   const res = await httpGet(url, fetchOpts);
+  if (res.status === 304) {
+    return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
+  }
   if (!res.ok) {
     const why = res.status === 429 ? "rate-limited (HTTP 429)" : `status ${res.status}${res.error ? ", " + res.error : ""}`;
     return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
   }
+  const validators = res.etag || res.lastModified ? { etag: res.etag, lastModified: res.lastModified } : {};
   if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
     const bytes = res.bytes ?? (await httpGet(url, PDF_FETCH_OPTS)).bytes;
     const got = bytes ? await extractPdf(bytes, {
@@ -1548,7 +1637,8 @@ async function fetchAndExtract(url, opts = {}) {
       // `native` keeps reporting as absent, which is what the cache key and every
       // existing dossier already assume.
       extractor: got.via && got.via !== "native" ? got.via : void 0,
-      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`
+      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`,
+      ...validators
     };
   }
   const docFmt = wantsDoc ?? docFormatForContentType(res.contentType);
@@ -1561,21 +1651,22 @@ async function fetchAndExtract(url, opts = {}) {
       }
     }) : { text: "", reason: "empty response body" };
     if (!got.text && docFmt.textFallback && bytes?.length) {
-      return { text: bytes.toString("utf8"), finalUrl: res.url, status: res.status, note: firecrawlNote };
+      return { text: bytes.toString("utf8"), finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
     }
     return {
       text: got.text,
       finalUrl: res.url,
       status: res.status,
       extractor: got.via,
-      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`
+      note: got.text ? firecrawlNote : `Fetched ${url} but could not extract text \u2014 ${got.reason}.`,
+      ...validators
     };
   }
   const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
   const text = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const title = isHtml ? htmlTitle(res.body) : void 0;
   const canonical = isHtml ? htmlCanonicalUrl(res.body) : void 0;
-  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote };
+  return { text, title, canonical, finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
@@ -1699,6 +1790,254 @@ function fnv1a64(s) {
     h = h * FNV_PRIME & MASK64;
   }
   return h;
+}
+function rrf(lists, keyOf, k = 60) {
+  const score = /* @__PURE__ */ new Map();
+  for (const list of lists) {
+    list.forEach((item, idx) => {
+      const key = keyOf(item);
+      score.set(key, (score.get(key) ?? 0) + 1 / (k + idx + 1));
+    });
+  }
+  return score;
+}
+function arxivIdFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
+  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (modern) return modern[1].toLowerCase();
+  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
+  if (legacy) return legacy[1].toLowerCase();
+  return void 0;
+}
+function doiFromUrl(url) {
+  let host;
+  let path;
+  try {
+    const u = new URL(url.trim());
+    host = u.hostname.toLowerCase();
+    path = u.pathname;
+  } catch {
+    return void 0;
+  }
+  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
+    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
+    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
+  }
+  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
+  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
+  return void 0;
+}
+function bm25Tokenize(text) {
+  if (!text) return [];
+  const out = [];
+  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
+    if (raw.length < 2) continue;
+    if (isStopword(raw)) continue;
+    const t = foldTerm(raw);
+    if (t.length >= 2) out.push(t);
+  }
+  return out;
+}
+function docTokens(doc, titleWeight, headingWeight) {
+  const out = bm25Tokenize(doc.body);
+  const headings = bm25Tokenize(doc.headings);
+  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  const title = bm25Tokenize(doc.title);
+  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  return out;
+}
+function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
+  if (queryTerms.length < 2) return 0;
+  const q = new Set(queryTerms);
+  const hits = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (q.has(tok)) hits.push({ pos: i, term: tok });
+  }
+  if (hits.length < 2) return 0;
+  let close = 0;
+  for (let i = 1; i < hits.length; i++) {
+    if (hits[i].term !== hits[i - 1].term && hits[i].pos - hits[i - 1].pos <= window) close++;
+  }
+  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
+}
+function buildBm25Index(question, docs, opts = {}) {
+  const k1 = opts.k1 ?? 1.2;
+  const b = opts.b ?? 0.75;
+  const titleWeight = 3;
+  const headingWeight = 2;
+  const queryTerms = [...new Set(bm25Tokenize(question))];
+  const N = docs.length;
+  const df = /* @__PURE__ */ new Map();
+  let totalLen = 0;
+  for (const doc of docs) {
+    const toks = docTokens(doc, titleWeight, headingWeight);
+    totalLen += toks.length;
+    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const avgdl = N ? totalLen / N : 0;
+  const idf = /* @__PURE__ */ new Map();
+  for (const t of queryTerms) {
+    if (N < 3) {
+      idf.set(t, 1);
+      continue;
+    }
+    const dfi = df.get(t) ?? 0;
+    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
+  }
+  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
+}
+function bm25Score(index, doc) {
+  if (!index.queryTerms.length) return 0;
+  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
+  const dl = toks.length;
+  if (!dl) return 0;
+  const tf = /* @__PURE__ */ new Map();
+  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+  const { k1, b, avgdl } = index;
+  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
+  let score = 0;
+  for (const term of index.queryTerms) {
+    const f = tf.get(term);
+    if (!f) continue;
+    const idf = index.idf.get(term) ?? 0;
+    score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
+  }
+  return score * (1 + proximityBonus(toks, index.queryTerms));
+}
+function bm25MatchedTerms(index, doc) {
+  if (!index.queryTerms.length) return [];
+  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
+  return index.queryTerms.filter((t) => present.has(t));
+}
+function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
+  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
+  const alphaTerms = queryTerms.filter(isAlpha);
+  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: [...ranked], dropped: [] };
+  const offTopic = (t) => {
+    const m = matchedOf(t);
+    return m.length === 0 || m.every((term) => !isAlpha(term));
+  };
+  const kept = [];
+  const dropped = [];
+  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
+  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
+  return { kept, dropped };
+}
+function recencyScore(meta, minYear, maxYear) {
+  const y = typeof meta?.year === "number" ? meta.year : void 0;
+  if (y === void 0 || maxYear <= minYear) return 0.5;
+  const clamped = Math.min(maxYear, Math.max(minYear, y));
+  return (clamped - minYear) / (maxYear - minYear);
+}
+function simhash(text) {
+  const toks = bm25Tokenize(text);
+  const shingles = [];
+  if (toks.length < 3) shingles.push(...toks);
+  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
+  if (!shingles.length) return 0n;
+  const v = new Array(64).fill(0);
+  for (const sh2 of shingles) {
+    const h = fnv1a64(sh2);
+    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
+  }
+  let out = 0n;
+  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
+  return out;
+}
+function hammingDistance(a, b) {
+  let x = a ^ b;
+  let count = 0;
+  while (x) {
+    x &= x - 1n;
+    count++;
+  }
+  return count;
+}
+function dedupeNearDuplicates(items, opts = {}) {
+  const maxBits = opts.maxBits ?? 3;
+  const minChars = opts.minChars ?? 500;
+  const better = (a, b) => a.score !== b.score ? a.score > b.score : a.url.localeCompare(b.url) < 0;
+  const kept = [];
+  let dropped = 0;
+  for (const it of items) {
+    const text = it.text || "";
+    const hash = text.length >= minChars ? simhash(text) : null;
+    if (hash !== null) {
+      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
+      if (dup) {
+        dropped++;
+        if (better(it, dup.it)) {
+          dup.it = it;
+          dup.hash = hash;
+        }
+        continue;
+      }
+    }
+    kept.push({ it, hash });
+  }
+  return { items: kept.map((k) => k.it), dropped };
+}
+function diversify(items, tokensOf, lambda = 0.75) {
+  if (items.length <= 2) return [...items];
+  const toks = new Map(items.map((it) => [it, tokensOf(it)]));
+  const max = Math.max(...items.map((it) => it.score), 1e-9);
+  const rel = (it) => it.score / max;
+  const jaccard2 = (a, b) => {
+    if (!a.size || !b.size) return 0;
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let inter = 0;
+    for (const t of small) if (large.has(t)) inter++;
+    return inter / (a.size + b.size - inter);
+  };
+  let simMax = 0;
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const v = jaccard2(toks.get(items[i]), toks.get(items[j]));
+      if (v > simMax) simMax = v;
+    }
+  }
+  const sim = (a, b) => simMax > 0 ? jaccard2(toks.get(a), toks.get(b)) / simMax : 0;
+  const remaining = [...items];
+  const out = [];
+  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  out.push(remaining.shift());
+  const maxSim = new Map(remaining.map((it) => [it, sim(it, out[0])]));
+  while (remaining.length) {
+    let bestIdx = 0;
+    let bestVal = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < remaining.length; i++) {
+      const it = remaining[i];
+      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
+      if (val > bestVal || val === bestVal && it.url.localeCompare(remaining[bestIdx].url) < 0) {
+        bestVal = val;
+        bestIdx = i;
+      }
+    }
+    const picked = remaining.splice(bestIdx, 1)[0];
+    out.push(picked);
+    for (const it of remaining) maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
+  }
+  return out;
+}
+var URL_IN_TEXT = /https?:\/\/[a-z0-9.-]+/gi;
+function externalHosts(url, text) {
+  const self = domainOf(url).replace(/^www\./, "");
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text.match(URL_IN_TEXT) ?? []) {
+    const h = domainOf(m).replace(/^www\./, "");
+    if (h && h !== self) out.add(h);
+  }
+  return out;
 }
 var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
 var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
@@ -1843,6 +2182,20 @@ function acceptLanguageHeader(lang, region) {
   const R = resolveRegion(lang, region).toUpperCase();
   if (l === "en") return `${l}-${R},${l};q=0.9`;
   return `${l}-${R},${l};q=0.9,en;q=0.5`;
+}
+var STDOUT_CAP = 24 * 1024 * 1024;
+function stripTags(s) {
+  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+}
+function ddgRedirectTarget(href) {
+  const uddg = /[?&]uddg=([^&]+)/.exec(href);
+  if (uddg) {
+    try {
+      return decodeURIComponent(uddg[1]);
+    } catch {
+    }
+  }
+  return href.startsWith("//") ? `https:${href}` : href;
 }
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 var PROBE_TIMEOUT_MS2 = 2e3;
@@ -2135,13 +2488,13 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function cacheRoot() {
-  return env("CACHE_DIR") ?? brand().cacheDir ?? join2(tmpdir2(), brand().name);
+  return env("CACHE_DIR") ?? brand().cacheDir ?? join3(tmpdir3(), brand().name);
 }
 function ensureComposeMaterialized() {
-  const base = join2(cacheRoot(), "compose");
-  const composePath = join2(base, "docker-compose.yml");
-  const settingsPath = join2(base, "docker", "searxng", "settings.yml");
-  const firecrawlEnvPath = join2(base, "docker", "firecrawl", "firecrawl.env");
+  const base = join3(cacheRoot(), "compose");
+  const composePath = join3(base, "docker-compose.yml");
+  const settingsPath = join3(base, "docker", "searxng", "settings.yml");
+  const firecrawlEnvPath = join3(base, "docker", "firecrawl", "firecrawl.env");
   writeIfChanged(composePath, renderAsset(COMPOSE_YAML));
   writeIfChanged(settingsPath, renderAsset(SEARXNG_SETTINGS_YAML));
   writeIfChanged(firecrawlEnvPath, renderAsset(FIRECRAWL_ENV));
@@ -2149,8 +2502,8 @@ function ensureComposeMaterialized() {
 }
 function writeIfChanged(path, content) {
   try {
-    if (existsSync2(path) && readFileSync2(path, "utf8") === content) return;
-    mkdirSync(dirname(path), { recursive: true });
+    if (existsSync3(path) && readFileSync2(path, "utf8") === content) return;
+    mkdirSync2(dirname(path), { recursive: true });
     writeFileSync2(path, content);
   } catch {
   }
@@ -2167,7 +2520,7 @@ function embedModel() {
   return env("EMBED_MODEL") ?? "nomic-embed-text";
 }
 function defaultRun(cmd, args, opts) {
-  const res = spawnSync(cmd, args, {
+  const res = spawnSync2(cmd, args, {
     encoding: "utf8",
     timeout: opts.timeoutMs,
     maxBuffer: 64 * 1024 * 1024,
@@ -2267,6 +2620,25 @@ ${pulled.stderr}` : ""),
 ${up.stderr}` : ""}`, code: 1 };
   return { message: [`${tag2}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
 }
+async function mapLimit(items, limit, fn) {
+  const width = Math.max(1, Math.floor(limit));
+  if (items.length <= 1 || width === 1) {
+    const out = [];
+    for (let i = 0; i < items.length; i++) out.push(await fn(items[i], i));
+    return out;
+  }
+  const results = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(width, items.length) }, async () => {
+    for (; ; ) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
 var chains = /* @__PURE__ */ new Map();
 function withRunLock(slug, fn) {
   const prev = chains.get(slug) ?? Promise.resolve();
@@ -2290,7 +2662,7 @@ function isNoWrite() {
 var collected = [];
 function ensureDir(dir) {
   if (isNoWrite()) return;
-  mkdirSync2(dir, { recursive: true });
+  mkdirSync3(dir, { recursive: true });
 }
 function writeArtifact(path, content) {
   if (isNoWrite()) {
@@ -2307,12 +2679,12 @@ function takeArtifacts() {
 }
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return env("CACHE_DIR") ?? brand().cacheDir ?? join3(tmpdir3(), brand().name, "cache");
+  return env("CACHE_DIR") ?? brand().cacheDir ?? join4(tmpdir4(), brand().name, "cache");
 }
 function cachePath(url, acceptLanguage = "", extractor = "native") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  return join3(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
+  return join4(cacheDir(), `${domain}-${fnv1a64(`${canon}\0${acceptLanguage}\0${extractor}`).toString(16)}.json`);
 }
 var PDF_CACHE_NS = "pdf";
 var DOC_CACHE_NS = "doc";
@@ -2325,22 +2697,38 @@ async function currentExtractor(opts, url) {
 function ttlMs() {
   return envInt("CACHE_TTL_MS", DEFAULT_TTL_MS);
 }
-function readCache(url, now, acceptLanguage = "", extractor = "native") {
+function isCacheFresh(entry, now = Date.now()) {
+  return typeof entry.cachedAt === "number" && now - entry.cachedAt <= ttlMs();
+}
+function revalidationHeaders(entry) {
+  const h = {};
+  if (entry.etag) h["if-none-match"] = entry.etag;
+  if (entry.lastModified) h["if-modified-since"] = entry.lastModified;
+  return h;
+}
+function readCache(url, acceptLanguage = "", extractor = "native") {
   const p = cachePath(url, acceptLanguage, extractor);
-  if (!existsSync3(p)) return void 0;
+  if (!existsSync4(p)) return void 0;
   try {
     const entry = JSON.parse(readFileSync3(p, "utf8"));
-    if (typeof entry.cachedAt !== "number" || now - entry.cachedAt > ttlMs()) return void 0;
+    if (typeof entry.cachedAt !== "number") return void 0;
     if (!entry.text?.trim()) return void 0;
     return entry;
   } catch {
     return void 0;
   }
 }
+function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
+  if (isNoWrite()) return;
+  try {
+    writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify({ ...entry, cachedAt: now }));
+  } catch {
+  }
+}
 function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   if (isNoWrite()) return;
   try {
-    mkdirSync3(cacheDir(), { recursive: true });
+    mkdirSync4(cacheDir(), { recursive: true });
     const entry = { ...res, cachedAt: now };
     writeFileSync4(cachePath(url, acceptLanguage, extractor), JSON.stringify(entry));
   } catch {
@@ -2350,8 +2738,20 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   if (!enabled) return fetchAndExtract(url, opts);
   const lang = opts.acceptLanguage ?? "";
   const ns = await currentExtractor(opts, url);
-  const hit = readCache(url, now, lang, ns);
-  if (hit) return { ...hit, cached: true };
+  const hit = readCache(url, lang, ns);
+  if (hit && isCacheFresh(hit, now)) return { ...hit, cached: true };
+  const revalidate = hit ? revalidationHeaders(hit) : {};
+  if (hit && Object.keys(revalidate).length) {
+    const probe = await fetchAndExtract(url, { ...opts, headers: revalidate });
+    if (probe.status === 304) {
+      touchCache(url, hit, now, lang, ns);
+      return { ...hit, cached: true };
+    }
+    if (probe.text?.trim()) {
+      writeCache(url, probe, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : probe.extractor ?? "native");
+      return probe;
+    }
+  }
   const res = await fetchAndExtract(url, opts);
   if (res.text?.trim()) writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
   return res;
@@ -2443,18 +2843,18 @@ var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname2(fileURLToPath(import.meta.url));
   const name = brand().name;
-  const candidates = [resolve(here, ".."), resolve(here, "..", "skills", name), resolve(here, "..", "..", "skills", name)];
-  return candidates.find((dir) => existsSync4(join4(dir, "SKILL.md")));
+  const candidates = [resolve2(here, ".."), resolve2(here, "..", "skills", name), resolve2(here, "..", "..", "skills", name)];
+  return candidates.find((dir) => existsSync5(join5(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join4(root, "references");
-  if (!existsSync4(refDir)) return out;
-  for (const file of readdirSync(refDir).sort()) {
+  const refDir = join5(root, "references");
+  if (!existsSync5(refDir)) return out;
+  for (const file of readdirSync3(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join4("references", file), `${skillName()} reference: ${basename(file, ".md")}`));
+    out.push(describe(root, join5("references", file), `${skillName()} reference: ${basename2(file, ".md")}`));
   }
   return out;
 }
@@ -2466,7 +2866,7 @@ function readResource(uri, moduleDir) {
   if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
   const rel = uri.slice(URI_SCHEME.length);
   if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve(root, rel);
+  const target = resolve2(root, rel);
   const rootReal = realpathSync(root);
   let targetReal;
   try {
@@ -2477,7 +2877,7 @@ function readResource(uri, moduleDir) {
   if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep)) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
-  if (!statSync(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  if (!statSync3(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
   return { uri, mimeType: "text/markdown", text: readFileSync4(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
@@ -2489,7 +2889,7 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join4(root, rel));
+  const summary = firstProse(join5(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
@@ -2746,14 +3146,14 @@ function startHttpServer(adapter, opts = {}) {
   server.requestTimeout = 0;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve32, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve22({
+      resolve32({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -2862,7 +3262,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES * 8;
 function readBody(req) {
-  return new Promise((resolve22, reject) => {
+  return new Promise((resolve32, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -2886,7 +3286,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve22(Buffer.concat(chunks).toString("utf8"));
+      else resolve32(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -2913,9 +3313,6 @@ function titleFromText(text) {
 }
 function shq(s) {
   return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
-}
-function slugify(input) {
-  return input.toLowerCase().replace(/^https?:\/\//, "").replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "run";
 }
 function pad(n) {
   return String(n).padStart(2, "0");
@@ -2951,51 +3348,6 @@ var BACKEND_TRUST = {
 var NEUTRAL_TRUST = 0.5;
 function trustScore(_url, backend) {
   return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
-}
-function rrf(lists, keyOf, k = 60) {
-  const score = /* @__PURE__ */ new Map();
-  for (const list of lists) {
-    list.forEach((item, idx) => {
-      const key = keyOf(item);
-      score.set(key, (score.get(key) ?? 0) + 1 / (k + idx + 1));
-    });
-  }
-  return score;
-}
-function arxivIdFromUrl(url) {
-  let host;
-  let path;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return void 0;
-  }
-  if (!/(^|\.)arxiv\.org$/.test(host)) return void 0;
-  const modern = /\/(?:abs|pdf|html|format)\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (modern) return modern[1].toLowerCase();
-  const legacy = /\/(?:abs|pdf|html|format)\/([a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?$/i.exec(path);
-  if (legacy) return legacy[1].toLowerCase();
-  return void 0;
-}
-function doiFromUrl(url) {
-  let host;
-  let path;
-  try {
-    const u = new URL(url.trim());
-    host = u.hostname.toLowerCase();
-    path = u.pathname;
-  } catch {
-    return void 0;
-  }
-  if (/(^|\.)(dx\.)?doi\.org$/.test(host)) {
-    const doi = normalizeDoi(decodeURIComponent(path.replace(/^\/+/, "").replace(/\/+$/, "")));
-    return /^10\.\d{4,9}\//.test(doi) ? doi : void 0;
-  }
-  const m = /\/doi(?:\/(?:abs|full|pdf|epdf|e?pub))?\/(10\.\d{4,9}\/[^\s?#]+)/i.exec(path);
-  if (m) return normalizeDoi(decodeURIComponent(m[1]).replace(/\/+$/, ""));
-  return void 0;
 }
 function identityKey(item) {
   const doi = item.meta?.doi;
@@ -3047,204 +3399,6 @@ function planVariants(question, depth) {
   const n = depth === "summary" ? 1 : depth === "standard" ? 2 : 3;
   return uniq.slice(0, n).length ? uniq.slice(0, n) : [base];
 }
-function bm25Tokenize(text) {
-  if (!text) return [];
-  const out = [];
-  for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
-    if (raw.length < 2) continue;
-    if (isStopword(raw)) continue;
-    const t = foldTerm(raw);
-    if (t.length >= 2) out.push(t);
-  }
-  return out;
-}
-function docTokens(doc, titleWeight, headingWeight) {
-  const out = bm25Tokenize(doc.body);
-  const headings = bm25Tokenize(doc.headings);
-  for (let r = 0; r < headingWeight; r++) out.push(...headings);
-  const title = bm25Tokenize(doc.title);
-  for (let r = 0; r < titleWeight; r++) out.push(...title);
-  return out;
-}
-function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
-  if (queryTerms.length < 2) return 0;
-  const q = new Set(queryTerms);
-  const hits = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const tok = tokens[i];
-    if (q.has(tok)) hits.push({ pos: i, term: tok });
-  }
-  if (hits.length < 2) return 0;
-  let close = 0;
-  for (let i = 1; i < hits.length; i++) {
-    if (hits[i].term !== hits[i - 1].term && hits[i].pos - hits[i - 1].pos <= window) close++;
-  }
-  return Math.min(cap, cap * (close / Math.max(1, queryTerms.length - 1)));
-}
-function buildBm25Index(question, docs, opts = {}) {
-  const k1 = opts.k1 ?? 1.2;
-  const b = opts.b ?? 0.75;
-  const titleWeight = 3;
-  const headingWeight = 2;
-  const queryTerms = [...new Set(bm25Tokenize(question))];
-  const N = docs.length;
-  const df = /* @__PURE__ */ new Map();
-  let totalLen = 0;
-  for (const doc of docs) {
-    const toks = docTokens(doc, titleWeight, headingWeight);
-    totalLen += toks.length;
-    for (const t of new Set(toks)) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-  const avgdl = N ? totalLen / N : 0;
-  const idf = /* @__PURE__ */ new Map();
-  for (const t of queryTerms) {
-    if (N < 3) {
-      idf.set(t, 1);
-      continue;
-    }
-    const dfi = df.get(t) ?? 0;
-    idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
-  }
-  return { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
-}
-function bm25MatchedTerms(index, doc) {
-  if (!index.queryTerms.length) return [];
-  const present = new Set(docTokens(doc, index.titleWeight, index.headingWeight));
-  return index.queryTerms.filter((t) => present.has(t));
-}
-function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
-  const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
-  const alphaTerms = queryTerms.filter(isAlpha);
-  if (queryTerms.length < 2 || alphaTerms.length < 1) return { kept: ranked, dropped: [] };
-  const offTopic = (t) => {
-    const m = matchedOf(t);
-    return m.length === 0 || m.every((term) => !isAlpha(term));
-  };
-  const kept = [];
-  const dropped = [];
-  for (const t of ranked) (offTopic(t) ? dropped : kept).push(t);
-  while (kept.length < floor && dropped.length) kept.push(dropped.shift());
-  return { kept, dropped };
-}
-function bm25Score(index, doc) {
-  if (!index.queryTerms.length) return 0;
-  const toks = docTokens(doc, index.titleWeight, index.headingWeight);
-  const dl = toks.length;
-  if (!dl) return 0;
-  const tf = /* @__PURE__ */ new Map();
-  for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
-  const { k1, b, avgdl } = index;
-  const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
-  let score = 0;
-  for (const term of index.queryTerms) {
-    const f = tf.get(term);
-    if (!f) continue;
-    const idf = index.idf.get(term) ?? 0;
-    score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
-  }
-  return score * (1 + proximityBonus(toks, index.queryTerms));
-}
-function recencyScore(meta, minYear, maxYear) {
-  const y = typeof meta?.year === "number" ? meta.year : void 0;
-  if (y === void 0 || maxYear <= minYear) return 0.5;
-  const clamped = Math.min(maxYear, Math.max(minYear, y));
-  return (clamped - minYear) / (maxYear - minYear);
-}
-function simhash(text) {
-  const toks = bm25Tokenize(text);
-  const shingles = [];
-  if (toks.length < 3) shingles.push(...toks);
-  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
-  if (!shingles.length) return 0n;
-  const v = new Array(64).fill(0);
-  for (const sh of shingles) {
-    const h = fnv1a64(sh);
-    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
-  }
-  let out = 0n;
-  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
-  return out;
-}
-function hammingDistance(a, b) {
-  let x = a ^ b;
-  let count = 0;
-  while (x) {
-    x &= x - 1n;
-    count++;
-  }
-  return count;
-}
-function betterSource(a, b) {
-  if (a.score !== b.score) return a.score > b.score;
-  return a.url.localeCompare(b.url) < 0;
-}
-function diversify(items, tokensOf, lambda = 0.75) {
-  if (items.length <= 2) return [...items];
-  const toks = new Map(items.map((it) => [it, tokensOf(it)]));
-  const max = Math.max(...items.map((it) => it.score), 1e-9);
-  const rel = (it) => it.score / max;
-  const jaccard2 = (a, b) => {
-    if (!a.size || !b.size) return 0;
-    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
-    let inter = 0;
-    for (const t of small) if (large.has(t)) inter++;
-    return inter / (a.size + b.size - inter);
-  };
-  let simMax = 0;
-  for (let i = 0; i < items.length; i++) {
-    for (let j = i + 1; j < items.length; j++) {
-      const v = jaccard2(toks.get(items[i]), toks.get(items[j]));
-      if (v > simMax) simMax = v;
-    }
-  }
-  const sim = (a, b) => simMax > 0 ? jaccard2(toks.get(a), toks.get(b)) / simMax : 0;
-  const remaining = [...items];
-  const out = [];
-  remaining.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  out.push(remaining.shift());
-  const maxSim = new Map(remaining.map((it) => [it, sim(it, out[0])]));
-  while (remaining.length) {
-    let bestIdx = 0;
-    let bestVal = Number.NEGATIVE_INFINITY;
-    for (let i = 0; i < remaining.length; i++) {
-      const it = remaining[i];
-      const val = lambda * rel(it) - (1 - lambda) * (maxSim.get(it) ?? 0);
-      if (val > bestVal || val === bestVal && it.url.localeCompare(remaining[bestIdx].url) < 0) {
-        bestVal = val;
-        bestIdx = i;
-      }
-    }
-    const picked = remaining.splice(bestIdx, 1)[0];
-    out.push(picked);
-    for (const it of remaining) {
-      maxSim.set(it, Math.max(maxSim.get(it) ?? 0, sim(it, picked)));
-    }
-  }
-  return out;
-}
-function dedupeNearDuplicates(items, opts = {}) {
-  const maxBits = opts.maxBits ?? 3;
-  const minChars = opts.minChars ?? 500;
-  const kept = [];
-  let dropped = 0;
-  for (const it of items) {
-    const text = it.text || "";
-    const hash = text.length >= minChars ? simhash(text) : null;
-    if (hash !== null) {
-      const dup = kept.find((k) => k.hash !== null && hammingDistance(k.hash, hash) <= maxBits);
-      if (dup) {
-        dropped++;
-        if (betterSource(it, dup.it)) {
-          dup.it = it;
-          dup.hash = hash;
-        }
-        continue;
-      }
-    }
-    kept.push({ it, hash });
-  }
-  return { items: kept.map((k) => k.it), dropped };
-}
 function sinceEpochSeconds(since) {
   if (!since) return null;
   const ms = Date.parse(since.length === 4 ? `${since}-01-01` : since);
@@ -3254,19 +3408,7 @@ function sinceDate(since) {
   const secs = sinceEpochSeconds(since);
   return secs === null ? null : new Date(secs * 1e3).toISOString().slice(0, 10);
 }
-async function mapLimit(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (true) {
-      const idx = next++;
-      if (idx >= items.length) break;
-      results[idx] = await fn(items[idx], idx);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
+var RUN_SLUG = { max: 80, fallback: "run" };
 
 // src/backends/searxng.ts
 var searxngBackend = async (ctx) => {
@@ -3379,19 +3521,6 @@ var firecrawlBackend = async (ctx) => {
 };
 
 // src/backends/duckduckgo.ts
-function stripTags(s) {
-  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-}
-function realUrl(href) {
-  const uddg = /[?&]uddg=([^&]+)/.exec(href);
-  if (uddg) {
-    try {
-      return decodeURIComponent(uddg[1]);
-    } catch {
-    }
-  }
-  return href.startsWith("//") ? "https:" + href : href;
-}
 function parseDdgPage(body, limit) {
   const found = [];
   const blockRe = /<a\b([^>]*\bresult__a\b[^>]*)>([\s\S]*?)<\/a>([\s\S]*?)(?=<a\b[^>]*\bresult__a\b|$)/gi;
@@ -3399,7 +3528,7 @@ function parseDdgPage(body, limit) {
   while ((m = blockRe.exec(body)) && found.length < limit) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]);
     if (!href0) continue;
-    const href = realUrl(href0[1]);
+    const href = ddgRedirectTarget(href0[1]);
     if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
     const snipM = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/i.exec(m[3]);
     found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
@@ -3456,7 +3585,7 @@ function parseLitePage(body, limit) {
   while ((m = blockRe.exec(body)) && found.length < limit) {
     const href0 = /\bhref="([^"]+)"/.exec(m[1]);
     if (!href0) continue;
-    const href = realUrl(href0[1]);
+    const href = ddgRedirectTarget(href0[1]);
     if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
     const snipM = /class="result-snippet"[^>]*>([\s\S]*?)<\/td>/i.exec(m[3]);
     found.push({ url: href, title: stripTags(m[2]) || href, snippet: snipM ? stripTags(snipM[1]) : "" });
@@ -4263,20 +4392,10 @@ async function runBackends(kinds, ctx) {
 }
 
 // src/dossier.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
-import { join as join5 } from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync5 } from "fs";
+import { join as join2 } from "path";
 
 // src/authority.ts
-var URL_IN_TEXT = /https?:\/\/[a-z0-9.-]+/gi;
-function externalHosts(url, text) {
-  const self = domainOf(url).replace(/^www\./, "");
-  const out = /* @__PURE__ */ new Set();
-  for (const m of text.match(URL_IN_TEXT) ?? []) {
-    const h = domainOf(m).replace(/^www\./, "");
-    if (h && h !== self) out.add(h);
-  }
-  return out;
-}
 function sourceSignals(opts) {
   const hosts = externalHosts(opts.url, opts.text);
   const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl(opts.text.slice(0, 4e3));
@@ -4415,20 +4534,20 @@ function renderSourceExtract(s, text, depth) {
   return head + capExtract(text, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join5(dir, s.extract);
-  if (!existsSync5(p)) return s.snippet ?? "";
+  const p = join2(dir, s.extract);
+  if (!existsSync2(p)) return s.snippet ?? "";
   const lines = readFileSync5(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth) {
-  writeArtifact(join5(dir, s.extract), renderSourceExtract(s, text, depth));
+  writeArtifact(join2(dir, s.extract), renderSourceExtract(s, text, depth));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join5(dir, "sources.json");
-  const dossierMd = join5(dir, "DOSSIER.md");
-  const manifestJson = join5(dir, "manifest.json");
+  const sourcesJson = join2(dir, "sources.json");
+  const dossierMd = join2(dir, "DOSSIER.md");
+  const manifestJson = join2(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
@@ -4436,10 +4555,10 @@ function writeDossierIndex(dir, sources, manifest, template) {
 }
 function writeBibtex(dir, sources, extras) {
   if (!extras.includes("bibtex")) return;
-  writeArtifact(join5(dir, "refs.bib"), toBibtex(sources));
+  writeArtifact(join2(dir, "refs.bib"), toBibtex(sources));
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join5(dir, "sources"));
+  ensureDir(join2(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
@@ -4539,11 +4658,11 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson(join5(dir, "sources.json"), "sources.json");
+  const sources = readJson(join2(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
-  const manifest = readJson(join5(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson(join2(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -4676,7 +4795,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode, question, d) {
-  return join6(tmpdir4(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
+  return join6(tmpdir2(), "ultrasearch", `${mode}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -5119,7 +5238,7 @@ async function runGather(options) {
     sourceCount: merged.length,
     maxSources: options.maxSources,
     builtAt: (/* @__PURE__ */ new Date()).toISOString(),
-    slug: `${options.mode}-${slugify(options.question)}`,
+    slug: `${options.mode}-${slugify(options.question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes,
@@ -5136,8 +5255,8 @@ async function runGather(options) {
 }
 
 // src/enrich.ts
-import { existsSync as existsSync6, readFileSync as readFileSync6, statSync as statSync2 } from "fs";
-import { basename as basename2, resolve as resolve2 } from "path";
+import { existsSync as existsSync6, readFileSync as readFileSync6, statSync } from "fs";
+import { basename, resolve } from "path";
 import { pathToFileURL } from "url";
 async function addSources(dir, hits, opts = {}) {
   const results = [];
@@ -5156,7 +5275,7 @@ var TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log
 async function addFiles(dir, paths, opts = {}) {
   const results = [];
   for (const p of paths) {
-    const abs = resolve2(p);
+    const abs = resolve(p);
     const url = pathToFileURL(abs).href;
     results.push({ ...await addFile(dir, abs, opts), url });
   }
@@ -5168,7 +5287,7 @@ async function addFiles(dir, paths, opts = {}) {
 }
 async function addFile(dir, abs, opts) {
   const url = pathToFileURL(abs).href;
-  if (!existsSync6(abs) || !statSync2(abs).isFile()) {
+  if (!existsSync6(abs) || !statSync(abs).isFile()) {
     return { id: "", added: false, note: `${abs} is not a readable file` };
   }
   const { sources, manifest } = readDossier(dir);
@@ -5176,7 +5295,7 @@ async function addFile(dir, abs, opts) {
   const existing = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(url));
   if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
   const bytes = readFileSync6(abs);
-  const name = basename2(abs);
+  const name = basename(abs);
   let text;
   let extractor;
   const docFmt = docFormatForUrl(url);
@@ -5565,7 +5684,7 @@ function mdToHtml(md, idPrefix, opts = {}) {
   const inline = (text) => renderInline(text, opts.verdicts);
   let i = 0;
   const headingId = (text) => {
-    const base = `${idPrefix}-${slugify(text)}`;
+    const base = `${idPrefix}-${slugify(text, RUN_SLUG)}`;
     let id = base;
     let n = 2;
     while (usedIds.has(id)) id = `${base}-${n++}`;
@@ -7035,7 +7154,7 @@ function runMerge(options) {
     sourceCount: merged.length,
     maxSources: merged.length,
     builtAt,
-    slug: `${modeName}-${slugify(question)}`,
+    slug: `${modeName}-${slugify(question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes: [
@@ -7397,7 +7516,7 @@ function orchestrateRun(runDir, engineAbs, opts = {}) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
+import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync4 } from "fs";
 import { isAbsolute, join as join14, relative, resolve as resolve4, sep as sep2 } from "path";
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
@@ -7747,7 +7866,7 @@ function handleRead(args, run) {
   if (real !== root && !real.startsWith(root + sep2)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
-  const st = statSync3(real);
+  const st = statSync4(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
   const lines = readFileSync11(real, "utf8").split("\n");
@@ -8548,8 +8667,8 @@ function parseList(s) {
 function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
   const abs = resolve5(spec);
-  if (existsSync12(abs) && statSync4(abs).isDirectory()) {
-    const files = readdirSync2(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
+  if (existsSync12(abs) && statSync5(abs).isDirectory()) {
+    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }

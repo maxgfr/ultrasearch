@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.12.1";
+declare const ENGINE_VERSION = "1.13.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -285,8 +285,43 @@ interface HttpResult {
     url: string;
     bytes?: Buffer;
     error?: string;
+    /** Cache validators, kept so a stale entry can be revalidated for free. */
+    etag?: string;
+    lastModified?: string;
+    /** True on an explicit 429, or a 403 that carries an exhausted quota header. */
+    rateLimited?: boolean;
+    /** Retry-After, parsed and capped, when the server sent one. */
+    retryAfterMs?: number;
 }
 declare function sleep(ms: number): Promise<void>;
+/**
+ * A rate-limit signal: an explicit 429, or a 403 whose remaining-quota header is
+ * zero — which is how GitHub's unauthenticated APIs report throttling. Worth
+ * separating from a plain 403, because one is "come back later" and the other is
+ * "you may never read this", and a caller that retries the second burns the
+ * quota it is waiting on.
+ */
+declare function detectRateLimited(status: number, headers: Headers): boolean;
+/**
+ * Parse `Retry-After` — delta-seconds or an HTTP-date — into a millisecond
+ * delay, clamped to `capMs`. Returns undefined when the header is absent or
+ * unparseable, so a caller can tell "no hint" from "wait zero".
+ */
+declare function parseRetryAfter(headers: Headers, capMs?: number): number | undefined;
+/**
+ * Read a Response body, keeping at most `max` bytes and cancelling the transfer
+ * the moment the cap is crossed.
+ *
+ * This exists because `await res.arrayBuffer()` then `.subarray(0, max)` — what
+ * this module used to do — caps the VALUE and not the DOWNLOAD: a 2 GB response
+ * was fully allocated before being trimmed to 4 MB. A cap that only applies
+ * after the bytes are already in memory is not a cap.
+ *
+ * Falls back to a one-shot read where no readable stream is exposed.
+ */
+declare function readCapped(res: Response, max: number): Promise<string>;
+/** Same streaming cap as `readCapped`, returning the raw bytes. */
+declare function readCappedBytes(res: Response, max: number): Promise<Buffer>;
 declare function httpGet(url: string, opts?: {
     timeoutMs?: number;
     accept?: string;
@@ -294,6 +329,9 @@ declare function httpGet(url: string, opts?: {
     maxBytes?: number;
     userAgent?: string;
     binary?: boolean;
+    /** Extra request headers, lower-cased. The escape hatch for conditional GET
+     *  (`if-none-match`, `if-modified-since`) and for an API that wants auth. */
+    headers?: Record<string, string>;
 }): Promise<HttpResult>;
 declare function httpJson(method: string, url: string, body?: unknown, opts?: {
     timeoutMs?: number;
@@ -334,10 +372,16 @@ interface ExtractResult {
     status: number;
     extractor?: ExtractorId;
     canonical?: string;
+    etag?: string;
+    lastModified?: string;
 }
 declare function fetchAndExtract(url: string, opts?: {
     acceptLanguage?: string;
     firecrawl?: string;
+    /** Extra request headers for the built-in path — how the cache sends
+     *  `if-none-match` / `if-modified-since`. Firecrawl does its own fetching and
+     *  ignores these, which is why a revalidating caller skips it. */
+    headers?: Record<string, string>;
 }): Promise<ExtractResult>;
 declare const DEAD_LINK_STATUS: Set<number>;
 declare function rescueViaWayback(url: string, opts?: {
@@ -350,6 +394,26 @@ declare function rescueViaWayback(url: string, opts?: {
     timestamp: string;
 } | undefined>;
 declare function looksLikeJunkExtraction(text: string): string | undefined;
+/**
+ * Drop consent-banner lines from extracted text, and say how many went.
+ *
+ * Deliberately conservative: a line goes only on two distinct pattern hits, or
+ * on one hit when the line is short enough to be a button ("Accept all
+ * cookies"). Prose that mentions cookies once inside a real sentence stays —
+ * this must never quietly delete the paragraph someone wanted to cite.
+ */
+declare function stripConsentBoilerplate(text: string): {
+    text: string;
+    dropped: number;
+};
+/**
+ * The page's `<meta name=description>`, falling back to `og:description`.
+ *
+ * Read from raw HTML because htmlToText drops `<head>` entirely. Worth having as
+ * a last-resort summary for a page whose body has nothing matching the question
+ * — better than citing a nav bar.
+ */
+declare function metaDescriptionOf(html: string): string | undefined;
 declare function nearestHeading(lines: string[], anchor: number): string | undefined;
 declare function focusedSnippet(text: string, question: string, opts?: {
     maxChars?: number;
@@ -525,6 +589,23 @@ declare function buildMatcher(question: string, max?: number): KeywordMatcher;
  * subtoken-expanded, so attribution stays consistent with buildMatcher.
  */
 declare function matcherFromTokens(tokens: string[], max?: number): KeywordMatcher;
+/**
+ * Turn an arbitrary identifier into a filesystem-safe slug —
+ * `github.com/expressjs/express` → `github.com-expressjs-express`.
+ *
+ * Used as an on-disk cache key, which is why the normalisation matters: a
+ * repository named as `https://github.com/x/y.git`, `git@github.com:x/y.git`
+ * and `github.com/x/y` is ONE repository, and three slugs would mean three
+ * clones of it.
+ *
+ * `max` is a parameter because the two uses want different lengths — a repo
+ * identity is short and a research question is not — and truncating a question
+ * at a repo's length collides distinct runs.
+ */
+declare function slugify(input: string, opts?: {
+    max?: number;
+    fallback?: string;
+}): string;
 
 declare function canonicalizeUrl(raw: string): string;
 declare function normalizeDoi(doi: string): string;
@@ -532,6 +613,169 @@ declare function domainOf(raw: string): string;
 /** The `domain` a local file is filed under. Not a host, and deliberately not one. */
 declare const LOCAL_FILE_DOMAIN = "local file";
 declare function fnv1a64(s: string): bigint;
+
+/**
+ * The minimum a candidate must expose to be ranked: where it came from and how
+ * good the caller currently thinks it is. `text` is optional because only the
+ * content-similarity passes need it.
+ */
+interface Ranked {
+    url: string;
+    score: number;
+    text?: string;
+}
+/**
+ * Reciprocal Rank Fusion: merge several ranked lists into one ranking without
+ * comparable cross-list scores.
+ *
+ * The problem it solves is that a keyless web engine's "score" and a scholarly
+ * API's "relevance" are not the same quantity and cannot be added. RRF only
+ * reads POSITION, so it needs no calibration: an item's contribution from each
+ * list is `1/(k + rank)`, and `k` damps the tail so rank 40 cannot outvote a
+ * couple of top-tens.
+ */
+declare function rrf<T>(lists: T[][], keyOf: (item: T) => string, k?: number): Map<string, number>;
+/**
+ * The arXiv id inside a URL, so `abs/`, `pdf/` and `html/` variants of the SAME
+ * paper collapse to one identity even when the backend supplied no metadata.
+ * Handles modern (2405.12345) and legacy (math.GT/0309136) ids, any arxiv.org
+ * subdomain, and strips a version suffix and a trailing `.pdf`.
+ */
+declare function arxivIdFromUrl(url: string): string | undefined;
+/**
+ * The DOI inside a URL — a doi.org resolver link, or a publisher landing page
+ * that carries the DOI in its path (`dl.acm.org/doi/…`, `/doi/full/…`). Returned
+ * normalised, so a DOI-in-path collapses with a bare one.
+ */
+declare function doiFromUrl(url: string): string | undefined;
+/**
+ * Drop duplicates by canonical URL, keeping the best-scored copy. Survivors keep
+ * their input order, so a caller that already ranked its list does not have to
+ * re-sort after de-duplicating.
+ */
+declare function dedupeByUrl<T extends Ranked>(items: readonly T[]): {
+    items: T[];
+    dropped: number;
+};
+interface Bm25Doc {
+    id: string;
+    title: string;
+    headings: string;
+    body: string;
+}
+interface Bm25Index {
+    idf: Map<string, number>;
+    avgdl: number;
+    N: number;
+    queryTerms: string[];
+    k1: number;
+    b: number;
+    titleWeight: number;
+    headingWeight: number;
+}
+/**
+ * Tokenise into canonical terms WITH repetition, so term frequency survives.
+ *
+ * Shares `foldTerm` and `isStopword` with `buildMatcher`, which is the point:
+ * two scorers that disagree about whether "requests" and "request" are the same
+ * term will disagree about relevance for reasons nobody can debug.
+ */
+declare function bm25Tokenize(text: string): string[];
+/**
+ * Build the index over the candidate pool — the pool IS the corpus, so IDF is
+ * relative to what was actually retrieved.
+ *
+ * Below three documents IDF is too noisy to mean anything, so it degrades to
+ * uniform (pure TF). A three-result pool where one term happens to be missing
+ * from two of them would otherwise assign that term a huge weight on no evidence.
+ */
+declare function buildBm25Index(question: string, docs: readonly Bm25Doc[], opts?: {
+    k1?: number;
+    b?: number;
+}): Bm25Index;
+/** BM25F score of one document against the index (raw, ≥0). */
+declare function bm25Score(index: Bm25Index, doc: Bm25Doc): number;
+/** Which distinct query terms actually occur in a document. */
+declare function bm25MatchedTerms(index: Bm25Index, doc: Bm25Doc): string[];
+/**
+ * Drop candidates that share no meaningful term with the query.
+ *
+ * Two off-topic shapes: an EMPTY overlap, and an overlap that is only numeric —
+ * a page whose sole connection to the question is that a PR number happens to
+ * contain the same digits as a year. Only active when the query has at least two
+ * terms and at least one alphabetic one, since a one-word query carries too
+ * little signal to filter on.
+ *
+ * NEVER drops below `floor`. A genuinely thin pool has to survive its own filter,
+ * so the best-ranked "off-topic" candidates are re-admitted until the floor is
+ * met. `ranked` must be best-first.
+ */
+declare function applyRelevanceFloor<T>(ranked: readonly T[], matchedOf: (t: T) => string[], queryTerms: string[], floor: number): {
+    kept: T[];
+    dropped: T[];
+};
+/**
+ * What fraction of the question's distinctive keywords appear in a text. Cheaper
+ * and blunter than BM25 — useful for snippet selection, where "does this line
+ * mention the thing at all" is the whole question.
+ */
+declare function contentCoverage(matcher: KeywordMatcher, text: string): number;
+/**
+ * Pool-relative recency in 0..1, neutral 0.5 when the item has no year or the
+ * pool has no spread.
+ *
+ * Relative to the RESULT SET rather than wall-clock on purpose: a score computed
+ * against "now" changes every day, which would make two runs over identical
+ * inputs rank differently and make any golden test rot on a calendar.
+ */
+declare function recencyScore(meta: {
+    year?: number;
+} | undefined, minYear: number, maxYear: number): number;
+/**
+ * 64-bit SimHash over 3-gram shingles. Near-duplicate documents land a few bits
+ * apart; unrelated ones sit around 32.
+ */
+declare function simhash(text: string): bigint;
+/** How many bits two SimHashes differ by. */
+declare function hammingDistance(a: bigint, b: bigint): number;
+/**
+ * Collapse near-duplicate items by SimHash over their text, keeping the
+ * best-scored copy. Items shorter than `minChars` carry too little signal and
+ * are never collapsed. Expects best-first input and preserves that order.
+ */
+declare function dedupeNearDuplicates<T extends Ranked>(items: readonly T[], opts?: {
+    maxBits?: number;
+    minChars?: number;
+}): {
+    items: T[];
+    dropped: number;
+};
+/**
+ * Re-order a ranked list so the top of it says several DIFFERENT things.
+ *
+ * The failure this fixes is not redundancy in the near-duplicate sense: eight
+ * independent pages can each restate the same argument in their own words, be
+ * correctly on-topic, and collectively bury the one source that says something
+ * else. Relevance ranking has no defence against that, because each one really
+ * is relevant.
+ *
+ * Greedy Maximal Marginal Relevance: at each rank pick the candidate maximising
+ * `λ·relevance − (1−λ)·(similarity to what is already ranked)`. Similarity is
+ * Jaccard over BM25 tokens — no new extraction, no model, deterministic.
+ *
+ * It REORDERS ONLY. Every input comes back exactly once: this changes what you
+ * read first, never what you have. λ = 0.75 keeps relevance dominant, so
+ * diversity breaks ties and demotes redundancy rather than promoting noise.
+ */
+declare function diversify<T extends Ranked>(items: readonly T[], tokensOf: (it: T) => Set<string>, lambda?: number): T[];
+/**
+ * The hosts a text links out to, excluding its own domain and `www.` noise.
+ *
+ * A page that cites nothing external is not automatically bad, but it is a fact
+ * worth surfacing next to a claim — so this reports the set and lets the caller
+ * decide what it means.
+ */
+declare function externalHosts(url: string, text: string): Set<string>;
 
 declare function isApiEndpoint(url: string): boolean;
 /**
@@ -582,6 +826,465 @@ declare function resolveRegion(lang: string | undefined, region?: string): strin
 declare function ddgRegion(lang: string | undefined, region?: string): string;
 declare function acceptLanguageHeader(lang: string | undefined, region?: string): string;
 
+interface ShResult {
+    ok: boolean;
+    status: number;
+    stdout: string;
+    stderr: string;
+    /** The executable itself was not found — not a failure OF the command. */
+    missing?: boolean;
+}
+declare function have(cmd: string): boolean;
+/** Test seam: forget which executables were found. */
+declare function resetHaveCache(): void;
+/** Run a command synchronously. Never throws — a missing binary is a result. */
+declare function sh(cmd: string, args: string[], opts?: {
+    cwd?: string;
+    input?: string;
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+}): ShResult;
+/**
+ * Run a command without blocking the event loop.
+ *
+ * Preferred wherever several commands could overlap — a synchronous `git clone`
+ * freezes everything else in the process for the whole transfer, which is the
+ * difference between three clones taking as long as the slowest and taking as
+ * long as all of them put together. SIGKILL on timeout, and never an orphan.
+ */
+declare function shAsync(cmd: string, args: string[], opts?: {
+    cwd?: string;
+    timeoutMs?: number;
+    env?: NodeJS.ProcessEnv;
+}): Promise<ShResult>;
+
+interface RepoRef {
+    /** Exactly what the caller passed. */
+    raw: string;
+    /** `github.com`, `local` for a directory, `generic` for unrecognisable text. */
+    host: string;
+    /** Owner, keeping GitLab subgroups intact ("group/subgroup"). */
+    owner?: string;
+    repo?: string;
+    cloneUrl?: string;
+    webUrl?: string;
+    isLocal: boolean;
+    /** Stable, filesystem-safe identity — the on-disk cache key. */
+    slug: string;
+}
+/** Where clones live. `<PREFIX>_REPO_DIR` overrides. */
+declare function repoCacheRoot(): string;
+/**
+ * Parse any repository identifier into a `RepoRef`. Accepts a local directory,
+ * `https://host/owner/repo(.git)`, `ssh://`/`git://` URLs, `git@host:owner/repo`,
+ * `host/owner/repo`, and the bare `owner/repo` shorthand (which means GitHub).
+ *
+ * An unrecognisable seed becomes a `generic` ref with NO synthesised clone URL.
+ * That matters: minting `https://github.com/<free text>.git` would turn "some
+ * words the user typed" into a plausible-looking URL that 404s later, far from
+ * where the mistake was made.
+ */
+declare function resolveRepo(raw: string): RepoRef;
+/**
+ * A working tree for `ref`, cloned if needed, returned as an absolute path.
+ *
+ * Shallow and blobless by default (`--depth 1 --filter=blob:none`): reading a
+ * repository's current state does not need its history or every past version of
+ * every file, and on a large project that is the difference between seconds and
+ * minutes. `ensureHistoryDepth` deepens it when a caller genuinely needs history.
+ *
+ * Never throws for a reason the caller cannot act on — a missing `git` says so
+ * rather than reporting a clone failure.
+ */
+declare function ensureClone(ref: RepoRef, opts?: {
+    refresh?: boolean;
+    branch?: string;
+}): Promise<string>;
+/**
+ * Deepen a shallow clone so history-walking commands (`git log`, pickaxe
+ * searches) have something to walk.
+ *
+ * Returns a note rather than throwing when it cannot: a shallow clone still
+ * answers every question about the CURRENT state, so failing the whole call
+ * because history is unavailable would refuse the answers that are available.
+ */
+declare function ensureHistoryDepth(dir: string, opts?: {
+    deepen?: number;
+}): Promise<{
+    ok: boolean;
+    note?: string;
+}>;
+/** The commit a working tree is on, or undefined when it is not a repo. */
+declare function headCommit(dir: string): string | undefined;
+/** Its `origin` remote, or undefined when it has none. */
+declare function originUrl(dir: string): string | undefined;
+/** Two commits are the same, tolerating one being absent. */
+declare function sameCommit(a: string | undefined, b: string | undefined): boolean;
+
+type ForgeKind = "github" | "gitlab" | "gitea";
+interface ForgeItem {
+    kind: "issue" | "pr" | "release" | "tag" | "discussion";
+    number?: number;
+    title: string;
+    url: string;
+    state?: string;
+    labels: string[];
+    body: string;
+    updatedAt?: string;
+    /** Whatever the forge scored it, when it scores at all. */
+    score?: number;
+}
+interface ForgeResult {
+    items: ForgeItem[];
+    /** Why it came back thin, in words a caller can show. Never an exception. */
+    note?: string;
+    rateLimited?: boolean;
+}
+interface ForgeOptions {
+    /** Override the API base — a self-hosted GitLab, or GitHub Enterprise. */
+    apiBase?: string;
+    limit?: number;
+    timeoutMs?: number;
+}
+/** Which forge a host is, by its shape. Unknown hosts get no client. */
+declare function forgeKind(host: string): ForgeKind | undefined;
+/**
+ * The API base for a repo's host.
+ *
+ * GitHub Enterprise is the awkward one: github.com serves `api.github.com`,
+ * while a self-hosted install serves `<host>/api/v3`. Getting this wrong is a
+ * 404 that reads like "no such repository".
+ */
+declare function apiBase(ref: RepoRef, opts?: ForgeOptions): string;
+/** Auth headers when a token is in the environment; none when it is not. */
+declare function forgeAuthHeaders(kind: ForgeKind): Record<string, string>;
+/**
+ * Map GitHub's issue-search payload into `ForgeItem`s.
+ *
+ * Exported for the parsing edges it has to survive: labels arriving as strings
+ * or as objects, the draft flag standing in for a state, missing fields. A null
+ * element is filtered first so one bad entry cannot throw away the whole page.
+ */
+declare function mapGithubIssues(raw: unknown[], kind: "issue" | "pr"): ForgeItem[];
+/**
+ * The repository's canonical `owner/repo`, following renames.
+ *
+ * A moved repository still answers on its old name through a redirect, but every
+ * subsequent search keyed on the old name silently returns nothing — so this is
+ * resolved once and the answer used everywhere after.
+ */
+declare function canonicalRepo(ref: RepoRef, opts?: ForgeOptions): Promise<string | undefined>;
+/**
+ * Search a repository's issues or pull requests.
+ *
+ * GitHub gets its search API — the only one of the three that ranks by
+ * relevance. GitLab and Gitea have no such endpoint, so they get a scoped list
+ * filtered by search terms, which is why their `score` is absent: they are
+ * ordered by recency and saying otherwise would be a lie the caller might rank on.
+ */
+declare function searchIssues(ref: RepoRef, terms: string[], kind: "issue" | "pr", opts?: ForgeOptions): Promise<ForgeResult>;
+/** A repository's releases, newest first. */
+declare function listReleases(ref: RepoRef, opts?: ForgeOptions): Promise<ForgeResult>;
+/** A repository's tags, which exist even where releases do not. */
+declare function listTags(ref: RepoRef, opts?: ForgeOptions): Promise<ForgeResult>;
+interface RepoFacts {
+    fullName?: string;
+    description?: string;
+    homepage?: string;
+    license?: string;
+    stars?: number;
+    forks?: number;
+    openIssues?: number;
+    defaultBranch?: string;
+    pushedAt?: string;
+    archived?: boolean;
+    topics: string[];
+}
+/**
+ * The repository's own metadata — stars, licence, homepage, whether it is
+ * archived.
+ *
+ * Worth having for a reason beyond curiosity: "is this project maintained" is
+ * otherwise answered by reading a README that says it is. `archived` and
+ * `pushedAt` answer it from the record.
+ */
+declare function repoFacts(ref: RepoRef, opts?: ForgeOptions): Promise<RepoFacts | undefined>;
+
+type RegistryKind = "npm" | "pypi" | "crates";
+interface PackageFacts {
+    registry: RegistryKind;
+    name: string;
+    version?: string;
+    description?: string;
+    homepage?: string;
+    /** Normalised to an https URL where the registry gives something git-shaped. */
+    repository?: string;
+    documentation?: string;
+    license?: string;
+    /** The registry's own deprecation notice, when there is one. */
+    deprecated?: string;
+    /** Recent downloads, where the registry publishes them. */
+    downloads?: number;
+    publishedAt?: string;
+}
+/**
+ * Turn whatever a registry calls a repository into a browsable https URL.
+ *
+ * They are wildly inconsistent — `git+https://…​.git`, `git://`, `git@host:…`,
+ * a bare `owner/repo`, or a plain URL — and a caller that passes any of those
+ * to a browser or a clone gets a different failure for each.
+ */
+declare function normalizeRepoUrl(raw: unknown): string | undefined;
+/**
+ * Look a package up in one registry.
+ *
+ * Returns undefined for "no such package", which is different from a failed
+ * request — a caller resolving a name across several registries needs to know
+ * whether to try the next one or to stop and report a network problem.
+ */
+declare function lookupPackage(registry: RegistryKind, name: string, version?: string): Promise<PackageFacts | undefined>;
+/**
+ * Resolve a bare library name across the registries, in the order most likely to
+ * be right, and return the first that knows it.
+ *
+ * Order is deliberate rather than alphabetical: npm has by far the most names,
+ * so trying it first resolves most lookups in one request. An explicit
+ * `registry` skips the guessing entirely, which a caller who knows the ecosystem
+ * should always do.
+ */
+declare function resolvePackage(name: string, opts?: {
+    registry?: RegistryKind;
+    version?: string;
+}): Promise<PackageFacts | undefined>;
+
+/** The charset named by a Content-Type header, if it names one. */
+declare function charsetFromContentType(contentType: string): string | undefined;
+/**
+ * The charset a document declares about itself: `<meta charset>` or the older
+ * `<meta http-equiv="content-type">`.
+ *
+ * Only the first 4 KB is scanned. The spec requires the declaration inside the
+ * first 1024 bytes, and reading further would mean decoding the body to find out
+ * how to decode the body.
+ */
+declare function charsetFromHtml(head: string): string | undefined;
+/**
+ * Decode response bytes into text, honouring — in order — a BOM, the
+ * Content-Type header, and the document's own `<meta charset>`.
+ *
+ * Precedence follows what actually helps: a BOM cannot be wrong, a header is
+ * usually right, and a meta tag is the last resort because a page served as
+ * UTF-8 while declaring latin1 in its markup is almost always a stale template
+ * rather than a truthful declaration.
+ *
+ * Falls back to UTF-8 on an unknown or unsupported label, so a nonsense charset
+ * degrades to today's behaviour rather than failing the fetch.
+ */
+declare function decodeBody(bytes: Buffer, contentType?: string): string;
+
+interface RobotsRule {
+    allow: boolean;
+    path: string;
+}
+interface Robots {
+    /** Rules for the group that best matches our agent, most specific first. */
+    rules: RobotsRule[];
+    /** `Crawl-delay` for our group, in ms, when one was declared. */
+    crawlDelayMs?: number;
+    /** Every `Sitemap:` line — they are file-level, not per-group. */
+    sitemaps: string[];
+    /** True when the file could not be read at all (which means "allowed"). */
+    absent: boolean;
+}
+/**
+ * Parse a robots.txt for one user-agent token.
+ *
+ * Group selection follows the spec's precedence: the most specific matching
+ * `User-agent` wins, and `*` is the fallback. A file with no group for us and no
+ * `*` group imposes nothing.
+ */
+declare function parseRobots(body: string, userAgent: string): Robots;
+/**
+ * Does this robots.txt permit fetching `url`?
+ *
+ * An absent or unparseable file means yes — that is what the spec says, and it
+ * is also the only safe default for a tool that must not turn a network hiccup
+ * into "this site is off limits".
+ */
+declare function isAllowed(robots: Robots, url: string): boolean;
+/** Test seam: forget every fetched robots.txt. */
+declare function resetRobotsCache(): void;
+/**
+ * Fetch and parse the robots.txt governing `url`, memoised per origin.
+ *
+ * Memoised because the alternative is one extra request per page fetched, which
+ * is precisely the kind of load robots.txt exists to prevent. Disabled entirely
+ * by `<PREFIX>_NO_ROBOTS`, for an operator who knows they are crawling their own
+ * site.
+ */
+declare function fetchRobots(url: string): Promise<Robots>;
+
+interface PageMetadata {
+    title?: string;
+    description?: string;
+    /** `og:type`, or JSON-LD `@type`. */
+    type?: string;
+    siteName?: string;
+    /** ISO-ish date strings, exactly as the page wrote them. */
+    publishedAt?: string;
+    modifiedAt?: string;
+    authors: string[];
+    imageUrl?: string;
+    canonicalUrl?: string;
+    /** Every JSON-LD block that parsed, untouched — for a caller that wants more. */
+    jsonLd: unknown[];
+}
+/**
+ * Every `<script type="application/ld+json">` block that parses.
+ *
+ * A block that does not parse is skipped rather than thrown: malformed JSON-LD
+ * is common (trailing commas, templating artefacts, HTML comments wrapped around
+ * it) and must never cost the caller the rest of the page.
+ */
+declare function extractJsonLd(html: string): unknown[];
+/** Every `<meta>` name/property and its content, lower-cased keys. */
+declare function extractMetaTags(html: string): Map<string, string>;
+/**
+ * What a page says about itself, merged from JSON-LD and its meta tags.
+ *
+ * JSON-LD wins on conflict: OpenGraph is written for social-preview cards and is
+ * routinely stale or templated, while JSON-LD is what the site feeds search
+ * engines and tends to be generated from the real record.
+ */
+declare function pageMetadata(html: string): PageMetadata;
+
+interface FeedItem {
+    title?: string;
+    url?: string;
+    /** As written by the feed. */
+    published?: string;
+    summary?: string;
+    id?: string;
+}
+interface Feed {
+    title?: string;
+    kind: "rss" | "atom";
+    items: FeedItem[];
+}
+/**
+ * Parse an RSS 2.0 or Atom feed.
+ *
+ * Returns an empty item list rather than throwing on anything unrecognised —
+ * the caller asked "does this site publish a feed", and "no" is a valid answer
+ * that must not look like a crash.
+ */
+declare function parseFeed(xml: string): Feed | undefined;
+/** Feed URLs a page advertises via `<link rel="alternate">`. */
+declare function discoverFeeds(html: string, baseUrl: string): string[];
+interface Sitemap {
+    /** Page URLs, for a urlset. */
+    urls: {
+        loc: string;
+        lastmod?: string;
+    }[];
+    /** Nested sitemap URLs, for a sitemapindex — fetch these to go deeper. */
+    sitemaps: string[];
+}
+/**
+ * Parse a sitemap.xml, whether it is a `urlset` or a `sitemapindex`.
+ *
+ * The two are reported separately rather than followed automatically: a sitemap
+ * index can name hundreds of children, and deciding how much of a site to
+ * enumerate is the caller's budget to spend, not this function's.
+ */
+declare function parseSitemap(xml: string): Sitemap;
+/**
+ * Fetch and parse the sitemap(s) for an origin.
+ *
+ * Tries the ones robots.txt names first — a site that publishes its sitemap
+ * location there means it — then falls back to `/sitemap.xml`. `max` bounds how
+ * many documents are fetched, because a sitemap index is an invitation to
+ * enumerate a site and that has to stay a budget the caller sets.
+ */
+declare function fetchSitemap(url: string, opts?: {
+    sitemaps?: string[];
+    max?: number;
+}): Promise<Sitemap>;
+/** Fetch and parse a feed URL. */
+declare function fetchFeed(url: string): Promise<Feed | undefined>;
+
+/** A keyless engine this module knows how to query. */
+type KeylessEngine = "ddg" | "ddglite" | "mojeek";
+declare const KEYLESS_ENGINES: KeylessEngine[];
+declare function isKeylessEngine(v: string): v is KeylessEngine;
+/**
+ * Which keyless engines the cascade may use: an explicit option wins, then
+ * `<PREFIX>_ENGINES` (a comma-separated list, or `off`), then all of them.
+ *
+ * The env switch matters because these are the only rung that reaches the public
+ * internet without being asked to. SearXNG and Firecrawl are localhost by
+ * default, so "no stack running" already means "no network"; without
+ * `<PREFIX>_ENGINES=off` a caller with no stack — a test suite, an air-gapped
+ * run, a sandbox — would start scraping duckduckgo.com the moment it called
+ * `search()`. Unknown names are ignored rather than throwing: a typo should cost
+ * one engine, not the run.
+ */
+declare function keylessEngines(opts?: {
+    engines?: KeylessEngine[];
+}): KeylessEngine[];
+interface EngineHit {
+    url: string;
+    title: string;
+    snippet: string;
+}
+interface EngineResult {
+    hits: EngineHit[];
+    /** Why it returned nothing, in words a caller can show. Never an exception. */
+    note?: string;
+    /** The engine refused for load reasons — worth trying again later, unlike a 404. */
+    throttled?: boolean;
+}
+/** Tags out, entities decoded, whitespace collapsed. */
+declare function stripTags(s: string): string;
+/**
+ * The real destination behind a DuckDuckGo redirector link, which rides in the
+ * `uddg` query parameter. Without this every DDG result is cited as a
+ * duckduckgo.com URL that resolves to the right page but names the wrong source.
+ */
+declare function ddgRedirectTarget(href: string): string;
+/**
+ * Why an engine refused, when the refusal is about load rather than the query.
+ *
+ * "Rate-limited" and "unreachable" are different facts: the first will work
+ * again in a few minutes and the second will not, and a caller that reports the
+ * wrong one sends its user down the wrong path. Repeated identically across six
+ * backends before it lived here.
+ */
+declare function throttleReason(status: number): {
+    throttled: boolean;
+    why: string;
+};
+/** One page of `html.duckduckgo.com/html/`. */
+declare function parseDdgHtml(body: string, limit?: number): EngineHit[];
+/** One page of `lite.duckduckgo.com/lite/` — a flat table, simpler and steadier. */
+declare function parseDdgLite(body: string, limit?: number): EngineHit[];
+/** One page of `mojeek.com/search` — direct hrefs, no redirector. */
+declare function parseMojeek(body: string, limit?: number): EngineHit[];
+/**
+ * Ask one keyless engine, walking `pages` result pages.
+ *
+ * Pagination stops as soon as a page adds no NEW canonical URL. An engine that
+ * ignores the offset parameter and re-serves page one would otherwise be walked
+ * to the requested depth, paying a request per page for the same ten results.
+ */
+declare function searchViaKeyless(engine: KeylessEngine, query: string, opts?: {
+    limit?: number;
+    pages?: number;
+    lang?: string;
+    region?: string;
+    timeoutMs?: number;
+}): Promise<EngineResult>;
+
 /** The docker stack publishes SearXNG here. */
 declare const SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 interface SearchHit {
@@ -589,7 +1292,7 @@ interface SearchHit {
     title: string;
     snippet: string;
     /** Which engine produced it. */
-    via: "searxng" | "firecrawl";
+    via: "searxng" | "firecrawl" | KeylessEngine;
 }
 interface SearchOptions {
     /** Base URL, or "off" to disable. Defaults to `<PREFIX>_SEARXNG` then localhost. */
@@ -603,6 +1306,12 @@ interface SearchOptions {
     region?: string;
     /** Result pages to walk. SearXNG paginates with `&pageno=`. */
     pages?: number;
+    /**
+     * Which keyless engines the cascade may fall back to, in order. Defaults to
+     * all of them; `[]` disables the keyless rung entirely, leaving the local
+     * stack as the only discovery path.
+     */
+    engines?: KeylessEngine[];
 }
 interface SearchResult {
     hits: SearchHit[];
@@ -637,16 +1346,23 @@ declare function probeSearxng(base: string): Promise<boolean>;
  */
 declare function searchViaSearxng(query: string, opts?: SearchOptions): Promise<SearchResult>;
 /**
- * Search the local stack: SearXNG first, Firecrawl as the fallback.
+ * Search: the local stack first, then the keyless engines, then Firecrawl.
  *
- * SearXNG leads because it is the cheaper of the two and Firecrawl's own
- * keyless `/search` delegates to it anyway — going straight to Firecrawl would
- * pay for a browser stack to reach the same index.
+ * SearXNG leads because it is the cheapest and aggregates many upstreams at
+ * once. The keyless engines come next because they need nothing installed at
+ * all — an install with no Docker still discovers pages, which is the whole
+ * reason they are here. Mojeek is in that group deliberately: it runs its own
+ * crawler rather than reselling somebody else's index, so it answers when the
+ * DuckDuckGo family has nothing.
  *
- * Never throws. When nothing is reachable the result is empty hits plus notes
- * saying which piece was missing and how to start it, because "no results" and
- * "no search engine running" are different facts and a caller that cannot tell
- * them apart will report the wrong one.
+ * Firecrawl is last, not first: its own keyless `/search` delegates to SearXNG
+ * anyway, so reaching for it early pays for a browser stack to arrive at the
+ * same index.
+ *
+ * Never throws. When nothing answers, the result is empty hits plus notes saying
+ * which piece was missing and how to start it — "no results" and "no search
+ * engine running" are different facts, and a caller that cannot tell them apart
+ * reports the wrong one.
  */
 declare function search(query: string, opts?: SearchOptions): Promise<SearchResult>;
 
@@ -709,21 +1425,72 @@ declare const SERVICE_PROFILES: Record<string, string[]>;
  */
 declare function stackControl(service: string | string[], action: string, deps?: StackDeps): StackResult;
 
+/**
+ * Map `items` through `fn` with at most `limit` in flight, preserving order.
+ *
+ * A rejecting `fn` rejects the whole call, the same contract as `Promise.all`.
+ * A caller that must degrade per item catches inside `fn` — which is what
+ * retrieval wants, since one unreachable page should never abandon the rest.
+ */
+declare function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]>;
+
 declare function withRunLock<T>(slug: string, fn: () => Promise<T>): Promise<T>;
 declare function resetRunLocks(): void;
 
 type Extract = Awaited<ReturnType<typeof fetchAndExtract>>;
+interface CacheEntry extends Extract {
+    cachedAt: number;
+    etag?: string;
+    lastModified?: string;
+}
 declare function cacheDir(): string;
 declare function cachePath(url: string, acceptLanguage?: string, extractor?: CacheNamespace): string;
 declare const PDF_CACHE_NS: "pdf";
 declare const DOC_CACHE_NS: "doc";
 type CacheNamespace = ExtractorId | typeof PDF_CACHE_NS | typeof DOC_CACHE_NS;
+/** Is this entry still inside the TTL? */
+declare function isCacheFresh(entry: CacheEntry, now?: number): boolean;
+/**
+ * Conditional-request headers for a stale entry, so revalidating it costs a
+ * request header and a 304 instead of the whole body again.
+ *
+ * Empty when the entry has no validators — the origin never sent any, so there
+ * is nothing to ask about and the caller must re-fetch normally.
+ */
+declare function revalidationHeaders(entry: Pick<CacheEntry, "etag" | "lastModified">): Record<string, string>;
 declare function cachedFetchAndExtract(url: string, opts?: {
     acceptLanguage?: string;
     firecrawl?: string;
 }, enabled?: boolean, now?: number): Promise<Extract & {
     cached?: boolean;
 }>;
+interface CacheStats {
+    dir: string;
+    entries: number;
+    bytes: number;
+    fresh: number;
+    stale: number;
+    ttlMs: number;
+    oldest?: string;
+    newest?: string;
+}
+/**
+ * What is on disk right now: how many entries, how much space, how many are
+ * still fresh.
+ *
+ * A cache nobody can inspect is a cache nobody trusts — "is this stale answer
+ * coming from disk?" was previously only answerable by deleting the directory
+ * and watching whether the run got slower.
+ */
+declare function cacheStats(now?: number): CacheStats;
+/**
+ * Drop stale entries, or every entry with `all`. Returns how many went.
+ *
+ * Nothing else ever removes anything: before this, the only eviction was the TTL
+ * deciding not to READ an entry, so a long-lived cache directory grew without
+ * bound and kept bodies for pages nobody would look at again.
+ */
+declare function cacheClean(all?: boolean, now?: number): number;
 
 interface Artifact {
     /** Path the artifact WOULD have been written to. */
@@ -922,4 +1689,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Brand, COMPOSE_YAML, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiPrefix, assessExtractedText, assessPdfText, baseLang, bestExcerpt, brand, browserUa, buildMatcher, cacheDir, cachePath, cachedFetchAndExtract, canonicalizeUrl, capExtract, capResponse, cleanInline, configure, contactUa, createServer, ddgRegion, deaccent, decodeEntities, deriveCitableUrl, docFormatForContentType, docFormatForUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureComposeMaterialized, ensureDir, env, envFlag, envInt, envName, escapeRegExp, expandTokens, extractDocument, extractMainHtml, extractPdf, fetchAndExtract, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isApiEndpoint, isCitableUrl, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keywords, listResources, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, mapScrapeResponse, mapSearchResponse, matcherFromTokens, nearestHeading, negotiateProtocol, normalizeDoi, ocrBudgetLeft, ocrPdf, ocrTools, pageDelayMs, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readResource, renderAsset, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRunLocks, resetSearxngProbeCache, resolveProvider, resolveRegion, resolveSkillRoot, runStdioServer, runWithInput, scrapeViaFirecrawl, search, searchViaFirecrawl, searchViaSearxng, searxngBase, searxngIsExplicit, setNoWrite, skillName, sleep, stackControl, startHttpServer, structuredContentFor, subtokens, takeArtifacts, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, type CacheEntry, type CacheStats, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type EngineHit, type EngineResult, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type Feed, type FeedItem, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PackageFacts, type PageMetadata, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, applyRelevanceFloor, arxivIdFromUrl, assessExtractedText, assessPdfText, baseLang, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, cleanInline, configure, contactUa, contentCoverage, createServer, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, dedupeByUrl, dedupeNearDuplicates, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFormatForContentType, docFormatForUrl, doiFromUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureClone, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, expandTokens, externalHosts, extractDocument, extractJsonLd, extractMainHtml, extractMetaTags, extractPdf, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, hammingDistance, have, headCommit, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keylessEngines, keywords, listReleases, listResources, listTags, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, matcherFromTokens, metaDescriptionOf, nearestHeading, negotiateProtocol, normalizeDoi, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, originUrl, pageDelayMs, pageMetadata, parseDdgHtml, parseDdgLite, parseFeed, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readCapped, readCappedBytes, readResource, recencyScore, renderAsset, repoCacheRoot, repoFacts, rescueViaWayback, resetBrand, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resolvePackage, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runStdioServer, runWithInput, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searxngBase, searxngIsExplicit, setNoWrite, sh, shAsync, simhash, skillName, sleep, slugify, stackControl, startHttpServer, stripConsentBoilerplate, stripTags, structuredContentFor, subtokens, takeArtifacts, throttleReason, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };

@@ -48,11 +48,14 @@ const ENGINES = {
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },
       { remote: "scripts/engine.d.mts", local: "webindex-engine.d.mts" },
-      // The engine's own reference docs, pinned by the same sha256 as its code
-      // and landing beside the skill rather than in src/vendor/ — an agent reads
-      // these, a bundler does not. Before this, `web-discovery.md` existed in two
-      // skills with different bytes, both describing one engine.
-      { remote: "references/web-discovery.md", local: "web-discovery.md", dest: "skills/ultrasearch/references/web-discovery.md" },
+      // No reference docs are synced here, deliberately. `dest` exists (see
+      // destOf) and ultradoc and construct use it, because their copies of
+      // web-discovery.md and provider-apis.md were near-identical descriptions
+      // of the ENGINE that had drifted apart. This repo's web-discovery.md is
+      // not that document: it is 287 lines about ultrasearch's own cascade and
+      // its --web-engine values, and verify-skill-bundle asserts that list
+      // against ALL_WEB_ENGINES. Overwriting it with the engine's generic one
+      // fails that gate, correctly.
     ],
   },
 };

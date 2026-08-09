@@ -42,6 +42,7 @@ import {
   diversify,
   trustScore,
   mapLimit,
+  RUN_SLUG,
 } from "./util.js";
 import type { Bm25Doc } from "./util.js";
 
@@ -80,7 +81,7 @@ const ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin ar
 
 // Default dossier directory under the OS temp dir, keyed by mode + question.
 export function defaultRunDir(mode: string, question: string, d?: Date): string {
-  return join(tmpdir(), "ultrasearch", `${mode}-${slugify(question)}`, runId(d));
+  return join(tmpdir(), "ultrasearch", `${mode}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 
 // General-web discovery engines, in cascade preference order: the more precise/
@@ -828,7 +829,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     sourceCount: merged.length,
     maxSources: options.maxSources,
     builtAt: new Date().toISOString(),
-    slug: `${options.mode}-${slugify(options.question)}`,
+    slug: `${options.mode}-${slugify(options.question, RUN_SLUG)}`,
     tiers: ["SUMMARY.md", "REPORT.md"],
     extras: mode.extras,
     notes,
