@@ -4,3 +4,4 @@
 export function docFlagRegex(): RegExp;
 export function helpCoversFlag(help: string, flag: string): boolean;
 export function webEngineEnum(line: string): string[] | null;
+export function searchProfileEnum(line: string): string[] | null;

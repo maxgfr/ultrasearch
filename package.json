@@ -11,9 +11,7 @@
     "skills",
     "scripts",
     "assets",
-    "src",
-    "docker-compose.yml",
-    "docker"
+    "src"
   ],
   "engines": {
     "node": ">=18"

@@ -36,6 +36,40 @@ the doc↔CLI drift gate).
 4. **The Node-18 floor is real.** The bundle declares `engines.node >=18`. Don't
    use a Node 20+ runtime API in `src/` — CI runs the committed bundle on Node 18.
 
+## The vendored engine
+
+Most of what this repo does to the web is not written here. `webindex`
+(github.com/maxgfr/webindex) owns HTTP, extraction, the PDF and office ladders,
+ranking, the container stack and the whole MCP protocol; `src/vendor/` holds its
+published bundle, pinned by tag and SHA-256, and tsup inlines it so the skill
+still ships as one file with no install.
+
+**Everything in `src/` reaches it through `src/engine.ts` — never
+`src/vendor/*` directly.** That module calls `configure()` once, so you cannot
+obtain an engine function without first importing the module that configured it.
+There is no ordering hazard to remember and no entry point that can forget.
+
+Three scripts keep the arrangement honest, all wired into `check:build`:
+
+| Script | What it refuses |
+|---|---|
+| `sync-engine.mjs --check` | A **tampered** vendor (bytes differ from the pin) or a **stale** one (pinned below `minRef`). The second matters because tsup inlines the bundle: a stale pin ships old behaviour with every test green. |
+| `verify-engine-usage.mjs` | A local declaration that **shadows** an engine export — exported or not — unless it is argued for in `engine-forks.json`. Also a drop below the usage floor, which would mean a whole layer quietly stopped being used. |
+| `verify-skill-bundle.mjs` | A skill directory that would not install, and any drift between the flags the docs name and the flags the CLI has. |
+
+Two rules follow from this, and both are easy to get wrong:
+
+- **Adopting an engine export and bumping `minRef` happen in the SAME commit.**
+  Deleting a local copy while pinned to a release that lacks its replacement
+  builds green and ships broken.
+- **`engine-forks.json` is a ratchet.** Entries may leave, never arrive. A fork
+  that no longer matches anything also fails, so the list cannot rot into
+  bookkeeping nobody trusts.
+
+To pull a new engine release: `node scripts/sync-engine.mjs --ref vX.Y.Z`, then
+`pnpm run check:build`. A daily workflow does this automatically and fails loudly
+rather than opening a pull request.
+
 ## Commits & releases
 
 We use [Conventional Commits](https://www.conventionalcommits.org/). On every

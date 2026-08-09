@@ -74,16 +74,27 @@ const ENGINE = engineExports();
 const FORKS = knownForks();
 const files = walk(srcDir);
 
-// `export function X` / `export const X` / `export class X` / `export interface X`
-// / `export type X =`. Deliberately NOT `export { X } from "…"` or `export type
-// { X } from "…"`, which are re-exports and are the whole point of the shims.
-const DECL = /^export\s+(?:async\s+)?(?:function|const|let|class|interface|enum)\s+([A-Za-z_$][\w$]*)|^export\s+type\s+([A-Za-z_$][\w$]*)\s*=/gm;
+// `function X` / `const X` / `class X` / `interface X` / `type X =`, with or
+// without a leading `export`. The `export` used to be required, which let a
+// PRIVATE copy of an engine export sit here unflagged — `const PDF_URL_RE` and
+// `function sleep` both did exactly that. A shadow is a shadow whether or not
+// the module chose to re-export it. Anchored at column 0 under /m, so locals
+// inside a function body are not candidates.
+//
+// Deliberately still NOT `export { X } from "…"` or `export type { X } from "…"`,
+// which are re-exports and are the whole point of the shims.
+const DECL = /^(?:export\s+)?(?:async\s+)?(?:function|const|let|class|interface|enum)\s+([A-Za-z_$][\w$]*)|^(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=/gm;
 // Both forms count as use. An `import` is this tree calling the engine; an
 // `export … from` is this tree SERVING the engine's implementation under the
 // path its own callers already use — which is what every shim does, and is the
 // larger half of the usage. Counting only imports would report a repo that had
 // successfully deleted its forks as barely using the engine at all.
-const USES_ENGINE = /(?:import|export)\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"(?:\.\.\/)*engine\.js"/g;
+//
+// `(?:\.{1,2}\/)*` and not `(?:\.\.\/)*`: the old form matched `../engine.js`
+// and `../../engine.js` but NOT `./engine.js`, so every top-level shim in src/
+// was invisible to the counter and the floor was being met by the subdirectories
+// alone. Deleting a root shim could not move the number.
+const USES_ENGINE = /(?:import|export)\s+(?:type\s+)?\{([^}]*)\}\s*from\s*"(?:\.{1,2}\/)*engine\.js"/g;
 
 const collisions = [];
 const tolerated = [];
@@ -110,7 +121,12 @@ for (const f of files) {
 
 // Raise this when a layer lands. Never lower it to make a red run pass — a drop
 // means a layer stopped being used, which is a decision, not a detail.
-const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 75);
+//
+// 125 against a real 129. It was 75 while the counter could not see `./engine.js`
+// — met by src/backends/ and src/mcp/ alone, so all nine root shims could have
+// been re-forked without moving the number. The point of a floor is to sit just
+// under the truth; 75 sat under a fiction.
+const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 125);
 
 let ok = true;
 
