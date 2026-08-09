@@ -122,13 +122,12 @@ for (const f of files) {
 // Raise this when a layer lands. Never lower it to make a red run pass — a drop
 // means a layer stopped being used, which is a decision, not a detail.
 //
-// 148 against a real 152, after adopting the v1.13 ranking layer.
+// 148 against a real 152, after adopting webindex v1.13's ranking layer.
 //
-// It was 125 against 129 before that, and 75 against a fiction before the
-// counter could see `./engine.js` at all. It was 75 while the counter could not see `./engine.js`
-// — met by src/backends/ and src/mcp/ alone, so all nine root shims could have
-// been re-forked without moving the number. The point of a floor is to sit just
-// under the truth; 75 sat under a fiction.
+// It was 125 against 129 before that. And 75 before the regex above could see
+// `./engine.js` at all — a floor met by src/backends/ and src/mcp/ alone, so all
+// nine root shims could have been re-forked without moving the number. A floor
+// belongs just under the truth; that one sat under a fiction.
 const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 148);
 
 let ok = true;
