@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.25.1](https://github.com/maxgfr/ultrasearch/compare/v1.25.0...v1.25.1) (2026-08-09)
+
+
+### Bug Fixes
+
+* **gate:** count ./engine.js imports, and see unexported shadows ([1710ce0](https://github.com/maxgfr/ultrasearch/commit/1710ce01ca054b8cc35e636251b650017bfb24ea))
+
 # [1.25.0](https://github.com/maxgfr/ultrasearch/compare/v1.24.0...v1.25.0) (2026-08-08)
 
 
