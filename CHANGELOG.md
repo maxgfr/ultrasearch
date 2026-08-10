@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.28.0](https://github.com/maxgfr/ultrasearch/compare/v1.27.0...v1.28.0) (2026-08-10)
+
+
+### Bug Fixes
+
+* **build:** regenerate the example dossier before diffing it ([376d900](https://github.com/maxgfr/ultrasearch/commit/376d900309605a1efaefb781fee763c9718073b6))
+
+
+### Features
+
+* **engine:** re-pin webindex to v1.18.1 ([c44639e](https://github.com/maxgfr/ultrasearch/commit/c44639e38cc12a43495fc934925e39fd0c34b800))
+
 # [1.27.0](https://github.com/maxgfr/ultrasearch/compare/v1.26.0...v1.27.0) (2026-08-10)
 
 
