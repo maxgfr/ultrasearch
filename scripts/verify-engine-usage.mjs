@@ -122,13 +122,15 @@ for (const f of files) {
 // Raise this when a layer lands. Never lower it to make a red run pass — a drop
 // means a layer stopped being used, which is a decision, not a detail.
 //
-// 148 against a real 152, after adopting webindex v1.13's ranking layer.
+// 175 against a real 179, after adopting webindex v1.15's harness layer:
+// the run directory, the CLI parser, the citation mechanics and the whole
+// orchestration emitter. It was 148 against 152 before that.
 //
 // It was 125 against 129 before that. And 75 before the regex above could see
 // `./engine.js` at all — a floor met by src/backends/ and src/mcp/ alone, so all
 // nine root shims could have been re-forked without moving the number. A floor
 // belongs just under the truth; that one sat under a fiction.
-const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 148);
+const FLOOR = Number(process.env.ENGINE_USAGE_FLOOR ?? 175);
 
 let ok = true;
 

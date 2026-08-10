@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { Script } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { main } from "../src/cli.js";
-import { BATCH_SIZE, SMALL_WORKLIST, listPhases, orchestrateRun } from "../src/orchestrate.js";
+import { BATCH_SIZE, SMALL_WORKLIST, emitOrchestration, listPhasesFor } from "../src/orchestrate.js";
 import { runPlan } from "../src/plan.js";
 import type { PlanResult } from "../src/types.js";
 import { runVerify } from "../src/verify.js";
@@ -76,7 +76,7 @@ async function run(argv: string[]): Promise<{ out: string; err: string; exit?: n
 describe("orchestrate — listPhases", () => {
   it("reports both phases not ready on an empty run, naming the producing command", () => {
     const run = makeRun();
-    const phases = listPhases(run, ENGINE);
+    const phases = listPhasesFor(run, ENGINE);
     expect(phases.map((p) => p.name)).toEqual(["gather", "verify"]);
     for (const p of phases) {
       expect(p.ready).toBe(false);
@@ -89,7 +89,7 @@ describe("orchestrate — listPhases", () => {
 
   it("reports ready phases with real item counts and absolute worklist paths", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    const phases = listPhases(run, ENGINE);
+    const phases = listPhasesFor(run, ENGINE);
     expect(phases[0]).toMatchObject({ name: "gather", ready: true, items: 5 });
     expect(phases[0]!.ids).toEqual(["Q1", "Q2", "Q3", "Q4", "Q5"]);
     expect(phases[1]).toMatchObject({ name: "verify", ready: true, items: 2 });
@@ -99,11 +99,12 @@ describe("orchestrate — listPhases", () => {
 
   it("a ready gather phase carries the persisted plan (question, mode, depth) and a concrete prerequisite", () => {
     const run = makeRun({ plan: 2 });
-    const [gather] = listPhases(run, ENGINE);
-    expect(gather!.plan).toBeDefined();
-    expect(gather!.plan!.question).toBe("how does HTTP rate limiting work");
-    expect(gather!.plan!.mode).toBe("topic");
-    expect(gather!.plan!.depth).toBe("standard");
+    const [gather] = listPhasesFor(run, ENGINE);
+    expect(gather!.parsed).toBeDefined();
+    const plan = gather!.parsed as PlanResult;
+    expect(plan.question).toBe("how does HTTP rate limiting work");
+    expect(plan.mode).toBe("topic");
+    expect(plan.depth).toBe("standard");
     expect(gather!.prerequisite).toContain("how does HTTP rate limiting work");
     // re-running the prerequisite must regenerate the SAME plan — including its depth
     expect(gather!.prerequisite).toContain("--depth standard");
@@ -112,7 +113,7 @@ describe("orchestrate — listPhases", () => {
   it("a plan without a depth field yields a prerequisite without --depth (the deep fallback is the contract's)", () => {
     const run = mkdtempSync(join(tmpdir(), "us-orch-nodepth-"));
     runPlan("how does HTTP rate limiting work", "topic", ["angle one", "angle two"], 2, run);
-    const [gather] = listPhases(run, ENGINE);
+    const [gather] = listPhasesFor(run, ENGINE);
     expect(gather!.prerequisite).not.toContain("--depth");
   });
 });
@@ -120,7 +121,7 @@ describe("orchestrate — listPhases", () => {
 describe("orchestrate — emitted workflow", () => {
   it("emits one workflow per ready phase, plus contracts and the runbook", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    const res = orchestrateRun(run, ENGINE);
+    const res = emitOrchestration(run, ENGINE);
     expect(res.exitCode).toBe(0);
     expect(existsSync(wf(run, "gather"))).toBe(true);
     expect(existsSync(wf(run, "verify"))).toBe(true);
@@ -132,7 +133,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("parses as JavaScript the way the Workflow harness evaluates it (meta export + async body)", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     for (const phase of ["gather", "verify"]) {
       const [metaLine, ...body] = readWf(run, phase).split("\n");
       expect(() => new Script(metaLine!.replace("export const meta =", "const meta ="))).not.toThrow();
@@ -142,7 +143,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("meta is a pure JSON literal on line 1 (name, description, phases)", () => {
     const run = makeRun({ plan: 5 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const first = readWf(run, "gather").split("\n")[0]!;
     expect(first.startsWith("export const meta = ")).toBe(true);
     const meta = JSON.parse(first.replace("export const meta = ", "")) as { name: string; description: string; phases: unknown[] };
@@ -153,7 +154,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("never contains Date.now / Math.random / new Date (forbidden under the Workflow tool)", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     for (const phase of ["gather", "verify"]) {
       const src = readWf(run, phase);
       expect(src).not.toContain("Date.now(");
@@ -164,7 +165,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("injects absolute RUN/ENGINE/WORKLIST constants matching the run", () => {
     const run = makeRun({ verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const src = readWf(run, "verify");
     for (const name of ["RUN", "ENGINE", "WORKLIST"]) {
       const m = src.match(new RegExp(`const ${name} = "([^"]+)"`));
@@ -177,7 +178,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("injects the REAL current worklist ids — a doctored worklist shows up on re-emit", () => {
     const run = makeRun({ plan: 4, verify: 4 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     expect(readWf(run, "gather")).not.toContain("Q9");
     expect(readWf(run, "verify")).not.toContain("C99:S1");
     const planPath = join(run, "PLAN.json");
@@ -188,27 +189,27 @@ describe("orchestrate — emitted workflow", () => {
     const todo = JSON.parse(readFileSync(todoPath, "utf8")) as { pairs: Record<string, unknown>[] };
     todo.pairs.push({ ...todo.pairs[0]!, claimId: "C99" });
     writeFileSync(todoPath, JSON.stringify(todo, null, 2));
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     expect(readWf(run, "gather")).toContain("Q9");
     expect(readWf(run, "verify")).toContain("C99:S1");
   });
 
   it("is deterministic — two runs over the same state emit byte-identical artifacts", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const read = () =>
       ["gather", "verify"].map((p) => readWf(run, p)).join("\0") +
       readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8") +
       readFileSync(join(run, "orchestration", "agents", "gatherer.md"), "utf8") +
       readFileSync(join(run, "orchestration", "agents", "skeptic.md"), "utf8");
     const first = read();
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     expect(read()).toBe(first);
   });
 
   it("batches the verify worklist (one skeptic per batch of BATCH_SIZE pairs)", () => {
     const run = makeRun({ verify: 20 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const src = readWf(run, "verify");
     const m = src.match(/const BATCHES = (\[.*?\])\n/s);
     expect(m).not.toBeNull();
@@ -222,7 +223,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("fans gather out one gatherer per sub-question (above the small-worklist floor)", () => {
     const run = makeRun({ plan: 5 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const src = readWf(run, "gather");
     const m = src.match(/const BATCHES = (\[.*?\])\n/s);
     const batches = JSON.parse(m![1]!) as string[][];
@@ -238,7 +239,7 @@ describe("orchestrate — emitted workflow", () => {
   // per-phase: gather fans out at ANY count ≥ 2, verify collapses at ≤ SMALL_WORKLIST.
   it("gather at the standard-depth default (3 sub-questions) fans out 3 gatherers — no collapse, no eco nudge", () => {
     const run = makeRun({ plan: 3 });
-    const res = orchestrateRun(run, ENGINE);
+    const res = emitOrchestration(run, ENGINE);
     const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
     const batches = JSON.parse(m![1]!) as string[][];
     expect(batches.length).toBe(3);
@@ -249,7 +250,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("a single-sub-question gather collapses to one agent + the eco nudge", () => {
     const run = makeRun({ plan: 1 });
-    const res = orchestrateRun(run, ENGINE);
+    const res = emitOrchestration(run, ENGINE);
     const m = readWf(run, "gather").match(/const BATCHES = (\[.*?\])\n/s);
     expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
     expect(res.notices.some((n) => n.includes("gather") && n.includes("--eco"))).toBe(true);
@@ -257,7 +258,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("verify keeps the ≤ SMALL_WORKLIST collapse (single agent + eco nudge at 3 pairs)", () => {
     const run = makeRun({ verify: 3 });
-    const res = orchestrateRun(run, ENGINE);
+    const res = emitOrchestration(run, ENGINE);
     const m = readWf(run, "verify").match(/const BATCHES = (\[.*?\])\n/s);
     expect((JSON.parse(m![1]!) as string[][]).length).toBe(1);
     expect(res.notices.some((n) => n.includes("verify") && n.includes("--eco"))).toBe(true);
@@ -266,7 +267,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("an empty worklist (REAL engine: a REPORT with no citations) is skipped with a notice, not emitted", () => {
     const run = makeRun({ plan: 5, verify: 0 });
-    const res = orchestrateRun(run, ENGINE);
+    const res = emitOrchestration(run, ENGINE);
     expect(res.exitCode).toBe(0);
     expect(existsSync(wf(run, "verify"))).toBe(false);
     expect(existsSync(wf(run, "gather"))).toBe(true);
@@ -275,10 +276,10 @@ describe("orchestrate — emitted workflow", () => {
 
   it("every contract('<role>') referenced by a workflow has its agents/<role>.md", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const agents = readdirSync(join(run, "orchestration", "agents")).map((f) => f.replace(/\.md$/, ""));
     for (const phase of ["gather", "verify"]) {
-      const refs = [...readWf(run, phase).matchAll(/contract\('([a-z-]+)'/g)].map((m) => m[1]!);
+      const refs = [...readWf(run, phase).matchAll(/contract\("([a-z-]+)"/g)].map((m) => m[1]!);
       expect(refs.length).toBeGreaterThan(0);
       for (const r of refs) expect(agents).toContain(r);
     }
@@ -286,7 +287,7 @@ describe("orchestrate — emitted workflow", () => {
 
   it("workflows return fragments and never contain an executed fold step (merge / --apply stay with the orchestrator)", () => {
     const run = makeRun({ plan: 5, verify: 5 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     for (const phase of ["gather", "verify"]) {
       const src = readWf(run, phase);
       expect(src).toMatch(/^return \{/m);
@@ -305,7 +306,7 @@ describe("orchestrate — emitted workflow", () => {
 describe("orchestrate — contracts & runbook", () => {
   it("every emitted contract carries the one-writer footer and returns structured output", () => {
     const run = makeRun({ plan: 2, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const dir = join(run, "orchestration", "agents");
     const files = readdirSync(dir);
     expect(files.sort()).toEqual(["gatherer.md", "skeptic.md"]);
@@ -320,7 +321,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("the gatherer contract sanctions ONLY its own sub-dossier writes (the disjoint-write exception)", () => {
     const run = makeRun({ plan: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const md = readFileSync(join(run, "orchestration", "agents", "gatherer.md"), "utf8");
     // The playbook's fan-out contract, made explicit: gather/fetch into its OWN
     // out dir only; the parent dossier and report tiers are off-limits.
@@ -347,7 +348,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("the skeptic contract encodes the four-verdict gate, harsher-when-unsure, and the numeral partial cap", () => {
     const run = makeRun({ verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const md = readFileSync(join(run, "orchestration", "agents", "skeptic.md"), "utf8");
     for (const v of ["supported", "partial", "unsupported", "refuted"]) expect(md).toContain(`\`${v}\``);
     expect(md).toMatch(/HARSHER/i);
@@ -357,7 +358,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("the runbook covers both phases with concrete paths, the fold commands and the exit gate", () => {
     const run = makeRun({ plan: 5 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
     expect(rb).toContain(join(run, "PLAN.json"));
     expect(rb).toContain(join(run, "VERIFY.todo.json"));
@@ -373,7 +374,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("verify workflow tail + RUNBOOK instruct clearing stale verdicts*.json before a re-fold (round-2 hygiene)", () => {
     const run = makeRun({ plan: 4, verify: 4 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     // the `--apply <dir>` glob refolds EVERY verdicts*.json — a round-2 re-plan
     // renumbers claim ids, so stale round-1 fragments corrupt the fold last-wins.
     expect(readWf(run, "verify")).toMatch(/delete or archive .*verdicts\*?\./i);
@@ -384,7 +385,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("both contracts carry the stale-id guard: stop and report when an ITEMS id left the worklist (a re-plan renumbers)", () => {
     const run = makeRun({ plan: 2, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     for (const f of ["gatherer.md", "skeptic.md"]) {
       const md = readFileSync(join(run, "orchestration", "agents", f), "utf8");
       expect(md, f).toMatch(/no longer in the worklist/i);
@@ -395,7 +396,7 @@ describe("orchestrate — contracts & runbook", () => {
 
   it("golden shape (paths normalized)", () => {
     const run = makeRun({ plan: 4, verify: 2 });
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     expect(stable(readWf(run, "gather"), run)).toMatchSnapshot("gather.workflow.mjs");
     expect(stable(readFileSync(join(run, "orchestration", "agents", "gatherer.md"), "utf8"), run)).toMatchSnapshot("gatherer.md");
     expect(stable(readFileSync(join(run, "orchestration", "agents", "skeptic.md"), "utf8"), run)).toMatchSnapshot("skeptic.md");
@@ -418,7 +419,7 @@ describe("orchestrate — shell-safe emission (US-2)", () => {
 
   it("single-quotes the question and the paths in the gather prerequisite", () => {
     const run = nastyRun();
-    const [gather] = listPhases(run, ENGINE);
+    const [gather] = listPhasesFor(run, ENGINE);
     expect(gather!.prerequisite).toContain(`--q ${NASTY_SHQ}`);
     expect(gather!.prerequisite).toContain(`--run-root '${run}'`);
     expect(gather!.prerequisite).not.toContain("\n");
@@ -426,7 +427,7 @@ describe("orchestrate — shell-safe emission (US-2)", () => {
 
   it("single-quotes the question and the paths in the workflow-tail merge fold", () => {
     const run = nastyRun();
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const src = readWf(run, "gather");
     expect(src).toContain(`--q ${NASTY_SHQ}`);
     expect(src).toContain(`--master '${run}'`);
@@ -435,7 +436,7 @@ describe("orchestrate — shell-safe emission (US-2)", () => {
 
   it("the RUNBOOK merge command quotes the question — it stays equal to PLAN.json's question", () => {
     const run = nastyRun();
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
     expect(rb).toContain(`--q ${NASTY_SHQ}`);
     // the paths in every runnable step are quoted too
@@ -445,7 +446,7 @@ describe("orchestrate — shell-safe emission (US-2)", () => {
 
   it("the RUNBOOK phase-status table survives pipes and newlines in the prerequisite", () => {
     const run = nastyRun();
-    orchestrateRun(run, ENGINE);
+    emitOrchestration(run, ENGINE);
     const rb = readFileSync(join(run, "orchestration", "RUNBOOK.md"), "utf8");
     const rows = rb.split("\n").filter((l) => l.startsWith("| gather |"));
     expect(rows.length).toBe(1); // one line — the newline was collapsed
@@ -459,7 +460,7 @@ describe("orchestrate — shell-safe emission (US-2)", () => {
 describe("orchestrate — eco mode & phase gating", () => {
   it("--eco emits RUNBOOK + contracts only, no workflow scripts", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    const res = orchestrateRun(run, ENGINE, { eco: true });
+    const res = emitOrchestration(run, ENGINE, { eco: true });
     expect(res.exitCode).toBe(0);
     expect(existsSync(join(run, "orchestration", "RUNBOOK.md"))).toBe(true);
     expect(existsSync(join(run, "orchestration", "agents", "gatherer.md"))).toBe(true);
@@ -470,19 +471,19 @@ describe("orchestrate — eco mode & phase gating", () => {
 
   it("--phase on a not-ready phase exits 2 and names the producing command", () => {
     const run = makeRun({ verify: 2 });
-    const res = orchestrateRun(run, ENGINE, { phase: "gather" });
+    const res = emitOrchestration(run, ENGINE, { phase: "gather" });
     expect(res.exitCode).toBe(2);
     expect(res.errors.some((e) => e.includes("plan"))).toBe(true);
     expect(existsSync(wf(run, "gather"))).toBe(false);
     const run2 = makeRun({ plan: 2 });
-    const res2 = orchestrateRun(run2, ENGINE, { phase: "verify" });
+    const res2 = emitOrchestration(run2, ENGINE, { phase: "verify" });
     expect(res2.exitCode).toBe(2);
     expect(res2.errors.some((e) => e.includes("verify --run"))).toBe(true);
   });
 
   it("--phase restricts emission to that phase", () => {
     const run = makeRun({ plan: 5, verify: 2 });
-    const res = orchestrateRun(run, ENGINE, { phase: "verify" });
+    const res = emitOrchestration(run, ENGINE, { phase: "verify" });
     expect(res.exitCode).toBe(0);
     expect(existsSync(wf(run, "verify"))).toBe(true);
     expect(existsSync(wf(run, "gather"))).toBe(false);
@@ -490,13 +491,13 @@ describe("orchestrate — eco mode & phase gating", () => {
 
   it("an unknown phase exits 2 naming the valid ones", () => {
     const run = makeRun({ verify: 2 });
-    const res = orchestrateRun(run, ENGINE, { phase: "nope" });
+    const res = emitOrchestration(run, ENGINE, { phase: "nope" });
     expect(res.exitCode).toBe(2);
     expect(res.errors.some((e) => e.includes("gather") && e.includes("verify"))).toBe(true);
   });
 
   it("a missing run dir exits 2", () => {
-    const res = orchestrateRun(join(tmpdir(), "us-orch-does-not-exist-xyz"), ENGINE);
+    const res = emitOrchestration(join(tmpdir(), "us-orch-does-not-exist-xyz"), ENGINE);
     expect(res.exitCode).toBe(2);
   });
 });

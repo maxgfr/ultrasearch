@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.14.0";
+declare const ENGINE_VERSION = "1.15.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -460,6 +460,16 @@ interface ExtractResult {
      * itself. Only ever set on the HTML path.
      */
     metaDescription?: string;
+    /**
+     * The raw HTML, only when the caller asked for it with `keepHtml` and only on
+     * the built-in HTML path.
+     *
+     * Opt-in because it doubles what a page costs in memory, and almost every
+     * caller wants the text and nothing else. The one that does not is a caller
+     * following LINKS — `crawlSite` — and the alternative for it is a second
+     * request for bytes this function already had in hand.
+     */
+    html?: string;
     etag?: string;
     lastModified?: string;
 }
@@ -479,6 +489,11 @@ declare function fetchAndExtract(url: string, opts?: {
      * documenting HTTP cookies it would eat the article.
      */
     stripConsent?: boolean;
+    /**
+     * Carry the raw HTML up in `html`. For a caller that follows links out of
+     * the page it just read; see ExtractResult.html for why it is opt-in.
+     */
+    keepHtml?: boolean;
 }): Promise<ExtractResult>;
 declare const DEAD_LINK_STATUS: Set<number>;
 declare function rescueViaWayback(url: string, opts?: {
@@ -1752,12 +1767,878 @@ declare function ensureDir(dir: string): void;
  * callers keep their existing shape — which means a caller that PRINTS the
  * returned path must check `isNoWrite()` first, or it advertises a file that
  * does not exist. The CLI does exactly that.
+ *
+ * The write is ATOMIC (see writeFileAtomic). Every artifact this engine and its
+ * consumers produce is read back by something — a manifest by the next command,
+ * an index by a concurrent MCP tool call, a report by the agent that cited it —
+ * and a plain writeFileSync leaves a window where a reader sees a truncated
+ * file and `JSON.parse` throws on it. Only one of the eight consuming skills
+ * had noticed and written its own atomic helper; making it the default here
+ * means none of the other seven has to.
  */
 declare function writeArtifact(path: string, content: string): string;
+/**
+ * Write a file so a concurrent reader sees either the old bytes or the new
+ * ones, never a half-written file. `rename` is atomic within a filesystem, and
+ * the temp file is a SIBLING so it always is one — a temp in os.tmpdir() would
+ * cross a mount point and silently degrade to a copy.
+ *
+ * Bypasses the no-write gate on purpose: this is the durability primitive, and
+ * `writeArtifact` above is the gated caller. A caller holding a path of its own
+ * that must not be written under `--stdout` calls `writeArtifact`, not this.
+ */
+declare function writeFileAtomic(path: string, content: string | Uint8Array): void;
 /** Drain the collected artifacts. Empty when writes actually went to disk. */
 declare function takeArtifacts(): Artifact[];
 /** Test seam: clear both the switch and anything collected under it. */
 declare function resetNoWrite(): void;
+
+/**
+ * The readable id a default output folder is named after: `run-YYYYMMDD-HHMMSS`.
+ *
+ * LOCAL time, not UTC, and that is the point: the person reading `ls` is the
+ * person who started the run, and a folder stamped three hours off their clock
+ * is a folder they cannot find. Sortable lexicographically, which is what makes
+ * `ls` order runs chronologically for free.
+ *
+ * The Date is a parameter so tests can pin it. Callers pass nothing.
+ */
+declare function runId(d?: Date): string;
+/**
+ * Shell-single-quote a value for a command line this engine EMITS — the
+ * free-text question and every path in an orchestration runbook.
+ *
+ * Single quotes are the only POSIX shell context with zero expansion: backticks,
+ * `$`, `|`, `;`, `&&` and newlines all stay literal inside them. An embedded
+ * single quote closes and reopens the quoting (' → '"'"'), which is the one
+ * escape the form does not admit directly.
+ *
+ * Newlines collapse to spaces so an emitted command stays ONE line. A runbook
+ * is copy-pasted by a human or a subagent; a command that wraps across lines is
+ * a command that gets pasted half-executed.
+ */
+declare function shq(s: string): string;
+/**
+ * Read and parse a JSON file, or return undefined.
+ *
+ * Absent, unreadable and malformed collapse to the SAME answer on purpose. Every
+ * caller of this in a run directory is asking "is this worklist ready?", and a
+ * file that exists but does not parse is not ready — it is the half-written or
+ * hand-edited state, and treating it as a hard error would strand a run that the
+ * prerequisite command can simply regenerate.
+ *
+ * It does NOT validate the shape. The caller knows what it asked for; this
+ * returns whatever parsed, typed as what the caller claimed. A caller that acts
+ * on a field must still check the field is there — which is why every worklist
+ * reader in the consuming skills tests `Array.isArray(...)` before trusting it.
+ */
+declare function readJsonSafe<T>(path: string): T | undefined;
+/**
+ * Read a run's manifest. Same tolerance as readJsonSafe, and the same warning:
+ * the type parameter is the caller's claim, not a guarantee.
+ */
+declare function readManifest<T>(dir: string, file?: string): T | undefined;
+/**
+ * Write a run's manifest — atomically, and through the no-write gate.
+ *
+ * Atomic because this is the file most likely to be read while it is written:
+ * an MCP server answering a tool call and a CLI in another terminal both reach
+ * for it, and a torn read is a `JSON.parse` throw in whichever got there first.
+ * Gated because a run under `--stdout` must leave the filesystem as it found it.
+ *
+ * Returns the path it wrote (or would have written) — so a caller that PRINTS
+ * it must check `isNoWrite()` first, the same contract as `writeArtifact`.
+ */
+declare function writeManifest(dir: string, value: unknown, file?: string): string;
+
+interface Fingerprint {
+    /** The URL as asked for. Not canonicalised: a caller comparing must compare like with like. */
+    url: string;
+    /** The strong validator, when the server sent one. */
+    etag?: string;
+    lastModified?: string;
+    /** SHA-256 of the body, when one was read. */
+    contentHash?: string;
+    /** Bytes read. 0 on a 304, which is the whole point of a 304. */
+    bytes: number;
+    status: number;
+    /** ISO timestamp of the observation, so a caller can age its own record. */
+    fetchedAt: string;
+}
+/** SHA-256 of a body, hex. Exported because a caller holding bytes from elsewhere wants the same digest. */
+declare function contentHash(body: string | Buffer): string;
+/**
+ * Observe a URL: its validators, its hash, and when it was seen.
+ *
+ * Always reads the body, because that is what makes the hash available for the
+ * many servers that send neither an ETag nor a Last-Modified. Use `hasChanged`
+ * when a validator is already in hand — that is the path that costs nothing.
+ */
+declare function fingerprint(url: string, opts?: {
+    timeoutMs?: number;
+    maxBytes?: number;
+}): Promise<Fingerprint>;
+interface ChangeVerdict {
+    /** Undefined when the request failed — "I could not tell" is not "unchanged". */
+    changed?: boolean;
+    /** How it was decided, so a caller can weigh the evidence. */
+    via: "not-modified" | "etag" | "last-modified" | "hash" | "unknown";
+    /** The fresh observation, so a caller can store it without a second request. */
+    fingerprint: Fingerprint;
+    note?: string;
+}
+/**
+ * Whether a URL has changed since a previous observation.
+ *
+ * Sends the conditional headers when `previous` carries validators. A 304 is
+ * the ideal answer: definitive, and no body crossed the wire.
+ *
+ * `changed` is deliberately OPTIONAL rather than defaulting to false. A network
+ * error, a 500 or a redirect to an error page all mean "I could not tell", and
+ * a caller that treats those as "unchanged" silently stops watching the page it
+ * asked to watch — which is the failure this shape exists to make impossible to
+ * write by accident.
+ */
+declare function hasChanged(url: string, previous?: Pick<Fingerprint, "etag" | "lastModified" | "contentHash">, opts?: {
+    timeoutMs?: number;
+    maxBytes?: number;
+}): Promise<ChangeVerdict>;
+
+interface Table {
+    /** The `<caption>`, when there is one. */
+    caption?: string;
+    /** Header cells, from `<thead>` or the first row of `<th>`. Empty when the table declares none. */
+    headers: string[];
+    /** Body rows, each padded to the widest row so a column index means one thing. */
+    rows: string[][];
+}
+/**
+ * Every table in a document, as rows and columns.
+ *
+ * A table with no data rows is dropped: a layout table used for positioning is
+ * still common on older sites, and returning it as data is a false positive a
+ * caller has no way to filter.
+ */
+declare function extractTables(html: string): Table[];
+/**
+ * A table as markdown, for folding back into extracted text.
+ *
+ * Pipes inside a cell are escaped, because an unescaped one silently splits the
+ * cell and shifts the rest of the row — the same failure the span handling above
+ * exists to prevent, reintroduced at the last step.
+ */
+declare function tableToMarkdown(table: Table): string;
+
+/** Test seam. Never call this from product code — in-flight waiters would bunch up. */
+declare function resetHostSchedule(): void;
+/**
+ * The floor between two requests to the SAME host, when robots.txt declares no
+ * `Crawl-delay` of its own.
+ *
+ * Deliberately the same knob `httpGet` already used for its inter-request
+ * pause, so a consumer that had tuned politeness keeps one number to tune.
+ */
+declare function hostDelayMs(): number;
+/**
+ * Wait until this host is willing to hear from us again, then claim the slot.
+ *
+ * The claim happens BEFORE the await returns, so two concurrent callers for one
+ * host serialise instead of both reading the same free time and departing
+ * together — which is the bug a naive "sleep if too soon" has, and the one that
+ * makes a rate limiter look like it works right up until the pool widens.
+ *
+ * Different hosts never wait on each other: the whole point is to keep
+ * concurrency high across a candidate list while staying single-file per site.
+ */
+declare function awaitHostSlot(url: string, delayMs?: number, now?: number): Promise<number>;
+/**
+ * Push a host's next departure out by `ms` — what a `Retry-After` means.
+ *
+ * `httpGet` already honours Retry-After for the request that received it; this
+ * is how that answer applies to every OTHER request queued for the same host,
+ * which is the difference between backing off and backing off once.
+ */
+declare function backOffHost(url: string, ms: number, now?: number): void;
+interface CrawlOptions {
+    /** Hard ceiling on pages fetched. Required in spirit; defaulted low on purpose. */
+    maxPages?: number;
+    /** How many links deep to follow. The seed is depth 0. */
+    maxDepth?: number;
+    /** Leave the seed's origin. Off by default — a crawl that wanders is not a site walk. */
+    crossOrigin?: boolean;
+    /** Seed the frontier from the site's sitemap as well as the seed page. Default true. */
+    useSitemap?: boolean;
+    /** Ignore robots.txt. For a site you own, and named so it cannot happen by accident. */
+    ignoreRobots?: boolean;
+    /** Per-host delay override. Otherwise robots' own Crawl-delay, else hostDelayMs(). */
+    delayMs?: number;
+    /** Called as each page lands, so a caller can stream rather than wait for the whole walk. */
+    onPage?(page: CrawledPage): void;
+}
+interface CrawledPage {
+    url: string;
+    depth: number;
+    title?: string;
+    text: string;
+    extractor: string;
+    /** Links found on this page, already absolute and canonicalised. */
+    links: string[];
+}
+interface CrawlResult {
+    pages: CrawledPage[];
+    /** URLs that were in scope but never fetched — the budget ran out. */
+    pending: string[];
+    /** URLs robots.txt refused. Reported rather than hidden: a silent skip reads as "not there". */
+    disallowed: string[];
+    notes: string[];
+}
+/** Absolute, canonical links out of a page's HTML. */
+declare function linksFrom(html: string, baseUrl: string): string[];
+/**
+ * Walk a site from a seed, breadth-first.
+ *
+ * Bounded three independent ways — pages, depth, and origin — because any one
+ * of them alone leaves a hole: a depth limit still admits a combinatorial
+ * frontier, a page limit alone will spend the whole budget on a paginated
+ * archive, and neither stops a link out to an unrelated host.
+ *
+ * robots.txt is consulted at EVERY hop, not once for the seed. That is the
+ * difference between this and `fetch`, and it is deliberate: `fetch` follows a
+ * URL the caller was handed, which is not crawling; this enumerates, which is.
+ * A refused URL is reported in `disallowed` rather than dropped, because a
+ * silent skip is indistinguishable from a page that does not exist.
+ *
+ * Breadth-first, so a shallow budget returns the pages nearest the seed — the
+ * ones a reader would have reached first — rather than one deep spur.
+ */
+declare function crawlSite(seed: string, opts?: CrawlOptions): Promise<CrawlResult>;
+
+/** Where the local Ollama answers. `off` disables the layer entirely. */
+declare function ollamaBase(): string;
+/** Whether the caller has turned embeddings off outright. */
+declare function embeddingsDisabled(): boolean;
+interface EmbedResult {
+    /** One vector per input, in input order. Empty when the service did not answer. */
+    vectors: number[][];
+    /** The model that produced them, for a caller that stores vectors alongside their model. */
+    model: string;
+    /** Why the result is empty, when it is. Never thrown — the layer is optional. */
+    note?: string;
+}
+/** Test seam, and the escape hatch for a server that came up mid-run. */
+declare function resetOllamaProbe(): void;
+/**
+ * Whether the local embedding server answers.
+ *
+ * Cached for the process: a probe per call would double the request count of
+ * every batch, and a server that goes away mid-run shows up as a failed embed
+ * anyway.
+ */
+declare function probeOllama(base?: string): Promise<boolean>;
+/**
+ * Embed a batch of texts.
+ *
+ * Order is preserved and matters: callers index their documents by position,
+ * and a race-ordered result would attach every vector to the wrong text —
+ * silently, since a vector carries no identity of its own. `mapLimit` gives that
+ * guarantee.
+ *
+ * An empty input returns immediately without probing, so a caller need not
+ * special-case it.
+ */
+declare function embed(texts: readonly string[], opts?: {
+    base?: string;
+    model?: string;
+    concurrency?: number;
+}): Promise<EmbedResult>;
+/** Embed one text. Convenience over `embed`, same degradation. */
+declare function embedOne(text: string, opts?: {
+    base?: string;
+    model?: string;
+}): Promise<number[] | undefined>;
+/**
+ * Cosine similarity, in [-1, 1].
+ *
+ * Returns 0 for a zero-magnitude vector rather than NaN. NaN propagates through
+ * every comparison as false, so a single degenerate embedding would silently
+ * sort to the bottom of one ranking and the top of another depending on how the
+ * comparator was written.
+ */
+declare function cosine(a: readonly number[], b: readonly number[]): number;
+/** A unit-length copy. A zero vector is returned unchanged, for the reason above. */
+declare function normalize(v: readonly number[]): number[];
+
+/** Where the local Qdrant answers. `off` disables the store. */
+declare function qdrantBase(): string;
+/** Test seam, and the escape hatch for a store that came up mid-run. */
+declare function resetQdrantProbe(): void;
+/** Whether the local vector store answers. Cached for the process, like the Ollama probe. */
+declare function probeQdrant(base?: string): Promise<boolean>;
+interface VectorPoint {
+    /** Qdrant accepts an unsigned integer or a UUID. A caller keying by URL should hash it. */
+    id: string | number;
+    vector: number[];
+    /** Whatever the caller needs back with a hit. The engine never reads it. */
+    payload?: Record<string, unknown>;
+}
+interface VectorHit {
+    id: string | number;
+    score: number;
+    payload?: Record<string, unknown>;
+}
+/**
+ * Create a collection if it is not already there.
+ *
+ * `size` must match the embedding model's dimension, and getting it wrong is
+ * not a soft failure — Qdrant rejects every later upsert. Callers derive it from
+ * a real embedding rather than hardcoding a number that changes with the model.
+ *
+ * Distance defaults to cosine because that is what `nomic-embed-text` is trained
+ * for and what `cosine()` here computes; a caller using a dot-product model says
+ * so explicitly.
+ */
+declare function ensureCollection(name: string, size: number, opts?: {
+    base?: string;
+    distance?: "Cosine" | "Dot" | "Euclid";
+}): Promise<{
+    ok: boolean;
+    note?: string;
+}>;
+/** Insert or replace points. Waits for the write, so a search right after sees them. */
+declare function upsert(name: string, points: readonly VectorPoint[], opts?: {
+    base?: string;
+}): Promise<{
+    ok: boolean;
+    note?: string;
+}>;
+/** Nearest neighbours of a vector. Empty with a note when the store is absent. */
+declare function searchVectors(name: string, vector: readonly number[], opts?: {
+    base?: string;
+    limit?: number;
+    filter?: unknown;
+}): Promise<{
+    hits: VectorHit[];
+    note?: string;
+}>;
+/** Drop a collection. Used by a caller that re-indexes from scratch. */
+declare function deleteCollection(name: string, opts?: {
+    base?: string;
+}): Promise<{
+    ok: boolean;
+    note?: string;
+}>;
+/**
+ * A document both lanes can read. Deliberately `Bm25Doc` itself rather than a
+ * new shape: it already carries the identity (`id`) the fusion keys on and the
+ * three fields the lexical lane weights, and inventing a parallel type would
+ * make every caller map between two descriptions of one document.
+ */
+type HybridDoc = Bm25Doc;
+interface HybridHit<D extends HybridDoc> {
+    doc: D;
+    /** The fused score. Comparable WITHIN one call and meaningless across calls. */
+    score: number;
+    /** 1-based rank in each lane, when that lane returned the document at all. */
+    lexicalRank?: number;
+    denseRank?: number;
+}
+/**
+ * Rank documents against a question with both retrievers, fused.
+ *
+ * The dense lane needs no vector store: it embeds the question and the
+ * documents in one batch and sorts by cosine. That keeps the common case — a
+ * pool of candidates already in memory, which is what a research run has —
+ * free of any indexing step. A caller with a corpus too large to embed per
+ * query indexes it in Qdrant and calls `searchVectors` directly.
+ *
+ * RRF rather than a weighted sum of scores: a cosine and a BM25 score share no
+ * scale, and any normalisation between them is a constant someone has to tune
+ * per corpus and will get wrong on the next one. Fusing by RANK needs no such
+ * constant, which is why it is the standard answer.
+ *
+ * With the embedding server absent, this degrades to exactly the lexical
+ * ranking the caller would have got from `bm25Score` alone, plus a note. It
+ * never throws and never returns fewer documents than it was given.
+ */
+declare function hybridSearch<D extends HybridDoc>(question: string, docs: readonly D[], opts?: {
+    limit?: number;
+    base?: string;
+    model?: string;
+    k?: number;
+}): Promise<{
+    hits: HybridHit<D>[];
+    note?: string;
+}>;
+
+/**
+ * A bracketed token that is not a markdown link.
+ *
+ * The negative lookahead is the whole subtlety: `[see the spec](https://…)` is
+ * a link whose text happens to be bracketed, and counting it as a citation
+ * makes every linked phrase look grounded.
+ *
+ * Global, so callers must reset `lastIndex` or use `matchAll`. The helpers
+ * below do; a caller reaching for the constant directly should too.
+ */
+declare const TOKEN_RE: RegExp;
+/** `[S1]` — the numbered-source shape. */
+declare const SOURCE_TOKEN: RegExp;
+/** `[E1]` — the numbered-evidence shape. */
+declare const EVIDENCE_TOKEN: RegExp;
+/** `[src/foo.ts:12]` or `[src/foo.ts:12-40]` — the file-and-line shape. */
+declare const FILE_LINE_TOKEN: RegExp;
+/** A `[path:line]` or `[path:start-end]` citation, parsed. Undefined when the token is not one. */
+declare function parseFileLine(token: string): {
+    path: string;
+    start: number;
+    end: number;
+} | undefined;
+/**
+ * Blank HTML comments, preserving line breaks so every later mask still lines
+ * up with the original numbering.
+ *
+ * A citation inside `<!-- [S1] -->` is invisible to the reader, so it must not
+ * ground the sentence beside it.
+ */
+declare function stripHtmlComments(text: string): string;
+/** Remove inline-code spans, so a `` `[S1]` `` shown as an EXAMPLE is not a citation. */
+declare function stripInlineCode(line: string): string;
+/**
+ * Lines inside ``` or ~~~ fences, plus the fence lines themselves.
+ *
+ * A report that documents its own citation format has `[S1]` in a code block;
+ * that is a sample, not a source.
+ */
+declare function codeMask(lines: readonly string[]): boolean[];
+/**
+ * Lines belonging to a marked blockquote region: a maximal run of consecutive
+ * `>` lines in which any line carries `marker`.
+ *
+ * The marker is the caller's, because what it MEANS is the caller's. One skill
+ * uses `[model-hint]` to flag a passage it knows is unsourced; the engine only
+ * needs to know which lines to set aside.
+ */
+declare function markedQuoteMask(lines: readonly string[], marker: RegExp): {
+    mask: boolean[];
+    regions: number;
+};
+/**
+ * Lines belonging to a trailing "## Sources" / "## References" section — from
+ * its heading through to the next heading of the same or shallower level.
+ *
+ * That section is the rendered listing of what was cited, not a place where
+ * citing happens. Counting its `[S#]` entries marks every source as cited and
+ * pads any coverage number computed downstream, which is the failure mode this
+ * exists for.
+ */
+declare function appendixMask(lines: readonly string[]): boolean[];
+/** OR a set of per-line masks together. Length is taken from the first. */
+declare function orMasks(...masks: readonly boolean[][]): boolean[];
+/**
+ * A unit of assertion: one block of prose or one table row, or a list read as a
+ * group. Lists stay grouped because an item is often only a claim in the
+ * context of its lead-in.
+ *
+ * `section` is whatever the caller's `sectionTag` returned for the heading this
+ * unit sits under — a hook for "this part of the document plays by different
+ * rules" without the engine having to know which rules.
+ */
+type ClaimUnit = ({
+    kind: "text";
+    text: string;
+} | {
+    kind: "list";
+    items: string[];
+}) & {
+    section?: string;
+};
+interface ClaimUnitOptions {
+    /**
+     * Extra lines to set aside, on top of code fences and HTML comments — a
+     * marked-quote mask, an appendix mask, or both through `orMasks`.
+     */
+    exclude?(lines: readonly string[]): boolean[];
+    /**
+     * A blockquote is its own unit ("unit", the default) or folds into the
+     * surrounding prose ("prose").
+     *
+     * "unit" is the safer reading and the reason it is the default: folding a
+     * quotation into the preceding paragraph lets it inherit that paragraph's
+     * citation, so a fabricated quote passes on someone else's source.
+     */
+    blockquotes?: "unit" | "prose";
+    /**
+     * Drop the header row of a table — the row immediately above the `|---|`
+     * separator. It is structure, not an assertion. Default true.
+     */
+    skipTableHeader?: boolean;
+    /**
+     * Keep inline-code spans in the STORED text. Structure detection always runs
+     * on the stripped form, so a pipe or a bracket inside backticks is never read
+     * as a table or a citation either way; this only decides whether a warning
+     * that echoes the claim can quote it verbatim. Default false.
+     */
+    keepInlineCode?: boolean;
+    /** Given a heading line's text, the tag to carry on units beneath it. */
+    sectionTag?(heading: string): string | undefined;
+}
+/**
+ * Split a markdown document into claim units.
+ *
+ * Headings, horizontal rules, code fences, HTML comments and table separators
+ * are structure and never become units. What remains is what a reader would
+ * call an assertion.
+ *
+ * This is a parser, not a judge: it says what the document asserts, never
+ * whether the assertions are grounded.
+ */
+declare function extractClaimUnits(text: string, opts?: ClaimUnitOptions): ClaimUnit[];
+/** The text a unit asserts: one string for prose, one per item for a list. */
+declare function unitTexts(unit: ClaimUnit): string[];
+/**
+ * The distinct citation tokens in a piece of text, in order of first
+ * appearance.
+ *
+ * `isCitation` is the caller's, and deliberately has no default: `[S1]`,
+ * `[E12]`, `[issue#45]` and `[src/foo.ts:12]` are all citations to the skill
+ * that uses them and prose to every other one. The engine will not guess.
+ */
+declare function citationTokensIn(text: string, isCitation: (token: string) => boolean): string[];
+/**
+ * Every bracketed token in the text, whether or not it is a citation.
+ *
+ * The counterpart to the function above: a caller that wants to report
+ * "3 bracketed tokens I did not recognise" needs the ones the predicate
+ * rejected, and re-scanning with an inverted predicate would miss that a token
+ * can look like two things at once.
+ */
+declare function bracketedTokensIn(text: string): string[];
+/**
+ * The citation tokens a document uses to ground its claims, and the ones that
+ * appear ONLY where they cannot.
+ *
+ * The second list is the useful half: a token that exists solely inside a code
+ * fence, an HTML comment or an excluded section looks like grounding to a
+ * reader skimming the file and grounds nothing. What to do about it — warn,
+ * fail, ignore — is the caller's.
+ */
+declare function collectCitations(text: string, isCitation: (token: string) => boolean, opts?: ClaimUnitOptions): {
+    grounding: string[];
+    inertOnly: string[];
+};
+/**
+ * Cited tokens that resolve to nothing known — a set difference, and nothing
+ * more. Whether a dangling citation is fatal is the caller's to decide.
+ */
+declare function danglingTokens(cited: Iterable<string>, known: Iterable<string>): string[];
+/** Known ids that no claim cites. The inverse of the above, same disclaimer. */
+declare function uncitedIds(cited: Iterable<string>, known: Iterable<string>): string[];
+/**
+ * Strip digit-group separators — comma, NBSP, narrow NBSP, apostrophe, plain
+ * space — so "10,000", "10 000" and "1'000" all read as one number.
+ *
+ * Applied to both sides of any containment test, which is the point: a report
+ * writing "10,000" and a source writing "10 000" are stating the same figure,
+ * and a comparison that says otherwise generates a false accusation.
+ */
+declare function normalizeNumeralText(text: string): string;
+/**
+ * The specific figures a claim asserts, normalised.
+ *
+ * Digits inside citation tokens, inline code and markdown-link URLs never
+ * count — `[S3]` and `/v2/users` are not claims about quantity. A bare single
+ * digit is dropped as too weak a signal to check anything with; "two parts" and
+ * "3 ways" are prose. Capped at 8, deduped, in order.
+ */
+declare function extractNumerals(text: string, max?: number): string[];
+
+/**
+ * The three calls that throw inside the workflow harness.
+ *
+ * `new Date()` with arguments is fine — it is the ARGLESS form that reads the
+ * clock — but the emitter refuses both, because distinguishing them by regex
+ * invites exactly the mistake the rule exists to stop. A workflow that needs a
+ * timestamp takes one as an injected constant.
+ */
+declare const WORKFLOW_FORBIDDEN: readonly ["Date.now(", "Math.random(", "new Date("];
+/** The half of a phase that describes how it is EMITTED, as the skill declares it. */
+interface PhaseEmission {
+    /** Contract filename under `orchestration/agents/<role>.md`, and the agent's role. */
+    role: string;
+    /** Progress-group title in the emitted workflow. */
+    title: string;
+    /** JSON Schema handed to `agent(…, { schema })`, so a fragment is validated on return. */
+    schema: unknown;
+    /** One agent per batch of at most this many items. */
+    batchSize: number;
+    /** Collapse to a single batch at or under this count. Defaults to the caller's floor. */
+    collapseFloor?(smallWorklist: number): number;
+    /** `meta.description` of the emitted workflow. */
+    description(items: number): string;
+    /** The orchestrator's fold step, rendered as comment lines in the script and in the runbook. */
+    applyHint(run: string, engineAbs: string, phase: PhaseInfo): string[];
+}
+/**
+ * The family-standard footer for a dispatch contract: subagents return
+ * fragments, the orchestrator is the sole writer.
+ *
+ * One writer, many readers — no races and no clobbered evidence. Every skill
+ * here had a copy; they differed only in whether a role gets a sanctioned
+ * write of its own, so that is the parameter.
+ *
+ * @param runAbs      the run directory, for the oversized-prose escape hatch
+ * @param sanctioned  the ONE write this role may perform, if any
+ * @param writingCommands  engine commands the subagent must not run
+ */
+declare function oneWriterFooter(runAbs: string, opts?: {
+    sanctioned?: string;
+    writingCommands?: readonly string[];
+}): string;
+/** Chunk ids into batches, one subagent per batch. Order-preserving and deterministic. */
+declare function toBatches(ids: readonly string[], batchSize: number): string[][];
+/**
+ * The launchable Workflow script for one ready phase.
+ *
+ * The worklist is the source of truth: the batches are frozen into the script
+ * at emit time, so a worklist that changes needs a re-emit before launching.
+ * Saying so in the file itself is cheaper than the confusion of a stale run.
+ */
+declare function emitWorkflowScript<T>(phase: PhaseInfo<T>, emission: PhaseEmission, runAbs: string, engineAbs: string, smallWorklist: number): string;
+/**
+ * The sequential fallback.
+ *
+ * Not a lesser path — it is the correct one for a small worklist, and the only
+ * one when no subagent-capable harness is present. It lists every phase,
+ * whether it is ready, and the exact command that makes it ready, so a reader
+ * can walk the whole run by hand.
+ */
+declare function runbookMd<T>(phases: readonly PhaseInfo<T>[], defs: readonly PhaseEmission[], runAbs: string, engineAbs: string, cli: string, preamble?: readonly string[]): string;
+
+/**
+ * Below this many items a fan-out does not pay for itself, and `orchestrate`
+ * says so rather than emitting a workflow nobody should launch.
+ *
+ * A default, not a rule: each phase overrides it through `collapseFloor`,
+ * because the units differ in weight. One heavy per-sub-question gather is
+ * worth its own agent at any count above one; one cheap claim↔source judgment
+ * is not.
+ */
+declare const SMALL_WORKLIST = 3;
+/** One agent per batch of at most this many items, unless a phase says otherwise. */
+declare const BATCH_SIZE = 8;
+/**
+ * A phase, as the SKILL declares it.
+ *
+ * `T` is whatever that phase's worklist file parses to — the skill's own type.
+ * This module reads it only through the two callbacks below, so it never has to
+ * know the shape.
+ */
+interface PhaseDefinition<T = unknown> extends PhaseEmission {
+    /** Phase name, used for `--phase`, the script filename and the progress group. */
+    name: string;
+    /** The worklist filename, relative to the run directory. */
+    worklist: string;
+    /**
+     * The fan-out ids in a parsed worklist, or undefined when it is not usable.
+     *
+     * Returning undefined is how a file that exists but is half-written stays
+     * "not ready" instead of producing a workflow over garbage — which is why
+     * every consumer's version of this tested `Array.isArray(...)` before
+     * trusting the parse.
+     */
+    ids(parsed: T): string[] | undefined;
+    /** The engine command that produces this worklist. Shown when it is missing. */
+    prerequisite(run: string, engineAbs: string, parsed?: T): string;
+}
+/** A phase, as this module resolved it against a run directory. */
+interface PhaseInfo<T = unknown> {
+    name: string;
+    ready: boolean;
+    /** Absolute path of the worklist this phase fans out over. */
+    worklist: string;
+    items: number;
+    ids: string[];
+    /** The command that produces the worklist when it is missing. */
+    prerequisite: string;
+    /** The parsed worklist, when ready — a phase's own emitters may need it. */
+    parsed?: T;
+}
+interface OrchestrateOptions {
+    /** Emit only this phase. Exit code 2 when its worklist does not exist yet. */
+    phase?: string;
+    /** Emit only the RUNBOOK and the contracts — the explicit low-token path. */
+    eco?: boolean;
+    /** Override the default collapse floor. */
+    smallWorklist?: number;
+    /** Lines the skill wants at the top of RUNBOOK.md, above the phase list. */
+    runbookPreamble?: string[];
+}
+interface OrchestrateResult {
+    exitCode: number;
+    written: string[];
+    notices: string[];
+    errors: string[];
+    phases: PhaseInfo[];
+}
+/**
+ * Resolve every declared phase against a run directory.
+ *
+ * Reading is tolerant by design (see readJsonSafe): absent, unreadable and
+ * malformed all mean "not ready", because the prerequisite command can simply
+ * regenerate the file and failing hard would strand the run instead.
+ */
+declare function listPhases<T>(runDir: string, engineAbs: string, defs: readonly PhaseDefinition<T>[]): PhaseInfo<T>[];
+/**
+ * Emit the run's orchestration from its current worklists.
+ *
+ * Writes, in `<run>/orchestration/`:
+ *   agents/<role>.md      the dispatch contracts, every role, every call
+ *   <phase>.workflow.mjs  one launchable Workflow script per ready phase
+ *   RUNBOOK.md            the sequential fallback
+ *
+ * The contracts are rewritten on every call, including under `--eco`: they
+ * double as the RUNBOOK's self-pass checklists, so the sequential path needs
+ * them just as much as the fan-out does.
+ *
+ * Every write goes through `writeArtifact`, so `--stdout` leaves the filesystem
+ * exactly as it found it. That is not a refinement — one consuming skill wrote
+ * these files with a bare writeFileSync and silently escaped its own gate.
+ */
+declare function orchestrateRun<T>(runDir: string, engineAbs: string, defs: readonly PhaseDefinition<T>[], contracts: (run: string, engineAbs: string, phases: PhaseInfo<T>[]) => Record<string, string>, opts?: OrchestrateOptions): OrchestrateResult;
+
+/** The command did what it was asked. */
+declare const EXIT_OK = 0;
+/** The command ran and the answer is a failure: nothing found, a gate refused. */
+declare const EXIT_FAILURE = 1;
+/** The invocation itself was wrong: unknown command, unknown flag, missing value. */
+declare const EXIT_USAGE = 2;
+/**
+ * The invocation was malformed. Carries EXIT_USAGE so a caller can map every
+ * parse failure to the right code without matching on the message.
+ *
+ * Thrown, not printed: the parser has no business owning stderr, and a test
+ * that asserts on a message should not have to capture a stream to read it.
+ */
+declare class UsageError extends Error {
+    readonly exitCode = 2;
+}
+interface CliSpec {
+    /** Every command word the CLI answers to. */
+    commands: Iterable<string>;
+    /** Flags that take a value: `--out <dir>` or `--out=<dir>`. */
+    valueFlags: Iterable<string>;
+    /** Flags that are present or absent: `--json`. Never take a value. */
+    boolFlags: Iterable<string>;
+}
+/** A parsed invocation of one command. */
+interface CommandArgs {
+    command: string;
+    /** Bare words, in order, with flags and their values removed. */
+    positional: string[];
+    values: Record<string, string>;
+    bools: ReadonlySet<string>;
+}
+/**
+ * What an argv turned out to be. `--help` and `--version` are outcomes rather
+ * than commands because every CLI answers them the same way and none of them
+ * wants a case in its command switch for it.
+ */
+type ParsedArgs = {
+    kind: "help";
+} | {
+    kind: "version";
+} | ({
+    kind: "command";
+} & CommandArgs);
+/**
+ * Parse an argv against a spec.
+ *
+ * Rejects, rather than ignoring: an unknown flag is a typo, and a CLI that
+ * silently drops `--limt 5` runs the whole command with the wrong budget and
+ * reports success. That silence is what this replaces — webindex's own CLI read
+ * flags with `argv.indexOf("--" + name)` and accepted anything.
+ *
+ * Throws UsageError on: an unknown command, an unknown flag, a value flag with
+ * no value, and a boolean flag given one.
+ */
+declare function parseArgs(argv: readonly string[], spec: CliSpec): ParsedArgs;
+/** A value flag, or undefined. */
+declare function argValue(p: CommandArgs, name: string): string | undefined;
+/** Whether a boolean flag was given. */
+declare function argBool(p: CommandArgs, name: string): boolean;
+/**
+ * A value flag as an integer, or undefined when absent.
+ *
+ * Throws UsageError on a value that is not one, rather than returning NaN. A
+ * NaN budget propagates into a comparison that is false whichever way it is
+ * written, so `--limit abc` would silently mean "no limit" — the opposite of
+ * what was asked.
+ */
+declare function argInt(p: CommandArgs, name: string): number | undefined;
+/** A comma-separated value flag as a trimmed, empty-free list. Absent → []. */
+declare function argList(p: CommandArgs, name: string): string[];
+/**
+ * A value flag constrained to a set. Absent → undefined; present and outside
+ * the set → UsageError naming what was expected.
+ */
+declare function argOneOf<T extends string>(p: CommandArgs, name: string, allowed: readonly T[]): T | undefined;
+/**
+ * The positional words as one string.
+ *
+ * `search rate limiting --limit 5` is ONE query of two words, not two queries
+ * and a stray number. The parser already dropped the flag and its value, so
+ * joining what is left is the whole of it — which is why this is three lines
+ * here and was a 25-line hand-rolled scanner in src/cli.ts.
+ */
+declare function positionalText(p: CommandArgs): string;
+/** JSON as a CLI writes it: two-space indent, one trailing newline. */
+declare function jsonLine(value: unknown): string;
+/**
+ * A fresh global regex matching a documented `--flag`.
+ *
+ * The lookbehind skips a `--` glued to a word tail (`foo--bar`, `---`) so a
+ * bold, parenthesised or em-dashed flag is still seen.
+ *
+ * Returns a NEW regex per call on purpose: a global regex carries `lastIndex`
+ * between uses, so a shared one silently skips matches in the second caller.
+ */
+declare function docFlagRegex(): RegExp;
+/** Every distinct `--flag` a document mentions, in first-seen order. */
+declare function documentedFlags(text: string): string[];
+/**
+ * Whether a help text mentions `--flag` as a whole token.
+ *
+ * The lookahead is what stops `--run` from being "covered" by `--run-root`, and
+ * `--shard` by `--shards`. Without it the gate passes on precisely the pairs it
+ * exists to catch.
+ */
+declare function helpCoversFlag(help: string, flag: string): boolean;
+/** The flags a CLI accepts that its help text never names. */
+declare function missingFromHelp(help: string, flags: Iterable<string>): string[];
+/**
+ * The pipe-separated value list documented for `--<flag>` on one line, or null
+ * when the line carries no such enumeration.
+ *
+ * The list must FOLLOW the flag with only non-letters in between, so a markdown
+ * table's pipes elsewhere on the line cannot false-positive. Backticks are
+ * stripped first so `` `a`|`b` `` still matches, and an escaped `\|` — which is
+ * how a literal pipe must be written inside a table cell — is unescaped first,
+ * because an enumeration in a table cell is still an enumeration.
+ */
+declare function pipedEnum(line: string, flag: string): string[] | null;
+/**
+ * Whether this process was started AS the CLI, rather than imported.
+ *
+ * Importing a bundle must not run it: the skill-bundle gate imports each built
+ * artifact to read its flag tables, and a `main()` that fired on import would
+ * turn a verification step into a run.
+ *
+ * Matches the basename against the configured brand, so a consumer's
+ * `scripts/ultrasearch.mjs`, a Homebrew `bin/ultrasearch` symlink and a global
+ * npm shim all count, while `node -e 'import(...)'` does not. brand() is read at
+ * CALL time — the lazy rule in brand.ts applies here like everywhere else.
+ */
+declare function isInvokedDirectly(argv1?: string | undefined, cli?: string): boolean;
 
 declare const PROTOCOL_VERSIONS: readonly ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 type ProtocolVersion = (typeof PROTOCOL_VERSIONS)[number];
@@ -1935,4 +2816,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type Feed, type FeedItem, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type HttpOptions, type HttpResult, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PackageFacts, type PageMetadata, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, type ToolDecl, ToolError, type ToolOutcome, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, applyRelevanceFloor, arxivIdFromUrl, assessExtractedText, assessPdfText, baseLang, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, cleanInline, configure, contactUa, contentCoverage, createServer, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, dedupeByUrl, dedupeNearDuplicates, defaultUa, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFormatForContentType, docFormatForUrl, doiFromUrl, domainOf, embedModel, enabledDocExtractors, enabledExtractors, ensureClone, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractDocument, extractJsonLd, extractMainHtml, extractMetaTags, extractPdf, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, hammingDistance, have, headCommit, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, keylessEngines, keywords, listReleases, listResources, listTags, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, matcherFromTokens, metaDescriptionOf, nearestHeading, negotiateProtocol, normalizeDoi, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, originUrl, pageDelayMs, pageMetadata, parseDdgHtml, parseDdgLite, parseFeed, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, pdfToText, politeDelayMs, probeFirecrawl, probeSearxng, pubmedAbstractUrl, rankedKeywords, readCapped, readCappedBytes, readResource, recencyScore, renderAsset, repoCacheRoot, repoFacts, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetNoWrite, resetOcrBudget, resetPdfLadderCache, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resolvePackage, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runStdioServer, runWithInput, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searxngBase, searxngIsExplicit, setCacheMode, setNoWrite, sh, shAsync, simhash, skillName, sleep, slugify, stackControl, startHttpServer, stripConsentBoilerplate, stripTags, structuredContentFor, subtokens, takeArtifacts, throttleReason, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, BATCH_SIZE, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, type ChangeVerdict, type ClaimUnit, type ClaimUnitOptions, type CliSpec, type CommandArgs, type CrawlOptions, type CrawlResult, type CrawledPage, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, EVIDENCE_TOKEN, EXIT_FAILURE, EXIT_OK, EXIT_USAGE, type EmbedResult, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FILE_LINE_TOKEN, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, type Feed, type FeedItem, type Fingerprint, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type HttpOptions, type HttpResult, type HybridDoc, type HybridHit, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type McpAdapter, type McpServer, type OrchestrateOptions, type OrchestrateResult, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROTOCOL_VERSIONS, type PackageFacts, type PageMetadata, type ParsedArgs, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PhaseDefinition, type PhaseEmission, type PhaseInfo, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, SMALL_WORKLIST, SOURCE_TOKEN, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, TOKEN_RE, type Table, type ToolDecl, ToolError, type ToolOutcome, UsageError, type VectorHit, type VectorPoint, WORKFLOW_FORBIDDEN, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, appendixMask, applyRelevanceFloor, argBool, argInt, argList, argOneOf, argValue, arxivIdFromUrl, assessExtractedText, assessPdfText, awaitHostSlot, backOffHost, baseLang, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, bracketedTokensIn, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, citationTokensIn, cleanInline, codeMask, collectCitations, configure, contactUa, contentCoverage, contentHash, cosine, crawlSite, createServer, danglingTokens, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, dedupeByUrl, dedupeNearDuplicates, defaultUa, deleteCollection, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFlagRegex, docFormatForContentType, docFormatForUrl, documentedFlags, doiFromUrl, domainOf, embed, embedModel, embedOne, embeddingsDisabled, emitWorkflowScript, enabledDocExtractors, enabledExtractors, ensureClone, ensureCollection, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractClaimUnits, extractDocument, extractJsonLd, extractMainHtml, extractMetaTags, extractNumerals, extractPdf, extractTables, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, fingerprint, firecrawlBase, firecrawlIsExplicit, fnv1a64, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, hammingDistance, hasChanged, have, headCommit, helpCoversFlag, hostDelayMs, htmlCanonicalUrl, htmlTitle, htmlToText, httpGet, httpJson, hybridSearch, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isInvokedDirectly, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, jsonLine, keylessEngines, keywords, linksFrom, listPhases, listReleases, listResources, listTags, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, markedQuoteMask, matcherFromTokens, metaDescriptionOf, missingFromHelp, nearestHeading, negotiateProtocol, normalize, normalizeDoi, normalizeNumeralText, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, ollamaBase, oneWriterFooter, orMasks, orchestrateRun, originUrl, pageDelayMs, pageMetadata, parseArgs, parseDdgHtml, parseDdgLite, parseFeed, parseFileLine, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, pdfToText, pipedEnum, politeDelayMs, positionalText, probeFirecrawl, probeOllama, probeQdrant, probeSearxng, pubmedAbstractUrl, qdrantBase, rankedKeywords, readCapped, readCappedBytes, readJsonSafe, readManifest, readResource, recencyScore, renderAsset, repoCacheRoot, repoFacts, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetHostSchedule, resetNoWrite, resetOcrBudget, resetOllamaProbe, resetPdfLadderCache, resetQdrantProbe, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resolvePackage, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runId, runStdioServer, runWithInput, runbookMd, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchVectors, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searxngBase, searxngIsExplicit, setCacheMode, setNoWrite, sh, shAsync, shq, simhash, skillName, sleep, slugify, stackControl, startHttpServer, stripConsentBoilerplate, stripHtmlComments, stripInlineCode, stripTags, structuredContentFor, subtokens, tableToMarkdown, takeArtifacts, throttleReason, toBatches, uncitedIds, unitTexts, upsert, urlDeclaresIdentity, validateArgs, withRunLock, writeArtifact, writeFileAtomic, writeManifest };

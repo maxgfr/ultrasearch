@@ -1,62 +1,35 @@
 // The shared claim parser: how a report file is split into claim units and how
 // [S#] citations are read out of them. `check` (the grounding gate), `verify`
-// (the claim↔source worklist) and `render` all import THIS module, so they can
-// never disagree on what a claim is or which sources it cites. Extracted from
-// check.ts verbatim — keep it dependency-free (no fs) so it stays pure.
+// (the claim<->source worklist) and `render` all import THIS module, so they can
+// never disagree on what a claim is or which sources it cites.
+//
+// Since webindex v1.15.0 the READING is the engine's: which bracketed tokens are
+// citations and which are markdown links, that a [S#] inside backticks or a code
+// fence or an HTML comment grounds nothing, which figures a claim asserts. Six
+// skills in this family each had their own regex for that, and the subtle cases
+// are exactly where independent copies disagree.
+//
+// What stays here is the POLICY, which the engine deliberately refuses to hold:
+// what counts as a source token for THIS tool ([S#]), what a model-hint region
+// means, and how a report file is masked before its claims are counted. The
+// engine exports no verdict at all -- no runCheck, no ok:boolean -- so `check`
+// still owns every decision it ever owned.
+import { appendixMask, codeMask, markedQuoteMask, stripHtmlComments, stripInlineCode, TOKEN_RE } from "./engine.js";
 
-// A bracketed token is a citation candidate when it is NOT a markdown link
-// ("](" after it). [S12] is a source citation; [M] is a model-hint marker;
-// anything else is an unknown token (warning only).
-export const TOKEN_RE = /\[([^\]\n]+)\](?!\()/g;
+export { TOKEN_RE, codeMask, stripInlineCode, stripHtmlComments, normalizeNumeralText, extractNumerals, appendixMask } from "./engine.js";
+
+/** A source citation for THIS tool. The engine has no opinion on the shape. */
 export const SOURCE_RE = /^S\d+$/;
 
-// Lines inside ``` / ~~~ fences are code — exclude from citation and claim
-// analysis so example snippets don't trip the checker.
-export function codeMask(lines: string[]): boolean[] {
-  const mask = new Array(lines.length).fill(false);
-  let inFence = false;
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\s*(```|~~~)/.test(lines[i]!)) {
-      mask[i] = true; // the fence line itself
-      inFence = !inFence;
-      continue;
-    }
-    mask[i] = inFence;
-  }
-  return mask;
-}
-
-// Mark each line that belongs to a model-hint blockquote region: a maximal run
-// of consecutive blockquote lines (^\s*>) in which any line contains
-// "[model-hint]". Returns the per-line mask plus the region count.
+/**
+ * Model-hint regions: a run of blockquote lines carrying `[model-hint]`.
+ *
+ * The engine's `markedQuoteMask` finds a marked run; what the marker MEANS -- a
+ * passage the author has flagged as unsourced and exempt from the grounding
+ * count -- is this tool's, so the marker stays here.
+ */
 export function hintMask(lines: string[]): { mask: boolean[]; regions: number } {
-  const mask = new Array(lines.length).fill(false);
-  let regions = 0;
-  let i = 0;
-  while (i < lines.length) {
-    if (/^\s*>/.test(lines[i]!)) {
-      let j = i;
-      let isHint = false;
-      while (j < lines.length && /^\s*>/.test(lines[j]!)) {
-        if (/\[model-hint\]/i.test(lines[j]!)) isHint = true;
-        j++;
-      }
-      if (isHint) {
-        regions++;
-        for (let k = i; k < j; k++) mask[k] = true;
-      }
-      i = j;
-    } else {
-      i++;
-    }
-  }
-  return { mask, regions };
-}
-
-// Remove inline-code spans so a [S#] (or a whole claim) hidden in backticks is
-// not treated as a citation or as covered prose (audit C1).
-export function stripInlineCode(line: string): string {
-  return line.replace(/`[^`\n]*`/g, " ");
+  return markedQuoteMask(lines, /\[model-hint\]/i);
 }
 
 function isHeadingOrRule(t: string): boolean {
@@ -165,60 +138,11 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[]):
   return units;
 }
 
-// Blank HTML comments (preserving line breaks) the way analyzeFile does, so a
-// citation hidden in `<!-- [S1] -->` can't ground a claim downstream either.
-export function stripHtmlComments(text: string): string {
-  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
-}
-
-// Strip group separators (comma, NBSP, narrow NBSP, apostrophe, plain space)
-// BETWEEN digits so "10,000", "10 000" and "1'000" all read "10000". Used on
-// both sides of the numeral-containment test below.
-export function normalizeNumeralText(text: string): string {
-  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
-}
-
-// Specific numerals asserted by a claim, in normalized form ("10,000" →
-// "10000", "99.9%" → "99.9"). Digits inside [S#]/[M] tokens, inline code and
-// markdown-link URLs never count. A bare single digit (even with a %) is too
-// weak a signal and is dropped. Deduped, capped at 8 per claim.
-export function extractNumerals(text: string): string[] {
-  const cleaned = stripInlineCode(text)
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // markdown link → its text (URL digits don't count)
-    .replace(/\[[^\]\n]+\](?!\()/g, " "); // [S#] / [M] / [unknown]
-  const out: string[] = [];
-  for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
-    const numeric = normalizeNumeralText(m[0]!).replace(/[,\u00A0\u202F'%]/g, "");
-    const digits = numeric.replace(/\D/g, "");
-    if (digits.length < 2 && !numeric.includes(".")) continue;
-    if (!out.includes(numeric)) out.push(numeric);
-    if (out.length >= 8) break;
-  }
-  return out;
-}
-
 // A trailing "## Sources" / "## References" section is the rendered appendix
 // pointer, not research prose: its boilerplate must not count as a factual
 // claim and its [S#] listing must not count as citation coverage (it would
 // otherwise mark every source "cited" and pad verify's supported count).
 const APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
-
-// Mark every line of each appendix section: from its heading (inclusive) to
-// the next heading of the same or shallower level (exclusive), or EOF.
-export function appendixMask(lines: string[]): boolean[] {
-  const mask = new Array(lines.length).fill(false);
-  let level = 0; // 0 = not inside an appendix section
-  for (let i = 0; i < lines.length; i++) {
-    const h = /^\s*(#{1,6})\s/.exec(lines[i]!);
-    if (level && h && h[1]!.length <= level) level = 0;
-    if (!level) {
-      const a = APPENDIX_HEADING.exec(lines[i]!);
-      if (a) level = a[1]!.length;
-    }
-    mask[i] = level > 0;
-  }
-  return mask;
-}
 
 // Split a hard-checked report file's raw text into claim units, applying the
 // SAME masking `runCheck` uses (HTML comments blanked, code fences and

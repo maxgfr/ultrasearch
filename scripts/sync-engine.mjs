@@ -49,7 +49,7 @@ const ENGINES = {
     // body stored beside its metadata, offline+refresh, apiBase on a bare host,
     // canonicalRepoRef, excerptWindows. Vendoring anything older typechecks
     // against the old declarations and then fails on names that are not there.
-    minRef: "v1.14.0",
+    minRef: "v1.15.1",
     meta: "engine.meta.json",
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },

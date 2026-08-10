@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmpdir } from "node:os";
-import { gatherReport, parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
+// `parseCli` is what `parseArgs` used to be: the tables and the exit policy
+// are still this repo's, only the validating loop moved into the engine with
+// webindex v1.15.0. Aliased so every assertion below reads unchanged.
+import { gatherReport, parseCli as parseArgs, buildGatherOptions, parseShardArgs, resolveApplyPaths, HELP, VALUE_FLAGS, BOOL_FLAGS } from "../src/cli.js";
 import { helpCoversFlag } from "../scripts/drift-rules.mjs";
 
 // parseArgs calls process.exit on help/version/errors; make it throw so we can

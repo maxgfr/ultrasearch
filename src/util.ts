@@ -55,6 +55,13 @@ export {
   diversify,
   dedupeNearDuplicates,
   mapLimit,
+  // Adopted with webindex v1.15.0, which brought the run directory in. `shq`
+  // is the one that matters: POSIX single-quoting has exactly one right
+  // answer, and this family had four implementations of it — one per repo that
+  // emits a command line. `runId` was three copies of the same timestamp
+  // format, which is what a shared on-disk convention should never be.
+  shq,
+  runId,
 } from "./engine.js";
 
 // A plain-text payload (an E-utilities abstract, a .txt spec) has no <title>,
@@ -74,25 +81,6 @@ export function titleFromText(text: string): string {
   const bibliographic = /^\d+\.\s/.test(lead) && /\bdoi:|\bepub\b|\d{4}\s+\w{3}\b/i.test(lead);
   const pick = (bibliographic ? paras[1] : lead) || lead;
   return pick.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
-}
-
-// Shell-single-quote a value for the command lines `orchestrate` emits (the
-// free-text question and every path). Single quotes are the only POSIX shell
-// context with zero expansion — backticks, `$`, `|`, `;` all stay literal.
-// Embedded single quotes close/reopen the quoting (' → '"'"'); newlines are
-// collapsed to spaces so an emitted command line stays one line.
-export function shq(s: string): string {
-  return `'${s.replace(/\r?\n/g, " ").replaceAll("'", `'"'"'`)}'`;
-}
-
-// Two-digit zero pad for the readable run id.
-function pad(n: number): string {
-  return String(n).padStart(2, "0");
-}
-
-// Readable run id used for the default output folder: run-YYYYMMDD-HHMMSS.
-export function runId(d: Date = new Date()): string {
-  return `run-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` + `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
 // ---------------------------------------------------------------------------

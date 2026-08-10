@@ -21,8 +21,8 @@ import { planQueries, formatQueryPlan } from "./queries.js";
 import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
-import { PHASES, listPhases, orchestrateRun } from "./orchestrate.js";
-import { runStdioServer, startHttpServer } from "./engine.js";
+import { PHASES, emitOrchestration, listPhasesFor } from "./orchestrate.js";
+import { type CommandArgs, type ParsedArgs, parseArgs, runStdioServer, startHttpServer, UsageError } from "./engine.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
@@ -301,74 +301,42 @@ function oneOf<T extends string>(name: string, value: string, allowed: readonly 
   return value as T;
 }
 
-export interface Parsed {
-  command: string;
-  positional: string[];
-  values: Record<string, string>;
-  bools: Set<string>;
-}
+/**
+ * One parsed invocation.
+ *
+ * Kept as this repo's own name for `CommandArgs` so no call site changed when
+ * the parser itself moved into the engine with webindex v1.15.0.
+ */
+export type Parsed = CommandArgs;
 
-export function parseArgs(argv: string[]): Parsed {
-  if (argv.length === 0) {
+/**
+ * Parse this CLI's argv against its own flag tables.
+ *
+ * The PARSER is the engine's as of v1.15.0 — it was the same validating loop in
+ * every skill here, and the one place they had all independently got right was
+ * refusing an unknown flag. What stays local is the part that is this tool's:
+ * the tables above, and what help and version PRINT.
+ *
+ * The engine throws UsageError rather than exiting, so the exit code lives here
+ * where the rest of this CLI's exit policy already does.
+ */
+export function parseCli(argv: string[]): Parsed {
+  let parsed: ParsedArgs;
+  try {
+    parsed = parseArgs(argv, { commands: COMMANDS, valueFlags: VALUE_FLAGS, boolFlags: BOOL_FLAGS });
+  } catch (e) {
+    if (!(e instanceof UsageError)) throw e;
+    fail(e.message);
+  }
+  if (parsed.kind === "help") {
     process.stdout.write(HELP);
     process.exit(0);
   }
-  if (argv[0] === "-h" || argv[0] === "--help") {
-    process.stdout.write(HELP);
-    process.exit(0);
-  }
-  if (argv[0] === "-v" || argv[0] === "--version") {
+  if (parsed.kind === "version") {
     process.stdout.write(VERSION + "\n");
     process.exit(0);
   }
-
-  const command = argv[0]!;
-  if (!COMMANDS.has(command)) {
-    fail(`unknown command: ${command} (run --help for usage)`);
-  }
-
-  const values: Record<string, string> = {};
-  const bools = new Set<string>();
-  const positional: string[] = [];
-
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === "-h" || arg === "--help") {
-      process.stdout.write(HELP);
-      process.exit(0);
-    }
-    if (arg === "-v" || arg === "--version") {
-      process.stdout.write(VERSION + "\n");
-      process.exit(0);
-    }
-    if (arg.startsWith("--")) {
-      const eq = arg.indexOf("=");
-      const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-      if (BOOL_FLAGS.has(key)) {
-        if (eq !== -1) fail(`--${key} is a boolean flag and does not take a value`);
-        bools.add(key);
-        continue;
-      }
-      if (!VALUE_FLAGS.has(key)) {
-        fail(`unknown flag: --${key} (run --help for the supported options)`);
-      }
-      let value: string;
-      if (eq !== -1) {
-        value = arg.slice(eq + 1);
-      } else {
-        const next = argv[i + 1];
-        if (next === undefined || next.startsWith("--")) {
-          fail(`missing value for --${key}`);
-        }
-        value = next;
-        i++;
-      }
-      values[key] = value;
-      continue;
-    }
-    positional.push(arg);
-  }
-  return { command, positional, values, bools };
+  return parsed;
 }
 
 function parseList(s: string): string[] {
@@ -656,9 +624,9 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
 // Exported (with an argv default) so tests can drive the whole dispatch surface
 // in-process — vitest's V8 coverage only instruments src/** in-process, so a
 // spawned bundle would exercise this code without ever counting toward it. The
-// isInvokedDirectly() gate below still controls auto-run from the CLI.
+// invokedAsThisModule() gate below still controls auto-run from the CLI.
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const p = parseArgs(argv);
+  const p = parseCli(argv);
   // Before anything else: every write in src/ consults this. `search`, `modes`
   // and `check` accept --stdout as a no-op (they already write nothing), so a
   // host can append the flag blanket-style — exactly like --cache today.
@@ -1066,10 +1034,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve(dir)}\n`);
           process.exit(2);
         }
-        process.stdout.write(JSON.stringify({ phases: listPhases(dir, engineAbs) }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ phases: listPhasesFor(dir, engineAbs) }, null, 2) + "\n");
         return;
       }
-      const res = orchestrateRun(dir, engineAbs, {
+      const res = emitOrchestration(dir, engineAbs, {
         phase: p.values.phase,
         eco: p.bools.has("eco"),
       });
@@ -1218,7 +1186,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 // Only run when invoked directly (node scripts/ultrasearch.mjs), not when
 // imported by tests. Realpath both sides so a symlinked path (macOS /tmp →
 // /private/tmp, a globally-linked skill folder) still matches.
-function isInvokedDirectly(): boolean {
+//
+// Deliberately NOT the engine's `isInvokedDirectly`, and renamed so the two
+// cannot be confused. A genuine homonym: the engine matches argv[1]'s basename
+// against the configured brand, which is right for a binary on PATH; this
+// compares resolved realpaths against THIS module's own URL, which is what
+// keeps a symlinked checkout from auto-running under vitest. Renaming is this
+// repo's documented answer to a homonym (see scripts/engine-forks.json).
+function invokedAsThisModule(): boolean {
   const argv1 = process.argv[1];
   if (argv1 === undefined) return false;
   const modulePath = fileURLToPath(import.meta.url);
@@ -1230,6 +1205,6 @@ function isInvokedDirectly(): boolean {
   return import.meta.url === pathToFileURL(argv1).href;
 }
 
-if (isInvokedDirectly()) {
+if (invokedAsThisModule()) {
   main().catch((e) => fail((e as Error).message));
 }
