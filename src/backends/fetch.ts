@@ -1,7 +1,7 @@
 // HTTP and extraction — public surface.
 //
 // The implementation now lives in the vendored webindex engine
-// (github.com/maxgfr/webindex), pinned in src/vendor/engine.meta.json. This
+// (github.com/maxgfr/webindex), pinned in src/vendor/webindex.meta.json. This
 // file stays as the import path the backends already use.
 //
 // Note the four accessors at the bottom. They were module-load constants here

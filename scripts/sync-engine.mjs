@@ -50,7 +50,7 @@ const ENGINES = {
     // canonicalRepoRef, excerptWindows. Vendoring anything older typechecks
     // against the old declarations and then fails on names that are not there.
     minRef: "v1.15.1",
-    meta: "engine.meta.json",
+    meta: "webindex.meta.json",
     files: [
       { remote: "scripts/engine.mjs", local: "webindex-engine.mjs" },
       { remote: "scripts/engine.d.mts", local: "webindex-engine.d.mts" },
