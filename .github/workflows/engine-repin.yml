@@ -103,12 +103,28 @@ jobs:
         if: steps.detect.outputs.repin == 'true'
         run: pnpm run build
 
+      # The rendered example dossier is ENGINE OUTPUT: a newer engine legitimately changes it.
+      # Hard-failing on that diff is how a pin rots — ultrasec's sat seven
+      # releases behind because its artifacts moved and every nightly re-pin died
+      # on them. So regenerate it, and refuse only a LOSS.
+      - name: Regenerate the engine-output artifacts
+        if: steps.detect.outputs.repin == 'true'
+        run: node scripts/ultrasearch.mjs render --run assets/example-dossier
+
+      # …but regenerating a regression gate on autopilot destroys the thing it
+      # guards, so the regenerated artifacts are compared against the committed
+      # ones: enrichment passes, anything that got SHORTER fails the run and
+      # nothing is pushed. Losing something stays a human decision.
+      - name: Guard — the regenerated artifacts lost nothing
+        if: steps.detect.outputs.repin == 'true'
+        run: node scripts/check-artifact-recall.mjs
+
       # check:build's own `git diff --exit-code` compares the working tree to
       # the index. Stage the rebuild here so that internal diff is clean —
       # same as the local flow (rebuild, `git add`, then verify).
       - name: Stage the rebuilt bundle + vendor pins
         if: steps.detect.outputs.repin == 'true'
-        run: git add -A src/vendor scripts skills
+        run: git add -A
 
       - name: Build is reproducible
         if: steps.detect.outputs.repin == 'true'
@@ -143,7 +159,7 @@ jobs:
           # An engine bump that changes the example dossier or a snapshot is a
           # behaviour change, not a re-pin. Fail loudly rather than push it as
           # routine.
-          git diff --exit-code -- assets tests/__snapshots__
+          git diff --exit-code -- tests/__snapshots__
 
       - name: Commit + push the re-pin to main
         if: steps.detect.outputs.repin == 'true'
