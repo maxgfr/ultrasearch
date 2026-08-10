@@ -2991,10 +2991,12 @@ function appendixMask(lines) {
   return mask;
 }
 function normalizeNumeralText(text) {
-  return text.replace(/(\d)[,\u00A0\u202F' ](?=\d)/g, "$1");
+  return text.replace(/(\d)[\u00A0\u202F'](?=\d)/g, "$1").replace(/(\d)[, ](\d{3})(?!\d)/g, "$1$2").replace(/(\d),(?=\d)/g, "$1.");
 }
 function extractNumerals(text, max = 8) {
-  const cleaned = stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ");
+  const cleaned = normalizeNumeralText(
+    stripInlineCode(text).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/\[[^\]\n]+\](?!\()/g, " ")
+  );
   const out = [];
   for (const m of cleaned.matchAll(/\d[\d,\u00A0\u202F']*(?:\.\d+)?%?/g)) {
     const numeric = normalizeNumeralText(m[0]).replace(/[,\u00A0\u202F'%]/g, "");

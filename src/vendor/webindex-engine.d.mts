@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.18.0";
+declare const ENGINE_VERSION = "1.18.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -2348,6 +2348,21 @@ declare function uncitedIds(cited: Iterable<string>, known: Iterable<string>): s
  * Applied to both sides of any containment test, which is the point: a report
  * writing "10,000" and a source writing "10 000" are stating the same figure,
  * and a comparison that says otherwise generates a false accusation.
+ *
+ * A comma is only a GROUP separator when it is followed by exactly three digits
+ * that no further digit follows. Everywhere else it is a DECIMAL comma and
+ * becomes a point, because most of the world writes "0,25" for what an English
+ * source writes "0.25". Stripping it unconditionally — as this did until the
+ * distinction was drawn — turned "0,25" into "025" and "1,5" into "15", so a
+ * report accused itself of inventing every figure it had correctly transcribed.
+ * That is not a corner case: the skills built on this engine are told to search
+ * in the audience's language and report in the user's, so a French report over
+ * English sources is the normal path, not the odd one.
+ *
+ * "1,000" stays ambiguous by construction and is read as one thousand — the
+ * three-digit group is the far more common convention in the corpora these
+ * tools fetch. NBSP, narrow NBSP and apostrophe are never decimal marks, so
+ * they are still stripped between any two digits.
  */
 declare function normalizeNumeralText(text: string): string;
 /**
