@@ -290,7 +290,10 @@ not hand control back mid-retrieval.
    - `SUMMARY.md` — the TL;DR (top of the mode template, a few sentences each).
    - `REPORT.md` — the full mode template (echoed in `DOSSIER.md`), filled
      **exhaustively**: use every relevant source and close with "Open questions /
-     contradictions".
+     contradictions". That closing section has **no exemption** — a sentence
+     saying what the dossier does not cover cites nothing by construction and
+     `check` counts it as unsourced. Write those lines as `> [model-hint]`
+     blockquotes, or end them with `[M]`.
 
    Cite every factual claim with `[S#]`; flag your own knowledge `[M]` (I1). In a
    table, the header row is structure but **every data row is a claim** and needs

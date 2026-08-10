@@ -66,8 +66,12 @@ at least one `[S#]` (or a model-hint flag). Known limits you should not lean on:
   factual assertion into a heading.
 - **Tables are split.** The **header row** — the one immediately followed by the
   `|---|` separator — is structure and is never coverage-checked. Every **data
-  row** IS a claim unit and needs its own `[S#]` (or a model-hint flag). A
-  comparison table of uncited rows fails `check`.
+  row** IS a claim unit and needs its own `[S#]` (or a model-hint flag).
+  ⚠ But coverage only counts a unit carrying **six or more substantive words**,
+  and the cells of a real comparison table rarely reach it: a row like
+  `| Token bucket | absorbs bursts |` passes `check` uncited, while the same
+  claim written out longhand fails. Cite your rows regardless — on tables the
+  gate is not behind you.
 - A trailing `## Sources` / `## References` section is the rendered appendix,
   not prose: its lines are never claims and its `[S#]` listing does not count
   as citation coverage (a dangling `[S#]` there still fails). Cite in the body
