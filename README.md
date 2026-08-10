@@ -184,8 +184,9 @@ the case worth seeing, and `ultrasearch doctor` says why.
   snippet. No configuration — it is used when it answers on
   `http://localhost:3002` and silently skipped when it does not, so runs never
   fail because of it (`--firecrawl <url>` / `ULTRASEARCH_FIRECRAWL`, `off` to
-  disable). Costs ~3 GB of images and ~4 GB of RAM; see
-  [`docker/firecrawl/README.md`](docker/firecrawl/README.md).
+  disable). Costs ~3 GB of images and ~4 GB of RAM. The compose file
+  and its env ship inside the vendored engine and are written out on first use
+  (`ultrasearch firecrawl up`); there is no `docker/` directory in this repo.
 
 The stack is **shared with the sibling skills** (ultrasearch, construct,
 ultradoc): one compose project, one set of containers, one set of volumes. They
