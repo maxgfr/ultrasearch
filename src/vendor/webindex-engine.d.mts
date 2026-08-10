@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.15.1";
+declare const ENGINE_VERSION = "1.18.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -2057,12 +2057,20 @@ declare function embedOne(text: string, opts?: {
     model?: string;
 }): Promise<number[] | undefined>;
 /**
- * Cosine similarity, in [-1, 1].
+ * Cosine similarity, in [-1, 1]. Zero whenever the answer would not be a number.
  *
- * Returns 0 for a zero-magnitude vector rather than NaN. NaN propagates through
- * every comparison as false, so a single degenerate embedding would silently
- * sort to the bottom of one ranking and the top of another depending on how the
- * comparator was written.
+ * Three ways that happens, and all three collapse to 0 rather than propagating:
+ *
+ *   - a zero-magnitude vector;
+ *   - vectors of DIFFERENT length, which for embeddings means two different
+ *     models. Scoring them over a shared prefix produces a plausible number for
+ *     a comparison that has no meaning, which is worse than refusing;
+ *   - a non-finite component — a NaN or an Infinity that reached the caller
+ *     from a broken embedding response.
+ *
+ * NaN compares false whichever way a comparator is written, so one degenerate
+ * vector would sort to the bottom of one ranking and the top of another
+ * depending on how someone happened to spell the sort.
  */
 declare function cosine(a: readonly number[], b: readonly number[]): number;
 /** A unit-length copy. A zero vector is returned unchanged, for the reason above. */
@@ -2377,6 +2385,20 @@ interface PhaseEmission {
     description(items: number): string;
     /** The orchestrator's fold step, rendered as comment lines in the script and in the runbook. */
     applyHint(run: string, engineAbs: string, phase: PhaseInfo): string[];
+    /**
+     * Extra options spliced into this phase's `agent(…)` call, as literal source.
+     *
+     * The case it exists for is worktree isolation: a phase whose subagents WRITE
+     * — a builder running a task — needs `isolation: 'worktree'` or they collide
+     * in one checkout. That is a property of the phase, not of the engine, and
+     * without a hook such a phase has to keep its own emitter.
+     *
+     * Source rather than a value because these are harness options, not data: the
+     * caller writes exactly what the harness expects. It is spliced into the
+     * emitted file, so it goes through the same safety assertion as everything
+     * else — a `Date.now()` in here is refused.
+     */
+    agentOpts?: string;
 }
 /**
  * The family-standard footer for a dispatch contract: subagents return
@@ -2403,7 +2425,7 @@ declare function toBatches(ids: readonly string[], batchSize: number): string[][
  * at emit time, so a worklist that changes needs a re-emit before launching.
  * Saying so in the file itself is cheaper than the confusion of a stale run.
  */
-declare function emitWorkflowScript<T>(phase: PhaseInfo<T>, emission: PhaseEmission, runAbs: string, engineAbs: string, smallWorklist: number): string;
+declare function emitWorkflowScript<T>(phase: PhaseInfo<T>, emission: PhaseEmission, runAbs: string, engineAbs: string, smallWorklist: number, constants?: Record<string, unknown>): string;
 /**
  * The sequential fallback.
  *
@@ -2439,14 +2461,20 @@ interface PhaseDefinition<T = unknown> extends PhaseEmission {
     /** The worklist filename, relative to the run directory. */
     worklist: string;
     /**
-     * The fan-out ids in a parsed worklist, or undefined when it is not usable.
+     * The fan-out ids for this phase, or undefined when it is not ready.
      *
      * Returning undefined is how a file that exists but is half-written stays
      * "not ready" instead of producing a workflow over garbage — which is why
      * every consumer's version of this tested `Array.isArray(...)` before
      * trusting the parse.
+     *
+     * `run` and `engineAbs` come along because a phase's units are not always a
+     * field of one file: one consumer derives its research gaps by ANALYSING the
+     * whole run, and needs the engine path to write each unit's drill command
+     * into the id itself. A callback that only ever saw the parsed worklist
+     * forced that phase to stay forked.
      */
-    ids(parsed: T): string[] | undefined;
+    ids(parsed: T | undefined, run: string, engineAbs: string): string[] | undefined;
     /** The engine command that produces this worklist. Shown when it is missing. */
     prerequisite(run: string, engineAbs: string, parsed?: T): string;
 }
@@ -2472,6 +2500,15 @@ interface OrchestrateOptions {
     smallWorklist?: number;
     /** Lines the skill wants at the top of RUNBOOK.md, above the phase list. */
     runbookPreamble?: string[];
+    /**
+     * Extra `const NAME = <json>` lines in every emitted workflow.
+     *
+     * For run-specific data a subagent must receive rather than fetch: a judge
+     * handed the decision and its evidence verbatim never has to open the run
+     * folder it is judging. Values are JSON-serialised, so the harness's
+     * pure-literal rule still holds.
+     */
+    constants?: Record<string, unknown>;
 }
 interface OrchestrateResult {
     exitCode: number;

@@ -3020,7 +3020,7 @@ function assertWorkflowSafe(script, phaseName) {
     }
   }
 }
-function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist) {
+function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants = {}) {
   const cli = brand().cli;
   const scriptPath = join6(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
@@ -3045,6 +3045,11 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist) {
     `const AGENTS = RUN + '/orchestration/agents'`,
     `const BATCHES = ${JSON.stringify(batches)}`,
     `const SCHEMA = ${JSON.stringify(emission.schema)}`,
+    // Run-specific data the caller wants pasted INTO the script rather than
+    // read from disk by the subagent. A judge panel is the case that needs it:
+    // each judge is handed the decision and its cited evidence verbatim,
+    // precisely so it never has to open the run folder it is judging.
+    ...Object.entries(constants).map(([name, value]) => `const ${name} = ${JSON.stringify(value)}`),
     ``,
     `function contract(role, extra) {`,
     `  return 'Read and follow the dispatch contract at ' + AGENTS + '/' + role + '.md VERBATIM.\\n'`,
@@ -3061,7 +3066,7 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist) {
     `    label: ${JSON.stringify(`${phase.name}:`)} + (i + 1),`,
     `    phase: ${JSON.stringify(emission.title)},`,
     `    agentType: 'general-purpose',`,
-    `    schema: SCHEMA,`,
+    `    schema: SCHEMA,${emission.agentOpts ?? ""}`,
     `  }))`,
     ``,
     `// One-writer rule: this workflow only COLLECTS the subagents' fragments.`,
@@ -3118,7 +3123,7 @@ function listPhases(runDir, engineAbs, defs) {
   return defs.map((def) => {
     const worklist = join7(run, def.worklist);
     const parsed = readJsonSafe(worklist);
-    const ids = parsed === void 0 ? void 0 : def.ids(parsed);
+    const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
     return {
       name: def.name,
@@ -3183,7 +3188,7 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join7(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small)));
+      written.push(writeArtifact(join7(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
   written.push(writeArtifact(join7(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble)));
