@@ -2266,6 +2266,10 @@ var LANG_COUNTRY = {
   da: "dk",
   cs: "cz",
   el: "gr",
+  nb: "no",
+  // Bokmål → Norway
+  nn: "no",
+  // Nynorsk → Norway
   uk: "ua",
   // Ukrainian language → Ukraine
   ar: "xa",
@@ -2276,6 +2280,13 @@ var LANG_COUNTRY = {
 var REGION_ALIASES = {
   gb: "uk",
   en: "us"
+};
+var DDG_LANG_ALIASES = {
+  nb: "no",
+  // Bokmål
+  nn: "no",
+  // Nynorsk
+  ja: "jp"
 };
 function baseLang(lang) {
   return (lang || "en").split("-")[0].toLowerCase();
@@ -2288,7 +2299,7 @@ function resolveRegion(lang, region) {
   return LANG_COUNTRY[l] ?? l;
 }
 function ddgRegion(lang, region) {
-  const l = baseLang(lang);
+  const l = DDG_LANG_ALIASES[baseLang(lang)] ?? baseLang(lang);
   let r = resolveRegion(lang, region);
   r = REGION_ALIASES[r] ?? r;
   return `${r}-${l}`;

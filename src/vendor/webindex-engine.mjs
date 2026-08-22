@@ -1,5 +1,5 @@
 // src/version.ts
-var ENGINE_VERSION = "1.18.1";
+var ENGINE_VERSION = "1.18.3";
 
 // src/brand.ts
 var DEFAULT_BRAND = {
@@ -2026,6 +2026,10 @@ var LANG_COUNTRY = {
   da: "dk",
   cs: "cz",
   el: "gr",
+  nb: "no",
+  // Bokmål → Norway
+  nn: "no",
+  // Nynorsk → Norway
   uk: "ua",
   // Ukrainian language → Ukraine
   ar: "xa",
@@ -2036,6 +2040,13 @@ var LANG_COUNTRY = {
 var REGION_ALIASES = {
   gb: "uk",
   en: "us"
+};
+var DDG_LANG_ALIASES = {
+  nb: "no",
+  // Bokmål
+  nn: "no",
+  // Nynorsk
+  ja: "jp"
 };
 function baseLang(lang) {
   return (lang || "en").split("-")[0].toLowerCase();
@@ -2048,7 +2059,7 @@ function resolveRegion(lang, region) {
   return LANG_COUNTRY[l] ?? l;
 }
 function ddgRegion(lang, region) {
-  const l = baseLang(lang);
+  const l = DDG_LANG_ALIASES[baseLang(lang)] ?? baseLang(lang);
   let r = resolveRegion(lang, region);
   r = REGION_ALIASES[r] ?? r;
   return `${r}-${l}`;
@@ -2893,7 +2904,13 @@ function ddgRedirectTarget(href) {
 }
 function throttleReason(status) {
   if (status === 429 || status === 503) return { throttled: true, why: `rate-limited (HTTP ${status})` };
+  if (status === 403) return { throttled: true, why: "blocked this client as automated traffic (HTTP 403)" };
   return { throttled: false, why: `unreachable (status ${status})` };
+}
+function looksLikeChallenge(body) {
+  if (body.length > 4e4) return false;
+  const head = body.slice(0, 4e3).toLowerCase();
+  return /<title>[^<]*captcha/.test(head) || head.includes("anomaly-modal") || head.includes("/anomaly.js") || head.includes("captcha-wrap") || head.includes("sending automated queries");
 }
 function parseBlocks(body, limit, blockRe, snippetRe, reject, resolveHref) {
   const found = [];
@@ -2940,6 +2957,10 @@ function parseMojeek(body, limit = 50) {
     (h) => h.startsWith("//") ? `https:${h}` : h
   );
 }
+function mojeekLocaleParams(locale) {
+  if (!locale) return "";
+  return `&lb=${encodeURIComponent(locale.lang)}&lbb=100&rb=${encodeURIComponent(locale.region)}&rbb=10`;
+}
 var SPECS = {
   // `s` is a 0-based result offset, ~30 per page.
   ddg: {
@@ -2957,7 +2978,7 @@ var SPECS = {
   // worth asking at all: it surfaces pages the DDG family does not have.
   mojeek: {
     label: "Mojeek",
-    url: (q, p) => `https://www.mojeek.com/search?q=${encodeURIComponent(q)}${p > 0 ? `&s=${p * 10 + 1}` : ""}`,
+    url: (q, p, _kl, locale) => `https://www.mojeek.com/search?q=${encodeURIComponent(q)}${p > 0 ? `&s=${p * 10 + 1}` : ""}${mojeekLocaleParams(locale)}`,
     parse: parseMojeek
   }
 };
@@ -2969,17 +2990,28 @@ async function searchViaKeyless(engine, query, opts = {}) {
   const limit = Math.max(1, opts.limit ?? 10);
   const kl = ddgRegion(opts.lang, opts.region);
   const acceptLanguage = acceptLanguageHeader(opts.lang, opts.region);
+  const locale = opts.lang || opts.region ? { lang: baseLang(opts.lang), region: resolveRegion(opts.lang, opts.region).toUpperCase() } : void 0;
   const seen = /* @__PURE__ */ new Set();
   const hits = [];
   for (let p = 0; p < pages && hits.length < limit; p++) {
-    const r = await httpGet(spec.url(q, p, kl), { accept: "text/html", acceptLanguage, timeoutMs: opts.timeoutMs ?? 12e3 });
+    const r = await httpGet(spec.url(q, p, kl, locale), { accept: "text/html", acceptLanguage, timeoutMs: opts.timeoutMs ?? 12e3 });
     if (!r.ok || !r.body) {
       if (p > 0) break;
       const { throttled, why } = throttleReason(r.status);
-      return { hits: [], note: `${spec.label} ${why}.`, throttled };
+      return { hits: [], note: `${spec.label} ${why}.`, throttled, ...r.status === 403 ? { blocked: true } : {} };
     }
     const before = hits.length;
-    for (const f of spec.parse(r.body, limit * 2)) {
+    const parsed = spec.parse(r.body, limit * 2);
+    if (parsed.length === 0 && looksLikeChallenge(r.body)) {
+      if (p > 0) break;
+      return {
+        hits: [],
+        note: `${spec.label} served an anti-bot challenge (HTTP ${r.status}) instead of results \u2014 blocked, not empty.`,
+        throttled: true,
+        blocked: true
+      };
+    }
+    for (const f of parsed) {
       const key = canonicalizeUrl(f.url);
       if (seen.has(key)) continue;
       seen.add(key);
@@ -3094,17 +3126,26 @@ async function search(query, opts = {}) {
   const viaSearxng = await searchViaSearxng(q, opts);
   if (viaSearxng.hits.length) return viaSearxng;
   const notes = [...viaSearxng.notes];
-  for (const engine of keylessEngines(opts)) {
+  const keyless = keylessEngines(opts);
+  let asked = 0;
+  let blocked = 0;
+  for (const engine of keyless) {
     const r = await searchViaKeyless(engine, q, { limit: opts.limit, pages: opts.pages, lang: opts.lang, region: opts.region });
     if (r.hits.length) {
       return { hits: r.hits.map((h) => ({ ...h, via: engine })), notes };
     }
+    asked++;
+    if (r.blocked) blocked++;
     if (r.throttled && r.note) notes.push(r.note);
   }
   const fc = await searchViaFirecrawl(q, opts.limit ?? 10, opts);
   const hits = (fc.hits ?? []).map((h) => ({ url: h.url, title: h.title, snippet: h.description, via: "firecrawl" }));
   if (fc.why) notes.push(fc.why);
-  if (!hits.length) notes.push(`No results from any engine. \`${brand().cli} stack up\` starts SearXNG and Firecrawl locally.`);
+  if (!hits.length) {
+    notes.push(
+      asked > 0 && blocked === asked ? `Every keyless engine blocked this client (${keyless.join(", ")}) \u2014 nothing was searched, which is not the same as nothing being there. Try again later, or run \`${brand().cli} stack up\` for a local SearXNG.` : `No results from any engine. \`${brand().cli} stack up\` starts SearXNG and Firecrawl locally.`
+    );
+  }
   return { hits, notes };
 }
 
@@ -5509,6 +5550,7 @@ export {
   listReleases,
   listResources,
   listTags,
+  looksLikeChallenge,
   looksLikeFirecrawl,
   looksLikeJunkExtraction,
   looksLikePdfUrl,
