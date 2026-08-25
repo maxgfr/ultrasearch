@@ -1,6 +1,6 @@
 ---
 name: ultrasearch
-description: "Use when the user wants a thorough, cited recap of what the WEB says — not the model's memory. Drives YOUR OWN WebSearch as the primary engine (several distinct queries, pooled), then fetches, de-duplicates and ranks every page into an evidence dossier and returns a citation-checked, tiered report (SUMMARY/REPORT + HTML/MD). Keyless engines, SearXNG and Firecrawl are optional amplifiers, never the floor. Modes: topic · bug (an error, via Stack Overflow/GitHub/HN) · research (lit review + BibTeX) · learn (lesson + glossary) · startup (market/competitors). Triggers: 'research X', 'what does the web say about X', 'deep dive on X', 'why am I getting <error>', 'literature review of X', 'teach me X', 'market research for <idea>', 'competitors of X', 'prior art on X'. Routed by ask shape: a cheap cited lookup for a one-fact ask, a full report otherwise, an opt-in deep tier (decomposition + adversarial verification) on 'deep research on X'. Vague ask? brainstorm proposes angles + questions."
+description: "Research what the web says and produce a citation-checked report. Use for deep dives, bug research, literature reviews, learning guides, market or competitor research, and prior-art searches; brainstorm angles for vague requests and use a direct web lookup for a single fact."
 license: MIT
 metadata:
   version: 1.29.0
@@ -10,7 +10,7 @@ metadata:
 
 **You are the search engine. The tool is the evidence machine.**
 
-Your own **WebSearch** is the best index in this pipeline: no container, no
+The host's **native web search** is the best index in this pipeline: no container, no
 scraping, no rate-limit roulette. But it stops at titles and snippets, and a
 report built on snippets is a report built on guesses. So the split is:
 
@@ -32,12 +32,12 @@ SearXNG) are an **amplifier**, not the floor. They are best-effort scrapers, and
 Seven rules hold on every run, at every depth. Later sections cite them by number
 instead of restating them.
 
-- **I0 — Your WebSearch drives discovery.** Every route starts with you
+- **I0 — Native web search drives discovery.** Every route starts with you
   searching. `queries` tells you how many distinct queries to run and which
   angles to cover; you pool every hit into one JSON array and pass it as
   `--web-results`. Never let a run fall back to the keyless engines *by default*
   — that is what the run means when it prints `websearch: none supplied`. If your
-  harness genuinely has no WebSearch tool, omit the flag and the engine keeps its
+  host genuinely has no web-search capability, omit the flag and the engine keeps its
   old behaviour on its own.
 
 - **I1 — Answer only from retrieved sources.** Never from your own knowledge of
@@ -51,7 +51,7 @@ instead of restating them.
   report in the language the user is talking to you in, quoting and glossing the
   foreign-language sources. Search locale ≠ output language.
 - **I4 — Always use the absolute `<skill-dir>/` prefix.** An installed skill
-  lives away from the project (e.g. `~/.claude/skills/ultrasearch/`), so a
+  lives away from the project (for example `~/.agents/skills/ultrasearch/`), so a
   cwd-relative path will NOT resolve. Substitute it in every command below **and
   in every subagent prompt**.
 - **I5 — You are the only writer of shared state.** Subagents return text. The
@@ -334,8 +334,8 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 
 | Your harness | How to run a fan-out phase |
 |---|---|
-| Has the Workflow tool | `orchestrate --run <RUN> --phase <p>`, then `Workflow({ scriptPath: "<RUN>/orchestration/<p>.workflow.mjs" })` |
-| Subagents, no Workflow tool | Same emission; dispatch one subagent per batch following `<RUN>/orchestration/agents/<role>.md` |
+| Claude Code exposes the Workflow tool | `orchestrate --run <RUN> --phase <p>`, then `Workflow({ scriptPath: "<RUN>/orchestration/<p>.workflow.mjs" })` |
+| Codex or another host exposes subagents | Same emission; dispatch one subagent per batch following `<RUN>/orchestration/agents/<role>.md` |
 | Eco mode, or no subagents | `orchestrate --run <RUN> --eco` → follow `<RUN>/orchestration/RUNBOOK.md` sequentially, playing each role yourself. Correctness-identical; only wall-clock differs. |
 
 Whatever the row, parallel subagents are

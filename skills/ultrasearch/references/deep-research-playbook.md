@@ -31,7 +31,7 @@ Every step is a plain `node <skill-dir>/scripts/ultrasearch.mjs …` call
 (`<skill-dir>` = this skill's absolute directory, per SKILL.md). Parallel
 subagents are an **optimization, not a requirement**:
 
-- **Harness with subagents** (e.g. Claude Code): dispatch one subagent per
+- **Harness with subagents** (for example Codex or Claude Code): dispatch one subagent per
   sub-question for the fan-out, and skeptic subagents (one per verify shard) for
   verification. Concrete, copy-pasteable contracts are below
   ("Fan-out subagent contract", "Parallel verification").
