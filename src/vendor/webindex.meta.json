@@ -1,9 +1,9 @@
 {
-  "tag": "v1.18.4",
-  "engineVersion": "1.18.4",
+  "tag": "v1.18.6",
+  "engineVersion": "1.18.6",
   "sha256": {
-    "webindex-engine.mjs": "15575f92088ecb9c07f66cad0bb366ca28eaf17d1f08f9df34077adeee508773",
-    "webindex-engine.d.mts": "d965ee1796fea99452e9e9a6ebdae8b1ab13f8c977f1e74917635d474158b3ac"
+    "webindex-engine.mjs": "6fbbbcab935645b9f7466e12b71297f70a0ecc2b7fcf1e676c8f6c7cf1b4eeaf",
+    "webindex-engine.d.mts": "75fec5eb66477b9f92bec02689b6232157da4ed650da03d72d4bf5b3ea555141"
   },
-  "syncedAt": "2026-08-26T06:49:15.606Z"
+  "syncedAt": "2026-08-31T12:52:12.053Z"
 }
