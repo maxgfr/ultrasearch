@@ -2,7 +2,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import type { Manifest, RawSource } from "../src/types.js";
+import type { Manifest, RawSource, Verdict } from "../src/types.js";
 import { writeDossier } from "../src/dossier.js";
 import { getMode } from "../src/modes/registry.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -253,13 +253,22 @@ describe.skipIf(!process.env.ULTRASEARCH_BENCH)("offline hot paths — bench", (
     expect(checkResult.sourceCitations).toBeGreaterThan(0);
     rows.push(row("runCheck", checkMs, dossierSize));
 
-    // A well-formed but empty VerifyResult — 0 adjudicated verdicts, so
-    // `requireVerify` fails closed (exactly the gate it exists to enforce)
-    // while still being a shape `render`'s HTML/markdown can read below.
-    writeFileSync(join(dirCheck, "VERIFY.json"), JSON.stringify({ ...reduceVerdicts([]), verdicts: [] }));
+    // Exactly ONE adjudicated verdict — enough for `applySemantic` to get past
+    // its early "0 adjudicated" return and reach the `requireVerify` COVERAGE
+    // branch (src/check.ts ~192-208), which re-derives `buildWorklist(dir)` and
+    // fails on every claim/source pair still missing a verdict. An all-empty
+    // verdicts file never reaches that branch at all, so it would measure the
+    // same thing as plain `runCheck` — this seeds just enough to force the real
+    // hot path (the worklist re-derivation) to run.
+    const firstPair = worklist.worklist.pairs[0]!;
+    const verdicts: Verdict[] = [{ ...firstPair, verdict: "supported", note: "" }];
+    writeFileSync(join(dirCheck, "VERIFY.json"), JSON.stringify({ ...reduceVerdicts(verdicts), verdicts }));
     const { result: verifyCheckResult, ms: verifyCheckMs } = timeSync(() => runCheck(dirCheck, { requireVerify: true }));
-    expect(verifyCheckResult.ok).toBe(false); // empty verdicts fail-closed — the gate really engaged
-    expect(verifyCheckResult.errors.some((e) => e.includes("VERIFY.json"))).toBe(true);
+    // The other pairs are still uncovered, so the gate fails closed — and the
+    // "no verdict in VERIFY.json" message only fires from the coverage branch,
+    // proving buildWorklist actually re-ran here.
+    expect(verifyCheckResult.ok).toBe(false);
+    expect(verifyCheckResult.errors.some((e) => e.includes("no verdict in VERIFY.json"))).toBe(true);
     rows.push(row("runCheck (requireVerify)", verifyCheckMs, dossierSize));
 
     // --- render: writeHtml + writeReportMarkdown ---
