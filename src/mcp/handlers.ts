@@ -11,7 +11,7 @@ import { runMerge } from "../merge.js";
 import { getMode, listModes } from "../modes/registry.js";
 import { runPlan } from "../plan.js";
 import { autoRelink, listIssues, relink } from "../relink.js";
-import { writeHtml, writeReportMarkdown } from "../render.js";
+import { loadRenderContext, writeHtml, writeReportMarkdown } from "../render.js";
 import {
   ALL_BACKENDS,
   ALL_DEPTHS,
@@ -475,10 +475,14 @@ function handleRender(args: Record<string, unknown>, run: string): unknown {
       next: "Nothing was written; index.md is above. index.html is skipped — it is only useful as a file.",
     };
   }
+  const wantHtml = !bool(args.no_html);
+  const wantMd = !bool(args.no_md);
+  if (!wantHtml && !wantMd) throw new ToolError("both `no_html` and `no_md` were set — there is nothing left to render.");
+  // One read of the dossier (+ its tiers) feeds both writers.
+  const ctx = loadRenderContext(run);
   const written: string[] = [];
-  if (!bool(args.no_html)) written.push(writeHtml(run));
-  if (!bool(args.no_md)) written.push(writeReportMarkdown(run));
-  if (!written.length) throw new ToolError("both `no_html` and `no_md` were set — there is nothing left to render.");
+  if (wantHtml) written.push(writeHtml(ctx));
+  if (wantMd) written.push(writeReportMarkdown(ctx));
   return { run, written };
 }
 

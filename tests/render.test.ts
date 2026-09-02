@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { writeFileSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { renderHtml, mdToHtml, buildReportMarkdown, writeReportMarkdown } from "../src/render.js";
+import { renderHtml, mdToHtml, buildReportMarkdown, writeReportMarkdown, writeHtml, loadRenderContext } from "../src/render.js";
 import { writeDossier } from "../src/dossier.js";
 import { runVerify, applyVerdicts } from "../src/verify.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -313,6 +313,66 @@ describe("renderHtml — deep-research enrichment", () => {
     expect(html).not.toContain('class="cite v-'); // no verdict-tinted citations
     expect(html).not.toContain('id="verification"');
     expect(html).not.toContain('id="subquestions"');
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("loadRenderContext", () => {
+  // The shared context must be a pure refactor: the ctx form and the dir form
+  // have to produce the exact same bytes, for HTML and for markdown.
+  function fullDossier(): string {
+    const dir = scratch();
+    writeFixtureDossier(dir, 3);
+    writeFileSync(join(dir, "SUMMARY.md"), "## TL;DR\nA short summary about request windows citing [S1].\n");
+    writeFileSync(join(dir, "REPORT.md"), "# R\nA grounded factual claim about request windows here [S2].\n");
+    writeFileSync(join(dir, "glossary.md"), "## Terms\n- **window**: a period of time, see [S1].\n");
+    runVerify(dir);
+    applyBySource(dir, { S1: "supported", S2: "partial", S3: "supported" });
+    return dir;
+  }
+
+  it("renders byte-identical HTML and markdown from a context and from a directory", () => {
+    const dir = fullDossier();
+    const ctx = loadRenderContext(dir);
+    expect(renderHtml(ctx)).toBe(renderHtml(dir));
+    expect(buildReportMarkdown(ctx)).toBe(buildReportMarkdown(dir));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("collects the sources cited across every present tier", () => {
+    const dir = fullDossier();
+    const ctx = loadRenderContext(dir);
+    expect(ctx.dir).toBe(dir);
+    expect(ctx.tiers.map((t) => t.tier.file)).toEqual(["SUMMARY.md", "REPORT.md", "glossary.md"]);
+    expect([...ctx.cited].sort()).toEqual(["S1", "S2"]);
+    expect(ctx.verify?.pairs).toBeGreaterThan(0);
+    expect(ctx.sources).toHaveLength(3);
+    expect(ctx.manifest.question).toBe("what is rate limiting");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("writes the same bytes whether the writers get a context or a directory", () => {
+    const dir = fullDossier();
+    const ctx = loadRenderContext(dir);
+    const htmlA = readFileSync(writeHtml(ctx, join(dir, "a.html")), "utf8");
+    const htmlB = readFileSync(writeHtml(dir, join(dir, "b.html")), "utf8");
+    expect(htmlA).toBe(htmlB);
+    const mdA = readFileSync(writeReportMarkdown(ctx, join(dir, "a.md")), "utf8");
+    const mdB = readFileSync(writeReportMarkdown(dir, join(dir, "b.md")), "utf8");
+    expect(mdA).toBe(mdB);
+    // The default output paths still come from the dossier directory.
+    expect(writeHtml(ctx)).toBe(join(dir, "index.html"));
+    expect(writeReportMarkdown(ctx)).toBe(join(dir, "index.md"));
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("has no tiers, no citations and no verify record on a bare dossier", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    const ctx = loadRenderContext(dir);
+    expect(ctx.tiers).toEqual([]);
+    expect(ctx.cited.size).toBe(0);
+    expect(ctx.verify).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 });

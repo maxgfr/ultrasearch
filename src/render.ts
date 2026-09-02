@@ -86,9 +86,11 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
     const fence = /^\s*(```|~~~)(.*)$/.exec(line);
     if (fence) {
       const marker = fence[1]!;
+      // Built once per fence, not once per scanned line (no /g, so no state).
+      const close = new RegExp(`^\\s*${marker}`);
       const body: string[] = [];
       i++;
-      while (i < lines.length && !new RegExp(`^\\s*${marker}`).test(lines[i]!)) {
+      while (i < lines.length && !close.test(lines[i]!)) {
         body.push(lines[i]!);
         i++;
       }
@@ -259,18 +261,43 @@ li.s-uncited{opacity:.6}
 @media(max-width:760px){.wrap{grid-template-columns:1fr}nav{position:static;max-height:none}}
 `;
 
-// The set of source ids cited by any present report tier (REPORT/SUMMARY/
-// glossary), using the shared citation accounting (appendix + code excluded).
-// Empty when no tier cites anything yet (a pre-report render) — callers must not
-// mark everything "uncited" in that case.
-function citedAcrossTiers(dir: string): Set<string> {
+// Everything a render needs from a dossier on disk. `cited` is the set of
+// source ids cited by any present tier, using the shared citation accounting
+// (appendix + code excluded); it is empty when no tier cites anything yet (a
+// pre-report render) — callers must not mark everything "uncited" in that case.
+export interface RenderContext {
+  dir: string;
+  sources: Source[];
+  manifest: Manifest;
+  tiers: { tier: (typeof TIERS)[number]; text: string }[];
+  verify?: VerifyResult;
+  cited: Set<string>;
+}
+
+// Read the dossier ONCE so index.html and index.md can share it: a render used
+// to cost two readDossier calls, two VERIFY.json parses and FOUR reads of every
+// tier (each writer read them to render, then again to count citations). One
+// context = one readDossier, one readVerify, one read + one citation scan per
+// present tier, for both writers.
+export function loadRenderContext(dir: string): RenderContext {
+  const { sources, manifest } = readDossier(dir);
+  const verify = readVerify(dir);
+  const tiers: { tier: (typeof TIERS)[number]; text: string }[] = [];
   const cited = new Set<string>();
-  for (const t of TIERS) {
-    const p = join(dir, t.file);
+  for (const tier of TIERS) {
+    const p = join(dir, tier.file);
     if (!existsSync(p)) continue;
-    for (const id of citedSourceIds(readFileSync(p, "utf8"))) cited.add(id);
+    const text = readFileSync(p, "utf8");
+    tiers.push({ tier, text });
+    for (const id of citedSourceIds(text)) cited.add(id);
   }
-  return cited;
+  return { dir, sources, manifest, tiers, verify, cited };
+}
+
+// Every public renderer takes a directory (the historical signature) or an
+// already-loaded context (so a pair of writers pays for one load).
+function toContext(dirOrCtx: string | RenderContext): RenderContext {
+  return typeof dirOrCtx === "string" ? loadRenderContext(dirOrCtx) : dirOrCtx;
 }
 
 // Read the resolved semantic-verification record, if one exists.
@@ -297,16 +324,14 @@ function worstBySource(verify?: VerifyResult): Map<string, VerdictKind> {
 }
 
 // Build the self-contained index.html for a dossier directory.
-export function renderHtml(dir: string): string {
-  const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync(join(dir, t.file)));
-  const verify = readVerify(dir);
+export function renderHtml(dirOrCtx: string | RenderContext): string {
+  const ctx = toContext(dirOrCtx);
+  const { sources, manifest, verify } = ctx;
   const verdicts = worstBySource(verify);
 
-  const rendered = present.map((t) => {
-    const md = readFileSync(join(dir, t.file), "utf8");
-    const { html, headings } = mdToHtml(md, t.id, { verdicts });
-    return { ...t, html, headings };
+  const rendered = ctx.tiers.map(({ tier, text }) => {
+    const { html, headings } = mdToHtml(text, tier.id, { verdicts });
+    return { ...tier, html, headings };
   });
 
   // Hoist an "open questions / contradictions" heading into a top callout.
@@ -349,7 +374,7 @@ export function renderHtml(dir: string): string {
   }
   if (verify) main.push(verificationSection(verify));
   if (subs.length) main.push(subQuestionsSection(manifest, sources));
-  main.push(sourcesSection(sources, citedAcrossTiers(dir)));
+  main.push(sourcesSection(sources, ctx.cited));
   main.push("</main>");
 
   const title = escapeHtml(manifest.question || "ultrasearch report");
@@ -445,9 +470,10 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
 }
 
 // Write index.html for a dossier; returns the output path.
-export function writeHtml(dir: string, out?: string): string {
-  const html = renderHtml(dir);
-  const path = out ?? join(dir, "index.html");
+export function writeHtml(dirOrCtx: string | RenderContext, out?: string): string {
+  const ctx = toContext(dirOrCtx);
+  const html = renderHtml(ctx);
+  const path = out ?? join(ctx.dir, "index.html");
   return writeArtifact(path, html);
 }
 
@@ -490,10 +516,9 @@ function verificationMarkdown(r: VerifyResult): string {
 // Written as `index.md` (NOT report.md): case-insensitive filesystems (macOS
 // APFS, Windows) treat report.md and the REPORT.md tier as the SAME file, so a
 // literal report.md would clobber the report tier and corrupt re-renders.
-export function buildReportMarkdown(dir: string): string {
-  const { sources, manifest } = readDossier(dir);
-  const present = TIERS.filter((t) => existsSync(join(dir, t.file)));
-  const verify = readVerify(dir);
+export function buildReportMarkdown(dirOrCtx: string | RenderContext): string {
+  const ctx = toContext(dirOrCtx);
+  const { sources, manifest, verify } = ctx;
 
   const meta =
     `> ${manifest.mode} · depth ${manifest.depth} · ${sources.length} sources` +
@@ -502,10 +527,10 @@ export function buildReportMarkdown(dir: string): string {
 
   const parts: string[] = [`# ${manifest.question || "ultrasearch report"}`, "", meta, ""];
 
-  for (const t of present) {
-    const body = readFileSync(join(dir, t.file), "utf8").trim();
+  for (const { tier, text } of ctx.tiers) {
+    const body = text.trim();
     if (!body) continue;
-    parts.push("---", "", `## ${t.label}`, "", body, "");
+    parts.push("---", "", `## ${tier.label}`, "", body, "");
   }
 
   if (verify) {
@@ -514,7 +539,7 @@ export function buildReportMarkdown(dir: string): string {
 
   parts.push("---", "", `## Sources`, "");
   if (sources.length) {
-    const cited = citedAcrossTiers(dir);
+    const cited = ctx.cited;
     const mark = cited.size > 0;
     for (const s of sources) {
       const flag = s.fullText === false ? " · ⚠ snippet only" : "";
@@ -531,8 +556,9 @@ export function buildReportMarkdown(dir: string): string {
 
 // Write the consolidated markdown report (index.md) for a dossier; returns the
 // output path. See buildReportMarkdown for why it is index.md, not report.md.
-export function writeReportMarkdown(dir: string, out?: string): string {
-  const md = buildReportMarkdown(dir);
-  const path = out ?? join(dir, "index.md");
+export function writeReportMarkdown(dirOrCtx: string | RenderContext, out?: string): string {
+  const ctx = toContext(dirOrCtx);
+  const md = buildReportMarkdown(ctx);
+  const path = out ?? join(ctx.dir, "index.md");
   return writeArtifact(path, md);
 }

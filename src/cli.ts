@@ -13,7 +13,7 @@ import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
 import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
-import { writeHtml, writeReportMarkdown } from "./render.js";
+import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { autoRelink, listIssues, relink } from "./relink.js";
 import { runPlan } from "./plan.js";
@@ -970,13 +970,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       }
       // By default render writes BOTH a self-contained index.html and a portable
       // consolidated index.md. --no-html / --no-md opt out of either.
+      // One read of the dossier (+ its tiers) feeds both writers.
+      const ctx = loadRenderContext(rdir);
       const written: { html?: string; md?: string } = {};
       if (!p.bools.has("no-html")) {
-        written.html = writeHtml(rdir, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
+        written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
         process.stderr.write(`ultrasearch: wrote ${written.html}\n`);
       }
       if (!p.bools.has("no-md")) {
-        written.md = writeReportMarkdown(rdir);
+        written.md = writeReportMarkdown(ctx);
         process.stderr.write(`ultrasearch: wrote ${written.md}\n`);
       }
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");
