@@ -1,5 +1,5 @@
 // src/version.ts
-var ENGINE_VERSION = "1.18.6";
+var ENGINE_VERSION = "1.18.7";
 
 // src/brand.ts
 var DEFAULT_BRAND = {
@@ -262,9 +262,18 @@ function ocrBudgetLeft() {
   return Math.max(0, envInt("OCR_MAX", DEFAULT_MAX_DOCS) - spent);
 }
 async function ocrTools() {
-  const probe = async (cmd, args) => (await runWithInput(cmd, args, Buffer.alloc(0), 2e4)).ok;
-  const [copyablePdf, tesseract] = await Promise.all([probe("copyable-pdf", ["--help"]), probe("tesseract", ["--version"])]);
-  return { copyablePdf, tesseract };
+  if (!toolsProbe) {
+    toolsProbe = (async () => {
+      const probe = async (cmd, args) => (await runWithInput(cmd, args, Buffer.alloc(0), 2e4)).ok;
+      const [copyablePdf, tesseract] = await Promise.all([probe("copyable-pdf", ["--help"]), probe("tesseract", ["--version"])]);
+      return { copyablePdf, tesseract };
+    })();
+  }
+  return toolsProbe;
+}
+var toolsProbe;
+function resetOcrTools() {
+  toolsProbe = void 0;
 }
 async function ocrPdf(bytes) {
   if (ocrBudgetLeft() <= 0) return void 0;
@@ -296,6 +305,7 @@ var dead = /* @__PURE__ */ new Set();
 function resetPdfLadderCache() {
   dead.clear();
   resetOcrBudget();
+  resetOcrTools();
 }
 function enabledExtractors(engines) {
   if (engines) return engines;
@@ -520,10 +530,10 @@ var CP1252_LABELS = /* @__PURE__ */ new Set([
   "us-ascii",
   "ascii"
 ]);
+var CP1252_C1_RANGE = /[\x80-\x9f]/g;
+var cp1252C1 = (c) => String.fromCharCode(CP1252_C1[c.charCodeAt(0) - 128]);
 function decodeCp1252(bytes) {
-  let out = "";
-  for (const b of bytes) out += String.fromCharCode(b >= 128 && b <= 159 ? CP1252_C1[b - 128] : b);
-  return out;
+  return bytes.toString("latin1").replace(CP1252_C1_RANGE, cp1252C1);
 }
 function decodeWith(bytes, encoding) {
   if (CP1252_LABELS.has(encoding)) return decodeCp1252(bytes);
@@ -752,7 +762,9 @@ function baseChar(ch) {
   const stripped = ch.normalize("NFD").replace(new RegExp("\\p{M}+", "gu"), "");
   return stripped.length === 1 ? stripped : ch;
 }
+var NON_ASCII = /[\u0080-\uffff]/;
 function deaccent(s) {
+  if (!NON_ASCII.test(s)) return s;
   let out = "";
   for (const ch of s) out += baseChar(ch);
   return out;
@@ -1102,6 +1114,10 @@ async function readCappedBytes(res, max) {
   }
   return Buffer.concat(chunks);
 }
+var DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+function isBinaryDocument(contentType) {
+  return /application\/pdf/i.test(contentType) || docFormatForContentType(contentType) !== void 0;
+}
 async function httpGet(url, opts = {}) {
   const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, body: "", contentType: "", url };
@@ -1117,7 +1133,7 @@ async function httpGet(url, opts = {}) {
         redirect: "follow",
         headers
       });
-      const max = opts.maxBytes ?? 4 * 1024 * 1024;
+      const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
       const meta = {
         contentType: res.headers.get("content-type") ?? "",
         url: res.url || url,
@@ -1133,6 +1149,7 @@ async function httpGet(url, opts = {}) {
       }
       const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
       countFetch(bytes.length, false);
+      const keepBytes = opts.binary || isBinaryDocument(meta.contentType);
       const result = {
         ok: res.ok,
         status: res.status,
@@ -1140,7 +1157,7 @@ async function httpGet(url, opts = {}) {
         // Windows-1252 page used to come back with every accented character
         // replaced by U+FFFD, and nothing anywhere noticed.
         body: opts.binary ? "" : decodeBody(bytes, meta.contentType),
-        bytes: opts.binary ? bytes : void 0,
+        bytes: keepBytes ? bytes : void 0,
         ...meta
       };
       if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
@@ -1178,8 +1195,14 @@ async function httpJson(method, url, body, opts = {}) {
         headers,
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
-      const text = await res.text();
-      countFetch(Buffer.byteLength(text), false);
+      const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+      const bytes = await readCappedBytes(res, max);
+      countFetch(bytes.length, false);
+      if (bytes.length >= max) {
+        ctrl.abort();
+        return { ok: false, status: res.status, data: void 0, error: `response too large: over the ${max}-byte cap` };
+      }
+      const text = bytes.toString("utf8");
       let data;
       try {
         data = text ? JSON.parse(text) : void 0;
@@ -1622,16 +1645,37 @@ function domainOf(raw) {
   }
 }
 var LOCAL_FILE_DOMAIN = "local file";
-var FNV_OFFSET = 0xcbf29ce484222325n;
-var FNV_PRIME = 0x100000001b3n;
-var MASK64 = (1n << 64n) - 1n;
-function fnv1a64(s) {
-  let h = FNV_OFFSET;
+var FNV_OFFSET_HI = 3421674724;
+var FNV_OFFSET_LO = 2216829733;
+var FNV_PRIME_LOW = 435;
+var laneHi = 0;
+var laneLo = 0;
+function fnvMix(s) {
+  let hi = laneHi;
+  let lo = laneLo;
   for (let i = 0; i < s.length; i++) {
-    h ^= BigInt(s.charCodeAt(i));
-    h = h * FNV_PRIME & MASK64;
+    lo = (lo ^ s.charCodeAt(i)) >>> 0;
+    const bP = (lo & 65535) * FNV_PRIME_LOW;
+    const aP = (lo >>> 16) * FNV_PRIME_LOW + (bP >>> 16);
+    const carry = aP >>> 16;
+    hi = carry + Math.imul(hi, FNV_PRIME_LOW) + (lo << 8) >>> 0;
+    lo = ((aP & 65535) << 16 | bP & 65535) >>> 0;
   }
-  return h;
+  laneHi = hi;
+  laneLo = lo;
+}
+function fnv1a64(s) {
+  laneHi = FNV_OFFSET_HI;
+  laneLo = FNV_OFFSET_LO;
+  fnvMix(s);
+  return BigInt(laneHi) << 32n | BigInt(laneLo);
+}
+function fnv1a64Words(pieces, out) {
+  laneHi = FNV_OFFSET_HI;
+  laneLo = FNV_OFFSET_LO;
+  for (const p of pieces) fnvMix(p);
+  out[0] = laneHi;
+  out[1] = laneLo;
 }
 
 // src/rank.ts
@@ -1704,10 +1748,20 @@ function bm25Tokenize(text) {
   for (const raw of text.split(/[^\p{L}\p{N}_]+/u)) {
     if (raw.length < 2) continue;
     if (isStopword(raw)) continue;
-    const t = foldTerm(raw);
+    const t = foldCached(raw);
     if (t.length >= 2) out.push(t);
   }
   return out;
+}
+var FOLD_CACHE_MAX = 5e4;
+var foldCache = /* @__PURE__ */ new Map();
+function foldCached(raw) {
+  const hit = foldCache.get(raw);
+  if (hit !== void 0) return hit;
+  const t = foldTerm(raw);
+  if (foldCache.size >= FOLD_CACHE_MAX) foldCache.clear();
+  foldCache.set(raw, t);
+  return t;
 }
 function docTokens(doc, titleWeight, headingWeight) {
   const out = bm25Tokenize(doc.body);
@@ -1824,27 +1878,43 @@ function recencyScore(meta, minYear, maxYear) {
 }
 function simhash(text) {
   const toks = bm25Tokenize(text);
-  const shingles = [];
-  if (toks.length < 3) shingles.push(...toks);
-  else for (let i = 0; i + 3 <= toks.length; i++) shingles.push(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`);
-  if (!shingles.length) return 0n;
-  const v = new Array(64).fill(0);
-  for (const sh2 of shingles) {
-    const h = fnv1a64(sh2);
-    for (let b = 0; b < 64; b++) v[b] += (h >> BigInt(b) & 1n) === 1n ? 1 : -1;
+  if (!toks.length) return 0n;
+  const v = new Int32Array(64);
+  const words = new Uint32Array(2);
+  const pieces = toks.length < 3 ? [""] : ["", " ", "", " ", ""];
+  const n = toks.length < 3 ? toks.length : toks.length - 2;
+  for (let i = 0; i < n; i++) {
+    if (toks.length < 3) pieces[0] = toks[i];
+    else {
+      pieces[0] = toks[i];
+      pieces[2] = toks[i + 1];
+      pieces[4] = toks[i + 2];
+    }
+    fnv1a64Words(pieces, words);
+    const hi2 = words[0];
+    const lo2 = words[1];
+    for (let b = 0; b < 32; b++) {
+      v[b] = v[b] + (lo2 >>> b & 1);
+      v[b + 32] = v[b + 32] + (hi2 >>> b & 1);
+    }
   }
-  let out = 0n;
-  for (let b = 0; b < 64; b++) if (v[b] > 0) out |= 1n << BigInt(b);
-  return out;
+  let lo = 0;
+  let hi = 0;
+  for (let b = 0; b < 32; b++) {
+    if (2 * v[b] > n) lo |= 1 << b;
+    if (2 * v[b + 32] > n) hi |= 1 << b;
+  }
+  return BigInt(hi >>> 0) << 32n | BigInt(lo >>> 0);
+}
+var MASK32 = 0xffffffffn;
+function popcount32(n) {
+  let x = n - (n >>> 1 & 1431655765);
+  x = (x & 858993459) + (x >>> 2 & 858993459);
+  return Math.imul(x + (x >>> 4) & 252645135, 16843009) >>> 24;
 }
 function hammingDistance(a, b) {
-  let x = a ^ b;
-  let count = 0;
-  while (x) {
-    x &= x - 1n;
-    count++;
-  }
-  return count;
+  const x = a ^ b;
+  return popcount32(Number(x & MASK32)) + popcount32(Number(x >> 32n & MASK32));
 }
 function dedupeNearDuplicates(items, opts = {}) {
   const maxBits = opts.maxBits ?? 3;
@@ -3613,7 +3683,7 @@ function resetRunLocks() {
 }
 
 // src/cache.ts
-import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync2, rmSync as rmSync3, statSync as statSync2, writeFileSync as writeFileSync4 } from "fs";
+import { existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync3, readdirSync as readdirSync2, rmSync as rmSync3, statSync as statSync2 } from "fs";
 import { join as join4 } from "path";
 import { tmpdir as tmpdir4 } from "os";
 
@@ -3733,14 +3803,29 @@ function readCache(url, acceptLanguage = "", extractor = "native") {
 }
 function writeCache(url, res, now, acceptLanguage = "", extractor = "native") {
   if (isNoWrite()) return;
+  const dir = cacheDir();
+  const { meta, body } = entryPaths(url, acceptLanguage, extractor);
+  const { text, ...rest } = res;
+  const write = () => {
+    ensureDir2(dir);
+    writeFileAtomic(body, text ?? "");
+    writeFileAtomic(meta, JSON.stringify({ ...rest, cachedAt: now }));
+  };
   try {
-    mkdirSync4(cacheDir(), { recursive: true });
-    const { meta, body } = entryPaths(url, acceptLanguage, extractor);
-    const { text, ...rest } = res;
-    writeFileSync4(body, text ?? "");
-    writeFileSync4(meta, JSON.stringify({ ...rest, cachedAt: now }));
+    write();
   } catch {
+    ensured.delete(dir);
+    try {
+      write();
+    } catch {
+    }
   }
+}
+var ensured = /* @__PURE__ */ new Set();
+function ensureDir2(dir) {
+  if (ensured.has(dir)) return;
+  mkdirSync4(dir, { recursive: true });
+  ensured.add(dir);
 }
 function touchCache(url, entry, now, acceptLanguage = "", extractor = "native") {
   writeCache(url, entry, now, acceptLanguage, extractor);
@@ -4057,71 +4142,82 @@ function sameOrigin(a, b) {
     return false;
   }
 }
+function crawlConcurrency() {
+  return envInt("CRAWL_CONCURRENCY", 4, 1, 16);
+}
 async function crawlSite(seed, opts = {}) {
   const maxPages = Math.max(1, opts.maxPages ?? 20);
   const maxDepth = Math.max(0, opts.maxDepth ?? 2);
+  const width = crawlConcurrency();
   const notes = [];
   const disallowed = [];
   const pages = [];
-  let robots = { rules: [], sitemaps: [], absent: true };
-  if (!opts.ignoreRobots) {
-    robots = await fetchRobots(seed);
-    if (robots.absent) notes.push("no robots.txt \u2014 nothing was refused, but nothing was granted either.");
-  } else {
-    notes.push("robots.txt was not consulted (ignoreRobots) \u2014 only correct on a site you own.");
-  }
-  const delay = opts.delayMs ?? robots.crawlDelayMs ?? hostDelayMs();
+  const NONE = { rules: [], sitemaps: [], absent: true };
+  const robotsFor = (url) => opts.ignoreRobots ? Promise.resolve(NONE) : fetchRobots(url);
+  const robots = await robotsFor(seed);
+  if (opts.ignoreRobots) notes.push("robots.txt was not consulted (ignoreRobots) \u2014 only correct on a site you own.");
+  else if (robots.absent) notes.push("no robots.txt \u2014 nothing was refused, but nothing was granted either.");
   if (robots.crawlDelayMs && opts.delayMs === void 0) notes.push(`honouring the declared Crawl-delay of ${robots.crawlDelayMs}ms.`);
+  const delayFor = (r) => opts.delayMs ?? r.crawlDelayMs ?? hostDelayMs();
   const seen = /* @__PURE__ */ new Set([canonicalizeUrl(seed)]);
-  const queue = [{ url: seed, depth: 0 }];
-  if (opts.useSitemap !== false && maxDepth > 0) {
-    const sm = await fetchSitemap(seed, { sitemaps: robots.sitemaps });
-    let added = 0;
-    for (const entry of sm.urls) {
-      const canon = canonicalizeUrl(entry.loc);
-      if (seen.has(canon)) continue;
-      if (!opts.crossOrigin && !sameOrigin(entry.loc, seed)) continue;
-      seen.add(canon);
-      queue.push({ url: entry.loc, depth: 1 });
-      added++;
-    }
-    if (added) notes.push(`seeded ${added} URL(s) from the sitemap.`);
-  }
-  while (queue.length && pages.length < maxPages) {
-    const next = queue.shift();
-    if (!next) break;
-    if (!opts.ignoreRobots && !isAllowed(robots, next.url)) {
-      disallowed.push(next.url);
-      continue;
-    }
-    await awaitHostSlot(next.url, delay);
-    const r = await fetchAndExtract(next.url, { keepHtml: next.depth < maxDepth });
-    if (!r.text) {
-      notes.push(`${next.url}: ${r.note ?? "nothing readable"}`);
-      continue;
-    }
-    const links = r.html ? linksFrom(r.html, next.url) : [];
+  const admit = (url, depth, into) => {
+    const canon = canonicalizeUrl(url);
+    if (seen.has(canon)) return false;
+    if (!opts.crossOrigin && !sameOrigin(url, seed)) return false;
+    seen.add(canon);
+    into.push({ url, depth });
+    return true;
+  };
+  let sitemap = opts.useSitemap !== false && maxDepth > 0 ? fetchSitemap(seed, { sitemaps: robots.sitemaps }) : void 0;
+  const fetchOne = async (item, r) => {
+    await awaitHostSlot(item.url, delayFor(r));
+    const got = await fetchAndExtract(item.url, { keepHtml: item.depth < maxDepth });
+    if (!got.text) return `${item.url}: ${got.note ?? "nothing readable"}`;
     const page = {
-      url: next.url,
-      depth: next.depth,
-      ...r.title ? { title: r.title } : {},
-      text: r.text,
-      extractor: r.extractor ?? "native",
-      links
+      url: item.url,
+      depth: item.depth,
+      ...got.title ? { title: got.title } : {},
+      text: got.text,
+      extractor: got.extractor ?? "native",
+      links: got.html ? linksFrom(got.html, item.url) : []
     };
-    pages.push(page);
     opts.onPage?.(page);
-    if (next.depth >= maxDepth) continue;
-    for (const link of links) {
-      const canon = canonicalizeUrl(link);
-      if (seen.has(canon)) continue;
-      if (!opts.crossOrigin && !sameOrigin(link, seed)) continue;
-      seen.add(canon);
-      queue.push({ url: link, depth: next.depth + 1 });
+    return page;
+  };
+  let wave = [{ url: seed, depth: 0 }];
+  while (wave.length && pages.length < maxPages) {
+    const files = await Promise.all(wave.map((it) => robotsFor(it.url)));
+    const allowed = [];
+    wave.forEach((item, i) => {
+      const r = files[i];
+      if (!opts.ignoreRobots && !isAllowed(r, item.url)) disallowed.push(item.url);
+      else allowed.push({ item, robots: r });
+    });
+    const batch = allowed.slice(0, maxPages - pages.length);
+    const leftover = allowed.slice(batch.length).map((a) => a.item);
+    const results = await mapLimit(batch, width, (a) => fetchOne(a.item, a.robots));
+    const next = [];
+    if (sitemap) {
+      const sm = await sitemap;
+      sitemap = void 0;
+      let added = 0;
+      for (const entry of sm.urls) if (admit(entry.loc, 1, next)) added++;
+      if (added) notes.push(`seeded ${added} URL(s) from the sitemap.`);
     }
+    for (const r of results) {
+      if (typeof r === "string") {
+        notes.push(r);
+        continue;
+      }
+      pages.push(r);
+      if (r.depth >= maxDepth) continue;
+      for (const link of r.links) admit(link, r.depth + 1, next);
+    }
+    wave = [...leftover, ...next];
   }
-  if (queue.length) notes.push(`stopped at the ${maxPages}-page budget with ${queue.length} URL(s) still queued.`);
-  return { pages, pending: queue.map((q) => q.url), disallowed, notes };
+  const pending = wave.map((q) => q.url);
+  if (pending.length) notes.push(`stopped at the ${maxPages}-page budget with ${pending.length} URL(s) still queued.`);
+  return { pages, pending, disallowed, notes };
 }
 
 // src/embed.ts
@@ -4258,12 +4354,13 @@ function unreachable(base) {
 }
 async function hybridSearch(question, docs, opts = {}) {
   if (docs.length === 0) return { hits: [] };
-  const index = buildBm25Index(question, docs);
-  const lexical = [...docs].sort((a, b) => bm25Score(index, b) - bm25Score(index, a));
-  const embedded = await embed([question, ...docs.map((d) => [d.title, d.headings, d.body].filter(Boolean).join("\n"))], {
+  const embedding = embed([question, ...docs.map((d) => [d.title, d.headings, d.body].filter(Boolean).join("\n"))], {
     ...opts.base !== void 0 ? { base: opts.base } : {},
     ...opts.model !== void 0 ? { model: opts.model } : {}
   });
+  const index = buildBm25Index(question, docs);
+  const lexical = docs.map((doc) => ({ doc, score: bm25Score(index, doc) })).sort((a, b) => b.score - a.score).map((s) => s.doc);
+  const embedded = await embedding;
   let dense = [];
   let note = embedded.note;
   if (embedded.vectors.length === docs.length + 1) {
@@ -4853,7 +4950,7 @@ var LATEST_PROTOCOL = PROTOCOL_VERSIONS[PROTOCOL_VERSIONS.length - 1];
 var ASSUMED_HTTP_PROTOCOL = "2025-03-26";
 var ANNOTATIONS_SINCE = "2025-03-26";
 var RICH_TOOLS_SINCE = "2025-06-18";
-var DEFAULT_MAX_RESPONSE_BYTES = 1e6;
+var DEFAULT_MAX_RESPONSE_BYTES2 = 1e6;
 function isProtocolVersion(v) {
   return typeof v === "string" && PROTOCOL_VERSIONS.includes(v);
 }
@@ -5018,7 +5115,7 @@ var ERR_INVALID_PARAMS = -32602;
 var ERR_INTERNAL = -32603;
 function createServer(adapter, opts = {}) {
   const serverInfo = { name: opts.serverName ?? brand().name, version: adapter.version };
-  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES2;
   let protocol = LATEST_PROTOCOL;
   const cancelled = /* @__PURE__ */ new Set();
   const CANCELLED_MAX = 1024;
@@ -5200,7 +5297,7 @@ async function runStdioServer(adapter, opts = {}) {
         track(
           (async () => {
             const out = [];
-            await Promise.all(parsed.map((m) => server.handle(m, (r) => void out.push(r))));
+            await mapLimit(parsed, MAX_IN_FLIGHT, (m) => server.handle(m, (r) => void out.push(r)));
             if (out.length) emit(JSON.stringify(out) + "\n");
           })().catch(reportInternal(send))
         );
@@ -5404,7 +5501,7 @@ export {
   BATCH_SIZE,
   COMPOSE_YAML,
   DEAD_LINK_STATUS,
-  DEFAULT_MAX_RESPONSE_BYTES,
+  DEFAULT_MAX_RESPONSE_BYTES2 as DEFAULT_MAX_RESPONSE_BYTES,
   DOC_EXTENSIONS,
   DOC_EXTRACTORS,
   ENGINE_VERSION,
@@ -5488,6 +5585,7 @@ export {
   contentCoverage,
   contentHash,
   cosine,
+  crawlConcurrency,
   crawlSite,
   createServer,
   danglingTokens,
@@ -5546,6 +5644,7 @@ export {
   firecrawlBase,
   firecrawlIsExplicit,
   fnv1a64,
+  fnv1a64Words,
   focusedSnippet,
   foldTerm,
   forgeAuthHeaders,
@@ -5650,6 +5749,7 @@ export {
   resetHostSchedule,
   resetNoWrite,
   resetOcrBudget,
+  resetOcrTools,
   resetOllamaProbe,
   resetPdfLadderCache,
   resetQdrantProbe,
