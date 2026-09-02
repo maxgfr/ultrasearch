@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BackendKind, RawSource, SourceMeta, WebSearchHit } from "./types.js";
-import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, nextSourceId } from "./dossier.js";
+import type { BackendKind, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
+import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
 import { extractPdf } from "./backends/pdf.js";
@@ -29,16 +29,77 @@ export interface IngestResult {
   skipped: number;
 }
 
+// The dossier an ingest is appending to, held in memory for the whole batch.
+//
+// It exists because the index is O(sources) to write and the batch used to
+// rewrite it once per URL: forty URLs meant forty reads of sources.json, forty
+// re-renders of DOSSIER.md and forty writes of all three index files, for one
+// dossier that only ever needed the last of them. `byCanon` is the same dedupe
+// the two `sources.find` scans did, at O(1); `maxId` is the same [S#] the
+// serial `nextSourceId` handed out, kept as a counter instead of re-derived.
+interface IngestState {
+  sources: Source[];
+  manifest: Manifest;
+  byCanon: Map<string, Source>;
+  maxId: number;
+}
+
+// One prepared source: everything settled EXCEPT the id, which only exists once
+// the source is committed. Refusals never reach commit, so they never burn one.
+interface Prepared {
+  ok: true;
+  raw: RawSource;
+  backend: BackendKind;
+  text: string;
+  question: string;
+}
+type PrepareResult = Prepared | { ok: false; result: EnrichResult };
+
+function loadState(dir: string): IngestState {
+  const { sources, manifest } = readDossier(dir);
+  const byCanon = new Map<string, Source>();
+  // FIRST match wins, because `sources.find` returned the first match: a
+  // dossier that somehow holds two sources on one canonical url has to keep
+  // reporting the earlier [S#], or a re-ingest silently re-points at the other.
+  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources) };
+}
+
+// Bank a prepared source into the in-memory dossier. Synchronous and total: it
+// allocates the id, writes the source's own extract, and folds the source into
+// `sources`/`byCanon`/`manifest` exactly as the per-URL path did.
+//
+// The extract stays a PER-SOURCE write on purpose — it is what makes a crashed
+// batch recoverable, and it is not the cost the batching removed.
+function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
+  const id = `S${++state.maxId}`; // shares the S<n> scheme the grounding contract depends on
+  const s = buildSource(p.raw, id, new Date().toISOString(), p.question);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth);
+  state.sources.push(s);
+  state.byCanon.set(s.canonicalUrl, s);
+  state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [...new Set([...state.manifest.backendsUsed, p.backend])] };
+  return { id, added: true };
+}
+
+// Persist the three index files — sources.json, manifest.json, DOSSIER.md —
+// from the batch's final state. Called ONCE per batch that added anything.
+function flushIndex(dir: string, state: IngestState): void {
+  writeDossierIndex(dir, state.sources, state.manifest, getMode(state.manifest.mode).template);
+}
+
 // Ingest a BATCH of URLs into one dossier — the whole point being that a
 // WebSearch that returned twelve good pages costs ONE process, not twelve.
 //
-// Deliberately SEQUENTIAL. `addSource` reads sources.json, picks the next free
-// [S#] and writes the file back; two concurrent calls both read the same
-// highest id, both claim it, and one source silently overwrites the other —
-// leaving a citation that still resolves, to the wrong page. Stable ids are
-// what the whole grounding contract rests on, so they are not something to
-// trade for wall-clock. The saving this command delivers is the N process
-// spawns and the N agent round-trips, which is where the cost actually was.
+// Deliberately SEQUENTIAL. The batch picks the next free [S#] for each source
+// in turn; two concurrent items both claim the same highest id, and one source
+// silently overwrites the other — leaving a citation that still resolves, to
+// the wrong page. Stable ids are what the whole grounding contract rests on, so
+// they are not something to trade for wall-clock. The saving this command
+// delivers is the N process spawns and the N agent round-trips, which is where
+// the cost actually was.
+//
+// The dossier index, by contrast, is read once and written once: rewriting it
+// per URL cost O(N²) for a file only its last version survives.
 //
 // Every URL gets an outcome, including the refusals: an ingest that quietly
 // dropped half its input would be worse than one that failed.
@@ -48,10 +109,28 @@ export async function addSources(
   opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
 ): Promise<IngestResult> {
   const results: IngestOutcome[] = [];
-  for (const hit of hits) {
-    const { url, title } = typeof hit === "string" ? { url: hit, title: undefined } : hit;
-    const r = await addSource(dir, url, { ...opts, title });
-    results.push({ ...r, url });
+  let state: IngestState | undefined;
+  const stateOf = (): IngestState => (state ??= loadState(dir));
+  let committed = 0;
+  try {
+    for (const hit of hits) {
+      const { url, title } = typeof hit === "string" ? { url: hit, title: undefined } : hit;
+      const p = await prepareSource(stateOf, url, { ...opts, title });
+      let r: EnrichResult;
+      if (p.ok) {
+        r = commit(dir, stateOf(), p);
+        committed++;
+      } else {
+        r = p.result;
+      }
+      results.push({ ...r, url });
+    }
+  } finally {
+    // Whatever was committed before a throw is still flushed, so a batch that
+    // dies halfway leaves a dossier that READS — index and extracts agreeing —
+    // rather than extracts no index mentions. A batch that added nothing writes
+    // nothing at all, which is how it behaved when each URL wrote its own index.
+    if (state && committed > 0) flushIndex(dir, state);
   }
   return {
     results,
@@ -67,8 +146,8 @@ export async function addSources(
 const TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log)$/i;
 
 // Ingest local FILES into an existing dossier — the same batch contract as
-// addSources (sequential, one outcome per input, refusals included), for
-// documents that never had a URL.
+// addSources (sequential, one outcome per input, refusals included, one index
+// write at the end), for documents that never had a URL.
 //
 // A local file skips almost everything addSource does: there is no provider to
 // resolve, no consent wall to see past, no dead origin to rescue from Wayback.
@@ -77,10 +156,25 @@ const TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|l
 // exactly like a cited page.
 export async function addFiles(dir: string, paths: string[], opts: { question?: string; cache?: boolean; firecrawl?: string } = {}): Promise<IngestResult> {
   const results: IngestOutcome[] = [];
-  for (const p of paths) {
-    const abs = resolve(p);
-    const url = pathToFileURL(abs).href;
-    results.push({ ...(await addFile(dir, abs, opts)), url });
+  let state: IngestState | undefined;
+  const stateOf = (): IngestState => (state ??= loadState(dir));
+  let committed = 0;
+  try {
+    for (const p of paths) {
+      const abs = resolve(p);
+      const url = pathToFileURL(abs).href;
+      const prep = await prepareFile(stateOf, abs, opts);
+      let r: EnrichResult;
+      if (prep.ok) {
+        r = commit(dir, stateOf(), prep);
+        committed++;
+      } else {
+        r = prep.result;
+      }
+      results.push({ ...r, url });
+    }
+  } finally {
+    if (state && committed > 0) flushIndex(dir, state);
   }
   return {
     results,
@@ -89,17 +183,23 @@ export async function addFiles(dir: string, paths: string[], opts: { question?: 
   };
 }
 
-async function addFile(dir: string, abs: string, opts: { question?: string; firecrawl?: string }): Promise<EnrichResult> {
+// Everything a local file needs settled before it can be committed: readable,
+// not already in the dossier, and convertible to text worth citing.
+//
+// `stateOf` is a LAZY handle rather than the state itself: the unreadable-path
+// refusal comes first, so `addFiles /nope.md` on a directory that is not a
+// dossier still reports the path instead of throwing on a missing sources.json.
+async function prepareFile(stateOf: () => IngestState, abs: string, opts: { question?: string; firecrawl?: string }): Promise<PrepareResult> {
   const url = pathToFileURL(abs).href;
   if (!existsSync(abs) || !statSync(abs).isFile()) {
-    return { id: "", added: false, note: `${abs} is not a readable file` };
+    return { ok: false, result: { id: "", added: false, note: `${abs} is not a readable file` } };
   }
 
-  const { sources, manifest } = readDossier(dir);
-  const question = opts.question ?? manifest.question;
+  const state = stateOf();
+  const question = opts.question ?? state.manifest.question;
 
-  const existing = sources.find((s) => s.canonicalUrl === canonicalizeUrl(url));
-  if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+  const existing = state.byCanon.get(canonicalizeUrl(url));
+  if (existing) return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
 
   const bytes = readFileSync(abs);
   const name = basename(abs);
@@ -112,13 +212,13 @@ async function addFile(dir: string, abs: string, opts: { question?: string; fire
     // cannot reach a path on this disk. Omitting it skips that rung, which is
     // exactly right — the npx rungs and the built-in reader still apply.
     const got = await extractPdf(bytes, {});
-    if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` };
+    if (!got.text) return { ok: false, result: { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` } };
     text = got.text;
     extractor = got.via;
   } else if (docFmt) {
     const got = await extractDocument(bytes, docFmt, {});
     if (!got.text && docFmt.textFallback) text = bytes.toString("utf8");
-    else if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` };
+    else if (!got.text) return { ok: false, result: { id: "", added: false, note: `could not extract text from ${name} — ${got.reason}.` } };
     else {
       text = got.text;
       extractor = got.via;
@@ -128,15 +228,17 @@ async function addFile(dir: string, abs: string, opts: { question?: string; fire
     text = /\.html?$/i.test(abs) ? htmlToText(extractMainHtml(raw)) : raw;
   } else {
     return {
-      id: "",
-      added: false,
-      note: `${name}: unsupported file type — ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`,
+      ok: false,
+      result: {
+        id: "",
+        added: false,
+        note: `${name}: unsupported file type — ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`,
+      },
     };
   }
 
-  if (!text.trim()) return { id: "", added: false, note: `${name} is empty` };
+  if (!text.trim()) return { ok: false, result: { id: "", added: false, note: `${name} is empty` } };
 
-  const id = nextSourceId(sources);
   const raw: RawSource = {
     url,
     title: titleFromText(text) || name,
@@ -146,14 +248,7 @@ async function addFile(dir: string, abs: string, opts: { question?: string; fire
     text,
     ...(extractor ? { meta: { textVia: extractor } } : {}),
   };
-  const s = buildSource(raw, id, new Date().toISOString(), question);
-  writeSourceExtract(dir, s, text, manifest.depth);
-
-  const nextSources = [...sources, s];
-  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed: [...new Set([...manifest.backendsUsed, "file" as BackendKind])] };
-  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
-
-  return { id, added: true };
+  return { ok: true, raw, backend: "file", text, question };
 }
 
 // Ingest a single URL into an existing dossier — the bridge for the agent's own
@@ -170,8 +265,25 @@ export async function addSource(
   url: string,
   opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
 ): Promise<EnrichResult> {
-  const { sources, manifest } = readDossier(dir);
-  const question = opts.question ?? manifest.question;
+  const state = loadState(dir);
+  const p = await prepareSource(() => state, url, opts);
+  if (!p.ok) return p.result;
+  const r = commit(dir, state, p);
+  flushIndex(dir, state);
+  return r;
+}
+
+// Everything `addSource` settles before an id is spent: the refusals, the
+// dedupe, the fetch, and the whole rescue ladder. It reads the dossier first
+// (through `stateOf`) exactly as the single-URL path always did, so a refusal
+// on a directory that is not a dossier still throws there rather than here.
+async function prepareSource(
+  stateOf: () => IngestState,
+  url: string,
+  opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string },
+): Promise<PrepareResult> {
+  const state = stateOf();
+  const question = opts.question ?? state.manifest.question;
 
   // An API endpoint and its landing page are the same document: fetch wherever
   // the text is, but record the page a reader can open. A batch/query endpoint
@@ -180,7 +292,7 @@ export async function addSource(
   // one `S#` per document is what citation checking rests on.
   const addressed = addressedIdCount(url);
   if (addressed > 1) {
-    return { id: "", added: false, note: `${url} addresses ${addressed} records — a source is ONE document. Fetch them one at a time.` };
+    return { ok: false, result: { id: "", added: false, note: `${url} addresses ${addressed} records — a source is ONE document. Fetch them one at a time.` } };
   }
   // An endpoint is a legitimate way to READ a walled document; it is never a
   // legitimate thing to cite. When you already know the page — you searched for
@@ -188,18 +300,20 @@ export async function addSource(
   // the text from `url` while recording yours.
   const supplied = opts.citeUrl?.trim();
   if (supplied && !isCitableUrl(supplied)) {
-    return { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open — pass the document's own page.` };
+    return { ok: false, result: { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open — pass the document's own page.` } };
   }
   const provider = resolveProvider(url);
-  if (provider.reject && !supplied) return { id: "", added: false, note: provider.reject };
+  if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
   let citeUrl = supplied || provider.citeUrl;
 
   // Dedupe on the CITE url so the same paper can't enter twice — once as its
-  // page and once as the endpoint that carries its text.
+  // page and once as the endpoint that carries its text. Against the batch's
+  // in-memory index, so a URL repeated INSIDE one batch is caught by the id the
+  // earlier occurrence just took.
   const canon = canonicalizeUrl(citeUrl);
-  const existing = sources.find((s) => s.canonicalUrl === canon);
+  const existing = state.byCanon.get(canon);
   if (existing) {
-    return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+    return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
 
   // Where the TEXT comes from. Normally the citation page, but a provider that
@@ -264,13 +378,16 @@ export async function addSource(
   }
   if (text?.trim() && wall) {
     return {
-      id: "",
-      added: false,
-      note: `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.`,
+      ok: false,
+      result: {
+        id: "",
+        added: false,
+        note: `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.`,
+      },
     };
   }
   if (!text?.trim()) {
-    return { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` };
+    return { ok: false, result: { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` } };
   }
 
   // We have the text; now settle what gets CITED. If the url we read is a
@@ -285,21 +402,23 @@ export async function addSource(
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {
-        id: "",
-        added: false,
-        note:
-          `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). ` +
-          `Find the page this record describes and pass it as citeUrl — the text still comes from the endpoint.`,
+        ok: false,
+        result: {
+          id: "",
+          added: false,
+          note:
+            `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). ` +
+            `Find the page this record describes and pass it as citeUrl — the text still comes from the endpoint.`,
+        },
       };
     }
     meta.textVia = citeUrl;
     via = citeUrl;
     citeUrl = derived;
-    const dup = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(citeUrl));
-    if (dup) return { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` };
+    const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
+    if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
 
-  const id = nextSourceId(sources); // shares the S<n> scheme the grounding contract depends on
   const backend: BackendKind = opts.backend ?? "claude";
   const raw: RawSource = {
     url: citeUrl,
@@ -312,13 +431,5 @@ export async function addSource(
     text,
     ...(Object.keys(meta).length ? { meta } : {}),
   };
-  const s = buildSource(raw, id, new Date().toISOString(), question);
-  writeSourceExtract(dir, s, text, manifest.depth);
-
-  const nextSources = [...sources, s];
-  const backendsUsed = [...new Set([...manifest.backendsUsed, backend])];
-  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
-  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
-
-  return { id, added: true };
+  return { ok: true, raw, backend, text, question };
 }

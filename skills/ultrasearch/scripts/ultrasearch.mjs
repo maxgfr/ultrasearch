@@ -5087,9 +5087,8 @@ function idNum(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
 }
-function nextSourceId(sources) {
-  const max = sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
-  return `S${max + 1}`;
+function maxSourceId(sources) {
+  return sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
 }
 function buildSource(rs, id, builtAt, question) {
   const text = rs.text ?? rs.snippet ?? "";
@@ -5891,12 +5890,44 @@ async function runGather(options) {
 import { existsSync as existsSync7, readFileSync as readFileSync7, statSync } from "fs";
 import { basename, resolve } from "path";
 import { pathToFileURL } from "url";
+function loadState(dir) {
+  const { sources, manifest } = readDossier(dir);
+  const byCanon = /* @__PURE__ */ new Map();
+  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources) };
+}
+function commit(dir, state, p) {
+  const id = `S${++state.maxId}`;
+  const s = buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth);
+  state.sources.push(s);
+  state.byCanon.set(s.canonicalUrl, s);
+  state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
+  return { id, added: true };
+}
+function flushIndex(dir, state) {
+  writeDossierIndex(dir, state.sources, state.manifest, getMode(state.manifest.mode).template);
+}
 async function addSources(dir, hits, opts = {}) {
   const results = [];
-  for (const hit of hits) {
-    const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
-    const r = await addSource(dir, url, { ...opts, title });
-    results.push({ ...r, url });
+  let state;
+  const stateOf = () => state ??= loadState(dir);
+  let committed = 0;
+  try {
+    for (const hit of hits) {
+      const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
+      const p = await prepareSource(stateOf, url, { ...opts, title });
+      let r;
+      if (p.ok) {
+        r = commit(dir, stateOf(), p);
+        committed++;
+      } else {
+        r = p.result;
+      }
+      results.push({ ...r, url });
+    }
+  } finally {
+    if (state && committed > 0) flushIndex(dir, state);
   }
   return {
     results,
@@ -5907,10 +5938,25 @@ async function addSources(dir, hits, opts = {}) {
 var TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log)$/i;
 async function addFiles(dir, paths, opts = {}) {
   const results = [];
-  for (const p of paths) {
-    const abs = resolve(p);
-    const url = pathToFileURL(abs).href;
-    results.push({ ...await addFile(dir, abs, opts), url });
+  let state;
+  const stateOf = () => state ??= loadState(dir);
+  let committed = 0;
+  try {
+    for (const p of paths) {
+      const abs = resolve(p);
+      const url = pathToFileURL(abs).href;
+      const prep = await prepareFile(stateOf, abs, opts);
+      let r;
+      if (prep.ok) {
+        r = commit(dir, stateOf(), prep);
+        committed++;
+      } else {
+        r = prep.result;
+      }
+      results.push({ ...r, url });
+    }
+  } finally {
+    if (state && committed > 0) flushIndex(dir, state);
   }
   return {
     results,
@@ -5918,15 +5964,15 @@ async function addFiles(dir, paths, opts = {}) {
     skipped: results.filter((r) => !r.added).length
   };
 }
-async function addFile(dir, abs, opts) {
+async function prepareFile(stateOf, abs, opts) {
   const url = pathToFileURL(abs).href;
   if (!existsSync7(abs) || !statSync(abs).isFile()) {
-    return { id: "", added: false, note: `${abs} is not a readable file` };
+    return { ok: false, result: { id: "", added: false, note: `${abs} is not a readable file` } };
   }
-  const { sources, manifest } = readDossier(dir);
-  const question = opts.question ?? manifest.question;
-  const existing = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(url));
-  if (existing) return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+  const state = stateOf();
+  const question = opts.question ?? state.manifest.question;
+  const existing = state.byCanon.get(canonicalizeUrl(url));
+  if (existing) return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   const bytes = readFileSync7(abs);
   const name = basename(abs);
   let text;
@@ -5934,13 +5980,13 @@ async function addFile(dir, abs, opts) {
   const docFmt = docFormatForUrl(url);
   if (looksLikePdfUrl(url)) {
     const got = await extractPdf(bytes, {});
-    if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` };
+    if (!got.text) return { ok: false, result: { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` } };
     text = got.text;
     extractor = got.via;
   } else if (docFmt) {
     const got = await extractDocument(bytes, docFmt, {});
     if (!got.text && docFmt.textFallback) text = bytes.toString("utf8");
-    else if (!got.text) return { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` };
+    else if (!got.text) return { ok: false, result: { id: "", added: false, note: `could not extract text from ${name} \u2014 ${got.reason}.` } };
     else {
       text = got.text;
       extractor = got.via;
@@ -5950,13 +5996,15 @@ async function addFile(dir, abs, opts) {
     text = /\.html?$/i.test(abs) ? htmlToText(extractMainHtml(raw2)) : raw2;
   } else {
     return {
-      id: "",
-      added: false,
-      note: `${name}: unsupported file type \u2014 ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`
+      ok: false,
+      result: {
+        id: "",
+        added: false,
+        note: `${name}: unsupported file type \u2014 ingest reads PDFs, office documents (${DOC_EXTENSIONS.join(", ")}) and plain text.`
+      }
     };
   }
-  if (!text.trim()) return { id: "", added: false, note: `${name} is empty` };
-  const id = nextSourceId(sources);
+  if (!text.trim()) return { ok: false, result: { id: "", added: false, note: `${name} is empty` } };
   const raw = {
     url,
     title: titleFromText(text) || name,
@@ -5966,31 +6014,34 @@ async function addFile(dir, abs, opts) {
     text,
     ...extractor ? { meta: { textVia: extractor } } : {}
   };
-  const s = buildSource(raw, id, (/* @__PURE__ */ new Date()).toISOString(), question);
-  writeSourceExtract(dir, s, text, manifest.depth);
-  const nextSources = [...sources, s];
-  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed: [.../* @__PURE__ */ new Set([...manifest.backendsUsed, "file"])] };
-  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
-  return { id, added: true };
+  return { ok: true, raw, backend: "file", text, question };
 }
 async function addSource(dir, url, opts = {}) {
-  const { sources, manifest } = readDossier(dir);
-  const question = opts.question ?? manifest.question;
+  const state = loadState(dir);
+  const p = await prepareSource(() => state, url, opts);
+  if (!p.ok) return p.result;
+  const r = commit(dir, state, p);
+  flushIndex(dir, state);
+  return r;
+}
+async function prepareSource(stateOf, url, opts) {
+  const state = stateOf();
+  const question = opts.question ?? state.manifest.question;
   const addressed = addressedIdCount(url);
   if (addressed > 1) {
-    return { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` };
+    return { ok: false, result: { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` } };
   }
   const supplied = opts.citeUrl?.trim();
   if (supplied && !isCitableUrl(supplied)) {
-    return { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open \u2014 pass the document's own page.` };
+    return { ok: false, result: { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open \u2014 pass the document's own page.` } };
   }
   const provider = resolveProvider(url);
-  if (provider.reject && !supplied) return { id: "", added: false, note: provider.reject };
+  if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
   let citeUrl = supplied || provider.citeUrl;
   const canon = canonicalizeUrl(citeUrl);
-  const existing = sources.find((s2) => s2.canonicalUrl === canon);
+  const existing = state.byCanon.get(canon);
   if (existing) {
-    return { id: existing.id, added: false, note: `already in dossier as ${existing.id}` };
+    return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
   const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
   const readUrl = supplied ? url : preferred;
@@ -6035,13 +6086,16 @@ async function addSource(dir, url, opts = {}) {
   }
   if (text?.trim() && wall) {
     return {
-      id: "",
-      added: false,
-      note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
+      ok: false,
+      result: {
+        id: "",
+        added: false,
+        note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
+      }
     };
   }
   if (!text?.trim()) {
-    return { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` };
+    return { ok: false, result: { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` } };
   }
   if (supplied && supplied !== url) {
     meta.textVia = url;
@@ -6050,18 +6104,20 @@ async function addSource(dir, url, opts = {}) {
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {
-        id: "",
-        added: false,
-        note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). Find the page this record describes and pass it as citeUrl \u2014 the text still comes from the endpoint.`
+        ok: false,
+        result: {
+          id: "",
+          added: false,
+          note: `${citeUrl} is an API endpoint and its payload names no document (no canonical link, DOI, arXiv id or PMID). Find the page this record describes and pass it as citeUrl \u2014 the text still comes from the endpoint.`
+        }
       };
     }
     meta.textVia = citeUrl;
     via = citeUrl;
     citeUrl = derived;
-    const dup = sources.find((s2) => s2.canonicalUrl === canonicalizeUrl(citeUrl));
-    if (dup) return { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` };
+    const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
+    if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
-  const id = nextSourceId(sources);
   const backend = opts.backend ?? "claude";
   const raw = {
     url: citeUrl,
@@ -6074,13 +6130,7 @@ async function addSource(dir, url, opts = {}) {
     text,
     ...Object.keys(meta).length ? { meta } : {}
   };
-  const s = buildSource(raw, id, (/* @__PURE__ */ new Date()).toISOString(), question);
-  writeSourceExtract(dir, s, text, manifest.depth);
-  const nextSources = [...sources, s];
-  const backendsUsed = [.../* @__PURE__ */ new Set([...manifest.backendsUsed, backend])];
-  const nextManifest = { ...manifest, sourceCount: nextSources.length, backendsUsed };
-  writeDossierIndex(dir, nextSources, nextManifest, getMode(nextManifest.mode).template);
-  return { id, added: true };
+  return { ok: true, raw, backend, text, question };
 }
 
 // src/render.ts

@@ -62,10 +62,17 @@ function idNum(id: string): number {
   return m ? Number(m[1]) : 0;
 }
 
+// The highest "S<n>" number a dossier already uses. Exported so a batch ingest
+// can allocate ids serially IN MEMORY (`S${++maxId}`) without re-deriving this
+// from the whole list per source — and, more importantly, without the two
+// having to agree by coincidence: both go through the same parse.
+export function maxSourceId(sources: Source[]): number {
+  return sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
+}
+
 // The next free "S<n>" id given the existing sources (used by `fetch`).
 export function nextSourceId(sources: Source[]): string {
-  const max = sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
-  return `S${max + 1}`;
+  return `S${maxSourceId(sources) + 1}`;
 }
 
 // Build a Source record (no file written) from a backend's RawSource.
