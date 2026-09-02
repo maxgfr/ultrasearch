@@ -2,15 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
 import {
-  extractUnits,
-  codeMask,
-  hintMask,
-  appendixMask,
+  maskedFile,
+  unitsOfMasked,
   stripInlineCode,
-  unitsOfFile,
   unitSourceTokens,
   extractNumerals,
   normalizeNumeralText,
+  type Unit,
   TOKEN_RE,
   SOURCE_RE,
 } from "./claims.js";
@@ -39,6 +37,7 @@ interface FileAnalysis {
   modelHints: number; // [M] markers + model-hint blockquote regions
   unknownTokens: string[];
   unsourcedClaims: string[]; // claim units lacking a source and not flagged
+  units: Unit[]; // the claim units the accounting above ran on — reused by the numeral pass
 }
 
 // Count substantive words in a unit, ignoring citation/hint tokens, markdown
@@ -68,14 +67,12 @@ function hasHintMarker(unit: string): boolean {
 }
 
 function analyzeFile(file: string, text: string): FileAnalysis {
-  // Strip HTML comments first (blanking their characters but preserving line
-  // breaks) so a citation hidden in `<!-- [S1] -->` cannot ground a claim — the
-  // renderer escapes comments to literal text, so they must not count here
-  // either. Mirrors htmlToText's comment handling.
-  const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
-  const code = codeMask(lines);
-  const { mask: hint, regions } = hintMask(lines);
-  const appendix = appendixMask(lines);
+  // One masking pass for the whole file, shared with `unitsOfFile` (claims.ts):
+  // HTML comments are blanked (characters replaced, line breaks preserved) so a
+  // citation hidden in `<!-- [S1] -->` cannot ground a claim — the renderer
+  // escapes comments to literal text, so they must not count here either.
+  const masked = maskedFile(text);
+  const { lines, code, regions, appendix } = masked;
 
   const sourceTokens: string[] = [];
   const appendixSourceTokens: string[] = [];
@@ -113,11 +110,10 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     return true;
   };
 
-  for (const u of extractUnits(
-    lines,
-    code,
-    hint.map((h, i) => h || appendix[i]!),
-  )) {
+  // The units the numeral pass will re-read from `FileAnalysis.units` — parsed
+  // once per file, not once per pass.
+  const units = unitsOfMasked(masked);
+  for (const u of units) {
     if (u.kind === "text") {
       flag(u.text);
     } else {
@@ -135,7 +131,7 @@ function analyzeFile(file: string, text: string): FileAnalysis {
     }
   }
 
-  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
+  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims, units };
 }
 
 // Fold the semantic-verification record (VERIFY.json) into a check result when
@@ -319,18 +315,39 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   //     fetch URL into the citation.
   // Both warn rather than fail: they describe sources already on disk, and a
   // dossier gathered before this check existed must still be checkable.
+  //
+  // One read per cited extract, shared by the wall scan below and the numeral
+  // pass further down — both want the same files, and an 80-source dossier
+  // shouldn't pay for them twice. `null` is UNKNOWN, which is what a missing OR
+  // unreadable extract means to BOTH consumers: the wall scan won't call it a
+  // wall, the numeral pass won't call a figure unattributed. Missing is guarded
+  // by existsSync because readSourceText falls back to the (far too thin)
+  // snippet. Lazy and keyed by id: an uncited source is never opened.
+  const bySourceId = new Map(sources.map((s) => [s.id, s] as const));
+  const textCache = new Map<string, string | null>();
+  const textOf = (id: string): string | null => {
+    let t = textCache.get(id);
+    if (t === undefined) {
+      const s = bySourceId.get(id);
+      try {
+        t = s && existsSync(join(dir, s.extract)) ? readSourceText(dir, s) : null;
+      } catch {
+        t = null;
+      }
+      textCache.set(id, t);
+    }
+    return t;
+  };
+
   const walled: string[] = [];
   const apiCited: string[] = [];
   for (const s of sources) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
-    try {
-      if (!existsSync(join(dir, s.extract))) continue;
-      const wall = looksLikeJunkExtraction(readSourceText(dir, s));
-      if (wall) walled.push(`${s.id} (${wall})`);
-    } catch {
-      // an unreadable extract is UNKNOWN, not a wall
-    }
+    const text = textOf(s.id);
+    if (text === null) continue; // absent or unreadable extract is UNKNOWN, not a wall
+    const wall = looksLikeJunkExtraction(text);
+    if (wall) walled.push(`${s.id} (${wall})`);
   }
   if (walled.length) {
     warnings.push(
@@ -350,29 +367,24 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   // extracts — the "correct number, wrong source" class that mechanical
   // citation-presence can't see. Containment is tested on normalized text
   // (group separators stripped) and is deliberately fail-open: an unreadable
-  // extract means UNKNOWN, not absent. Extracts are read + normalized lazily
-  // and at most once each, so an 80-source dossier stays cheap.
+  // extract means UNKNOWN, not absent. Extracts come from the shared `textOf`
+  // cache (read at most once each, above) and are normalized at most once each
+  // here, and the claim units are the ones `analyzeFile` already parsed — so an
+  // 80-source dossier stays cheap and REPORT is never parsed twice.
   const numeralIssues: NonNullable<CheckResult["numeralIssues"]> = [];
-  const bySourceId = new Map(sources.map((s) => [s.id, s] as const));
   const normCache = new Map<string, string | null>();
   const normOf = (id: string): string | null => {
     let t = normCache.get(id);
     if (t === undefined) {
-      // A missing extract file means UNKNOWN, not absent — readSourceText's
-      // snippet fallback is too thin to prove a figure is unattributed.
-      const s = bySourceId.get(id);
-      try {
-        t = s && existsSync(join(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
-      } catch {
-        t = null;
-      }
+      const raw = textOf(id);
+      t = raw === null ? null : normalizeNumeralText(raw);
       normCache.set(id, t);
     }
     return t;
   };
-  for (const f of present) {
-    if (!HARD_FILES.includes(f)) continue;
-    for (const u of unitsOfFile(readFileSync(join(dir, f), "utf8"))) {
+  for (const a of analyses) {
+    if (!HARD_FILES.includes(a.file)) continue;
+    for (const u of a.units) {
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -382,7 +394,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
         if (!texts.length) continue;
         for (const n of nums) {
           if (!texts.some((t) => t.includes(n))) {
-            numeralIssues.push({ file: f, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
+            numeralIssues.push({ file: a.file, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
           }
         }
       }

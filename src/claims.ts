@@ -144,20 +144,46 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[]):
 // otherwise mark every source "cited" and pad verify's supported count).
 const APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
 
+/** A report file's lines plus every mask `check`'s accounting reads them through. */
+export interface MaskedFile {
+  /** Lines with HTML comments blanked (line breaks preserved). */
+  lines: string[];
+  /** Lines inside a code fence. */
+  code: boolean[];
+  /** Lines inside a `[model-hint]` blockquote region. */
+  hint: boolean[];
+  /** How many such regions there are — a flagged passage counts as one hint. */
+  regions: number;
+  /** Lines inside a trailing Sources/References appendix. */
+  appendix: boolean[];
+  /** `hint || appendix` — the lines a claim unit must NOT be extracted from. */
+  unclaimable: boolean[];
+}
+
+// The single masking of a report file: HTML comments blanked, code fences,
+// model-hint regions and the Sources/References appendix located. `check`'s
+// token accounting, `check`'s claim units and `unitsOfFile` (verify/render) all
+// go through here, so the three can never drift into disagreeing about which
+// line is prose — the failure mode independent copies of this always produce.
+export function maskedFile(text: string): MaskedFile {
+  const lines = stripHtmlComments(text).split("\n");
+  const code = codeMask(lines);
+  const { mask: hint, regions } = hintMask(lines);
+  const appendix = appendixMask(lines);
+  return { lines, code, hint, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]!) };
+}
+
+// Split an already-masked report file into claim units.
+export function unitsOfMasked(m: MaskedFile): Unit[] {
+  return extractUnits(m.lines, m.code, m.unclaimable);
+}
+
 // Split a hard-checked report file's raw text into claim units, applying the
 // SAME masking `runCheck` uses (HTML comments blanked, code fences and
 // model-hint regions excluded). Exposed so `verify` extracts exactly the claims
 // the grounding gate scores — the two can never disagree on what a claim is.
 export function unitsOfFile(text: string): Unit[] {
-  const lines = stripHtmlComments(text).split("\n");
-  const code = codeMask(lines);
-  const { mask: hint } = hintMask(lines);
-  const appendix = appendixMask(lines);
-  return extractUnits(
-    lines,
-    code,
-    hint.map((h, i) => h || appendix[i]!),
-  );
+  return unitsOfMasked(maskedFile(text));
 }
 
 // The distinct [S#] source ids cited within a piece of claim text, in order.

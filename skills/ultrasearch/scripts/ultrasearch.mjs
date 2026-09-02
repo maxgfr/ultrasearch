@@ -6137,16 +6137,18 @@ function extractUnits(lines, code, hint) {
   flush();
   return units;
 }
-function unitsOfFile(text) {
+function maskedFile(text) {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
-  const { mask: hint } = hintMask(lines);
+  const { mask: hint, regions } = hintMask(lines);
   const appendix = appendixMask(lines);
-  return extractUnits(
-    lines,
-    code,
-    hint.map((h, i) => h || appendix[i])
-  );
+  return { lines, code, hint, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]) };
+}
+function unitsOfMasked(m) {
+  return extractUnits(m.lines, m.code, m.unclaimable);
+}
+function unitsOfFile(text) {
+  return unitsOfMasked(maskedFile(text));
 }
 function unitSourceTokens(text) {
   const masked = stripInlineCode(text);
@@ -6812,20 +6814,18 @@ function hasHintMarker(unit) {
   return false;
 }
 function analyzeFile(file, text) {
-  const lines = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " ")).split("\n");
-  const code = codeMask(lines);
-  const { mask: hint, regions } = hintMask(lines);
-  const appendix = appendixMask(lines);
+  const masked = maskedFile(text);
+  const { lines, code, regions, appendix } = masked;
   const sourceTokens = [];
   const appendixSourceTokens = [];
   const unknownTokens = [];
   let mMarkers = 0;
   for (let i = 0; i < lines.length; i++) {
     if (code[i]) continue;
-    const masked = stripInlineCode(lines[i]);
+    const masked2 = stripInlineCode(lines[i]);
     TOKEN_RE2.lastIndex = 0;
     let m;
-    while (m = TOKEN_RE2.exec(masked)) {
+    while (m = TOKEN_RE2.exec(masked2)) {
       const tok = m[1].trim();
       if (SOURCE_RE.test(tok)) (appendix[i] ? appendixSourceTokens : sourceTokens).push(tok);
       else if (appendix[i])
@@ -6843,11 +6843,8 @@ function analyzeFile(file, text) {
     unsourcedClaims.push(unit.trim().slice(0, 120));
     return true;
   };
-  for (const u of extractUnits(
-    lines,
-    code,
-    hint.map((h, i) => h || appendix[i])
-  )) {
+  const units = unitsOfMasked(masked);
+  for (const u of units) {
     if (u.kind === "text") {
       flag(u.text);
     } else {
@@ -6862,7 +6859,7 @@ function analyzeFile(file, text) {
       }
     }
   }
-  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims };
+  return { file, sourceTokens, appendixSourceTokens, modelHints: mMarkers + regions, unknownTokens, unsourcedClaims, units };
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
@@ -6993,17 +6990,30 @@ function runCheck(dir, opts = {}) {
   if (uncitedSources.length) {
     warnings.push(`${uncitedSources.length} source(s) were never cited (informational).`);
   }
+  const bySourceId = new Map(sources.map((s) => [s.id, s]));
+  const textCache = /* @__PURE__ */ new Map();
+  const textOf = (id) => {
+    let t = textCache.get(id);
+    if (t === void 0) {
+      const s = bySourceId.get(id);
+      try {
+        t = s && existsSync10(join11(dir, s.extract)) ? readSourceText(dir, s) : null;
+      } catch {
+        t = null;
+      }
+      textCache.set(id, t);
+    }
+    return t;
+  };
   const walled = [];
   const apiCited = [];
   for (const s of sources) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
-    try {
-      if (!existsSync10(join11(dir, s.extract))) continue;
-      const wall = looksLikeJunkExtraction(readSourceText(dir, s));
-      if (wall) walled.push(`${s.id} (${wall})`);
-    } catch {
-    }
+    const text = textOf(s.id);
+    if (text === null) continue;
+    const wall = looksLikeJunkExtraction(text);
+    if (wall) walled.push(`${s.id} (${wall})`);
   }
   if (walled.length) {
     warnings.push(
@@ -7016,24 +7026,19 @@ function runCheck(dir, opts = {}) {
     );
   }
   const numeralIssues = [];
-  const bySourceId = new Map(sources.map((s) => [s.id, s]));
   const normCache = /* @__PURE__ */ new Map();
   const normOf = (id) => {
     let t = normCache.get(id);
     if (t === void 0) {
-      const s = bySourceId.get(id);
-      try {
-        t = s && existsSync10(join11(dir, s.extract)) ? normalizeNumeralText(readSourceText(dir, s)) : null;
-      } catch {
-        t = null;
-      }
+      const raw = textOf(id);
+      t = raw === null ? null : normalizeNumeralText(raw);
       normCache.set(id, t);
     }
     return t;
   };
-  for (const f of present) {
-    if (!HARD_FILES2.includes(f)) continue;
-    for (const u of unitsOfFile(readFileSync10(join11(dir, f), "utf8"))) {
+  for (const a of analyses) {
+    if (!HARD_FILES2.includes(a.file)) continue;
+    for (const u of a.units) {
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -7043,7 +7048,7 @@ function runCheck(dir, opts = {}) {
         if (!texts.length) continue;
         for (const n of nums) {
           if (!texts.some((t) => t.includes(n))) {
-            numeralIssues.push({ file: f, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
+            numeralIssues.push({ file: a.file, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
           }
         }
       }
