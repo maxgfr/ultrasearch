@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.32.0](https://github.com/maxgfr/ultrasearch/compare/v1.31.0...v1.32.0) (2026-09-02)
+
+
+### Features
+
+* **engine:** re-pin vendored engines ([6167518](https://github.com/maxgfr/ultrasearch/commit/61675188b68eae23eec72240dcc92207e068da2c))
+
 # [1.31.0](https://github.com/maxgfr/ultrasearch/compare/v1.30.0...v1.31.0) (2026-08-31)
 
 
