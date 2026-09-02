@@ -6612,16 +6612,16 @@ function buildWorklist(dir, opts = {}) {
       const nums = extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id);
-        const numeralsAbsent = nums.filter((n) => !normOf(s).includes(n));
         pairs.push({
           claimId,
           file,
           sourceId: id,
           claim: claim.trim().slice(0, 400),
           extractPath: s.extract,
-          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
-          ...numeralsAbsent.length ? { numeralsAbsent } : {},
-          trust: s.trust
+          trust: s.trust,
+          source: s,
+          rawClaim: claim,
+          nums
         });
       }
     }
@@ -6632,7 +6632,23 @@ function buildWorklist(dir, opts = {}) {
   const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
   const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
   const shaped = shards !== void 0 ? kept.slice().sort(cmp).filter((_, i) => i % shards === shard) : kept;
-  const worklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  const emit = (p) => {
+    if (opts.keysOnly) {
+      return { claimId: p.claimId, file: p.file, sourceId: p.sourceId, claim: p.claim, extractPath: p.extractPath, extractDigest: "" };
+    }
+    const norm = p.nums.length ? normOf(p.source) : "";
+    const numeralsAbsent = p.nums.filter((n) => !norm.includes(n));
+    return {
+      claimId: p.claimId,
+      file: p.file,
+      sourceId: p.sourceId,
+      claim: p.claim,
+      extractPath: p.extractPath,
+      extractDigest: focusedSnippet(textOf(p.source), p.rawClaim, { maxChars: 600, maxSentences: 4 }),
+      ...numeralsAbsent.length ? { numeralsAbsent } : {}
+    };
+  };
+  const worklist = { run: dir, pairs: shaped.map(emit) };
   return { worklist, total: pairs.length, kept: shaped.length };
 }
 function runVerify(dir, opts = {}) {
@@ -6882,7 +6898,7 @@ function applySemantic(dir, result, requireVerify) {
   if (requireVerify) {
     let expected = [];
     try {
-      expected = buildWorklist(dir).worklist.pairs;
+      expected = buildWorklist(dir, { keysOnly: true }).worklist.pairs;
     } catch {
       expected = [];
     }

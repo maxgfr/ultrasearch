@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
-import { runVerify, applyVerdicts, reduceVerdicts } from "../src/verify.js";
+import { buildWorklist, runVerify, applyVerdicts, reduceVerdicts } from "../src/verify.js";
 import { runCheck } from "../src/check.js";
 import { writeFixtureDossier } from "./dossierfix.js";
 import type { Verdict } from "../src/types.js";
@@ -106,6 +106,205 @@ describe("runVerify (worklist)", () => {
     );
     const r = runVerify(dir, { maxVerify: 2 });
     expect(r.pairs.length).toBe(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// A dossier whose REPORT cites two sources per claim and asserts numerals the
+// fixture extracts never state, so the derivation exercises every field of a
+// pair: multi-source claims, the trust/claimId/sourceId cap order, and the
+// optional `numeralsAbsent` warning.
+const NUMERIC_REPORT = `# X
+## A
+Latency fell by 42% after the rollout [S1] [S2].
+## B
+The window is 60 seconds long in practice [S2] [S3].
+## C
+A third claim about buckets and bursts [S1] [S3].`;
+
+function numericDossier(): string {
+  const dir = scratch();
+  writeFixtureDossier(dir, 3);
+  report(dir, NUMERIC_REPORT);
+  return dir;
+}
+
+// `VERIFY.todo.json` is `JSON.stringify`'d, so a pair's KEY ORDER is part of the
+// artifact's bytes: these snapshots are the byte-identity oracle for the
+// derivation (deferring the digests to the survivors must not move a single
+// field, pair or byte).
+describe("buildWorklist (derivation is byte-stable)", () => {
+  it("emits every claim↔source pair in document order, digests and all", () => {
+    const dir = numericDossier();
+    const b = buildWorklist(dir);
+    expect(b.total).toBe(6);
+    expect(b.kept).toBe(6);
+    expect(b.worklist.run).toBe(dir);
+    expect(b.worklist.pairs).toEqual([
+      {
+        claimId: "C1",
+        file: "REPORT.md",
+        sourceId: "S1",
+        claim: "Latency fell by 42% after the rollout [S1] [S2].",
+        extractPath: "sources/S1.md",
+        extractDigest: "S1 — some extract text for S1",
+        numeralsAbsent: ["42"],
+      },
+      {
+        claimId: "C1",
+        file: "REPORT.md",
+        sourceId: "S2",
+        claim: "Latency fell by 42% after the rollout [S1] [S2].",
+        extractPath: "sources/S2.md",
+        extractDigest: "S2 — some extract text for S2",
+        numeralsAbsent: ["42"],
+      },
+      {
+        claimId: "C2",
+        file: "REPORT.md",
+        sourceId: "S2",
+        claim: "The window is 60 seconds long in practice [S2] [S3].",
+        extractPath: "sources/S2.md",
+        extractDigest: "S2 — some extract text for S2",
+        numeralsAbsent: ["60"],
+      },
+      {
+        claimId: "C2",
+        file: "REPORT.md",
+        sourceId: "S3",
+        claim: "The window is 60 seconds long in practice [S2] [S3].",
+        extractPath: "sources/S3.md",
+        extractDigest: "S3 — some extract text for S3",
+        numeralsAbsent: ["60"],
+      },
+      {
+        claimId: "C3",
+        file: "REPORT.md",
+        sourceId: "S1",
+        claim: "A third claim about buckets and bursts [S1] [S3].",
+        extractPath: "sources/S1.md",
+        extractDigest: "S1 — some extract text for S1",
+      },
+      {
+        claimId: "C3",
+        file: "REPORT.md",
+        sourceId: "S3",
+        claim: "A third claim about buckets and bursts [S1] [S3].",
+        extractPath: "sources/S3.md",
+        extractDigest: "S3 — some extract text for S3",
+      },
+    ]);
+    // Key order is artifact bytes, not just shape — assert it explicitly.
+    expect(Object.keys(b.worklist.pairs[0]!)).toEqual(["claimId", "file", "sourceId", "claim", "extractPath", "extractDigest", "numeralsAbsent"]);
+    expect(Object.keys(b.worklist.pairs[4]!)).toEqual(["claimId", "file", "sourceId", "claim", "extractPath", "extractDigest"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the same pairs, in the same order, when the cap bites", () => {
+    const dir = numericDossier();
+    const b = buildWorklist(dir, { maxVerify: 3 });
+    expect(b.total).toBe(6);
+    expect(b.kept).toBe(3);
+    expect(b.worklist.pairs).toEqual([
+      {
+        claimId: "C1",
+        file: "REPORT.md",
+        sourceId: "S1",
+        claim: "Latency fell by 42% after the rollout [S1] [S2].",
+        extractPath: "sources/S1.md",
+        extractDigest: "S1 — some extract text for S1",
+        numeralsAbsent: ["42"],
+      },
+      {
+        claimId: "C1",
+        file: "REPORT.md",
+        sourceId: "S2",
+        claim: "Latency fell by 42% after the rollout [S1] [S2].",
+        extractPath: "sources/S2.md",
+        extractDigest: "S2 — some extract text for S2",
+        numeralsAbsent: ["42"],
+      },
+      {
+        claimId: "C2",
+        file: "REPORT.md",
+        sourceId: "S2",
+        claim: "The window is 60 seconds long in practice [S2] [S3].",
+        extractPath: "sources/S2.md",
+        extractDigest: "S2 — some extract text for S2",
+        numeralsAbsent: ["60"],
+      },
+    ]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keeps the same pairs, in the same order, for a shard stripe", () => {
+    const dir = numericDossier();
+    const b = buildWorklist(dir, { shards: 2, shard: 1 });
+    expect(b.total).toBe(6);
+    expect(b.kept).toBe(3);
+    expect(b.worklist.pairs).toEqual([
+      {
+        claimId: "C1",
+        file: "REPORT.md",
+        sourceId: "S2",
+        claim: "Latency fell by 42% after the rollout [S1] [S2].",
+        extractPath: "sources/S2.md",
+        extractDigest: "S2 — some extract text for S2",
+        numeralsAbsent: ["42"],
+      },
+      {
+        claimId: "C2",
+        file: "REPORT.md",
+        sourceId: "S3",
+        claim: "The window is 60 seconds long in practice [S2] [S3].",
+        extractPath: "sources/S3.md",
+        extractDigest: "S3 — some extract text for S3",
+        numeralsAbsent: ["60"],
+      },
+      {
+        claimId: "C3",
+        file: "REPORT.md",
+        sourceId: "S3",
+        claim: "A third claim about buckets and bursts [S1] [S3].",
+        extractPath: "sources/S3.md",
+        extractDigest: "S3 — some extract text for S3",
+      },
+    ]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keysOnly derives the same claim↔source keys without reading one extract", () => {
+    const dir = numericDossier();
+    const full = buildWorklist(dir).worklist.pairs.map((p) => `${p.claimId}|${p.sourceId}`);
+
+    // Booby-trap every extract: a DIRECTORY where `sources/S#.md` should be, so
+    // `existsSync` still passes but any read throws EISDIR. Reading an extract
+    // is then observable as an exception rather than a timing.
+    for (const id of ["S1", "S2", "S3"]) {
+      rmSync(join(dir, "sources", `${id}.md`));
+      mkdirSync(join(dir, "sources", `${id}.md`));
+    }
+    expect(() => buildWorklist(dir)).toThrow(); // the full derivation DOES read them
+
+    const keys = buildWorklist(dir, { keysOnly: true });
+    expect(keys.total).toBe(6);
+    expect(keys.kept).toBe(6);
+    expect(keys.worklist.pairs.map((p) => `${p.claimId}|${p.sourceId}`)).toEqual(full);
+    // keysOnly pairs carry identity only — an empty digest and no numerals.
+    expect(keys.worklist.pairs.every((p) => p.extractDigest === "")).toBe(true);
+    expect(keys.worklist.pairs.every((p) => !("numeralsAbsent" in p))).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keysOnly still honours the cap and the shard stripe", () => {
+    const dir = numericDossier();
+    const keyOf = (p: { claimId: string; sourceId: string }) => `${p.claimId}|${p.sourceId}`;
+    expect(buildWorklist(dir, { keysOnly: true, maxVerify: 3 }).worklist.pairs.map(keyOf)).toEqual(
+      buildWorklist(dir, { maxVerify: 3 }).worklist.pairs.map(keyOf),
+    );
+    expect(buildWorklist(dir, { keysOnly: true, shards: 2, shard: 1 }).worklist.pairs.map(keyOf)).toEqual(
+      buildWorklist(dir, { shards: 2, shard: 1 }).worklist.pairs.map(keyOf),
+    );
     rmSync(dir, { recursive: true, force: true });
   });
 });

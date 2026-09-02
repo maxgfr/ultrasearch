@@ -192,7 +192,9 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
   if (requireVerify) {
     let expected: ReturnType<typeof buildWorklist>["worklist"]["pairs"] = [];
     try {
-      expected = buildWorklist(dir).worklist.pairs;
+      // keysOnly: this gate matches pairs on (claimId, sourceId) only, so the
+      // digests would be read and built for nothing.
+      expected = buildWorklist(dir, { keysOnly: true }).worklist.pairs;
     } catch {
       expected = [];
     }

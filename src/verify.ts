@@ -46,7 +46,21 @@ function claimStrings(text: string): string[] {
 // --require-verify` coverage gate re-derives it to detect dropped verdicts. Same
 // claim granularity + cap + optional shard as before, so the re-derived pairs
 // line up with what `verify --run` emitted.
-export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): BuiltWorklist {
+//
+// The digests are DEFERRED: pairs are derived with their identity keys only,
+// the cap and the shard stripe are applied to those light pairs, and
+// `extractDigest`/`numeralsAbsent` are computed in one final pass over the
+// survivors. `cmp` reads only trust/claimId/sourceId, so neither the kept set
+// nor its order depends on the deferred fields — the emitted pairs (and their
+// key order, which is `VERIFY.todo.json`'s bytes) are unchanged; a capped or
+// sharded run simply stops digesting the pairs it then throws away.
+//
+// With { keysOnly: true } that final pass is skipped entirely and NO extract is
+// read: each pair carries its identity keys (claimId, file, sourceId, claim,
+// extractPath) with an empty `extractDigest` and no `numeralsAbsent`. It exists
+// for `check --require-verify`, whose coverage gate matches pairs on
+// (claimId, sourceId) alone — never for a worklist an agent will adjudicate.
+export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number; keysOnly?: boolean } = {}): BuiltWorklist {
   const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`);
@@ -73,7 +87,21 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
     return t;
   };
 
-  const pairs: (ClaimEvidencePair & { trust: number })[] = [];
+  // A derived pair BEFORE its digest: identity keys plus what the cap and the
+  // deferred digest pass need (trust, the source record, the claim's numerals).
+  type LightPair = {
+    claimId: string;
+    file: string;
+    sourceId: string;
+    claim: string;
+    extractPath: string;
+    trust: number;
+    source: Source;
+    rawClaim: string;
+    nums: string[];
+  };
+
+  const pairs: LightPair[] = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
     const p = join(dir, file);
@@ -87,19 +115,16 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
       const nums = extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id)!;
-        // Precompute which claim numerals this source's extract does NOT
-        // contain, so the adjudicating skeptic cannot miss a specific figure
-        // that its cited source never states (verdict caps at `partial`).
-        const numeralsAbsent = nums.filter((n) => !normOf(s).includes(n));
         pairs.push({
           claimId,
           file,
           sourceId: id,
           claim: claim.trim().slice(0, 400),
           extractPath: s.extract,
-          extractDigest: focusedSnippet(textOf(s), claim, { maxChars: 600, maxSentences: 4 }),
-          ...(numeralsAbsent.length ? { numeralsAbsent } : {}),
           trust: s.trust,
+          source: s,
+          rawClaim: claim,
+          nums,
         });
       }
     }
@@ -124,7 +149,28 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
           .sort(cmp)
           .filter((_, i) => i % shards === shard)
       : kept;
-  const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(({ trust, ...rest }) => rest) };
+  // Only NOW read the extracts — one focused digest per SURVIVING pair. The key
+  // order below is the artifact's byte order; do not reshuffle it.
+  const emit = (p: LightPair): ClaimEvidencePair => {
+    if (opts.keysOnly) {
+      return { claimId: p.claimId, file: p.file, sourceId: p.sourceId, claim: p.claim, extractPath: p.extractPath, extractDigest: "" };
+    }
+    // Precompute which claim numerals this source's extract does NOT contain,
+    // so the adjudicating skeptic cannot miss a specific figure that its cited
+    // source never states (verdict caps at `partial`).
+    const norm = p.nums.length ? normOf(p.source) : "";
+    const numeralsAbsent = p.nums.filter((n) => !norm.includes(n));
+    return {
+      claimId: p.claimId,
+      file: p.file,
+      sourceId: p.sourceId,
+      claim: p.claim,
+      extractPath: p.extractPath,
+      extractDigest: focusedSnippet(textOf(p.source), p.rawClaim, { maxChars: 600, maxSentences: 4 }),
+      ...(numeralsAbsent.length ? { numeralsAbsent } : {}),
+    };
+  };
+  const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(emit) };
   return { worklist, total: pairs.length, kept: shaped.length };
 }
 
