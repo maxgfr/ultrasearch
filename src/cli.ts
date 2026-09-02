@@ -970,15 +970,20 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       }
       // By default render writes BOTH a self-contained index.html and a portable
       // consolidated index.md. --no-html / --no-md opt out of either.
-      // One read of the dossier (+ its tiers) feeds both writers.
-      const ctx = loadRenderContext(rdir);
+      const wantHtml = !p.bools.has("no-html");
+      const wantMd = !p.bools.has("no-md");
+      // One read of the dossier (+ its tiers) feeds both writers — and no read
+      // at all when both are opted out, so `--no-html --no-md` stays the no-op
+      // it has always been (it must not fail on a directory that is not a
+      // dossier: it was never going to read one).
+      const ctx = wantHtml || wantMd ? loadRenderContext(rdir) : undefined;
       const written: { html?: string; md?: string } = {};
-      if (!p.bools.has("no-html")) {
-        written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
+      if (wantHtml) {
+        written.html = writeHtml(ctx!, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
         process.stderr.write(`ultrasearch: wrote ${written.html}\n`);
       }
-      if (!p.bools.has("no-md")) {
-        written.md = writeReportMarkdown(ctx);
+      if (wantMd) {
+        written.md = writeReportMarkdown(ctx!);
         process.stderr.write(`ultrasearch: wrote ${written.md}\n`);
       }
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");

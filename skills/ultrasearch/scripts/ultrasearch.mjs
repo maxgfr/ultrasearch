@@ -9537,14 +9537,16 @@ ${formatServices(rows)}
         process.stderr.write("ultrasearch: --stdout \u2014 index.md above; index.html skipped (it is only useful as a file).\n");
         return;
       }
-      const ctx = loadRenderContext(rdir);
+      const wantHtml = !p.bools.has("no-html");
+      const wantMd = !p.bools.has("no-md");
+      const ctx = wantHtml || wantMd ? loadRenderContext(rdir) : void 0;
       const written = {};
-      if (!p.bools.has("no-html")) {
+      if (wantHtml) {
         written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
         process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
       }
-      if (!p.bools.has("no-md")) {
+      if (wantMd) {
         written.md = writeReportMarkdown(ctx);
         process.stderr.write(`ultrasearch: wrote ${written.md}
 `);

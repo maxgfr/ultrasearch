@@ -173,6 +173,19 @@ describe("main() — render", () => {
     const written = JSON.parse(j.out);
     expect(written.html || written.md).toBeTruthy();
   });
+
+  // --no-html --no-md asks for nothing, so render must touch nothing: it does
+  // not even read the dossier, and a directory that is not one at all still
+  // exits 0. Pins the lazy context load against a regression to an eager one.
+  it("reads nothing and exits 0 when both --no-html and --no-md are set", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "us-cli-render-none-"));
+    const r = await run(["render", "--run", empty, "--no-html", "--no-md"]);
+    expect(r.exit).toBeUndefined();
+    expect(r.err).toBe("");
+    expect(existsSync(join(empty, "index.html"))).toBe(false);
+    expect(existsSync(join(empty, "index.md"))).toBe(false);
+    rmSync(empty, { recursive: true, force: true });
+  });
 });
 
 describe("main() — check", () => {
