@@ -15,11 +15,15 @@ import type { ManifestServices } from "./types.js";
 // without ever being queried and nothing would say so. `doctor` is the answer.
 
 export interface ServiceStatus {
+  /** `describeWebSearchLane` adds a "websearch" row, so this is wider than `ServiceName`. */
   name: string;
   ok: boolean;
   /** One line: where it is / why it isn't, and what to do about it. */
   detail: string;
 }
+
+/** The rows `probeServices` can produce, in the order `doctor` prints them. */
+export type ServiceName = "searxng" | "firecrawl" | "pdf-inspector" | "pdftotext" | "ocr" | "pdf ladder" | "anydoc" | "doc ladder";
 
 const VERSION_PROBE_TIMEOUT_MS = 20_000;
 
@@ -30,100 +34,141 @@ async function toolVersion(cmd: string, args: string[]): Promise<string | undefi
 }
 
 /**
- * Probe every optional service and extractor. Never throws; a probe that cannot
- * answer is reported as unavailable, which is exactly how a run treats it.
+ * Probe every optional service and extractor, in parallel. Never throws; a
+ * probe that cannot answer is reported as unavailable, which is exactly how a
+ * run treats it.
+ *
+ * `only` narrows the work to the rows the caller will actually print — `doctor`
+ * wants all of them, `searxng status` wants one — and the rest are not probed at
+ * all, which is the difference between one HTTP round-trip and two npx spawns.
+ * It never reorders: whatever order it is given, the answer keeps the table's.
  */
-export async function probeServices(opts: { firecrawl?: string; searxng?: string } = {}): Promise<ServiceStatus[]> {
-  const out: ServiceStatus[] = [];
-
-  const sxBase = searxngBase({ searxng: opts.searxng });
-  if (!sxBase) out.push({ name: "searxng", ok: false, detail: "disabled (--searxng off)" });
-  else {
-    const up = await probeSearxng(sxBase);
-    out.push({
-      name: "searxng",
-      ok: up,
-      detail: up ? `answering at ${sxBase}` : `not running at ${sxBase} — \`ultrasearch searxng up\``,
-    });
-  }
-
-  const fcBase = firecrawlBase(opts);
-  if (!fcBase) out.push({ name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" });
-  else {
-    const explicit = firecrawlIsExplicit(opts);
-    const up = await probeFirecrawl(fcBase, explicit);
-    out.push({
-      name: "firecrawl",
-      ok: up,
-      detail: up
-        ? `answering at ${fcBase}`
-        : // Distinguish "nothing there" from "something there, but not Firecrawl" —
-          // a squatted port is a confusing failure to debug without being told.
-          `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} — \`ultrasearch firecrawl up\``,
-    });
-  }
-
+export async function probeServices(opts: { firecrawl?: string; searxng?: string } = {}, only?: readonly ServiceName[]): Promise<ServiceStatus[]> {
+  // Both ladders are read once and shared: two rows each depend on them, and
+  // asking twice could straddle a change to the environment mid-probe.
   const rungs = enabledExtractors();
-  if (rungs.includes("pdf-inspector")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]);
-    out.push({
-      name: "pdf-inspector",
-      ok: !!v,
-      detail: v ? `${v} (via npx)` : "unavailable — needs npm, and a prebuilt binary for this platform",
-    });
-  } else {
-    out.push({ name: "pdf-inspector", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_PDF_ENGINE)" });
-  }
-
-  const pt = await toolVersion("pdftotext", ["-v"]);
-  out.push({ name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" });
-
-  // OCR is the only rung that can read a scan, and it needs TWO binaries. Which
-  // one is missing is the whole answer here — "OCR unavailable" would send you
-  // looking in the wrong place, and copyable-pdf's own remedy for a missing
-  // tesseract is an interactive `brew install` this never triggers.
-  if (rungs.includes("ocr")) {
-    const { copyablePdf, tesseract } = await ocrTools();
-    out.push({
-      name: "ocr",
-      ok: copyablePdf && tesseract,
-      detail:
-        copyablePdf && tesseract
-          ? `copyable-pdf + tesseract, ${ocrBudgetLeft()} document(s) per run (ULTRASEARCH_OCR_MAX)`
-          : !copyablePdf && !tesseract
-            ? "not installed — `brew install maxgfr/tap/copyable-pdf tesseract` (scanned PDFs stay unreadable)"
-            : copyablePdf
-              ? "copyable-pdf is installed but tesseract is not — `brew install tesseract`"
-              : "tesseract is installed but copyable-pdf is not — `brew install maxgfr/tap/copyable-pdf`",
-    });
-  } else {
-    out.push({ name: "ocr", ok: false, detail: "skipped (ULTRASEARCH_PDF_ENGINE)" });
-  }
-
-  out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" → ") });
-
-  // The office-document converter. It needs Node 20+, one version above this
-  // package's own floor, so "unavailable" here is a normal outcome on a Node 18
-  // host rather than a misconfiguration — say so instead of implying a fix.
   const docRungs = enabledDocExtractors();
-  if (docRungs.includes("anydoc")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]);
-    out.push({
+
+  // The two `npx -y` probes install into npm's shared `_npx` cache directory,
+  // where two concurrent installs can wedge on the same lock. So they run in
+  // series with EACH OTHER — and in parallel with everything else.
+  let npxChain: Promise<unknown> = Promise.resolve();
+  const afterNpx = <T>(f: () => Promise<T>): Promise<T> => {
+    const p = npxChain.then(f);
+    // The chain only sequences. A probe that blew up must not take the next one
+    // down with it; its rejection is still delivered through `p` to the caller.
+    npxChain = p.catch(() => {});
+    return p;
+  };
+
+  // The fixed order `doctor` prints. `only` picks from this table without ever
+  // reordering it, because `formatServices` pads the name column to the widest
+  // name in the array it is handed.
+  const probes: { name: ServiceName; run: () => Promise<ServiceStatus> }[] = [
+    {
+      name: "searxng",
+      run: async () => {
+        const sxBase = searxngBase({ searxng: opts.searxng });
+        if (!sxBase) return { name: "searxng", ok: false, detail: "disabled (--searxng off)" };
+        const up = await probeSearxng(sxBase);
+        return {
+          name: "searxng",
+          ok: up,
+          detail: up ? `answering at ${sxBase}` : `not running at ${sxBase} — \`ultrasearch searxng up\``,
+        };
+      },
+    },
+    {
+      name: "firecrawl",
+      run: async () => {
+        const fcBase = firecrawlBase(opts);
+        if (!fcBase) return { name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" };
+        const explicit = firecrawlIsExplicit(opts);
+        const up = await probeFirecrawl(fcBase, explicit);
+        return {
+          name: "firecrawl",
+          ok: up,
+          detail: up
+            ? `answering at ${fcBase}`
+            : // Distinguish "nothing there" from "something there, but not Firecrawl" —
+              // a squatted port is a confusing failure to debug without being told.
+              `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} — \`ultrasearch firecrawl up\``,
+        };
+      },
+    },
+    {
+      name: "pdf-inspector",
+      run: async () => {
+        if (!rungs.includes("pdf-inspector")) return { name: "pdf-inspector", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_PDF_ENGINE)" };
+        const v = await afterNpx(() => toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]));
+        return {
+          name: "pdf-inspector",
+          ok: !!v,
+          detail: v ? `${v} (via npx)` : "unavailable — needs npm, and a prebuilt binary for this platform",
+        };
+      },
+    },
+    {
+      name: "pdftotext",
+      run: async () => {
+        const pt = await toolVersion("pdftotext", ["-v"]);
+        return { name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" };
+      },
+    },
+    {
+      // OCR is the only rung that can read a scan, and it needs TWO binaries.
+      // Which one is missing is the whole answer here — "OCR unavailable" would
+      // send you looking in the wrong place, and copyable-pdf's own remedy for a
+      // missing tesseract is an interactive `brew install` this never triggers.
+      name: "ocr",
+      run: async () => {
+        if (!rungs.includes("ocr")) return { name: "ocr", ok: false, detail: "skipped (ULTRASEARCH_PDF_ENGINE)" };
+        const { copyablePdf, tesseract } = await ocrTools();
+        return {
+          name: "ocr",
+          ok: copyablePdf && tesseract,
+          detail:
+            copyablePdf && tesseract
+              ? `copyable-pdf + tesseract, ${ocrBudgetLeft()} document(s) per run (ULTRASEARCH_OCR_MAX)`
+              : !copyablePdf && !tesseract
+                ? "not installed — `brew install maxgfr/tap/copyable-pdf tesseract` (scanned PDFs stay unreadable)"
+                : copyablePdf
+                  ? "copyable-pdf is installed but tesseract is not — `brew install tesseract`"
+                  : "tesseract is installed but copyable-pdf is not — `brew install maxgfr/tap/copyable-pdf`",
+        };
+      },
+    },
+    { name: "pdf ladder", run: async () => ({ name: "pdf ladder", ok: true, detail: rungs.join(" → ") }) },
+    {
+      // The office-document converter. It needs Node 20+, one version above this
+      // package's own floor, so "unavailable" here is a normal outcome on a Node
+      // 18 host rather than a misconfiguration — say so instead of implying a fix.
       name: "anydoc",
-      ok: !!v,
-      detail: v ? `${v} (via npx)` : "unavailable — needs npm, Node 20+, and a prebuilt binary for this platform",
-    });
-  } else {
-    out.push({ name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" });
-  }
-  out.push({
-    name: "doc ladder",
-    ok: docRungs.length > 0,
-    // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
-    // run meets will be refused — worth saying plainly rather than printing "".
-    detail: docRungs.length ? docRungs.join(" → ") : "disabled — office documents will be refused, not read",
-  });
-  return out;
+      run: async () => {
+        if (!docRungs.includes("anydoc")) return { name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" };
+        const v = await afterNpx(() => toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]));
+        return {
+          name: "anydoc",
+          ok: !!v,
+          detail: v ? `${v} (via npx)` : "unavailable — needs npm, Node 20+, and a prebuilt binary for this platform",
+        };
+      },
+    },
+    {
+      name: "doc ladder",
+      run: async () => ({
+        name: "doc ladder",
+        ok: docRungs.length > 0,
+        // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
+        // run meets will be refused — worth saying plainly rather than printing "".
+        detail: docRungs.length ? docRungs.join(" → ") : "disabled — office documents will be refused, not read",
+      }),
+    },
+  ];
+
+  const wanted = only ? probes.filter((p) => only.includes(p.name)) : probes;
+  // `Promise.all` keeps the table's order whatever order the probes finish in.
+  return Promise.all(wanted.map((p) => p.run()));
 }
 
 /**

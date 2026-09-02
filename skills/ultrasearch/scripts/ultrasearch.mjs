@@ -5270,76 +5270,112 @@ async function toolVersion(cmd, args) {
   if (!r.ok) return void 0;
   return r.stdout.trim().split("\n")[0]?.trim() || "installed";
 }
-async function probeServices(opts = {}) {
-  const out = [];
-  const sxBase = searxngBase({ searxng: opts.searxng });
-  if (!sxBase) out.push({ name: "searxng", ok: false, detail: "disabled (--searxng off)" });
-  else {
-    const up = await probeSearxng(sxBase);
-    out.push({
-      name: "searxng",
-      ok: up,
-      detail: up ? `answering at ${sxBase}` : `not running at ${sxBase} \u2014 \`ultrasearch searxng up\``
-    });
-  }
-  const fcBase = firecrawlBase(opts);
-  if (!fcBase) out.push({ name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" });
-  else {
-    const explicit = firecrawlIsExplicit(opts);
-    const up = await probeFirecrawl(fcBase, explicit);
-    out.push({
-      name: "firecrawl",
-      ok: up,
-      detail: up ? `answering at ${fcBase}` : (
-        // Distinguish "nothing there" from "something there, but not Firecrawl" —
-        // a squatted port is a confusing failure to debug without being told.
-        `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} \u2014 \`ultrasearch firecrawl up\``
-      )
-    });
-  }
+async function probeServices(opts = {}, only) {
   const rungs = enabledExtractors();
-  if (rungs.includes("pdf-inspector")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]);
-    out.push({
-      name: "pdf-inspector",
-      ok: !!v,
-      detail: v ? `${v} (via npx)` : "unavailable \u2014 needs npm, and a prebuilt binary for this platform"
-    });
-  } else {
-    out.push({ name: "pdf-inspector", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_PDF_ENGINE)" });
-  }
-  const pt = await toolVersion("pdftotext", ["-v"]);
-  out.push({ name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" });
-  if (rungs.includes("ocr")) {
-    const { copyablePdf, tesseract } = await ocrTools();
-    out.push({
-      name: "ocr",
-      ok: copyablePdf && tesseract,
-      detail: copyablePdf && tesseract ? `copyable-pdf + tesseract, ${ocrBudgetLeft()} document(s) per run (ULTRASEARCH_OCR_MAX)` : !copyablePdf && !tesseract ? "not installed \u2014 `brew install maxgfr/tap/copyable-pdf tesseract` (scanned PDFs stay unreadable)" : copyablePdf ? "copyable-pdf is installed but tesseract is not \u2014 `brew install tesseract`" : "tesseract is installed but copyable-pdf is not \u2014 `brew install maxgfr/tap/copyable-pdf`"
-    });
-  } else {
-    out.push({ name: "ocr", ok: false, detail: "skipped (ULTRASEARCH_PDF_ENGINE)" });
-  }
-  out.push({ name: "pdf ladder", ok: true, detail: rungs.join(" \u2192 ") });
   const docRungs = enabledDocExtractors();
-  if (docRungs.includes("anydoc")) {
-    const v = await toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]);
-    out.push({
-      name: "anydoc",
-      ok: !!v,
-      detail: v ? `${v} (via npx)` : "unavailable \u2014 needs npm, Node 20+, and a prebuilt binary for this platform"
+  let npxChain = Promise.resolve();
+  const afterNpx = (f) => {
+    const p = npxChain.then(f);
+    npxChain = p.catch(() => {
     });
-  } else {
-    out.push({ name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" });
-  }
-  out.push({
-    name: "doc ladder",
-    ok: docRungs.length > 0,
-    // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
-    // run meets will be refused — worth saying plainly rather than printing "".
-    detail: docRungs.length ? docRungs.join(" \u2192 ") : "disabled \u2014 office documents will be refused, not read"
-  });
-  return out;
+    return p;
+  };
+  const probes = [
+    {
+      name: "searxng",
+      run: async () => {
+        const sxBase = searxngBase({ searxng: opts.searxng });
+        if (!sxBase) return { name: "searxng", ok: false, detail: "disabled (--searxng off)" };
+        const up = await probeSearxng(sxBase);
+        return {
+          name: "searxng",
+          ok: up,
+          detail: up ? `answering at ${sxBase}` : `not running at ${sxBase} \u2014 \`ultrasearch searxng up\``
+        };
+      }
+    },
+    {
+      name: "firecrawl",
+      run: async () => {
+        const fcBase = firecrawlBase(opts);
+        if (!fcBase) return { name: "firecrawl", ok: false, detail: "disabled (--firecrawl off)" };
+        const explicit = firecrawlIsExplicit(opts);
+        const up = await probeFirecrawl(fcBase, explicit);
+        return {
+          name: "firecrawl",
+          ok: up,
+          detail: up ? `answering at ${fcBase}` : (
+            // Distinguish "nothing there" from "something there, but not Firecrawl" —
+            // a squatted port is a confusing failure to debug without being told.
+            `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} \u2014 \`ultrasearch firecrawl up\``
+          )
+        };
+      }
+    },
+    {
+      name: "pdf-inspector",
+      run: async () => {
+        if (!rungs.includes("pdf-inspector")) return { name: "pdf-inspector", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_PDF_ENGINE)" };
+        const v = await afterNpx(() => toolVersion("npx", ["-y", "--prefer-offline", PDF_INSPECTOR_SPEC, "--version"]));
+        return {
+          name: "pdf-inspector",
+          ok: !!v,
+          detail: v ? `${v} (via npx)` : "unavailable \u2014 needs npm, and a prebuilt binary for this platform"
+        };
+      }
+    },
+    {
+      name: "pdftotext",
+      run: async () => {
+        const pt = await toolVersion("pdftotext", ["-v"]);
+        return { name: "pdftotext", ok: !!pt, detail: pt ?? "not installed (poppler-utils)" };
+      }
+    },
+    {
+      // OCR is the only rung that can read a scan, and it needs TWO binaries.
+      // Which one is missing is the whole answer here — "OCR unavailable" would
+      // send you looking in the wrong place, and copyable-pdf's own remedy for a
+      // missing tesseract is an interactive `brew install` this never triggers.
+      name: "ocr",
+      run: async () => {
+        if (!rungs.includes("ocr")) return { name: "ocr", ok: false, detail: "skipped (ULTRASEARCH_PDF_ENGINE)" };
+        const { copyablePdf, tesseract } = await ocrTools();
+        return {
+          name: "ocr",
+          ok: copyablePdf && tesseract,
+          detail: copyablePdf && tesseract ? `copyable-pdf + tesseract, ${ocrBudgetLeft()} document(s) per run (ULTRASEARCH_OCR_MAX)` : !copyablePdf && !tesseract ? "not installed \u2014 `brew install maxgfr/tap/copyable-pdf tesseract` (scanned PDFs stay unreadable)" : copyablePdf ? "copyable-pdf is installed but tesseract is not \u2014 `brew install tesseract`" : "tesseract is installed but copyable-pdf is not \u2014 `brew install maxgfr/tap/copyable-pdf`"
+        };
+      }
+    },
+    { name: "pdf ladder", run: async () => ({ name: "pdf ladder", ok: true, detail: rungs.join(" \u2192 ") }) },
+    {
+      // The office-document converter. It needs Node 20+, one version above this
+      // package's own floor, so "unavailable" here is a normal outcome on a Node
+      // 18 host rather than a misconfiguration — say so instead of implying a fix.
+      name: "anydoc",
+      run: async () => {
+        if (!docRungs.includes("anydoc")) return { name: "anydoc", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_DOC_ENGINE)" };
+        const v = await afterNpx(() => toolVersion("npx", ["-y", "--prefer-offline", ANYDOC_SPEC, "--version"]));
+        return {
+          name: "anydoc",
+          ok: !!v,
+          detail: v ? `${v} (via npx)` : "unavailable \u2014 needs npm, Node 20+, and a prebuilt binary for this platform"
+        };
+      }
+    },
+    {
+      name: "doc ladder",
+      run: async () => ({
+        name: "doc ladder",
+        ok: docRungs.length > 0,
+        // An empty ladder is not a broken one, but it does mean every .docx/.pptx a
+        // run meets will be refused — worth saying plainly rather than printing "".
+        detail: docRungs.length ? docRungs.join(" \u2192 ") : "disabled \u2014 office documents will be refused, not read"
+      })
+    }
+  ];
+  const wanted = only ? probes.filter((p) => only.includes(p.name)) : probes;
+  return Promise.all(wanted.map((p) => p.run()));
 }
 function describeServices(s) {
   const parts = [];
@@ -9251,9 +9287,7 @@ async function main(argv = process.argv.slice(2)) {
     case "gather": {
       const options = buildGatherOptions(p);
       if (options.search === "max" && !options.json) {
-        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng })).filter(
-          (s) => !s.ok && (s.name === "searxng" || s.name === "firecrawl")
-        );
+        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng }, ["searxng", "firecrawl"])).filter((s) => !s.ok);
         if (down.length) {
           process.stderr.write(
             `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.
@@ -9362,7 +9396,7 @@ ${formatServices(rows)}
     case "firecrawl": {
       const action = p.positional[0] ?? "status";
       if (action === "status") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r2) => r2.name === p.command);
+        const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }, [p.command]);
         process.stdout.write(formatServices(rows) + "\n");
         return;
       }
@@ -9373,7 +9407,7 @@ ${formatServices(rows)}
       process.stdout.write(r.message + "\n");
       if (r.code !== 0) process.exit(r.code);
       if (action === "up") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r2) => r2.name === p.command);
+        const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }, [p.command]);
         process.stdout.write("\n" + formatServices(rows) + "\n");
       }
       return;

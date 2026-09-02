@@ -650,13 +650,12 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const options = buildGatherOptions(p);
       // Preflight for `--search max` ONLY. It promises the whole stack, and a
       // deep max run costs 10-20 minutes — learning at the end that the
-      // containers were down is learning too late. Two probes, ~2s worst case,
-      // and it never aborts: a stack-less max is still a good run, it is just
-      // not the one that was asked for.
+      // containers were down is learning too late. Only the two container
+      // probes run, and they run in parallel — ~2s worst case — and it never
+      // aborts: a stack-less max is still a good run, it is just not the one
+      // that was asked for.
       if (options.search === "max" && !options.json) {
-        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng })).filter(
-          (s) => !s.ok && (s.name === "searxng" || s.name === "firecrawl"),
-        );
+        const down = (await probeServices({ firecrawl: options.firecrawl, searxng: options.searxng }, ["searxng", "firecrawl"])).filter((s) => !s.ok);
         if (down.length) {
           process.stderr.write(
             `ultrasearch: --search max wants the container stack, and ${down.map((s) => s.name).join(" + ")} ${down.length > 1 ? "are" : "is"} not answering.\n` +
@@ -771,7 +770,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     case "firecrawl": {
       const action = p.positional[0] ?? "status";
       if (action === "status") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }, [p.command]);
         process.stdout.write(formatServices(rows) + "\n");
         return;
       }
@@ -784,7 +783,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // `up --wait` returns as soon as the healthchecks pass; report what the
       // engine will actually see, which is the only thing that matters here.
       if (action === "up") {
-        const rows = (await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })).filter((r) => r.name === p.command);
+        const rows = await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }, [p.command]);
         process.stdout.write("\n" + formatServices(rows) + "\n");
       }
       return;
