@@ -31,6 +31,7 @@
     "eval": "node evals/run.mjs --suite offline",
     "eval:network": "node evals/run.mjs --suite network",
     "bench:pdf": "ULTRASEARCH_BENCH=1 vitest run tests/bench-pdf.test.ts",
+    "bench:offline": "ULTRASEARCH_BENCH=1 vitest run tests/bench-offline.test.ts",
     "release": "semantic-release",
     "verify:engine": "node scripts/verify-engine-usage.mjs"
   },
