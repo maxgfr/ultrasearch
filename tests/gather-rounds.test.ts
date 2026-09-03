@@ -329,8 +329,9 @@ describe("gather hydration: a Wayback rescue reached through another item's fall
       if (url.includes("archive.org/wayback/available")) return { body: WAYBACK_AVAIL_PUBMED, contentType: "application/json" };
       if (url.includes("web.archive.org")) return { body: ARCHIVED_ABSTRACT };
       // Slow enough that the web hit has finished its rescue and folded it into
-      // the hydrate cache before this item reaches for the fallback.
-      if (url.includes("doi.org")) return { status: 500, body: "server error", delayMs: 120 };
+      // the hydrate cache before this item reaches for the fallback. The rescue is
+      // three in-memory mock round-trips, so 400 ms is a wide margin on a loaded CI runner.
+      if (url.includes("doi.org")) return { status: 500, body: "server error", delayMs: 400 };
       if (url.includes("pubmed.ncbi.nlm.nih.gov/28495875")) return { status: 404, body: "gone" };
       return undefined;
     });
