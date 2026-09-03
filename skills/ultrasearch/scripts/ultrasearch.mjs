@@ -7222,9 +7222,12 @@ function formatCheckReport(r, dir) {
 // src/relink.ts
 function listIssues(dir) {
   const { sources } = readDossier(dir);
+  return listIssuesFrom(sources, (s) => safeText(dir, s));
+}
+function listIssuesFrom(sources, textOf) {
   const issues = [];
   for (const s of sources) {
-    const text = safeText(dir, s);
+    const text = textOf(s);
     if (!isCitableUrl(s.url)) {
       const derived = text ? deriveCitableUrl(text) : void 0;
       const twin = derived ? sources.find((o) => o.id !== s.id && o.canonicalUrl === canonicalizeUrl(derived)) : void 0;
@@ -7257,39 +7260,52 @@ function listIssues(dir) {
   return issues;
 }
 function autoRelink(dir) {
+  const { sources, manifest } = readDossier(dir);
+  const state = newState(sources);
+  const cache = /* @__PURE__ */ new Map();
+  const textOf = (s) => {
+    const hit = cache.get(s.id);
+    if (hit !== void 0) return hit;
+    const text = safeText(dir, s);
+    cache.set(s.id, text);
+    return text;
+  };
   const repaired = [];
   const tried = /* @__PURE__ */ new Set();
   for (; ; ) {
-    const next = listIssues(dir).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
+    const next = listIssuesFrom(state.sources, textOf).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
     if (!next) break;
     tried.add(next.id);
-    const r = relink(dir, next.id, next.derived);
-    if (r.relinked) repaired.push(r);
+    const { result, relinked, text } = applyRelink(state, next.id, next.derived, textOf);
+    if (!result.relinked || !relinked) continue;
+    writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
+    cache.set(relinked.id, safeText(dir, relinked));
+    repaired.push(result);
   }
-  return { repaired, remaining: listIssues(dir) };
+  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
 }
-function safeText(dir, s) {
-  try {
-    return readSourceText(dir, s);
-  } catch {
-    return "";
-  }
+function newState(sources) {
+  const byCanon = /* @__PURE__ */ new Map();
+  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  return { sources: [...sources], byCanon };
 }
-function relink(dir, id, url, opts = {}) {
-  const { sources, manifest } = readDossier(dir);
-  const idx = sources.findIndex((s) => s.id === id);
-  if (idx < 0) return { id, relinked: false, note: `${id} is not in this dossier` };
-  const target = sources[idx];
+function applyRelink(state, id, url, textOf, opts = {}) {
+  const idx = state.sources.findIndex((s) => s.id === id);
+  if (idx < 0) return { result: { id, relinked: false, note: `${id} is not in this dossier` } };
+  const target = state.sources[idx];
   const next = url.trim();
   if (!isCitableUrl(next)) {
-    return { id, relinked: false, note: `${next} is not a citable page url \u2014 a citation must open in a browser` };
+    return { result: { id, relinked: false, note: `${next} is not a citable page url \u2014 a citation must open in a browser` } };
   }
   const canon = canonicalizeUrl(next);
-  if (canon === target.canonicalUrl) return { id, relinked: false, note: `${id} already points at ${next}` };
-  const clash = sources.find((s) => s.id !== id && s.canonicalUrl === canon);
-  if (clash) return { id, relinked: false, note: `${clash.id} already cites ${next} \u2014 merge the claims onto it instead of duplicating the source` };
+  if (canon === target.canonicalUrl) return { result: { id, relinked: false, note: `${id} already points at ${next}` } };
+  const clash = state.byCanon.get(canon);
+  if (clash) {
+    return { result: { id, relinked: false, note: `${clash.id} already cites ${next} \u2014 merge the claims onto it instead of duplicating the source` } };
+  }
   const from = target.url;
-  const text = safeText(dir, target);
+  const text = textOf(target);
   const titled = target.title && target.title !== from ? target.title : titleFromText(text) || next;
   const relinked = {
     ...target,
@@ -7302,11 +7318,26 @@ function relink(dir, id, url, opts = {}) {
     // that payload, and a reader auditing the source deserves to know.
     meta: { ...target.meta, textVia: target.meta?.textVia ?? from }
   };
-  const nextSources = [...sources];
-  nextSources[idx] = relinked;
-  writeSourceExtract(dir, relinked, text, manifest.depth);
-  writeDossierIndex(dir, nextSources, refreshed(manifest, nextSources), getMode(manifest.mode).template);
-  return { id, relinked: true, from, to: next };
+  state.sources[idx] = relinked;
+  if (state.byCanon.get(target.canonicalUrl) === target) state.byCanon.delete(target.canonicalUrl);
+  state.byCanon.set(canon, relinked);
+  return { result: { id, relinked: true, from, to: next }, relinked, text };
+}
+function safeText(dir, s) {
+  try {
+    return readSourceText(dir, s);
+  } catch {
+    return "";
+  }
+}
+function relink(dir, id, url, opts = {}) {
+  const { sources, manifest } = readDossier(dir);
+  const state = newState(sources);
+  const { result, relinked, text } = applyRelink(state, id, url, (s) => safeText(dir, s), opts);
+  if (!result.relinked || !relinked) return result;
+  writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
+  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  return result;
 }
 function refreshed(manifest, sources) {
   return { ...manifest, sourceCount: sources.length };

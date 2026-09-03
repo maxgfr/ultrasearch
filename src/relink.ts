@@ -42,9 +42,20 @@ export interface RelinkResult {
 /** Everything wrong with a dossier's sources that the citation graph can't see. */
 export function listIssues(dir: string): RelinkIssue[] {
   const { sources } = readDossier(dir);
+  return listIssuesFrom(sources, (s) => safeText(dir, s));
+}
+
+/**
+ * The same worklist, over sources ALREADY in hand and a reader for their text.
+ *
+ * `autoRelink` re-lists after every repair, and reading the whole dossier back
+ * off disk each round was the entire cost of that. With the state passed in, a
+ * round costs one scan and no I/O — and the repair loop can keep its text cache.
+ */
+function listIssuesFrom(sources: Source[], textOf: (s: Source) => string): RelinkIssue[] {
   const issues: RelinkIssue[] = [];
   for (const s of sources) {
-    const text = safeText(dir, s);
+    const text = textOf(s);
     if (!isCitableUrl(s.url)) {
       const derived = text ? deriveCitableUrl(text) : undefined;
       // The derived page can already be in the dossier — the same document
@@ -92,20 +103,121 @@ export function listIssues(dir: string): RelinkIssue[] {
  * left. No network: this reads the extracts already on disk.
  */
 export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: RelinkIssue[] } {
+  const { sources, manifest } = readDossier(dir);
+  const state = newState(sources);
+  // One read per extract for the whole pass. The loop used to re-read every
+  // source's text on every round; the text of a source only ever changes when
+  // that source is itself repaired, and the repair below refreshes its entry.
+  const cache = new Map<string, string>();
+  const textOf = (s: Source): string => {
+    const hit = cache.get(s.id);
+    if (hit !== undefined) return hit;
+    const text = safeText(dir, s);
+    cache.set(s.id, text);
+    return text;
+  };
+
   const repaired: RelinkResult[] = [];
-  // Re-listed each round: a repair rewrites sources.json, and it can turn a
-  // LATER source into a duplicate of the one just fixed, so the next candidate
-  // has to be read back rather than held from a stale snapshot. `tried` makes
-  // the loop terminate: a candidate the writer refuses is never re-offered.
+  // Re-listed each round against the IN-MEMORY state, which the repair mutates:
+  // a repair can turn a LATER source into a duplicate of the one just fixed, and
+  // the twin lookup has to see that. It does — `state.sources` and its canonical
+  // index carry the new url the moment it is applied, so the next round decides
+  // on the repaired dossier exactly as re-reading it from disk used to. `tried`
+  // makes the loop terminate: a candidate the writer refuses is never re-offered.
   const tried = new Set<string>();
   for (;;) {
-    const next = listIssues(dir).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
+    const next = listIssuesFrom(state.sources, textOf).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
     if (!next) break;
     tried.add(next.id);
-    const r = relink(dir, next.id, next.derived!);
-    if (r.relinked) repaired.push(r); // a refusal just stays in the worklist
+    const { result, relinked, text } = applyRelink(state, next.id, next.derived!, textOf);
+    if (!result.relinked || !relinked) continue; // a refusal just stays in the worklist
+    // The extract's header carries the url and title, so each repair rewrites
+    // its own extract as it happens. Its text is then re-read rather than
+    // assumed: the writer caps what it stores, and `remaining` is computed from
+    // exactly what a later reader would find on disk.
+    writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
+    cache.set(relinked.id, safeText(dir, relinked));
+    repaired.push(result);
   }
-  return { repaired, remaining: listIssues(dir) };
+  // The three index files describe the FINAL state, so they are written once —
+  // and not at all when nothing was repaired, which leaves an unrepairable
+  // dossier bit-for-bit untouched.
+  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
+}
+
+/**
+ * A dossier's sources plus a canonical-url index, for a caller applying several
+ * repairs in a row. The map answers the "does anything already cite this page?"
+ * question the clash check asks, and is kept a faithful stand-in for a scan of
+ * `sources`: first entry wins, exactly like the `find` it replaces.
+ */
+interface RelinkState {
+  sources: Source[];
+  byCanon: Map<string, Source>;
+}
+
+function newState(sources: Source[]): RelinkState {
+  const byCanon = new Map<string, Source>();
+  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  return { sources: [...sources], byCanon };
+}
+
+/**
+ * The repair itself, on state alone: every refusal `relink` can return, and on
+ * success the new Source plus the text its extract must be rewritten with. The
+ * caller owns the writing — one repair writes both files, a batch of them writes
+ * the index once.
+ */
+function applyRelink(
+  state: RelinkState,
+  id: string,
+  url: string,
+  textOf: (s: Source) => string,
+  opts: { title?: string } = {},
+): { result: RelinkResult; relinked?: Source; text?: string } {
+  const idx = state.sources.findIndex((s) => s.id === id);
+  if (idx < 0) return { result: { id, relinked: false, note: `${id} is not in this dossier` } };
+  const target = state.sources[idx]!;
+
+  const next = url.trim();
+  if (!isCitableUrl(next)) {
+    return { result: { id, relinked: false, note: `${next} is not a citable page url — a citation must open in a browser` } };
+  }
+  const canon = canonicalizeUrl(next);
+  if (canon === target.canonicalUrl) return { result: { id, relinked: false, note: `${id} already points at ${next}` } };
+  // The target cannot be its own clash: its canonical url is not `canon` — the
+  // line above just proved it — so a hit here is another source, as the
+  // `s.id !== id` scan this replaces required.
+  const clash = state.byCanon.get(canon);
+  if (clash) {
+    return { result: { id, relinked: false, note: `${clash.id} already cites ${next} — merge the claims onto it instead of duplicating the source` } };
+  }
+
+  const from = target.url;
+  const text = textOf(target);
+  // A url standing in as a title is part of the same symptom — swapping in the
+  // NEW url would just relabel it. The document's own text is the better name.
+  const titled = target.title && target.title !== from ? target.title : titleFromText(text) || next;
+  const relinked: Source = {
+    ...target,
+    url: next,
+    canonicalUrl: canon,
+    domain: domainOf(next),
+    trust: trustScore(next, target.backend),
+    title: opts.title || titled,
+    // Where the text came from stays on the record: the claim is grounded in
+    // that payload, and a reader auditing the source deserves to know.
+    meta: { ...target.meta, textVia: target.meta?.textVia ?? from },
+  };
+
+  state.sources[idx] = relinked;
+  // The old canonical url is only forgotten if it was THIS source's claim on it:
+  // a dossier that somehow holds two sources on one canonical url must keep the
+  // other one findable, the way a scan of `sources` still would.
+  if (state.byCanon.get(target.canonicalUrl) === target) state.byCanon.delete(target.canonicalUrl);
+  state.byCanon.set(canon, relinked);
+  return { result: { id, relinked: true, from, to: next }, relinked, text };
 }
 
 function safeText(dir: string, s: Source): string {
@@ -124,42 +236,13 @@ function safeText(dir: string, s: Source): string {
  */
 export function relink(dir: string, id: string, url: string, opts: { title?: string } = {}): RelinkResult {
   const { sources, manifest } = readDossier(dir);
-  const idx = sources.findIndex((s) => s.id === id);
-  if (idx < 0) return { id, relinked: false, note: `${id} is not in this dossier` };
-  const target = sources[idx]!;
-
-  const next = url.trim();
-  if (!isCitableUrl(next)) {
-    return { id, relinked: false, note: `${next} is not a citable page url — a citation must open in a browser` };
-  }
-  const canon = canonicalizeUrl(next);
-  if (canon === target.canonicalUrl) return { id, relinked: false, note: `${id} already points at ${next}` };
-  const clash = sources.find((s) => s.id !== id && s.canonicalUrl === canon);
-  if (clash) return { id, relinked: false, note: `${clash.id} already cites ${next} — merge the claims onto it instead of duplicating the source` };
-
-  const from = target.url;
-  const text = safeText(dir, target);
-  // A url standing in as a title is part of the same symptom — swapping in the
-  // NEW url would just relabel it. The document's own text is the better name.
-  const titled = target.title && target.title !== from ? target.title : titleFromText(text) || next;
-  const relinked: Source = {
-    ...target,
-    url: next,
-    canonicalUrl: canon,
-    domain: domainOf(next),
-    trust: trustScore(next, target.backend),
-    title: opts.title || titled,
-    // Where the text came from stays on the record: the claim is grounded in
-    // that payload, and a reader auditing the source deserves to know.
-    meta: { ...target.meta, textVia: target.meta?.textVia ?? from },
-  };
-
-  const nextSources = [...sources];
-  nextSources[idx] = relinked;
+  const state = newState(sources);
+  const { result, relinked, text } = applyRelink(state, id, url, (s) => safeText(dir, s), opts);
+  if (!result.relinked || !relinked) return result; // a refusal writes nothing
   // The extract's header carries the url and title, so it has to be rewritten.
-  writeSourceExtract(dir, relinked, text, manifest.depth);
-  writeDossierIndex(dir, nextSources, refreshed(manifest, nextSources), getMode(manifest.mode).template);
-  return { id, relinked: true, from, to: next };
+  writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
+  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  return result;
 }
 
 function refreshed(manifest: Manifest, sources: Source[]): Manifest {
