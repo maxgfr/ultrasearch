@@ -2,10 +2,21 @@ import { describe, it, expect } from "vitest";
 import { TOOLS, WRITE_TOOLS, TOOL_META, annotationsFor, toolsFor } from "../src/mcp/tools.js";
 import { validateArgs } from "../src/engine.js";
 import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES } from "../src/types.js";
+import { readFileSync } from "node:fs";
 
 const ALL = [...TOOLS, ...WRITE_TOOLS];
 
 describe("tool declarations", () => {
+  it("documents every advertised MCP tool in the README", () => {
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    const section = readme.match(/### Tools\n([\s\S]*?)\n### /)?.[1] ?? "";
+    const documented = [...section.matchAll(/\| `(ultrasearch_[a-z_]+)` \|/g)].map((match) => match[1]).sort();
+    const advertised = ALL.map((tool) => tool.name).sort();
+
+    expect(documented).toEqual(advertised);
+    expect(section).toContain(`${advertised.length} tools.`);
+  });
+
   it("names every tool consistently and uniquely", () => {
     const names = ALL.map((t) => t.name);
     expect(new Set(names).size).toBe(names.length);
