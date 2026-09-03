@@ -1421,7 +1421,7 @@ async function httpGet(url, opts = {}) {
       }
       const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
       countFetch(bytes.length, false);
-      const keepBytes = opts.binary || isBinaryDocument(meta.contentType);
+      const keepBytes = opts.binary || isBinaryDocument(meta.contentType) && bytes.length < max;
       const result = {
         ok: res.ok,
         status: res.status,
@@ -1468,9 +1468,9 @@ async function httpJson(method, url, body, opts = {}) {
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
       const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-      const bytes = await readCappedBytes(res, max);
+      const bytes = await readCappedBytes(res, max + 1);
       countFetch(bytes.length, false);
-      if (bytes.length >= max) {
+      if (bytes.length > max) {
         ctrl.abort();
         return { ok: false, status: res.status, data: void 0, error: `response too large: over the ${max}-byte cap` };
       }
@@ -2155,8 +2155,14 @@ function popcount32(n) {
   return Math.imul(x + (x >>> 4) & 252645135, 16843009) >>> 24;
 }
 function hammingDistance(a, b) {
-  const x = a ^ b;
-  return popcount32(Number(x & MASK32)) + popcount32(Number(x >> 32n & MASK32));
+  let x = a ^ b;
+  let count = popcount32(Number(x & MASK32)) + popcount32(Number(x >> 32n & MASK32));
+  x >>= 64n;
+  while (x) {
+    x &= x - 1n;
+    count++;
+  }
+  return count;
 }
 function dedupeNearDuplicates(items, opts = {}) {
   const maxBits = opts.maxBits ?? 3;
@@ -3687,6 +3693,18 @@ async function runStdioServer(adapter, opts = {}) {
   const drainToLimit = async () => {
     while (inFlight.size >= MAX_IN_FLIGHT) await Promise.race(inFlight);
   };
+  let active = 0;
+  const waiting = [];
+  const runHandler = async (msg, send2) => {
+    while (active >= MAX_IN_FLIGHT) await new Promise((resolve42) => waiting.push(resolve42));
+    active++;
+    try {
+      await server.handle(msg, send2);
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
   const rl = createInterface({ input, terminal: false });
   try {
     for await (const line of rl) {
@@ -3704,7 +3722,7 @@ async function runStdioServer(adapter, opts = {}) {
         track(
           (async () => {
             const out = [];
-            await mapLimit(parsed, MAX_IN_FLIGHT, (m) => server.handle(m, (r) => void out.push(r)));
+            await mapLimit(parsed, MAX_IN_FLIGHT, (m) => runHandler(m, (r) => void out.push(r)));
             if (out.length) emit(JSON.stringify(out) + "\n");
           })().catch(reportInternal(send))
         );
@@ -3714,7 +3732,7 @@ async function runStdioServer(adapter, opts = {}) {
         send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
         continue;
       }
-      track(server.handle(parsed, send).catch(reportInternal(send)));
+      track(runHandler(parsed, send).catch(reportInternal(send)));
     }
     await Promise.all(inFlight);
   } finally {
