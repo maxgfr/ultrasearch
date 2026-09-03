@@ -5601,6 +5601,18 @@ async function runGather(options) {
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   const hydrateCache = /* @__PURE__ */ new Map();
+  const hydrate = (url, key) => {
+    let p = hydrateCache.get(key);
+    if (!p) {
+      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+        if (res.cached) cacheHits++;
+        tallyExtractor(res, url);
+        return res;
+      });
+      hydrateCache.set(key, p);
+    }
+    return p;
+  };
   let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
@@ -5629,31 +5641,23 @@ async function runGather(options) {
         return;
       }
       const key = canonicalizeUrl(it.url);
-      let res = hydrateCache.get(key);
-      if (!res) {
-        res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
-        if (res.cached) cacheHits++;
-        tallyExtractor(res, it.url);
-        hydrateCache.set(key, res);
-      }
+      const fromCache = hydrateCache.has(key);
+      const res = await hydrate(it.url, key);
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
       let text = res.text?.trim() ? res.text : "";
       let junk = text ? looksLikeJunkExtraction(text) : void 0;
       let title = junk ? void 0 : res.title;
+      if (fromCache && res.waybackSnapshot && it.meta?.waybackSnapshot !== res.waybackSnapshot) {
+        it.meta = { ...it.meta, waybackSnapshot: res.waybackSnapshot };
+        hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${res.waybackSnapshot}).`);
+      }
       if (!text || junk) {
         const absUrl = typeof it.meta?.absUrl === "string" ? it.meta.absUrl : void 0;
         const candidates = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : void 0];
         for (const cand of [...new Set(candidates)]) {
           if (!cand || cand === it.url) continue;
-          const altKey = canonicalizeUrl(cand);
-          let alt = hydrateCache.get(altKey);
-          if (!alt) {
-            alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
-            if (alt.cached) cacheHits++;
-            tallyExtractor(alt, cand);
-            hydrateCache.set(altKey, alt);
-          }
+          const alt = await hydrate(cand, canonicalizeUrl(cand));
           if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
             text = alt.text;
             junk = void 0;
@@ -5673,6 +5677,7 @@ async function runGather(options) {
           title = title || wb.title;
           it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
           hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+          hydrateCache.set(key, Promise.resolve({ ...res, text, title, waybackSnapshot: wb.timestamp }));
         }
       }
       if (text && junk && res.extractor !== "firecrawl") {
@@ -5683,7 +5688,7 @@ async function runGather(options) {
           junk = void 0;
           title = title || fc.data.title;
           tallyExtractor({ extractor: "firecrawl" });
-          hydrateCache.set(key, { ...res, text: fc.data.markdown, title, extractor: "firecrawl" });
+          hydrateCache.set(key, Promise.resolve({ ...res, text: fc.data.markdown, title, extractor: "firecrawl" }));
           hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} \u2014 re-extracted it with Firecrawl.`);
         }
       }

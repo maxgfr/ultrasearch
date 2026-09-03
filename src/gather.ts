@@ -393,8 +393,30 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
-  // re-fetches a page round 1 already hydrated.
-  const hydrateCache = new Map<string, ExtractResult & { cached?: boolean }>();
+  // re-fetches a page round 1 already hydrated. The cache holds the PROMISE, not
+  // the result, so two hydration workers that reach for the same URL at the same
+  // moment (one page, one other page's fallback) share a single fetch instead of
+  // both missing a not-yet-filled cache — and the per-page bookkeeping (cache
+  // hits, extractor tallies) lives inside that shared promise, so it fires
+  // exactly once per key whichever worker created it.
+  //
+  // Rescues are folded back in (`waybackSnapshot` here, `firecrawl` further
+  // down), so a second assemble pass reuses the RECOVERED page rather than
+  // re-paying archive.org for the same dead link. A fold carries the snapshot id
+  // so a later cache hit can re-apply the `meta` + note the rescue itself wrote.
+  const hydrateCache = new Map<string, Promise<ExtractResult & { cached?: boolean; waybackSnapshot?: string }>>();
+  const hydrate = (url: string, key: string) => {
+    let p = hydrateCache.get(key);
+    if (!p) {
+      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+        if (res.cached) cacheHits++;
+        tallyExtractor(res, url);
+        return res;
+      });
+      hydrateCache.set(key, p);
+    }
+    return p;
+  };
   // Pages served from the on-disk cache instead of the network, across every
   // round of this run. Recorded on the manifest so a dossier is self-describing
   // about how fresh its page bodies are.
@@ -452,13 +474,8 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         return;
       }
       const key = canonicalizeUrl(it.url);
-      let res = hydrateCache.get(key);
-      if (!res) {
-        res = await cachedFetchAndExtract(it.url, extractOpts, !!options.cache);
-        if (res.cached) cacheHits++;
-        tallyExtractor(res, it.url);
-        hydrateCache.set(key, res);
-      }
+      const fromCache = hydrateCache.has(key); // asked BEFORE hydrate() fills it
+      const res = await hydrate(it.url, key);
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
       if (res.note) hydrateNotes.push(res.note);
 
@@ -467,6 +484,18 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA")
       // — drop it with the body so a rescued page isn't labelled by the wall.
       let title = junk ? undefined : res.title;
+
+      // This page was rescued from the Wayback Machine earlier in the run (round
+      // 1, or a worker that got here first). The text is already in hand — but
+      // the `meta` and the note belong to the ITEM, and this item is a fresh copy
+      // (`fuse` rebuilds every source per assemble pass), so re-apply them here.
+      // Without this the gap round would silently drop the snapshot a re-rescue
+      // used to record. Never on the first pass: the rescue block below writes
+      // them there, and the guard keeps a re-hydrated item from saying it twice.
+      if (fromCache && res.waybackSnapshot && it.meta?.waybackSnapshot !== res.waybackSnapshot) {
+        it.meta = { ...it.meta, waybackSnapshot: res.waybackSnapshot };
+        hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${res.waybackSnapshot}).`);
+      }
 
       // The page gave us nothing usable (failed, empty, or a consent/anti-bot
       // wall). Try same-document alternates before giving up on full text: the
@@ -480,14 +509,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const candidates = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : undefined];
         for (const cand of [...new Set(candidates)]) {
           if (!cand || cand === it.url) continue;
-          const altKey = canonicalizeUrl(cand);
-          let alt = hydrateCache.get(altKey);
-          if (!alt) {
-            alt = await cachedFetchAndExtract(cand, extractOpts, !!options.cache);
-            if (alt.cached) cacheHits++;
-            tallyExtractor(alt, cand);
-            hydrateCache.set(altKey, alt);
-          }
+          const alt = await hydrate(cand, canonicalizeUrl(cand));
           if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
             text = alt.text;
             junk = undefined;
@@ -511,6 +533,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           title = title || wb.title;
           it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
           hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
+          // Fold the rescue into the hydrate cache (as the Firecrawl rescue below
+          // does), so the gap round reuses the snapshot instead of spending a
+          // second archive.org round-trip — and a second cap slot — on it. The
+          // status stays as fetched: the origin is still dead, and the non-empty
+          // `text` is what keeps a cache hit out of this block.
+          hydrateCache.set(key, Promise.resolve({ ...res, text, title, waybackSnapshot: wb.timestamp }));
         }
       }
 
@@ -531,7 +559,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           // Fold the rescue back into the in-process hydrate cache, so a second
           // assemble pass (the --rounds 2 gap round) reuses it rather than
           // re-scraping — and so the run counts this page exactly once.
-          hydrateCache.set(key, { ...res, text: fc.data.markdown, title, extractor: "firecrawl" });
+          hydrateCache.set(key, Promise.resolve({ ...res, text: fc.data.markdown, title, extractor: "firecrawl" }));
           hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} — re-extracted it with Firecrawl.`);
         }
       }

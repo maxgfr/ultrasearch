@@ -12,6 +12,10 @@ export interface MockResponse {
   // back these bytes and `text()` decodes them the way httpGet does, so a test
   // sees exactly the mojibake a real binary download produces.
   bytes?: Buffer;
+  // Hold the response open for this many ms before resolving. For the tests that
+  // care about what happens WHILE a fetch is in flight (two workers reaching for
+  // the same URL at once), which a synchronous router cannot otherwise express.
+  delayMs?: number;
 }
 
 export type Router = (url: string, init?: RequestInit) => MockResponse | undefined;
@@ -28,6 +32,7 @@ export function installFetchMock(router: Router) {
     if (!r) {
       return makeResponse({ status: 404, body: "not found", contentType: "text/plain" }, url);
     }
+    if (r.delayMs) await new Promise((res) => setTimeout(res, r.delayMs));
     return makeResponse(r, url);
   });
   vi.stubGlobal("fetch", spy);
