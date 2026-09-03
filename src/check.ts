@@ -71,8 +71,8 @@ function analyzeFile(file: string, text: string): FileAnalysis {
   // HTML comments are blanked (characters replaced, line breaks preserved) so a
   // citation hidden in `<!-- [S1] -->` cannot ground a claim — the renderer
   // escapes comments to literal text, so they must not count here either.
-  const masked = maskedFile(text);
-  const { lines, code, regions, appendix } = masked;
+  const mf = maskedFile(text);
+  const { lines, code, regions, appendix } = mf;
 
   const sourceTokens: string[] = [];
   const appendixSourceTokens: string[] = [];
@@ -112,7 +112,7 @@ function analyzeFile(file: string, text: string): FileAnalysis {
 
   // The units the numeral pass will re-read from `FileAnalysis.units` — parsed
   // once per file, not once per pass.
-  const units = unitsOfMasked(masked);
+  const units = unitsOfMasked(mf);
   for (const u of units) {
     if (u.kind === "text") {
       flag(u.text);
@@ -323,6 +323,8 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   // wall, the numeral pass won't call a figure unattributed. Missing is guarded
   // by existsSync because readSourceText falls back to the (far too thin)
   // snippet. Lazy and keyed by id: an uncited source is never opened.
+  // Map-from-entries: nothing enforces id uniqueness in a hand-edited
+  // sources.json, and a duplicate id resolves here to the LAST entry carrying it.
   const bySourceId = new Map(sources.map((s) => [s.id, s] as const));
   const textCache = new Map<string, string | null>();
   const textOf = (id: string): string | null => {

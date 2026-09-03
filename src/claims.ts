@@ -150,9 +150,7 @@ export interface MaskedFile {
   lines: string[];
   /** Lines inside a code fence. */
   code: boolean[];
-  /** Lines inside a `[model-hint]` blockquote region. */
-  hint: boolean[];
-  /** How many such regions there are — a flagged passage counts as one hint. */
+  /** How many `[model-hint]` blockquote regions there are — a flagged passage counts as one hint. */
   regions: number;
   /** Lines inside a trailing Sources/References appendix. */
   appendix: boolean[];
@@ -165,12 +163,15 @@ export interface MaskedFile {
 // token accounting, `check`'s claim units and `unitsOfFile` (verify/render) all
 // go through here, so the three can never drift into disagreeing about which
 // line is prose — the failure mode independent copies of this always produce.
+// One deliberate exception stays outside: `citedSourceIds` below runs its own
+// pass because it must NOT apply `hintMask` — a [S#] inside a model-hint region
+// is still a citation for "which sources did the report cite?".
 export function maskedFile(text: string): MaskedFile {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
   const appendix = appendixMask(lines);
-  return { lines, code, hint, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]!) };
+  return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]!) };
 }
 
 // Split an already-masked report file into claim units.

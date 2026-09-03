@@ -5603,18 +5603,6 @@ async function runGather(options) {
     return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   const hydrateCache = /* @__PURE__ */ new Map();
-  const hydrate = (url, key) => {
-    let p = hydrateCache.get(key);
-    if (!p) {
-      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
-        if (res.cached) cacheHits++;
-        tallyExtractor(res, url);
-        return res;
-      });
-      hydrateCache.set(key, p);
-    }
-    return p;
-  };
   let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
@@ -5628,6 +5616,18 @@ async function runGather(options) {
     }
   };
   const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
+  const hydrate = (url, key) => {
+    let p = hydrateCache.get(key);
+    if (!p) {
+      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+        if (res.cached) cacheHits++;
+        tallyExtractor(res, url);
+        return res;
+      });
+      hydrateCache.set(key, p);
+    }
+    return p;
+  };
   async function assemble(rawLists) {
     let merged2 = fuse(rawLists);
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
@@ -5666,6 +5666,10 @@ async function runGather(options) {
             title = title || alt.title;
             it.meta = { ...it.meta, textVia: cand };
             hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${cand} instead.`);
+            if (alt.waybackSnapshot) {
+              it.meta = { ...it.meta, waybackSnapshot: alt.waybackSnapshot };
+              hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${alt.waybackSnapshot}).`);
+            }
             break;
           }
         }
@@ -5901,7 +5905,7 @@ function loadState(dir) {
   const { sources, manifest } = readDossier(dir);
   const byCanon = /* @__PURE__ */ new Map();
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources) };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources), template: getMode(manifest.mode).template };
 }
 function commit(dir, state, p) {
   const id = `S${++state.maxId}`;
@@ -5913,7 +5917,7 @@ function commit(dir, state, p) {
   return { id, added: true };
 }
 function flushIndex(dir, state) {
-  writeDossierIndex(dir, state.sources, state.manifest, getMode(state.manifest.mode).template);
+  writeDossierIndex(dir, state.sources, state.manifest, state.template);
 }
 async function addSources(dir, hits, opts = {}) {
   const results = [];
@@ -6235,7 +6239,7 @@ function maskedFile(text) {
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
   const appendix = appendixMask(lines);
-  return { lines, code, hint, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]) };
+  return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]) };
 }
 function unitsOfMasked(m) {
   return extractUnits(m.lines, m.code, m.unclaimable);
@@ -6915,18 +6919,18 @@ function hasHintMarker(unit) {
   return false;
 }
 function analyzeFile(file, text) {
-  const masked = maskedFile(text);
-  const { lines, code, regions, appendix } = masked;
+  const mf = maskedFile(text);
+  const { lines, code, regions, appendix } = mf;
   const sourceTokens = [];
   const appendixSourceTokens = [];
   const unknownTokens = [];
   let mMarkers = 0;
   for (let i = 0; i < lines.length; i++) {
     if (code[i]) continue;
-    const masked2 = stripInlineCode(lines[i]);
+    const masked = stripInlineCode(lines[i]);
     TOKEN_RE2.lastIndex = 0;
     let m;
-    while (m = TOKEN_RE2.exec(masked2)) {
+    while (m = TOKEN_RE2.exec(masked)) {
       const tok = m[1].trim();
       if (SOURCE_RE.test(tok)) (appendix[i] ? appendixSourceTokens : sourceTokens).push(tok);
       else if (appendix[i])
@@ -6944,7 +6948,7 @@ function analyzeFile(file, text) {
     unsourcedClaims.push(unit.trim().slice(0, 120));
     return true;
   };
-  const units = unitsOfMasked(masked);
+  const units = unitsOfMasked(mf);
   for (const u of units) {
     if (u.kind === "text") {
       flag(u.text);
@@ -7268,6 +7272,7 @@ function listIssuesFrom(sources, textOf) {
 }
 function autoRelink(dir) {
   const { sources, manifest } = readDossier(dir);
+  const template = getMode(manifest.mode).template;
   const state = newState(sources);
   const cache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -7289,7 +7294,7 @@ function autoRelink(dir) {
     cache.set(relinked.id, safeText(dir, relinked));
     repaired.push(result);
   }
-  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), template);
   return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
 }
 function newState(sources) {
@@ -9661,17 +9666,19 @@ ${formatServices(rows)}
       }
       const wantHtml = !p.bools.has("no-html");
       const wantMd = !p.bools.has("no-md");
-      const ctx = wantHtml || wantMd ? loadRenderContext(rdir) : void 0;
       const written = {};
-      if (wantHtml) {
-        written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
-        process.stderr.write(`ultrasearch: wrote ${written.html}
+      if (wantHtml || wantMd) {
+        const ctx = loadRenderContext(rdir);
+        if (wantHtml) {
+          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
+          process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
-      }
-      if (wantMd) {
-        written.md = writeReportMarkdown(ctx);
-        process.stderr.write(`ultrasearch: wrote ${written.md}
+        }
+        if (wantMd) {
+          written.md = writeReportMarkdown(ctx);
+          process.stderr.write(`ultrasearch: wrote ${written.md}
 `);
+        }
       }
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");
       return;

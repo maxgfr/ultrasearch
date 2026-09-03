@@ -284,3 +284,67 @@ describe("gather hydration: two workers reaching for one URL fetch it once", () 
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// The same shared-key shape as above, but the shared page is DEAD: PubMed's
+// landing page 404s and is rescued from the Wayback Machine by the plain web
+// hit, while the DOI item (500 at doi.org — NOT a dead-link status, so it never
+// rescues itself) reaches for that very page as its `meta.absUrl` fallback. The
+// text it is handed is an archive recovery, and the dossier has to say so for
+// that source too. Short body on purpose: under `dedupeNearDuplicates`' 500-char
+// floor, so both sources survive and the DOI one can be asserted on.
+const ARCHIVED_ABSTRACT = `<html><head><title>Archived Cas9 abstract</title></head><body><article><p>Cas9 is a dual-RNA guided DNA endonuclease, and this archived copy of the abstract records how the guide RNA programs Cas9 to cleave a matching DNA target while the tracrRNA duplex meters that cleavage.</p></article></body></html>`;
+const WAYBACK_AVAIL_PUBMED = JSON.stringify({
+  archived_snapshots: {
+    closest: {
+      status: "200",
+      available: true,
+      url: "https://web.archive.org/web/20230405060708/https://pubmed.ncbi.nlm.nih.gov/28495875/",
+      timestamp: "20230405060708",
+    },
+  },
+});
+
+describe("gather hydration: a Wayback rescue reached through another item's fallback", () => {
+  it("records the snapshot and the recovery note on the item served the archived text", async () => {
+    installFetchMock((url) => {
+      if (url.includes("esearch.fcgi")) return { body: JSON.stringify({ esearchresult: { idlist: ["28495875"] } }), contentType: "application/json" };
+      if (url.includes("esummary.fcgi")) {
+        return {
+          body: JSON.stringify({
+            result: {
+              uids: ["28495875"],
+              "28495875": {
+                title: "A programmable dual-RNA-guided DNA endonuclease.",
+                pubdate: "2012",
+                source: "Science",
+                articleids: [{ idtype: "doi", value: "10.1126/science.aad5227" }],
+              },
+            },
+          }),
+          contentType: "application/json",
+        };
+      }
+      if (url.includes("html.duckduckgo.com")) return { body: DDG_PUBMED };
+      // archive.org rules first: the availability URL embeds the encoded origin.
+      if (url.includes("archive.org/wayback/available")) return { body: WAYBACK_AVAIL_PUBMED, contentType: "application/json" };
+      if (url.includes("web.archive.org")) return { body: ARCHIVED_ABSTRACT };
+      // Slow enough that the web hit has finished its rescue and folded it into
+      // the hydrate cache before this item reaches for the fallback.
+      if (url.includes("doi.org")) return { status: 500, body: "server error", delayMs: 120 };
+      if (url.includes("pubmed.ncbi.nlm.nih.gov/28495875")) return { status: 404, body: "gone" };
+      return undefined;
+    });
+
+    const dir = mkdtempSync(join(tmpdir(), "us-altwb-"));
+    const r = await runGather(opts({ question: "Cas9 dual RNA guided endonuclease", backends: ["pubmed", "duckduckgo"], out: dir }));
+
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+    const doiSource = sources.find((s) => s.url.includes("doi.org"))!;
+    expect(doiSource).toBeTruthy();
+    expect(doiSource.meta?.textVia).toBe("https://pubmed.ncbi.nlm.nih.gov/28495875/");
+    expect(doiSource.meta?.waybackSnapshot).toBe("20230405060708");
+    expect(r.manifest.notes).toContain("Recovered https://doi.org/10.1126/science.aad5227 from the Wayback Machine (snapshot 20230405060708).");
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -975,15 +975,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       // at all when both are opted out, so `--no-html --no-md` stays the no-op
       // it has always been (it must not fail on a directory that is not a
       // dossier: it was never going to read one).
-      const ctx = wantHtml || wantMd ? loadRenderContext(rdir) : undefined;
       const written: { html?: string; md?: string } = {};
-      if (wantHtml) {
-        written.html = writeHtml(ctx!, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
-        process.stderr.write(`ultrasearch: wrote ${written.html}\n`);
-      }
-      if (wantMd) {
-        written.md = writeReportMarkdown(ctx!);
-        process.stderr.write(`ultrasearch: wrote ${written.md}\n`);
+      if (wantHtml || wantMd) {
+        const ctx = loadRenderContext(rdir);
+        if (wantHtml) {
+          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve(p.values.out) : undefined);
+          process.stderr.write(`ultrasearch: wrote ${written.html}\n`);
+        }
+        if (wantMd) {
+          written.md = writeReportMarkdown(ctx);
+          process.stderr.write(`ultrasearch: wrote ${written.md}\n`);
+        }
       }
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(written, null, 2) + "\n");
       return;

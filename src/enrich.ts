@@ -42,6 +42,10 @@ interface IngestState {
   manifest: Manifest;
   byCanon: Map<string, Source>;
   maxId: number;
+  // Resolved with the dossier, not at flush time: an unknown `manifest.mode`
+  // throws while the batch has written nothing, instead of after every extract
+  // is already on disk with no index to name it.
+  template: string;
 }
 
 // One prepared source: everything settled EXCEPT the id, which only exists once
@@ -62,7 +66,7 @@ function loadState(dir: string): IngestState {
   // dossier that somehow holds two sources on one canonical url has to keep
   // reporting the earlier [S#], or a re-ingest silently re-points at the other.
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources) };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources), template: getMode(manifest.mode).template };
 }
 
 // Bank a prepared source into the in-memory dossier. Synchronous and total: it
@@ -84,7 +88,7 @@ function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
 // Persist the three index files — sources.json, manifest.json, DOSSIER.md —
 // from the batch's final state. Called ONCE per batch that added anything.
 function flushIndex(dir: string, state: IngestState): void {
-  writeDossierIndex(dir, state.sources, state.manifest, getMode(state.manifest.mode).template);
+  writeDossierIndex(dir, state.sources, state.manifest, state.template);
 }
 
 // Ingest a BATCH of URLs into one dossier — the whole point being that a
@@ -130,6 +134,8 @@ export async function addSources(
     // dies halfway leaves a dossier that READS — index and extracts agreeing —
     // rather than extracts no index mentions. A batch that added nothing writes
     // nothing at all, which is how it behaved when each URL wrote its own index.
+    // A throw from here would REPLACE the in-flight error — the reason the mode
+    // lookup moved to `loadState`, leaving only the index write itself.
     if (state && committed > 0) flushIndex(dir, state);
   }
   return {
@@ -174,6 +180,8 @@ export async function addFiles(dir: string, paths: string[], opts: { question?: 
       results.push({ ...r, url });
     }
   } finally {
+    // Same contract as addSources — and the same caveat: a throw from here
+    // would replace whatever error was already on its way out.
     if (state && committed > 0) flushIndex(dir, state);
   }
   return {

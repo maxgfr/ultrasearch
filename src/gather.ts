@@ -405,18 +405,6 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // re-paying archive.org for the same dead link. A fold carries the snapshot id
   // so a later cache hit can re-apply the `meta` + note the rescue itself wrote.
   const hydrateCache = new Map<string, Promise<ExtractResult & { cached?: boolean; waybackSnapshot?: string }>>();
-  const hydrate = (url: string, key: string) => {
-    let p = hydrateCache.get(key);
-    if (!p) {
-      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
-        if (res.cached) cacheHits++;
-        tallyExtractor(res, url);
-        return res;
-      });
-      hydrateCache.set(key, p);
-    }
-    return p;
-  };
   // Pages served from the on-disk cache instead of the network, across every
   // round of this run. Recorded on the manifest so a dossier is self-describing
   // about how fresh its page bodies are.
@@ -445,6 +433,26 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     }
   };
   const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
+  // Declared AFTER everything it closes over (`cacheHits`, `tallyExtractor`,
+  // `extractOpts`): as a `const` arrow it would hit the temporal dead zone if it
+  // were ever called from above this line.
+  //
+  // A REJECTED promise stays in the cache for the whole run, so round 2 replays
+  // the rejection instead of retrying — acceptable because the only way to get
+  // one is a cache-write I/O failure: `fetchAndExtract` reports a failed fetch as
+  // `status: 0` and resolves, it does not reject.
+  const hydrate = (url: string, key: string) => {
+    let p = hydrateCache.get(key);
+    if (!p) {
+      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+        if (res.cached) cacheHits++;
+        tallyExtractor(res, url);
+        return res;
+      });
+      hydrateCache.set(key, p);
+    }
+    return p;
+  };
 
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
@@ -516,6 +524,18 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
             title = title || alt.title;
             it.meta = { ...it.meta, textVia: cand };
             hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${cand} instead.`);
+            // The fallback canonicalised onto a key some OTHER item already
+            // rescued from the archive this run, so the text we just took is an
+            // archived copy. Same re-apply as the primary hydrate above: the
+            // snapshot and the note belong to the item, and this item never ran
+            // a rescue of its own. Pushed AFTER the fallback note so the pair
+            // reads in the order it happened (fell back, and the fallback was
+            // itself a recovery); the alt path fires in no other test, so the
+            // existing dossier snapshots are untouched either way.
+            if (alt.waybackSnapshot) {
+              it.meta = { ...it.meta, waybackSnapshot: alt.waybackSnapshot };
+              hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${alt.waybackSnapshot}).`);
+            }
             break;
           }
         }

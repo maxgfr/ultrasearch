@@ -104,6 +104,9 @@ function listIssuesFrom(sources: Source[], textOf: (s: Source) => string): Relin
  */
 export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: RelinkIssue[] } {
   const { sources, manifest } = readDossier(dir);
+  // Resolved with the dossier, not at index-write time: an unknown
+  // `manifest.mode` throws before the loop has rewritten a single extract.
+  const template = getMode(manifest.mode).template;
   const state = newState(sources);
   // One read per extract for the whole pass. The loop used to re-read every
   // source's text on every round; the text of a source only ever changes when
@@ -142,7 +145,7 @@ export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: 
   // The three index files describe the FINAL state, so they are written once —
   // and not at all when nothing was repaired, which leaves an unrepairable
   // dossier bit-for-bit untouched.
-  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), template);
   return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
 }
 

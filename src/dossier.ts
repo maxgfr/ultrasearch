@@ -70,7 +70,9 @@ export function maxSourceId(sources: Source[]): number {
   return sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
 }
 
-// The next free "S<n>" id given the existing sources (used by `fetch`).
+// The next free "S<n>" id given the existing sources. The single-shot allocator:
+// batch ingest now walks `maxSourceId` in memory instead, so this has no
+// production caller left — kept for API compatibility and the tests.
 export function nextSourceId(sources: Source[]): string {
   return `S${maxSourceId(sources) + 1}`;
 }
