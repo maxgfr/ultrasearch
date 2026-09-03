@@ -4370,11 +4370,13 @@ var genericBackend = async (ctx) => {
       notes: ["generic backend needs --url <u,...>; nothing to fetch."]
     };
   }
+  const extractOpts = { acceptLanguage: acceptLanguageHeader(ctx.options.lang, ctx.options.region), firecrawl: ctx.options.firecrawl };
+  const fetched = await mapLimit(urls, ctx.options.concurrency ?? 6, (url) => cachedFetchAndExtract(url, extractOpts, !!ctx.options.cache));
   const items = [];
   const notes = [];
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
-    const { text, title, note, finalUrl } = await fetchAndExtract(url);
+    const { text, title, note, finalUrl } = fetched[i];
     if (note) notes.push(note);
     if (!text) continue;
     items.push({
