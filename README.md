@@ -303,14 +303,16 @@ to (**resources**). A client given only the tools has to invent the rest.
 
 ### Tools
 
-Eleven tools. `ultrasearch_gather` is the one to reach for first:
+13 tools. `ultrasearch_gather` is the one to reach for first:
 
 | Tool | What it does |
 |------|--------------|
 | `ultrasearch_gather` | Fan out, fetch, dedupe → a dossier on disk; returns its directory |
 | `ultrasearch_search` | One backend, ranked results, **writes nothing** — the cheap probe |
+| `ultrasearch_ingest` | Add many URLs or web-search hits to a dossier in one call |
 | `ultrasearch_fetch` | Ingest a URL you found yourself into a dossier as a citable `[S#]` |
 | `ultrasearch_check` | The grounding gate: every `[S#]` must resolve |
+| `ultrasearch_relink` | Repair source citation URLs without fetching their content again |
 | `ultrasearch_verify` | Claim↔source worklist for adversarial support-checking |
 | `ultrasearch_render` | Dossier + report → self-contained `index.html` and `index.md` |
 | `ultrasearch_plan` | Decompose a broad question into sub-questions |
