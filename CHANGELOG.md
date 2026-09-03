@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.32.1](https://github.com/maxgfr/ultrasearch/compare/v1.32.0...v1.32.1) (2026-09-03)
+
+
+### Bug Fixes
+
+* **gather:** keep wayback provenance when an alternate is served from the cache ([382666f](https://github.com/maxgfr/ultrasearch/commit/382666fab950d24b5617cb80d60d9788aa0a8792))
+
+
+### Performance Improvements
+
+* **check:** parse REPORT once and read each cited extract once ([b47366c](https://github.com/maxgfr/ultrasearch/commit/b47366c63fb989cedee8406d3c890006953812bb))
+* **enrich:** read and write the dossier index once per ingest batch ([edfa96e](https://github.com/maxgfr/ultrasearch/commit/edfa96ec74fff4a691a362f25358b6d4e9c9171a))
+* **gather:** fold wayback rescues into the hydrate cache and dedupe fetches in flight ([2638bd1](https://github.com/maxgfr/ultrasearch/commit/2638bd1f61350ec91f4d41bde771f557c393efb6))
+* **generic:** fetch explicit urls in parallel through the cached fetcher ([596daca](https://github.com/maxgfr/ultrasearch/commit/596daca0b90c97d7a02c00f87d90ce03d278980d))
+* **relink:** repair in memory and write the index once ([c3850d2](https://github.com/maxgfr/ultrasearch/commit/c3850d2184ccba66315931373d03da225642a2bc))
+* **render:** load the context only when a writer runs ([4f5b611](https://github.com/maxgfr/ultrasearch/commit/4f5b611842f1c0c754a92a81a7f0fdd6d5bf4d02))
+* **render:** load the dossier context once for html and markdown ([341f075](https://github.com/maxgfr/ultrasearch/commit/341f0753275f9994b1703fcccb27c66651d49a6b))
+* **services:** probe only what the caller needs, in parallel ([6238ee8](https://github.com/maxgfr/ultrasearch/commit/6238ee8c3f695e2b5c3d325d1072a985609e465f))
+* **verify:** digest only the pairs that survive the cap and shard ([950aff7](https://github.com/maxgfr/ultrasearch/commit/950aff79a36fb75febc28c7ec979842abc53dc21))
+
 # [1.32.0](https://github.com/maxgfr/ultrasearch/compare/v1.31.0...v1.32.0) (2026-09-02)
 
 
