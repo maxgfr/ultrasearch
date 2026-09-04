@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.18.8";
+declare const ENGINE_VERSION = "1.18.9";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1303,9 +1303,9 @@ declare function lookupPackage(registry: RegistryKind, name: string, version?: s
  * be right, and return the first that knows it.
  *
  * Order is deliberate rather than alphabetical: npm has by far the most names,
- * so trying it first resolves most lookups in one request. An explicit
- * `registry` skips the guessing entirely, which a caller who knows the ecosystem
- * should always do.
+ * so trying it first resolves most lookups without probing another registry. An
+ * explicit `registry` skips the guessing entirely, which a caller who knows the
+ * ecosystem should always do.
  */
 declare function resolvePackage(name: string, opts?: {
     registry?: RegistryKind;

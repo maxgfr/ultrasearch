@@ -1,5 +1,5 @@
 // src/version.ts
-var ENGINE_VERSION = "1.18.8";
+var ENGINE_VERSION = "1.18.9";
 
 // src/brand.ts
 var DEFAULT_BRAND = {
@@ -2598,15 +2598,80 @@ function normalizeRepoUrl(raw) {
 function reqOpts2() {
   return { timeoutMs: 12e3, userAgent: contactUa(), accept: "application/json" };
 }
+var NPM_TIME_TAIL_BYTES = 2 * 1024 * 1024;
+var isWs = (c) => c === " " || c === "	" || c === "\n" || c === "\r";
+function opensTimeMap(text, i) {
+  let j = i - 1;
+  while (j >= 0 && isWs(text[j])) j--;
+  if (text[j] !== ":") return false;
+  j--;
+  while (j >= 0 && isWs(text[j])) j--;
+  return j >= 5 && text.slice(j - 5, j + 1) === '"time"';
+}
+var MAX_OPEN_TIME_MAPS = 16;
+function scanTimeMap(text, version, phase) {
+  let publishedAt;
+  let depth = 0;
+  let quoted = phase !== "outside";
+  let escaped = phase === "escape";
+  const open = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') quoted = false;
+      continue;
+    }
+    if (c === '"') quoted = true;
+    else if (c === "{") {
+      if (open.length < MAX_OPEN_TIME_MAPS && opensTimeMap(text, i)) open.push({ at: i, depth });
+      depth++;
+    } else if (c === "}") {
+      depth--;
+      const top = open[open.length - 1];
+      if (top?.depth === depth) {
+        open.pop();
+        try {
+          const time = JSON.parse(text.slice(top.at, i + 1));
+          if (time && typeof time === "object" && !Array.isArray(time) && typeof time[version] === "string") publishedAt = time[version];
+        } catch (err) {
+          if (!(err instanceof SyntaxError)) throw err;
+        }
+      }
+      while (open.length && open[open.length - 1].depth > depth) open.pop();
+    }
+  }
+  return publishedAt;
+}
+function npmTimeFromTail(text, version) {
+  return scanTimeMap(text, version, "outside") ?? scanTimeMap(text, version, "string") ?? scanTimeMap(text, version, "escape");
+}
+async function npmPublishedAt(packageUrl, version) {
+  if (!version) return void 0;
+  const tail = await httpGet(packageUrl, {
+    ...reqOpts2(),
+    // Optional enrichment must not inherit the primary lookup's retry budget:
+    // package facts are already usable if this suffix is slow or unavailable.
+    timeoutMs: 2500,
+    retries: 0,
+    headers: { range: `bytes=-${NPM_TIME_TAIL_BYTES}` },
+    maxBytes: NPM_TIME_TAIL_BYTES
+  });
+  return tail.ok ? npmTimeFromTail(tail.body, version) : void 0;
+}
 async function lookupPackage(registry, name, version) {
   const n = name.trim();
   if (!n) return void 0;
-  const r = await httpJson("GET", REGISTRY_URL[registry](n), void 0, reqOpts2());
+  const url = registry === "npm" ? `${REGISTRY_URL.npm(n)}/${encodeURIComponent(version ?? "latest")}` : REGISTRY_URL[registry](n);
+  const r = await httpJson("GET", url, void 0, reqOpts2());
   if (!r.ok || !r.data || typeof r.data !== "object") return void 0;
   const d = r.data;
   if (registry === "npm") {
-    const latest = version ?? d["dist-tags"]?.latest;
-    const v = latest && d.versions?.[latest] || {};
+    const latest = version ?? d["dist-tags"]?.latest ?? d.version;
+    const v = latest && d.versions?.[latest] || d;
+    const stated = latest ? d.time?.[latest] : void 0;
+    const publishedAt = typeof stated === "string" ? stated : await npmPublishedAt(REGISTRY_URL.npm(n), latest);
     const deprecated = typeof v.deprecated === "string" ? v.deprecated : v.deprecated === true ? "deprecated" : void 0;
     return {
       registry,
@@ -2618,7 +2683,7 @@ async function lookupPackage(registry, name, version) {
       documentation: typeof v.documentation === "string" ? v.documentation : void 0,
       license: typeof v.license === "string" ? v.license : v.license?.type,
       ...deprecated ? { deprecated } : {},
-      publishedAt: latest ? d.time?.[latest] : void 0
+      publishedAt
     };
   }
   if (registry === "pypi") {
