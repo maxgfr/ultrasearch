@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.34.1](https://github.com/maxgfr/ultrasearch/compare/v1.34.0...v1.34.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* Update README to remove redundant installation note ([f71efce](https://github.com/maxgfr/ultrasearch/commit/f71efceb77c97d8248aaec05d4bf6fcd8460c396))
+
 # [1.34.0](https://github.com/maxgfr/ultrasearch/compare/v1.33.1...v1.34.0) (2026-09-04)
 
 
