@@ -7,6 +7,7 @@ import { DEEP_CAPS } from "./types.js";
 import { extractNumerals, normalizeNumeralText, unitSourceTokens, unitsOfFile } from "./claims.js";
 import { readJson, readSourceText } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
+import { sourceTextWithoutPassageLabels } from "./passages.js";
 
 const HARD_FILES = ["REPORT.md"];
 const VALID_VERDICTS: VerdictKind[] = ["supported", "partial", "refuted", "unsupported"];
@@ -92,7 +93,7 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
   const normOf = (s: Source): string => {
     let t = normCache.get(s.id);
     if (t === undefined) {
-      t = normalizeNumeralText(textOf(s));
+      t = normalizeNumeralText(sourceTextWithoutPassageLabels(textOf(s)));
       normCache.set(s.id, t);
     }
     return t;
@@ -353,7 +354,11 @@ export function bindToWorklist(dir: string, verdicts: Verdict[], opts: { strict?
       (!!v.extractPath && v.extractPath !== exp.extractPath) ||
       (!!v.extractDigest && v.extractDigest !== exp.extractDigest);
     const fingerprints = saved.get(key);
-    if (contradicts || (!opts.strict && fingerprints && (fingerprints.size !== 1 || !fingerprints.has(exp.fingerprint!)))) stale.push(key);
+    // Older sharded/unsharded worklists may coexist after regeneration. A
+    // current saved fingerprint can bind a compact verdict; an older sibling
+    // must not veto it. Stale-only records still fail, and explicit verdict
+    // fingerprints were checked above without borrowing from any worklist.
+    if (contradicts || (!opts.strict && fingerprints && !fingerprints.has(exp.fingerprint!))) stale.push(key);
     else if (opts.strict || !fingerprints) {
       if (v.verdict) unbound.push(key);
       bound.push(v);

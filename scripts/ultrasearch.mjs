@@ -5087,6 +5087,13 @@ function toBibtex(sources) {
 }
 
 // src/passages.ts
+var OMISSION_NOTICE = "[Other source text omitted; passages selected for the question. Character positions use UTF-16 offsets in the fetched extract.]";
+function sourceTextWithoutPassageLabels(text) {
+  return text.split("\n").filter((line) => {
+    const trimmed = line.trim();
+    return !/^\[Source passage: characters \d+-\d+ of \d+\]$/.test(trimmed) && trimmed !== OMISSION_NOTICE;
+  }).join("\n");
+}
 function selectSourcePassages(text, question, depth) {
   const cap = depth === "deep" ? Infinity : depth === "standard" ? 8e3 : 4e3;
   if (text.length <= cap || !question.trim()) return capExtract(text, depth);
@@ -5127,7 +5134,9 @@ function selectSourcePassages(text, question, depth) {
   if (!selected.length) return capExtract(text, depth);
   selected.sort((a, b) => a.start - b.start);
   return selected.map((w) => `[Source passage: characters ${w.start + 1}-${w.end} of ${text.length}]
-${text.slice(w.start, w.end)}`).join("\n\n") + "\n\n[Other source text omitted; passages selected for the question. Character positions use UTF-16 offsets in the fetched extract.]";
+${text.slice(w.start, w.end)}`).join("\n\n") + `
+
+${OMISSION_NOTICE}`;
 }
 
 // src/dossier.ts
@@ -6792,7 +6801,7 @@ function buildWorklist(dir, opts = {}) {
   const normOf = (s) => {
     let t = normCache.get(s.id);
     if (t === void 0) {
-      t = normalizeNumeralText(textOf(s));
+      t = normalizeNumeralText(sourceTextWithoutPassageLabels(textOf(s)));
       normCache.set(s.id, t);
     }
     return t;
@@ -6959,7 +6968,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
     }
     const contradicts = !!v.claim && v.claim.trim() !== exp.claim.trim() || !!v.extractPath && v.extractPath !== exp.extractPath || !!v.extractDigest && v.extractDigest !== exp.extractDigest;
     const fingerprints = saved.get(key);
-    if (contradicts || !opts.strict && fingerprints && (fingerprints.size !== 1 || !fingerprints.has(exp.fingerprint))) stale.push(key);
+    if (contradicts || !opts.strict && fingerprints && !fingerprints.has(exp.fingerprint)) stale.push(key);
     else if (opts.strict || !fingerprints) {
       if (v.verdict) unbound.push(key);
       bound.push(v);
@@ -7309,7 +7318,7 @@ function runCheck(dir, opts = {}) {
     let t = normCache.get(id);
     if (t === void 0) {
       const raw = textOf(id);
-      t = raw === null ? null : normalizeNumeralText(raw);
+      t = raw === null ? null : normalizeNumeralText(sourceTextWithoutPassageLabels(raw));
       normCache.set(id, t);
     }
     return t;

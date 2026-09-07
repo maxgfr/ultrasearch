@@ -16,6 +16,7 @@ import { readSourceText } from "./dossier.js";
 import { looksLikeJunkExtraction } from "./backends/fetch.js";
 import { isApiEndpoint } from "./citable.js";
 import { bindToWorklist, reduceVerdicts } from "./verify.js";
+import { sourceTextWithoutPassageLabels } from "./passages.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -407,7 +408,7 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
     let t = normCache.get(id);
     if (t === undefined) {
       const raw = textOf(id);
-      t = raw === null ? null : normalizeNumeralText(raw);
+      t = raw === null ? null : normalizeNumeralText(sourceTextWithoutPassageLabels(raw));
       normCache.set(id, t);
     }
     return t;

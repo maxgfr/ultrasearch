@@ -1,6 +1,21 @@
 import { buildMatcher, capExtract } from "./engine.js";
 import type { Manifest } from "./types.js";
 
+const OMISSION_NOTICE = "[Other source text omitted; passages selected for the question. Character positions use UTF-16 offsets in the fetched extract.]";
+
+// Positions and source lengths are engine metadata, not facts stated by the
+// source. Keep the stored extract intact for fingerprints and relinking; only
+// grounding consumers remove these annotations from the evidence they search.
+export function sourceTextWithoutPassageLabels(text: string): string {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      return !/^\[Source passage: characters \d+-\d+ of \d+\]$/.test(trimmed) && trimmed !== OMISSION_NOTICE;
+    })
+    .join("\n");
+}
+
 // Rank bounded, contiguous windows of the complete fetched text. The source
 // slices stay verbatim; offsets refer to the original extract, not this digest.
 export function selectSourcePassages(text: string, question: string, depth: Manifest["depth"]): string {
@@ -47,6 +62,6 @@ export function selectSourcePassages(text: string, question: string, depth: Mani
   selected.sort((a, b) => a.start - b.start);
   return (
     selected.map((w) => `[Source passage: characters ${w.start + 1}-${w.end} of ${text.length}]\n${text.slice(w.start, w.end)}`).join("\n\n") +
-    "\n\n[Other source text omitted; passages selected for the question. Character positions use UTF-16 offsets in the fetched extract.]"
+    `\n\n${OMISSION_NOTICE}`
   );
 }
