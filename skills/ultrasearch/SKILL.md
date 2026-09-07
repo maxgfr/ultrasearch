@@ -4,7 +4,7 @@ description: "Research a web topic, brainstorm research angles, and produce an e
 disable-model-invocation: true
 license: MIT
 metadata:
-  version: 1.35.0
+  version: 1.35.1
 ---
 
 # ultrasearch — recap the web, grounded not guessed
