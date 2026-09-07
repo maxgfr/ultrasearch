@@ -18,9 +18,6 @@ open web instead of a git repo.
 npx skills add maxgfr/ultrasearch
 ```
 
-> Already installed? Re-run `npx skills add maxgfr/ultrasearch` to pull the
-> latest engine + skill description.
-
 ## Why
 
 Ask a model about a topic and it answers from stale training memory. ultrasearch
