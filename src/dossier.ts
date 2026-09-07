@@ -6,7 +6,8 @@ import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
 import { sourceSignals } from "./authority.js";
 import { ensureDir, isNoWrite, writeArtifact } from "./no-write.js";
 import { toBibtex } from "./bibtex.js";
-import { focusedSnippet, capExtract } from "./backends/fetch.js";
+import { focusedSnippet } from "./backends/fetch.js";
+import { selectSourcePassages } from "./passages.js";
 
 // The grounding contract, inlined into DOSSIER.md so the model writing the
 // tiers has the rules in front of it. `check` enforces exactly this.
@@ -113,14 +114,14 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
 
 // The on-disk content of sources/S#.md: a small header + the cleaned, depth-
 // capped extract. Shared by writeDossier and the `fetch`/enrich path.
-export function renderSourceExtract(s: Source, text: string, depth: Manifest["depth"]): string {
+export function renderSourceExtract(s: Source, text: string, depth: Manifest["depth"], question = ""): string {
   const head = [
     `# ${s.id} — ${s.title}`,
     `- url: ${s.url}`,
     `- backend: ${s.backend} · fetched: ${s.fetchedAt} · trust: ${s.trust} · score: ${s.score}`,
     "",
   ].join("\n");
-  return head + capExtract(text, depth) + "\n";
+  return head + selectSourcePassages(text, question, depth) + "\n";
 }
 
 // Inverse of renderSourceExtract: recover a source's cleaned text from its
@@ -151,8 +152,8 @@ export interface WriteDossierResult {
 }
 
 // Persist one source's cleaned extract as sources/S#.md.
-export function writeSourceExtract(dir: string, s: Source, text: string, depth: Manifest["depth"]): void {
-  writeArtifact(join(dir, s.extract), renderSourceExtract(s, text, depth));
+export function writeSourceExtract(dir: string, s: Source, text: string, depth: Manifest["depth"], question = ""): void {
+  writeArtifact(join(dir, s.extract), renderSourceExtract(s, text, depth, question));
 }
 
 // Persist the three index files every reader of a dossier depends on:
@@ -186,7 +187,7 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
   const sources: Source[] = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth);
+    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth, manifest.question);
     return s;
   });
 

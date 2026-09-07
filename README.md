@@ -1,5 +1,12 @@
 # ultrasearch
 
+## Manual skill invocation
+
+Invoke `$ultrasearch` explicitly in Codex or `/ultrasearch` in Claude Code.
+The shipped skill disables automatic activation in both hosts; CLI commands
+remain unchanged. Other hosts may not honor these settings. Existing installed
+copies need to be updated to receive this invocation policy.
+
 **Recap everything the web says about a topic — grounded, not guessed.**
 
 `ultrasearch` is a [skills.sh](https://skills.sh) agent skill. Give it a
@@ -192,6 +199,13 @@ be up at a time — starting a second failed on the port *after* leaving its
 sidecars running. Bringing it up from any of them now targets the same
 containers, so the second is a no-op and the RAM is paid once.
 
+Compose files and bind-mounted settings use the shared directory
+`~/.cache/skills/compose`. Set `ULTRA_STACK_CACHE_DIR` to the same directory
+for all three tools to override its parent. Per-tool HTTP and clone cache
+overrides still apply only to those caches. The first startup after upgrading
+from per-tool Compose directories may recreate SearXNG once to move its mount;
+subsequent startups from another tool reuse it.
+
 Upgrading from a version with per-skill container names? Remove the old ones
 once — this file can no longer stop them, and they still hold the ports:
 
@@ -242,6 +256,13 @@ cache (**on by default**, `--no-cache` to disable) is shared across processes, s
 the deep tier's per-sub-question fan-out reuses pages instead of re-fetching
 them. It is keyed by canonical URL *and* locale, and only successful extractions
 are stored.
+
+For long sources, `summary` and `standard` select question-relevant, contiguous
+passages from the complete fetched extract, including late sections. Each
+verbatim passage records its original character positions; omitted text is
+explicitly marked. The existing 4,000/8,000-character body caps remain. With no
+lexical match, the prefix fallback remains; `deep` retains the full fetched
+extract. This is retrieval, not a guarantee that every relevant passage was found.
 
 Each run also reports what retrieval could **not** do: a thin-dossier flag, the
 question terms the sources barely cover, per-source `⚠ snippet only` markers, and

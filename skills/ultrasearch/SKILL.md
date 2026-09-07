@@ -1,6 +1,7 @@
 ---
 name: ultrasearch
-description: "Research what the web says and produce a citation-checked report. Use for deep dives, bug research, literature reviews, learning guides, market or competitor research, and prior-art searches; brainstorm angles for vague requests and use a direct web lookup for a single fact."
+description: "Research a web topic, brainstorm research angles, and produce an evidence dossier and citation-checked report."
+disable-model-invocation: true
 license: MIT
 metadata:
   version: 1.34.1
@@ -252,6 +253,11 @@ not hand control back mid-retrieval.
    websites**: `trust` reflects only the ROUTE a source arrived by (a scholarly
    API vouches for a record; a web engine vouches for nothing). Deciding what is
    authoritative is your job — you are the only party here that can read the page.
+
+   At `summary`/`standard`, long extracts contain question-selected verbatim
+   passages with original character positions and an omission notice. Selection
+   can miss context: use `--depth deep` or open the original when the omitted
+   sections matter. Positions refer to the fetched extract, not the HTML source.
 
    As you read each extract, appraise it: primary source (a spec, a vendor's own
    docs, the paper), secondary reporting, or content marketing rewriting someone

@@ -15,7 +15,7 @@ import {
 import { readSourceText } from "./dossier.js";
 import { looksLikeJunkExtraction } from "./backends/fetch.js";
 import { isApiEndpoint } from "./citable.js";
-import { buildWorklist, reduceVerdicts } from "./verify.js";
+import { bindToWorklist, reduceVerdicts } from "./verify.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -185,15 +185,43 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
   // claim↔source pairs (same deterministic derivation `verify --run` used) and
   // fail closed on any pair without an adjudicated verdict. This also catches a
   // REPORT edited after verification (claim ids shift ⇒ re-verify).
+  //
+  // …and the deep exit-gate BINDING: coverage answers "is every pair judged?",
+  // never "is the judgement still about THIS text?". Re-deriving the worklist
+  // also re-stamps each pair's content fingerprint (claim + full extract), so a
+  // REPORT claim rewritten — or an extract swapped — after `verify --apply`
+  // leaves the (claimId, sourceId) keys intact but the fingerprints apart, and
+  // the gate refuses to pass a verdict nobody gave for the current text.
   if (requireVerify) {
-    let expected: ReturnType<typeof buildWorklist>["worklist"]["pairs"] = [];
-    try {
-      // keysOnly: this gate matches pairs on (claimId, sourceId) only, so the
-      // digests would be read and built for nothing.
-      expected = buildWorklist(dir, { keysOnly: true }).worklist.pairs;
-    } catch {
-      expected = [];
+    // `strict`: at the gate an adjudicated verdict must ALREADY carry a matching
+    // fingerprint — nothing is bound here, so a stale ledger cannot be laundered
+    // into a fresh one by re-running `check`.
+    const binding = bindToWorklist(dir, verdicts, { strict: true });
+    if (!binding.derivable) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: REPORT's claim↔source worklist could not be re-derived (unreadable sources.json/extract), so the ` +
+          `verdicts cannot be bound to the text they judged — fix the dossier and re-run \`verify\` + \`verify --apply\`.`,
+      );
     }
+    if (binding.stale.length) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: ${binding.stale.length} adjudicated pair(s) no longer match the text they judged ` +
+          `(${binding.stale.slice(0, 6).join(", ")}${binding.stale.length > 6 ? ", …" : ""}) — REPORT.md and/or the cited ` +
+          `extract changed since \`verify\` generated the worklist. Re-run \`verify\`, re-adjudicate, then \`verify --apply\`.`,
+      );
+    }
+    if (binding.unbound.length) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: ${binding.unbound.length} verdict(s) in VERIFY.json are not bound to any adjudicated content ` +
+          `(${binding.unbound.slice(0, 6).join(", ")}${binding.unbound.length > 6 ? ", …" : ""}) — the record predates or ` +
+          `bypasses content binding. Re-run \`verify\` and \`verify --apply <verdicts.json>\` to bind each verdict to the ` +
+          `claim + extract it judged.`,
+      );
+    }
+    const expected = binding.derivable ? binding.expected : [];
     const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId}\u0000${v.sourceId}`));
     const uncovered = expected.filter((p) => !adjudicatedKeys.has(`${p.claimId}\u0000${p.sourceId}`));
     if (uncovered.length) {

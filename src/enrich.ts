@@ -78,7 +78,7 @@ function loadState(dir: string): IngestState {
 function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   const id = `S${++state.maxId}`; // shares the S<n> scheme the grounding contract depends on
   const s = buildSource(p.raw, id, new Date().toISOString(), p.question);
-  writeSourceExtract(dir, s, p.text, state.manifest.depth);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [...new Set([...state.manifest.backendsUsed, p.backend])] };

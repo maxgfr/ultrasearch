@@ -230,6 +230,7 @@ export interface WebSearchHit {
 
 // Optional, backend-specific metadata carried on a source.
 export interface SourceMeta {
+  extractor?: string; // extractor already used by a full-text backend
   doi?: string;
   arxivId?: string;
   authors?: string[];
@@ -467,6 +468,12 @@ export interface ClaimEvidencePair {
   claim: string; // the claim-unit text (capped)
   extractPath: string; // relative path, e.g. "sources/S2.md"
   extractDigest: string; // claim-focused snippet of the cited extract
+  // Content binding, stamped when the worklist is GENERATED: a hash of the
+  // claim's full text + the FULL cited extract. It travels with the verdict, so
+  // `verify --apply` and `check --require-verify` can tell whether the text the
+  // agent judged is still the text being gated. Absent on a `keysOnly`
+  // derivation (which reads no extract) and on pre-binding/legacy records.
+  fingerprint?: string;
   numeralsAbsent?: string[]; // claim numerals NOT found in this source's full extract (normalized) — verdict caps at `partial`
 }
 

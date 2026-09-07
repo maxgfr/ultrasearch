@@ -27,3 +27,4 @@ configure({
 });
 
 export * from "./vendor/webindex-engine.mjs";
+export { materializeSharedStack as ensureComposeMaterialized, sharedStackControl as stackControl } from "./stack.js";

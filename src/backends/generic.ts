@@ -34,7 +34,7 @@ export const genericBackend: Backend = async (ctx): Promise<BackendResult> => {
   const notes: string[] = [];
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i]!;
-    const { text, title, note, finalUrl } = fetched[i]!;
+    const { text, title, note, finalUrl, extractor } = fetched[i]!;
     if (note) notes.push(note);
     if (!text) continue;
     items.push({
@@ -44,6 +44,7 @@ export const genericBackend: Backend = async (ctx): Promise<BackendResult> => {
       score: urls.length - i,
       snippet: bestExcerpt(text, ctx.question),
       text,
+      ...(extractor ? { meta: { extractor } } : {}),
     });
   }
   return { backend: "generic", items, notes };

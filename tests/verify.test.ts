@@ -133,6 +133,11 @@ function numericDossier(): string {
 // artifact's bytes: these snapshots are the byte-identity oracle for the
 // derivation (deferring the digests to the survivors must not move a single
 // field, pair or byte).
+// The content fingerprint is a hash of live file bytes, so it is asserted by
+// SHAPE here (its behaviour — binding a verdict to the text it judged — is
+// covered end-to-end in verify-binding.test.ts).
+const FP = expect.stringMatching(/^[0-9a-f]{32}$/);
+
 describe("buildWorklist (derivation is byte-stable)", () => {
   it("emits every claim↔source pair in document order, digests and all", () => {
     const dir = numericDossier();
@@ -148,6 +153,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "Latency fell by 42% after the rollout [S1] [S2].",
         extractPath: "sources/S1.md",
         extractDigest: "S1 — some extract text for S1",
+        fingerprint: FP,
         numeralsAbsent: ["42"],
       },
       {
@@ -157,6 +163,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "Latency fell by 42% after the rollout [S1] [S2].",
         extractPath: "sources/S2.md",
         extractDigest: "S2 — some extract text for S2",
+        fingerprint: FP,
         numeralsAbsent: ["42"],
       },
       {
@@ -166,6 +173,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "The window is 60 seconds long in practice [S2] [S3].",
         extractPath: "sources/S2.md",
         extractDigest: "S2 — some extract text for S2",
+        fingerprint: FP,
         numeralsAbsent: ["60"],
       },
       {
@@ -175,6 +183,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "The window is 60 seconds long in practice [S2] [S3].",
         extractPath: "sources/S3.md",
         extractDigest: "S3 — some extract text for S3",
+        fingerprint: FP,
         numeralsAbsent: ["60"],
       },
       {
@@ -184,6 +193,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "A third claim about buckets and bursts [S1] [S3].",
         extractPath: "sources/S1.md",
         extractDigest: "S1 — some extract text for S1",
+        fingerprint: FP,
       },
       {
         claimId: "C3",
@@ -192,11 +202,21 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "A third claim about buckets and bursts [S1] [S3].",
         extractPath: "sources/S3.md",
         extractDigest: "S3 — some extract text for S3",
+        fingerprint: FP,
       },
     ]);
     // Key order is artifact bytes, not just shape — assert it explicitly.
-    expect(Object.keys(b.worklist.pairs[0]!)).toEqual(["claimId", "file", "sourceId", "claim", "extractPath", "extractDigest", "numeralsAbsent"]);
-    expect(Object.keys(b.worklist.pairs[4]!)).toEqual(["claimId", "file", "sourceId", "claim", "extractPath", "extractDigest"]);
+    expect(Object.keys(b.worklist.pairs[0]!)).toEqual([
+      "claimId",
+      "file",
+      "sourceId",
+      "claim",
+      "extractPath",
+      "extractDigest",
+      "fingerprint",
+      "numeralsAbsent",
+    ]);
+    expect(Object.keys(b.worklist.pairs[4]!)).toEqual(["claimId", "file", "sourceId", "claim", "extractPath", "extractDigest", "fingerprint"]);
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -213,6 +233,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "Latency fell by 42% after the rollout [S1] [S2].",
         extractPath: "sources/S1.md",
         extractDigest: "S1 — some extract text for S1",
+        fingerprint: FP,
         numeralsAbsent: ["42"],
       },
       {
@@ -222,6 +243,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "Latency fell by 42% after the rollout [S1] [S2].",
         extractPath: "sources/S2.md",
         extractDigest: "S2 — some extract text for S2",
+        fingerprint: FP,
         numeralsAbsent: ["42"],
       },
       {
@@ -231,6 +253,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "The window is 60 seconds long in practice [S2] [S3].",
         extractPath: "sources/S2.md",
         extractDigest: "S2 — some extract text for S2",
+        fingerprint: FP,
         numeralsAbsent: ["60"],
       },
     ]);
@@ -250,6 +273,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "Latency fell by 42% after the rollout [S1] [S2].",
         extractPath: "sources/S2.md",
         extractDigest: "S2 — some extract text for S2",
+        fingerprint: FP,
         numeralsAbsent: ["42"],
       },
       {
@@ -259,6 +283,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "The window is 60 seconds long in practice [S2] [S3].",
         extractPath: "sources/S3.md",
         extractDigest: "S3 — some extract text for S3",
+        fingerprint: FP,
         numeralsAbsent: ["60"],
       },
       {
@@ -268,6 +293,7 @@ describe("buildWorklist (derivation is byte-stable)", () => {
         claim: "A third claim about buckets and bursts [S1] [S3].",
         extractPath: "sources/S3.md",
         extractDigest: "S3 — some extract text for S3",
+        fingerprint: FP,
       },
     ]);
     rmSync(dir, { recursive: true, force: true });

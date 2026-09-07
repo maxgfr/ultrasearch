@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
@@ -13,6 +14,16 @@ const VALID_VERDICTS: VerdictKind[] = ["supported", "partial", "refuted", "unsup
 export interface VerifyWorklist {
   run: string;
   pairs: ClaimEvidencePair[];
+}
+
+// CONTENT BINDING — the identity of what an agent actually adjudicated: the
+// claim's FULL text plus the FULL cited extract. Deliberately not the 600-char
+// `extractDigest`: an edit past the digest window (or past the claim's 400-char
+// display cap) would leave the stored snippet byte-identical while changing the
+// evidence the verdict rests on. Computed once, at worklist GENERATION time, and
+// carried by the verdict from `VERIFY.todo.json` through `VERIFY.json`.
+export function pairFingerprint(claim: string, extract: string): string {
+  return createHash("sha256").update(String(claim.length)).update("|").update(claim).update(extract).digest("hex").slice(0, 32);
 }
 
 export interface BuiltWorklist {
@@ -153,6 +164,9 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
   // order below is the artifact's byte order; do not reshuffle it.
   const emit = (p: LightPair): ClaimEvidencePair => {
     if (opts.keysOnly) {
+      // No extract is read here, so there is no `fingerprint` either: a
+      // keys-only derivation can answer "which pairs exist", never "is this
+      // verdict still bound to the text it judged".
       return { claimId: p.claimId, file: p.file, sourceId: p.sourceId, claim: p.claim, extractPath: p.extractPath, extractDigest: "" };
     }
     // Precompute which claim numerals this source's extract does NOT contain,
@@ -167,6 +181,8 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
       claim: p.claim,
       extractPath: p.extractPath,
       extractDigest: focusedSnippet(textOf(p.source), p.rawClaim, { maxChars: 600, maxSentences: 4 }),
+      // Bound to the FULL claim + the FULL extract as they are RIGHT NOW.
+      fingerprint: pairFingerprint(p.rawClaim, textOf(p.source)),
       ...(numeralsAbsent.length ? { numeralsAbsent } : {}),
     };
   };
@@ -242,6 +258,7 @@ function parseVerdictFile(verdictsPath: string): Verdict[] {
       claim: typeof v.claim === "string" ? v.claim : "",
       extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
       extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
+      ...(typeof v.fingerprint === "string" && v.fingerprint ? { fingerprint: v.fingerprint } : {}),
       verdict,
       note: typeof v.note === "string" ? v.note : "",
     });
@@ -253,6 +270,98 @@ function parseVerdictFile(verdictsPath: string): Verdict[] {
     );
   }
   return verdicts;
+}
+
+export const pairKey = (p: { claimId: string; sourceId: string }): string => `${p.claimId}/${p.sourceId}`;
+
+export interface BindingReport {
+  derivable: boolean; // could the CURRENT worklist be re-derived at all?
+  stale: string[]; // keys whose stored content contradicts the current worklist
+  unbound: string[]; // adjudicated keys carrying no fingerprint (strict mode only)
+  bound: Verdict[]; // the rows, with a confirmed/stamped `fingerprint` where earned
+  expected: ClaimEvidencePair[]; // the current worklist the rows were bound against
+}
+
+// Bind a set of verdicts to the CURRENT worklist — the one rule that makes a
+// verdict about TEXT rather than about a (claimId, sourceId) key pair.
+//
+// A row is STALE when anything it carries from generation time contradicts what
+// the worklist says today: its `fingerprint` (claim + full extract), or, for a
+// row that predates fingerprints, the claim text / extract path / digest it
+// recorded. Staleness is fatal to the caller — a verdict that judged other text
+// must never be re-stamped as fresh.
+//
+// Minimal/legacy rows borrow a fingerprint only from the saved generation-time
+// worklist (including shards), after comparing it with the full current text.
+// Display snippets cannot prove identity: both claim and extract are truncated.
+//
+// Rows naming a pair outside the current worklist (e.g. a capped-out or foreign
+// pair) are left untouched: the coverage gate, not the binding, decides whether
+// the worklist is fully adjudicated.
+//
+// `{ strict: true }` is the GATE's reading, used by `check --require-verify`:
+// there, fold time is long past, so an adjudicated row for a current pair must
+// already CARRY a matching fingerprint — a record that never went through
+// `verify --apply` (hand-written, or written before binding existed) is reported
+// as `unbound` instead of being stamped on the spot.
+export function bindToWorklist(dir: string, verdicts: Verdict[], opts: { strict?: boolean } = {}): BindingReport {
+  let expected: ClaimEvidencePair[];
+  try {
+    expected = buildWorklist(dir).worklist.pairs;
+  } catch {
+    // No derivable worklist (no sources.json / unreadable extract): nothing can
+    // be vouched for here. Callers fail closed on `derivable === false` where a
+    // green result would otherwise mean "verified".
+    return { derivable: false, stale: [], unbound: [], bound: verdicts, expected: [] };
+  }
+  const byKey = new Map(expected.map((p) => [pairKey(p), p] as const));
+  const saved = new Map<string, Set<string>>();
+  if (!opts.strict) {
+    for (const name of readdirSync(dir).filter((name) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name))) {
+      try {
+        const todo = JSON.parse(readFileSync(join(dir, name), "utf8"));
+        if (!Array.isArray(todo?.pairs)) continue;
+        for (const p of todo.pairs) {
+          if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
+          const key = pairKey(p);
+          const fingerprints = saved.get(key) ?? new Set<string>();
+          fingerprints.add(p.fingerprint);
+          saved.set(key, fingerprints);
+        }
+      } catch {
+        // An unreadable generation record cannot bind any verdict.
+      }
+    }
+  }
+  const stale: string[] = [];
+  const unbound: string[] = [];
+  const bound: Verdict[] = [];
+  for (const v of verdicts) {
+    const key = pairKey(v);
+    const exp = byKey.get(key);
+    if (!exp) {
+      bound.push(v);
+      continue;
+    }
+    if (v.fingerprint) {
+      if (v.fingerprint !== exp.fingerprint) stale.push(key);
+      bound.push(v);
+      continue;
+    }
+    const contradicts =
+      (!!v.claim && v.claim.trim() !== exp.claim.trim()) ||
+      (!!v.extractPath && v.extractPath !== exp.extractPath) ||
+      (!!v.extractDigest && v.extractDigest !== exp.extractDigest);
+    const fingerprints = saved.get(key);
+    if (contradicts || (!opts.strict && fingerprints && (fingerprints.size !== 1 || !fingerprints.has(exp.fingerprint!)))) stale.push(key);
+    else if (opts.strict || !fingerprints) {
+      if (v.verdict) unbound.push(key);
+      bound.push(v);
+      continue;
+    }
+    bound.push(stale.includes(key) ? v : { ...v, fingerprint: exp.fingerprint });
+  }
+  return { derivable: true, stale, unbound, bound, expected };
 }
 
 // Phase B — read one OR several agent-filled verdicts files (e.g. one per
@@ -272,7 +381,25 @@ export function applyVerdicts(dir: string, verdictsPath: string | string[]): Ver
       merged.set(`${v.claimId} ${v.sourceId}`, v);
     }
   }
-  const verdicts = [...merged.values()];
+  // BIND before folding: a verdict may only enter the ledger if the claim and
+  // the extract it judged are still the ones on disk. Fail closed — throwing
+  // BEFORE `writeArtifact` is what stops a stale adjudication from acquiring a
+  // fresh fingerprint by being re-applied over edited text.
+  const binding = bindToWorklist(dir, [...merged.values()]);
+  if (binding.stale.length) {
+    throw new Error(
+      `${binding.stale.length} verdict(s) judged text that has changed since the worklist was generated ` +
+        `(${binding.stale.slice(0, 6).join(", ")}${binding.stale.length > 6 ? ", …" : ""}): REPORT.md and/or the cited ` +
+        `extract were edited after \`verify\`. Re-run \`verify\` and re-adjudicate the regenerated worklist, then ` +
+        `\`verify --apply\` — a verdict cannot be transferred to text nobody judged (nothing was written).`,
+    );
+  }
+  if (binding.unbound.length) {
+    throw new Error(
+      `Unbound verdict(s) (${binding.unbound.join(", ")}): missing a valid generation-time fingerprint. Re-run \`verify\`, re-adjudicate the saved worklist, then \`verify --apply\` (nothing was written).`,
+    );
+  }
+  const verdicts = binding.bound;
   const result = reduceVerdicts(verdicts);
   // Persist the gate result + the full adjudicated list (the latter only for
   // `render`'s per-claim verdict table / badges; `check --semantic` ignores it).

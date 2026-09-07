@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename2, join as join17, relative as relative2, resolve as resolve5 } from "path";
+import { basename as basename2, join as join18, relative as relative2, resolve as resolve5 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync5, readdirSync, readFileSync as readFileSync12 } from "fs";
+import { realpathSync as realpathSync3, existsSync as existsSync12, statSync as statSync5, readdirSync as readdirSync4, readFileSync as readFileSync12 } from "fs";
 
 // src/types.ts
 var VERSION = "1.34.1";
@@ -168,7 +168,7 @@ var websearchBackend = async (ctx) => {
 };
 
 // src/gather.ts
-import { join as join5 } from "path";
+import { join as join9 } from "path";
 import { tmpdir as tmpdir2 } from "os";
 
 // src/modes/topic.ts
@@ -3918,6 +3918,24 @@ function readBody(req) {
   });
 }
 
+// src/stack.ts
+import { homedir } from "os";
+import { join as join2 } from "path";
+function withStackCache(action) {
+  const key = brand().envPrefix + "_CACHE_DIR";
+  const saved = process.env[key];
+  process.env[key] = process.env.ULTRA_STACK_CACHE_DIR || join2(homedir(), ".cache", "skills");
+  try {
+    return action();
+  } finally {
+    if (saved === void 0) delete process.env[key];
+    else process.env[key] = saved;
+  }
+}
+function sharedStackControl(service, action, deps = {}) {
+  return withStackCache(() => stackControl(service, action, deps));
+}
+
 // src/engine.ts
 configure({
   name: "ultrasearch",
@@ -4395,7 +4413,7 @@ var genericBackend = async (ctx) => {
   const notes = [];
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
-    const { text, title, note, finalUrl } = fetched[i];
+    const { text, title, note, finalUrl, extractor } = fetched[i];
     if (note) notes.push(note);
     if (!text) continue;
     items.push({
@@ -4405,7 +4423,8 @@ var genericBackend = async (ctx) => {
       backend: "generic",
       score: urls.length - i,
       snippet: bestExcerpt(text, ctx.question),
-      text
+      text,
+      ...extractor ? { meta: { extractor } } : {}
     });
   }
   return { backend: "generic", items, notes };
@@ -5011,7 +5030,7 @@ async function runBackends(kinds, ctx) {
 
 // src/dossier.ts
 import { existsSync as existsSync2, readFileSync as readFileSync6 } from "fs";
-import { join as join2 } from "path";
+import { join as join5 } from "path";
 
 // src/authority.ts
 function sourceSignals(opts) {
@@ -5065,6 +5084,50 @@ function toBibtex(sources) {
     out.push("");
   }
   return out.join("\n");
+}
+
+// src/passages.ts
+function selectSourcePassages(text, question, depth) {
+  const cap = depth === "deep" ? Infinity : depth === "standard" ? 8e3 : 4e3;
+  if (text.length <= cap || !question.trim()) return capExtract(text, depth);
+  const matcher = buildMatcher(question);
+  const candidates = [];
+  for (let start = 0; start < text.length; ) {
+    let end = Math.min(text.length, start + 800);
+    if (end < text.length) {
+      const paragraph = text.lastIndexOf("\n", end);
+      const sentence = text.lastIndexOf(". ", end);
+      const boundary = Math.max(paragraph, sentence);
+      if (boundary > start + 400) end = boundary + 1;
+      else if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+    }
+    const score = matcher.matchLine(text.slice(start, end)).size;
+    if (score) {
+      let contextStart = Math.max(0, start - 160);
+      let contextEnd = Math.min(text.length, end + 160);
+      if (contextStart > 0 && /[\uDC00-\uDFFF]/.test(text[contextStart]) && /[\uD800-\uDBFF]/.test(text[contextStart - 1])) contextStart--;
+      if (contextEnd < text.length && /[\uD800-\uDBFF]/.test(text[contextEnd - 1]) && /[\uDC00-\uDFFF]/.test(text[contextEnd])) contextEnd++;
+      candidates.push({ start: contextStart, end: contextEnd, score });
+    }
+    start = end;
+  }
+  if (!candidates.length) return capExtract(text, depth);
+  candidates.sort((a, b) => b.score - a.score || a.start - b.start);
+  const selected = [];
+  const maxPassages = depth === "summary" ? 3 : 6;
+  let remaining = cap - 800;
+  for (const candidate of candidates) {
+    if (selected.length >= maxPassages) break;
+    if (selected.some((w) => candidate.start < w.end && candidate.end > w.start)) continue;
+    const length = candidate.end - candidate.start;
+    if (length > remaining) continue;
+    selected.push(candidate);
+    remaining -= length;
+  }
+  if (!selected.length) return capExtract(text, depth);
+  selected.sort((a, b) => a.start - b.start);
+  return selected.map((w) => `[Source passage: characters ${w.start + 1}-${w.end} of ${text.length}]
+${text.slice(w.start, w.end)}`).join("\n\n") + "\n\n[Other source text omitted; passages selected for the question. Character positions use UTF-16 offsets in the fetched extract.]";
 }
 
 // src/dossier.ts
@@ -5141,30 +5204,30 @@ function buildSource(rs, id, builtAt, question) {
     ...rs.fullText === false ? { fullText: false } : {}
   };
 }
-function renderSourceExtract(s, text, depth) {
+function renderSourceExtract(s, text, depth, question = "") {
   const head = [
     `# ${s.id} \u2014 ${s.title}`,
     `- url: ${s.url}`,
     `- backend: ${s.backend} \xB7 fetched: ${s.fetchedAt} \xB7 trust: ${s.trust} \xB7 score: ${s.score}`,
     ""
   ].join("\n");
-  return head + capExtract(text, depth) + "\n";
+  return head + selectSourcePassages(text, question, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join2(dir, s.extract);
+  const p = join5(dir, s.extract);
   if (!existsSync2(p)) return s.snippet ?? "";
   const lines = readFileSync6(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
   const body = (hasHeader ? lines.slice(3) : lines).join("\n").trim();
   return body || s.snippet || "";
 }
-function writeSourceExtract(dir, s, text, depth) {
-  writeArtifact(join2(dir, s.extract), renderSourceExtract(s, text, depth));
+function writeSourceExtract(dir, s, text, depth, question = "") {
+  writeArtifact(join5(dir, s.extract), renderSourceExtract(s, text, depth, question));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join2(dir, "sources.json");
-  const dossierMd = join2(dir, "DOSSIER.md");
-  const manifestJson = join2(dir, "manifest.json");
+  const sourcesJson = join5(dir, "sources.json");
+  const dossierMd = join5(dir, "DOSSIER.md");
+  const manifestJson = join5(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
@@ -5172,14 +5235,14 @@ function writeDossierIndex(dir, sources, manifest, template) {
 }
 function writeBibtex(dir, sources, extras) {
   if (!extras.includes("bibtex")) return;
-  writeArtifact(join2(dir, "refs.bib"), toBibtex(sources));
+  writeArtifact(join5(dir, "refs.bib"), toBibtex(sources));
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join2(dir, "sources"));
+  ensureDir(join5(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth);
+    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth, manifest.question);
     return s;
   });
   const m = { ...manifest, sourceCount: sources.length };
@@ -5275,11 +5338,11 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson(join2(dir, "sources.json"), "sources.json");
+  const sources = readJson(join5(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
-  const manifest = readJson(join2(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson(join5(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -5448,7 +5511,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode2, question, d) {
-  return join5(tmpdir2(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
+  return join9(tmpdir2(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -5626,6 +5689,7 @@ async function runGather(options) {
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
   const extractorUse = /* @__PURE__ */ new Map();
+  const prehydratedTallied = /* @__PURE__ */ new Set();
   const docExtractorUse = /* @__PURE__ */ new Map();
   const tallyExtractor = (res, url) => {
     const k = res.extractor ?? "native";
@@ -5659,6 +5723,11 @@ async function runGather(options) {
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
       if (it.text?.trim()) {
         it.fullText = true;
+        const key2 = canonicalizeUrl(it.url);
+        if (it.meta?.extractor && !prehydratedTallied.has(key2)) {
+          tallyExtractor({ extractor: it.meta.extractor }, it.url);
+          prehydratedTallied.add(key2);
+        }
         return;
       }
       const key = canonicalizeUrl(it.url);
@@ -5929,7 +5998,7 @@ function loadState(dir) {
 function commit(dir, state, p) {
   const id = `S${++state.maxId}`;
   const s = buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question);
-  writeSourceExtract(dir, s, p.text, state.manifest.depth);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
@@ -6165,7 +6234,7 @@ async function prepareSource(stateOf, url, opts) {
 
 // src/render.ts
 import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 
 // src/claims.ts
 var SOURCE_RE = /^S\d+$/;
@@ -6485,7 +6554,7 @@ function loadRenderContext(dir) {
   const tiers = [];
   const cited = /* @__PURE__ */ new Set();
   for (const tier of TIERS) {
-    const p = join9(dir, tier.file);
+    const p = join10(dir, tier.file);
     if (!existsSync8(p)) continue;
     const text = readFileSync8(p, "utf8");
     tiers.push({ tier, text });
@@ -6497,7 +6566,7 @@ function toContext(dirOrCtx) {
   return typeof dirOrCtx === "string" ? loadRenderContext(dirOrCtx) : dirOrCtx;
 }
 function readVerify(dir) {
-  const p = join9(dir, "VERIFY.json");
+  const p = join10(dir, "VERIFY.json");
   if (!existsSync8(p)) return void 0;
   try {
     return JSON.parse(readFileSync8(p, "utf8"));
@@ -6618,7 +6687,7 @@ function sourcesSection(sources, cited) {
 function writeHtml(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const html = renderHtml(ctx);
-  const path = out ?? join9(ctx.dir, "index.html");
+  const path = out ?? join10(ctx.dir, "index.html");
   return writeArtifact(path, html);
 }
 function mdLinkText(s) {
@@ -6679,19 +6748,23 @@ function buildReportMarkdown(dirOrCtx) {
 function writeReportMarkdown(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const md = buildReportMarkdown(ctx);
-  const path = out ?? join9(ctx.dir, "index.md");
+  const path = out ?? join10(ctx.dir, "index.md");
   return writeArtifact(path, md);
 }
 
 // src/check.ts
 import { existsSync as existsSync10, readFileSync as readFileSync10 } from "fs";
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 
 // src/verify.ts
-import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
-import { join as join10 } from "path";
+import { createHash } from "crypto";
+import { existsSync as existsSync9, readFileSync as readFileSync9, readdirSync } from "fs";
+import { join as join11 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
+function pairFingerprint(claim, extract) {
+  return createHash("sha256").update(String(claim.length)).update("|").update(claim).update(extract).digest("hex").slice(0, 32);
+}
 function claimStrings(text) {
   const out = [];
   for (const u of unitsOfFile(text)) {
@@ -6701,7 +6774,7 @@ function claimStrings(text) {
   return out;
 }
 function buildWorklist(dir, opts = {}) {
-  const sources = readJson(join10(dir, "sources.json"), "sources.json");
+  const sources = readJson(join11(dir, "sources.json"), "sources.json");
   if (!Array.isArray(sources)) {
     throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
   }
@@ -6727,7 +6800,7 @@ function buildWorklist(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
-    const p = join10(dir, file);
+    const p = join11(dir, file);
     if (!existsSync9(p)) continue;
     const text = readFileSync9(p, "utf8");
     for (const claim of claimStrings(text)) {
@@ -6771,6 +6844,8 @@ function buildWorklist(dir, opts = {}) {
       claim: p.claim,
       extractPath: p.extractPath,
       extractDigest: focusedSnippet(textOf(p.source), p.rawClaim, { maxChars: 600, maxSentences: 4 }),
+      // Bound to the FULL claim + the FULL extract as they are RIGHT NOW.
+      fingerprint: pairFingerprint(p.rawClaim, textOf(p.source)),
       ...numeralsAbsent.length ? { numeralsAbsent } : {}
     };
   };
@@ -6787,8 +6862,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeArtifact(join10(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join10(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join11(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join11(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -6829,6 +6904,7 @@ function parseVerdictFile(verdictsPath) {
       claim: typeof v.claim === "string" ? v.claim : "",
       extractPath: typeof v.extractPath === "string" ? v.extractPath : "",
       extractDigest: typeof v.extractDigest === "string" ? v.extractDigest : "",
+      ...typeof v.fingerprint === "string" && v.fingerprint ? { fingerprint: v.fingerprint } : {},
       verdict,
       note: typeof v.note === "string" ? v.note : ""
     });
@@ -6840,6 +6916,59 @@ function parseVerdictFile(verdictsPath) {
   }
   return verdicts;
 }
+var pairKey = (p) => `${p.claimId}/${p.sourceId}`;
+function bindToWorklist(dir, verdicts, opts = {}) {
+  let expected;
+  try {
+    expected = buildWorklist(dir).worklist.pairs;
+  } catch {
+    return { derivable: false, stale: [], unbound: [], bound: verdicts, expected: [] };
+  }
+  const byKey = new Map(expected.map((p) => [pairKey(p), p]));
+  const saved = /* @__PURE__ */ new Map();
+  if (!opts.strict) {
+    for (const name of readdirSync(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
+      try {
+        const todo = JSON.parse(readFileSync9(join11(dir, name), "utf8"));
+        if (!Array.isArray(todo?.pairs)) continue;
+        for (const p of todo.pairs) {
+          if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
+          const key = pairKey(p);
+          const fingerprints = saved.get(key) ?? /* @__PURE__ */ new Set();
+          fingerprints.add(p.fingerprint);
+          saved.set(key, fingerprints);
+        }
+      } catch {
+      }
+    }
+  }
+  const stale = [];
+  const unbound = [];
+  const bound = [];
+  for (const v of verdicts) {
+    const key = pairKey(v);
+    const exp = byKey.get(key);
+    if (!exp) {
+      bound.push(v);
+      continue;
+    }
+    if (v.fingerprint) {
+      if (v.fingerprint !== exp.fingerprint) stale.push(key);
+      bound.push(v);
+      continue;
+    }
+    const contradicts = !!v.claim && v.claim.trim() !== exp.claim.trim() || !!v.extractPath && v.extractPath !== exp.extractPath || !!v.extractDigest && v.extractDigest !== exp.extractDigest;
+    const fingerprints = saved.get(key);
+    if (contradicts || !opts.strict && fingerprints && (fingerprints.size !== 1 || !fingerprints.has(exp.fingerprint))) stale.push(key);
+    else if (opts.strict || !fingerprints) {
+      if (v.verdict) unbound.push(key);
+      bound.push(v);
+      continue;
+    }
+    bound.push(stale.includes(key) ? v : { ...v, fingerprint: exp.fingerprint });
+  }
+  return { derivable: true, stale, unbound, bound, expected };
+}
 function applyVerdicts(dir, verdictsPath) {
   const paths = Array.isArray(verdictsPath) ? verdictsPath : [verdictsPath];
   const merged = /* @__PURE__ */ new Map();
@@ -6848,9 +6977,20 @@ function applyVerdicts(dir, verdictsPath) {
       merged.set(`${v.claimId} ${v.sourceId}`, v);
     }
   }
-  const verdicts = [...merged.values()];
+  const binding = bindToWorklist(dir, [...merged.values()]);
+  if (binding.stale.length) {
+    throw new Error(
+      `${binding.stale.length} verdict(s) judged text that has changed since the worklist was generated (${binding.stale.slice(0, 6).join(", ")}${binding.stale.length > 6 ? ", \u2026" : ""}): REPORT.md and/or the cited extract were edited after \`verify\`. Re-run \`verify\` and re-adjudicate the regenerated worklist, then \`verify --apply\` \u2014 a verdict cannot be transferred to text nobody judged (nothing was written).`
+    );
+  }
+  if (binding.unbound.length) {
+    throw new Error(
+      `Unbound verdict(s) (${binding.unbound.join(", ")}): missing a valid generation-time fingerprint. Re-run \`verify\`, re-adjudicate the saved worklist, then \`verify --apply\` (nothing was written).`
+    );
+  }
+  const verdicts = binding.bound;
   const result = reduceVerdicts(verdicts);
-  writeArtifact(join10(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join11(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -6987,7 +7127,7 @@ function analyzeFile(file, text) {
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
-  const p = join11(dir, "VERIFY.json");
+  const p = join12(dir, "VERIFY.json");
   if (!existsSync10(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
@@ -7017,12 +7157,26 @@ function applySemantic(dir, result, requireVerify) {
     result.errors.push(`Semantic verification failed: ${reduced.failures.length} claim(s) refuted or unsupported by their cited source (see VERIFY.json).`);
   }
   if (requireVerify) {
-    let expected = [];
-    try {
-      expected = buildWorklist(dir, { keysOnly: true }).worklist.pairs;
-    } catch {
-      expected = [];
+    const binding = bindToWorklist(dir, verdicts, { strict: true });
+    if (!binding.derivable) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: REPORT's claim\u2194source worklist could not be re-derived (unreadable sources.json/extract), so the verdicts cannot be bound to the text they judged \u2014 fix the dossier and re-run \`verify\` + \`verify --apply\`.`
+      );
     }
+    if (binding.stale.length) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: ${binding.stale.length} adjudicated pair(s) no longer match the text they judged (${binding.stale.slice(0, 6).join(", ")}${binding.stale.length > 6 ? ", \u2026" : ""}) \u2014 REPORT.md and/or the cited extract changed since \`verify\` generated the worklist. Re-run \`verify\`, re-adjudicate, then \`verify --apply\`.`
+      );
+    }
+    if (binding.unbound.length) {
+      result.ok = false;
+      result.errors.push(
+        `${flag}: ${binding.unbound.length} verdict(s) in VERIFY.json are not bound to any adjudicated content (${binding.unbound.slice(0, 6).join(", ")}${binding.unbound.length > 6 ? ", \u2026" : ""}) \u2014 the record predates or bypasses content binding. Re-run \`verify\` and \`verify --apply <verdicts.json>\` to bind each verdict to the claim + extract it judged.`
+      );
+    }
+    const expected = binding.derivable ? binding.expected : [];
     const adjudicatedKeys = new Set(verdicts.filter((v) => !!v.verdict).map((v) => `${v.claimId}\0${v.sourceId}`));
     const uncovered = expected.filter((p2) => !adjudicatedKeys.has(`${p2.claimId}\0${p2.sourceId}`));
     if (uncovered.length) {
@@ -7044,7 +7198,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync10(join11(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync10(join12(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -7052,7 +7206,7 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join11(dir, "sources.json");
+  const sourcesPath = join12(dir, "sources.json");
   if (!existsSync10(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
@@ -7066,11 +7220,11 @@ function runCheck(dir, opts = {}) {
     return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
   }
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync10(join11(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync10(join12(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync10(join11(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync10(join12(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -7121,7 +7275,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync10(join11(dir, s.extract)) ? readSourceText(dir, s) : null;
+        t = s && existsSync10(join12(dir, s.extract)) ? readSourceText(dir, s) : null;
       } catch {
         t = null;
       }
@@ -7375,7 +7529,7 @@ function refreshed(manifest, sources) {
 }
 
 // src/plan.ts
-import { join as join12 } from "path";
+import { join as join13 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -7612,12 +7766,12 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join12(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join13(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join12(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join13(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -7659,7 +7813,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join13 } from "path";
+import { join as join14 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -7766,8 +7920,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join13(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join13(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join14(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join14(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -7876,10 +8030,10 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { join as join15 } from "path";
+import { join as join16 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join14 } from "path";
+import { join as join15 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -7936,7 +8090,7 @@ function agentContracts(runAbs, engineAbs) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join14(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join15(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
@@ -7959,7 +8113,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join14(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join15(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -7985,7 +8139,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
-  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join14(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join15(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gatherPlan ? shq(gatherPlan.question) : '"<question>"';
   const mode2 = gatherPlan ? gatherPlan.mode : "<m>";
   const run = shq(runAbs);
@@ -8005,15 +8159,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join14(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join14(runAbs, "PLAN.json")}\`, apply \`${join14(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join15(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join15(runAbs, "PLAN.json")}\`, apply \`${join15(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join14(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join14(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join14(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join15(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join15(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join15(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join14(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join15(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `
   ];
 }
@@ -8021,7 +8175,7 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 // src/orchestrate.ts
 var PHASES = ["gather", "verify"];
 function mergeHint(runAbs, engineAbs, plan) {
-  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join15(runAbs, s.id.toLowerCase())) : [`${join15(runAbs, "q1")},\u2026`];
+  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join16(runAbs, s.id.toLowerCase())) : [`${join16(runAbs, "q1")},\u2026`];
   const q = plan ? plan.question : "<question>";
   const mode2 = plan ? plan.mode : "<mode>";
   return [
@@ -8062,7 +8216,7 @@ var VERIFY = {
   applyHint: (run, engineAbs) => [
     `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
     `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-    `save each returned fragment as ${join15(run, "verdicts.<i>.json")} then reassemble + gate:`,
+    `save each returned fragment as ${join16(run, "verdicts.<i>.json")} then reassemble + gate:`,
     `node ${shq(engineAbs)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
   ]
 };
@@ -8079,7 +8233,7 @@ function listPhasesFor(runDir, engineAbs) {
 
 // src/mcp/handlers.ts
 import { existsSync as existsSync11, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync4 } from "fs";
-import { isAbsolute, join as join16, relative, resolve as resolve4, sep as sep2 } from "path";
+import { isAbsolute, join as join17, relative, resolve as resolve4, sep as sep2 } from "path";
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -8129,7 +8283,7 @@ function requiredRun(args, defaults) {
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve4(run);
-  if (!existsSync11(join16(abs, "manifest.json"))) {
+  if (!existsSync11(join17(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -8280,9 +8434,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join16(res.dir, "DOSSIER.md"),
+    dossier_md: join17(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join16(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join17(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -8320,14 +8474,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync11(join16(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync11(join17(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str(args.master);
   if (master !== void 0 && !isAbsolute(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str(args.question), mode: str(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join16(res.dir, "DOSSIER.md"),
+    dossier_md: join17(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -8420,7 +8574,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute(raw) ? raw : join16(run, raw);
+  const target = isAbsolute(raw) ? raw : join17(run, raw);
   let real;
   try {
     real = realpathSync2(target);
@@ -9192,7 +9346,7 @@ function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
   const abs = resolve5(spec);
   if (existsSync12(abs) && statSync5(abs).isDirectory()) {
-    const files = readdirSync(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
+    const files = readdirSync4(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -9484,7 +9638,7 @@ async function main(argv = process.argv.slice(2)) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join17(resolve5(runDir), "manifest.json");
+        const mf = join18(resolve5(runDir), "manifest.json");
         if (!existsSync12(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
         try {
           manifest = JSON.parse(readFileSync12(mf, "utf8"));
@@ -9515,7 +9669,7 @@ ${formatServices(rows)}
       if (action !== "up" && action !== "down") {
         fail(`${p.command}: unknown action '${action}' (expected up | down | status)`);
       }
-      const r = stackControl(p.command, action);
+      const r = sharedStackControl(p.command, action);
       process.stdout.write(r.message + "\n");
       if (r.code !== 0) process.exit(r.code);
       if (action === "up") {
@@ -9770,7 +9924,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join17(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join18(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}

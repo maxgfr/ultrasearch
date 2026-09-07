@@ -421,6 +421,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // that silence is why a container can sit up for weeks without being noticed as
   // unused — see the `services` block on the manifest.
   const extractorUse = new Map<string, number>();
+  const prehydratedTallied = new Set<string>();
   // Office documents are tallied apart from pages. `anydoc` reads both PDFs and
   // .docx/.pptx/…, so the rung name alone cannot say which ladder ran — the URL
   // can, and it is the only thing that can.
@@ -479,6 +480,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
       if (it.text?.trim()) {
         it.fullText = true; // a content backend already carried the real text
+        const key = canonicalizeUrl(it.url);
+        if (it.meta?.extractor && !prehydratedTallied.has(key)) {
+          tallyExtractor({ extractor: it.meta.extractor }, it.url);
+          prehydratedTallied.add(key);
+        }
         return;
       }
       const key = canonicalizeUrl(it.url);

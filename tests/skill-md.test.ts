@@ -39,8 +39,8 @@ describe("SKILL.md", () => {
     expect(pkg.version).toBe(VERSION);
   });
 
-  it("has a trigger-rich description within the length cap", () => {
-    expect(fm.description.length).toBeGreaterThan(200);
+  it("has a human-facing summary within the length cap", () => {
+    expect(fm.description.length).toBeGreaterThan(0);
     expect(fm.description.length).toBeLessThanOrEqual(1000);
     expect(fm.description.toLowerCase()).toContain("check");
   });
