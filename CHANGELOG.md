@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.35.3](https://github.com/maxgfr/ultrasearch/compare/v1.35.2...v1.35.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **engine:** separate workflow maintenance from automatic repins ([85a823d](https://github.com/maxgfr/ultrasearch/commit/85a823d0bb37fb40603216b2a6b4d54c05ff27c9))
+
 ## [1.35.2](https://github.com/maxgfr/ultrasearch/compare/v1.35.1...v1.35.2) (2026-09-08)
 
 
