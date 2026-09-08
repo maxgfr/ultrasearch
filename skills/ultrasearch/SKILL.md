@@ -9,7 +9,7 @@ metadata:
 
 # ultrasearch — recap the web, grounded not guessed
 
-Use bundled WebIndex retrieval to inspect and cite source passages. Report unavailable sources; search snippets alone do not substantiate conclusions.
+For engine evidence and coverage limits, read [engine-evidence](references/engine-evidence.md).
 
 **You are the search engine. The tool is the evidence machine.**
 
