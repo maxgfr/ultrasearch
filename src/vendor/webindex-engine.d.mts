@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.19.1";
+declare const ENGINE_VERSION = "1.19.4";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
