@@ -103,9 +103,9 @@ describe("lifecycle methods", () => {
     expect((await rpc({ id: 5, method: "prompts/get", params: { name: "research_topic", arguments: {} } }))!.error).toMatchObject({ code: -32602 });
   });
 
-  it("drops a request the client cancelled, and answers the next one", async () => {
+  it("ignores cancellation of an unknown request without poisoning later IDs", async () => {
     expect(await rpc({ method: "notifications/cancelled", params: { requestId: 7 } })).toBeUndefined();
-    expect(await rpc({ id: 7, method: "ping" })).toBeUndefined();
+    expect((await rpc({ id: 7, method: "ping" }))!.result).toEqual({});
     expect((await rpc({ id: 8, method: "ping" }))!.result).toEqual({});
   });
 

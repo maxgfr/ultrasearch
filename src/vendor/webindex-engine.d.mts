@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.18.9";
+declare const ENGINE_VERSION = "1.19.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -344,6 +344,10 @@ interface HttpResult {
     contentType: string;
     url: string;
     bytes?: Buffer;
+    /** Retained response bytes, before character decoding. */
+    bytesRead?: number;
+    /** The body exceeded the cap; its retained prefix is incomplete. */
+    truncated?: boolean;
     error?: string;
     /** Cache validators, kept so a stale entry can be revalidated for free. */
     etag?: string;
@@ -387,8 +391,13 @@ declare function httpGet(url: string, opts?: {
     accept?: string;
     acceptLanguage?: string;
     maxBytes?: number;
+    /** Optional larger cap for a response identified as a document by MIME.
+     *  An explicit maxBytes always wins. */
+    maxDocumentBytes?: number;
     userAgent?: string;
     binary?: boolean;
+    /** Approve the initial URL and every redirect before network access. */
+    authorizeUrl?: (url: string) => Promise<boolean>;
     /** Extra request headers, lower-cased. The escape hatch for conditional GET
      *  (`if-none-match`, `if-modified-since`) and for an API that wants auth. */
     headers?: Record<string, string>;
@@ -411,6 +420,8 @@ declare function httpJson(method: string, url: string, body?: unknown, opts?: {
     status: number;
     data: any;
     error?: string;
+    bytesRead?: number;
+    truncated?: boolean;
 }>;
 /**
  * Decode the common named entities plus decimal/hex numeric references, in ONE
@@ -453,6 +464,8 @@ interface ExtractResult {
     finalUrl: string;
     status: number;
     extractor?: ExtractorId;
+    /** Document type detected from the URL or response, independent of converter. */
+    documentType?: "pdf" | "doc";
     canonical?: string;
     /**
      * The page's own one-line summary (`<meta name=description>`, else
@@ -484,6 +497,8 @@ declare function fetchAndExtract(url: string, opts?: {
      *  `if-none-match` / `if-modified-since`. Firecrawl does its own fetching and
      *  ignores these, which is why a revalidating caller skips it. */
     headers?: Record<string, string>;
+    /** Check the initial URL and each redirect; disables remote extraction. */
+    authorizeUrl?: (url: string) => Promise<boolean>;
     /**
      * Drop consent-banner lines from the extracted text.
      *
@@ -503,6 +518,7 @@ declare const DEAD_LINK_STATUS: Set<number>;
 declare function rescueViaWayback(url: string, opts?: {
     acceptLanguage?: string;
     firecrawl?: string;
+    authorizeUrl?: (url: string) => Promise<boolean>;
 }): Promise<{
     text: string;
     title?: string;
@@ -1367,6 +1383,7 @@ declare function parseRobots(body: string, userAgent: string): Robots;
  * into "this site is off limits".
  */
 declare function isAllowed(robots: Robots, url: string): boolean;
+type UrlAuthorizer = (url: string) => Promise<boolean>;
 /** Test seam: forget every fetched robots.txt. */
 declare function resetRobotsCache(): void;
 /**
@@ -1377,7 +1394,9 @@ declare function resetRobotsCache(): void;
  * by `<PREFIX>_NO_ROBOTS`, for an operator who knows they are crawling their own
  * site.
  */
-declare function fetchRobots(url: string): Promise<Robots>;
+declare function fetchRobots(url: string, opts?: {
+    authorizeUrl?: UrlAuthorizer;
+}): Promise<Robots>;
 
 interface PageMetadata {
     title?: string;
@@ -1464,6 +1483,7 @@ declare function parseSitemap(xml: string): Sitemap;
 declare function fetchSitemap(url: string, opts?: {
     sitemaps?: string[];
     max?: number;
+    authorizeUrl?: (url: string) => Promise<boolean>;
 }): Promise<Sitemap>;
 /** Fetch and parse a feed URL. */
 declare function fetchFeed(url: string): Promise<Feed | undefined>;

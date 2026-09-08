@@ -1386,26 +1386,83 @@ async function readCappedBytes(res, max) {
   }
   return Buffer.concat(chunks);
 }
+async function readMeasuredBody(res, max) {
+  const read = await readCappedBytes(res, max + 1);
+  const bytes = read.subarray(0, max);
+  return { bytes, bytesRead: bytes.length, truncated: read.length > max };
+}
 var DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 function isBinaryDocument(contentType) {
   return /application\/pdf/i.test(contentType) || docFormatForContentType(contentType) !== void 0;
+}
+var REDIRECT_STATUS = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+async function authorizedGet(url, init, authorize) {
+  let target = url;
+  const fail2 = (error) => ({ failure: { ok: false, status: 0, body: "", contentType: "", url: target, error } });
+  const headers = { ...init.headers };
+  for (let redirects = 0; ; redirects++) {
+    try {
+      if (!await authorize(target)) return fail2(`URL not authorized: ${target}`);
+    } catch (e) {
+      return fail2(`URL authorization failed for ${target}: ${e.message}`);
+    }
+    const response = await fetch(target, { ...init, headers, redirect: "manual" });
+    const location = response.headers.get("location");
+    if (!REDIRECT_STATUS.has(response.status) || !location) return { response };
+    await response.body?.cancel().catch(() => {
+    });
+    if (redirects >= 20) return fail2("Too many redirects (maximum 20)");
+    try {
+      const next = new URL(location, target);
+      if (!/^https?:$/.test(next.protocol)) return fail2(`Unsupported redirect protocol: ${next.protocol}`);
+      if (next.origin !== new URL(target).origin) {
+        delete headers.authorization;
+        delete headers.cookie;
+        delete headers["proxy-authorization"];
+      }
+      target = next.href;
+    } catch {
+      return fail2(`Invalid redirect URL from ${target}`);
+    }
+  }
 }
 async function httpGet(url, opts = {}) {
   const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, body: "", contentType: "", url };
   for (let attempt = 0; attempt < attempts; attempt++) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 2e4);
+    let t;
+    let remainingMs = opts.timeoutMs ?? 2e4;
+    let startedAt = 0;
+    const pauseTimeout = () => {
+      if (t === void 0) return;
+      clearTimeout(t);
+      t = void 0;
+      remainingMs -= performance.now() - startedAt;
+    };
+    const resumeTimeout = () => {
+      startedAt = performance.now();
+      if (remainingMs <= 0) ctrl.abort();
+      else t = setTimeout(() => ctrl.abort(), remainingMs);
+    };
     try {
       const headers = { "user-agent": opts.userAgent ?? defaultUa(), accept: opts.accept ?? "*/*" };
       if (opts.acceptLanguage) headers["accept-language"] = opts.acceptLanguage;
       for (const [k, v] of Object.entries(opts.headers ?? {})) headers[k.toLowerCase()] = v;
-      const res = await fetch(url, {
+      const init = {
         signal: ctrl.signal,
         redirect: "follow",
         headers
-      });
-      const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+      };
+      if (!opts.authorizeUrl) resumeTimeout();
+      const requested = opts.authorizeUrl ? await authorizedGet(url, init, async (target) => {
+        pauseTimeout();
+        const allowed = await opts.authorizeUrl(target);
+        if (allowed) resumeTimeout();
+        return allowed;
+      }) : { response: await fetch(url, init) };
+      if ("failure" in requested) return requested.failure;
+      const res = requested.response;
       const meta = {
         contentType: res.headers.get("content-type") ?? "",
         url: res.url || url,
@@ -1414,14 +1471,15 @@ async function httpGet(url, opts = {}) {
         rateLimited: detectRateLimited(res.status, res.headers),
         retryAfterMs: parseRetryAfter(res.headers)
       };
+      const max = opts.maxBytes ?? (isBinaryDocument(meta.contentType) ? opts.maxDocumentBytes : void 0) ?? DEFAULT_MAX_RESPONSE_BYTES;
       const declared = Number(res.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > max) {
         ctrl.abort();
-        return { ok: false, status: res.status, body: "", ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
+        return { ok: false, status: res.status, body: "", bytesRead: 0, truncated: true, ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
       }
-      const bytes = res.status === 304 ? Buffer.alloc(0) : await readCappedBytes(res, max);
+      const { bytes, bytesRead, truncated } = res.status === 304 ? { bytes: Buffer.alloc(0), bytesRead: 0, truncated: false } : await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
-      const keepBytes = opts.binary || isBinaryDocument(meta.contentType) && bytes.length < max;
+      const keepBytes = opts.binary || isBinaryDocument(meta.contentType) && !truncated;
       const result = {
         ok: res.ok,
         status: res.status,
@@ -1430,6 +1488,8 @@ async function httpGet(url, opts = {}) {
         // replaced by U+FFFD, and nothing anywhere noticed.
         body: opts.binary ? "" : decodeBody(bytes, meta.contentType),
         bytes: keepBytes ? bytes : void 0,
+        bytesRead,
+        truncated,
         ...meta
       };
       if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
@@ -1468,11 +1528,11 @@ async function httpJson(method, url, body, opts = {}) {
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
       const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-      const bytes = await readCappedBytes(res, max + 1);
+      const { bytes, bytesRead, truncated } = await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
-      if (bytes.length > max) {
+      if (truncated) {
         ctrl.abort();
-        return { ok: false, status: res.status, data: void 0, error: `response too large: over the ${max}-byte cap` };
+        return { ok: false, status: res.status, data: void 0, bytesRead, truncated, error: `response too large: over the ${max}-byte cap` };
       }
       const text = bytes.toString("utf8");
       let data;
@@ -1481,7 +1541,7 @@ async function httpJson(method, url, body, opts = {}) {
       } catch {
         data = text;
       }
-      const result = { ok: res.ok, status: res.status, data };
+      const result = { ok: res.ok, status: res.status, data, bytesRead, truncated };
       if (RETRY_STATUS.has(res.status) && attempt < attempts - 1) {
         last = result;
         await sleep(retryDelayMs(res.headers));
@@ -1633,6 +1693,14 @@ function htmlTitle(html) {
   const t = decodeEntities(m[1].replace(/\s+/g, " ").trim());
   return t || void 0;
 }
+function htmlAttributes(tag2) {
+  const attrs = /* @__PURE__ */ new Map();
+  for (const m of tag2.matchAll(/([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g)) {
+    const name = m[1].toLowerCase();
+    if (!attrs.has(name)) attrs.set(name, m[2] ?? m[3] ?? m[4] ?? "");
+  }
+  return attrs;
+}
 function htmlCanonicalUrl(html) {
   const head = html.slice(0, 6e4);
   const canonical = /<link\b[^>]*\brel=["']?canonical["']?[^>]*>/i.exec(head)?.[0];
@@ -1705,7 +1773,7 @@ async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
   let firecrawlNote;
-  if (!wantsPdf && !wantsDoc) {
+  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
       return {
@@ -1719,7 +1787,7 @@ async function fetchAndExtract(url, opts = {}) {
     firecrawlNote = fc.data ? `Firecrawl got HTTP ${fc.data.statusCode} for ${url} \u2014 fell back to the built-in extractor.` : fc.why;
   }
   const base = wantsPdf ? PDF_FETCH_OPTS : wantsDoc ? DOC_FETCH_OPTS : { accept: "text/html,text/plain,*/*", acceptLanguage: opts.acceptLanguage };
-  const fetchOpts = opts.headers ? { ...base, headers: opts.headers } : base;
+  const fetchOpts = { ...base, maxDocumentBytes: PDF_FETCH_OPTS.maxBytes, headers: opts.headers, authorizeUrl: opts.authorizeUrl };
   let res = await httpGet(url, fetchOpts);
   if (!res.ok && brand().defaultUa === "contact" && (res.status === 403 || res.status === 429)) {
     res = await httpGet(url, { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" });
@@ -1732,16 +1800,21 @@ async function fetchAndExtract(url, opts = {}) {
     return { text: "", finalUrl: res.url, status: res.status, note: `Could not fetch ${url} (${why}).` };
   }
   const validators = res.etag || res.lastModified ? { etag: res.etag, lastModified: res.lastModified } : {};
+  if (res.truncated && (wantsPdf || wantsDoc || isBinaryDocument(res.contentType))) {
+    return { text: "", finalUrl: res.url, status: res.status, note: `Fetched ${url} but the document exceeds the response size cap.` };
+  }
   if (wantsPdf || /application\/pdf/i.test(res.contentType)) {
-    const bytes = res.bytes ?? (await httpGet(url, PDF_FETCH_OPTS)).bytes;
+    const bytes = res.bytes ?? (await httpGet(url, { ...PDF_FETCH_OPTS, headers: opts.headers, authorizeUrl: opts.authorizeUrl })).bytes;
     const got = bytes ? await extractPdf(bytes, {
       firecrawl: async () => {
+        if (opts.authorizeUrl) return void 0;
         const fc = await scrapeViaFirecrawl(url, opts);
         return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : void 0;
       }
     }) : { text: "", reason: "empty response body" };
     return {
       text: got.text,
+      documentType: "pdf",
       finalUrl: res.url,
       status: res.status,
       // `native` keeps reporting as absent, which is what the cache key and every
@@ -1753,18 +1826,20 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const docFmt = wantsDoc ?? docFormatForContentType(res.contentType);
   if (docFmt) {
-    const bytes = res.bytes ?? (await httpGet(url, DOC_FETCH_OPTS)).bytes;
+    const bytes = res.bytes ?? (await httpGet(url, { ...DOC_FETCH_OPTS, headers: opts.headers, authorizeUrl: opts.authorizeUrl })).bytes;
     const got = bytes ? await extractDocument(bytes, docFmt, {
       firecrawl: async () => {
+        if (opts.authorizeUrl) return void 0;
         const fc = await scrapeViaFirecrawl(url, opts);
         return fc.data && (fc.data.statusCode ?? 200) < 400 ? fc.data.markdown : void 0;
       }
     }) : { text: "", reason: "empty response body" };
     if (!got.text && docFmt.textFallback && bytes?.length) {
-      return { text: bytes.toString("utf8"), finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
+      return { text: decodeBody(bytes, res.contentType), documentType: "doc", finalUrl: res.url, status: res.status, note: firecrawlNote, ...validators };
     }
     return {
       text: got.text,
+      documentType: "doc",
       finalUrl: res.url,
       status: res.status,
       extractor: got.via,
@@ -1772,7 +1847,9 @@ async function fetchAndExtract(url, opts = {}) {
       ...validators
     };
   }
-  const isHtml = /html/i.test(res.contentType) || /^\s*</.test(res.body);
+  const mime = res.contentType.split(";")[0].trim().toLowerCase();
+  const ambiguousType = !mime || mime === "application/octet-stream";
+  const isHtml = /^(?:text\/html|application\/xhtml\+xml)$/.test(mime) || ambiguousType && /^\s*<(?:!doctype\s+html\b|html\b|head\b|body\b|article\b|main\b|p\b|h[1-6]\b)/i.test(res.body);
   const stripped = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
   const text = isHtml && opts.stripConsent ? stripConsentBoilerplate(stripped).text : stripped;
   const title = isHtml ? htmlTitle(res.body) : void 0;
@@ -1792,7 +1869,7 @@ async function fetchAndExtract(url, opts = {}) {
 }
 var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
 async function rescueViaWayback(url, opts = {}) {
-  if (envFlag("NO_WAYBACK")) return void 0;
+  if (opts.authorizeUrl || envFlag("NO_WAYBACK")) return void 0;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
   const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa() });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
@@ -1845,9 +1922,15 @@ function stripConsentBoilerplate(text) {
   return { text: kept.join("\n"), dropped };
 }
 function metaDescriptionOf(html) {
-  const m = /<meta[^>]+name=["']description["'][^>]*content=["']([^"']+)["']/i.exec(html) || /<meta[^>]+content=["']([^"']+)["'][^>]*name=["']description["']/i.exec(html) || /<meta[^>]+property=["']og:description["'][^>]*content=["']([^"']+)["']/i.exec(html);
-  const d = m?.[1]?.replace(/\s+/g, " ").trim();
-  return d ? decodeEntities(d) : void 0;
+  let og;
+  for (const match of html.matchAll(/<meta\b(?:[^"'<>]|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = htmlAttributes(match[0]);
+    const value = attrs.get("content")?.replace(/\s+/g, " ").trim();
+    if (!value) continue;
+    if (attrs.get("name")?.toLowerCase() === "description") return decodeEntities(value);
+    if (attrs.get("property")?.toLowerCase() === "og:description" && og === void 0) og = decodeEntities(value);
+  }
+  return og;
 }
 function focusedSnippet(text, question, opts = {}) {
   const maxChars = opts.maxChars ?? 360;
@@ -2921,10 +3004,14 @@ async function currentExtractor(opts, url) {
   const base = firecrawlBase(opts);
   return base && await probeFirecrawl(base, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
-var WRITTEN_NAMESPACES = ["native", "firecrawl", PDF_CACHE_NS, DOC_CACHE_NS];
-function readAnyNamespace(url, acceptLanguage) {
+var DOCUMENT_NAMESPACES = [PDF_CACHE_NS, DOC_CACHE_NS, "pdf-inspector", "pdftotext", "anydoc", "ocr"];
+var WRITTEN_NAMESPACES = ["native", "firecrawl", ...DOCUMENT_NAMESPACES];
+function namespaceFor(result, predicted) {
+  return result.documentType ?? (predicted === PDF_CACHE_NS || predicted === DOC_CACHE_NS ? predicted : result.extractor ?? "native");
+}
+function readAnyNamespace(url, acceptLanguage, namespaces = WRITTEN_NAMESPACES) {
   let best;
-  for (const ns of WRITTEN_NAMESPACES) {
+  for (const ns of namespaces) {
     const hit = readCache(url, acceptLanguage, ns);
     if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
   }
@@ -3005,23 +3092,23 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     return { text: "", finalUrl: url, status: 0, note: `Offline: ${url} is not in the cache (drop --offline, or warm it with a normal run).` };
   }
   const ns = await currentExtractor(opts, url);
-  const hit = refresh ? void 0 : readCache(url, lang, ns);
+  const hit = refresh ? void 0 : readAnyNamespace(url, lang, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])]);
   if (hit && isCacheFresh(hit, now)) return served(hit);
   const revalidate = hit ? revalidationHeaders(hit) : {};
   if (hit && Object.keys(revalidate).length) {
     const probe = await fetchAndExtract(url, { ...opts, headers: revalidate });
     if (probe.status === 304) {
-      touchCache(url, hit, now, lang, ns);
+      touchCache(url, hit, now, lang, namespaceFor(hit, ns));
       return served(hit);
     }
     if (probe.text?.trim()) {
-      writeCache(url, probe, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : probe.extractor ?? "native");
+      writeCache(url, probe, now, lang, namespaceFor(probe, ns));
       return probe;
     }
   }
   const res = await fetchAndExtract(url, opts);
   if (res.text?.trim()) {
-    writeCache(url, res, now, lang, ns === PDF_CACHE_NS || ns === DOC_CACHE_NS ? ns : res.extractor ?? "native");
+    writeCache(url, res, now, lang, namespaceFor(res, ns));
     return res;
   }
   const stale = hit ?? readAnyNamespace(url, lang);
@@ -3392,7 +3479,7 @@ function validateArgs(schema, args) {
     if (!spec?.type) continue;
     const actual = Array.isArray(value) ? "array" : typeof value;
     if (spec.type === "number") {
-      if (actual === "number") continue;
+      if (actual === "number" && Number.isFinite(value)) continue;
       if (actual === "string" && value.trim() !== "" && Number.isFinite(Number(value))) continue;
       return `\`${key}\` must be a number, got ${actual === "string" ? JSON.stringify(value) : actual}`;
     }
@@ -3447,7 +3534,7 @@ var LOOPBACK_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
 function isOriginAllowed(origin, allowed = []) {
   if (origin === void 0) return true;
   const o = origin.trim();
-  if (o === "" || o === "null") return true;
+  if (o === "" || o === "null") return false;
   if (LOOPBACK_ORIGIN.test(o)) return true;
   return allowed.some((a) => a === "*" || a.toLowerCase() === o.toLowerCase());
 }
@@ -3524,6 +3611,8 @@ function firstProse(file) {
 }
 var ToolError = class extends Error {
 };
+var InvalidParamsError = class extends Error {
+};
 var PromptError = class extends Error {
 };
 var ERR_INVALID_REQUEST = -32600;
@@ -3534,8 +3623,7 @@ function createServer(adapter, opts = {}) {
   const serverInfo = { name: opts.serverName ?? brand().name, version: adapter.version };
   const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES2;
   let protocol = LATEST_PROTOCOL;
-  const cancelled = /* @__PURE__ */ new Set();
-  const CANCELLED_MAX = 1024;
+  const active = /* @__PURE__ */ new Map();
   const listTools = () => adapter.listTools(protocol);
   const prompts = () => adapter.prompts ?? [];
   async function handle(msg, send) {
@@ -3547,15 +3635,17 @@ function createServer(adapter, opts = {}) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
         if (typeof target === "string" || typeof target === "number") {
-          if (cancelled.size >= CANCELLED_MAX) cancelled.delete(cancelled.values().next().value);
-          cancelled.add(String(target));
+          const request2 = active.get(target);
+          if (request2) request2.cancelled = true;
         }
       }
       return;
     }
     const id = msg.id;
+    const request = { cancelled: false };
+    active.set(id, request);
     const reply = (out) => {
-      if (cancelled.delete(String(id))) return;
+      if (request.cancelled) return;
       send({ jsonrpc: "2.0", id, ...out });
     };
     try {
@@ -3626,6 +3716,8 @@ function createServer(adapter, opts = {}) {
       }
     } catch (e) {
       reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
+    } finally {
+      if (active.get(id) === request) active.delete(id);
     }
   }
   async function handleToolCall(msg, reply) {
@@ -3643,12 +3735,22 @@ function createServer(adapter, opts = {}) {
       return;
     }
     try {
-      const { text: raw, artifact } = await adapter.callTool(name, args);
+      const normalized = Object.fromEntries(
+        Object.entries(args).map(([key, value]) => [
+          key,
+          decl.inputSchema.properties[key]?.type === "number" && typeof value === "string" ? Number(value) : value
+        ])
+      );
+      const { text: raw, artifact } = await adapter.callTool(name, normalized);
       const text = capResponse(raw, name, maxBytes, artifact, adapter.capAdvice);
       const capped = text !== raw;
       const structured = protocol >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, decl.outputSchema !== void 0) : void 0;
       reply({ result: { content: [{ type: "text", text }], ...structured ? { structuredContent: structured } : {} } });
     } catch (e) {
+      if (e instanceof InvalidParamsError) {
+        reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
+        return;
+      }
       if (e instanceof ToolError) {
         reply({ result: { content: [{ type: "text", text: e.message }], isError: true } });
         return;

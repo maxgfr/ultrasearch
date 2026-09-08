@@ -132,10 +132,10 @@ describe("isOriginAllowed", () => {
     }
   });
 
-  it("allows an absent or opaque origin (non-browser clients send none)", () => {
+  it("allows absent Origin for non-browser clients but rejects opaque or empty Origin", () => {
     expect(isOriginAllowed(undefined)).toBe(true);
-    expect(isOriginAllowed("null")).toBe(true);
-    expect(isOriginAllowed("")).toBe(true);
+    expect(isOriginAllowed("null")).toBe(false);
+    expect(isOriginAllowed("")).toBe(false);
   });
 
   it("rejects a remote origin — the DNS-rebinding case", () => {

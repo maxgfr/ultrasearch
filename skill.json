@@ -1,0 +1,44 @@
+{
+  "name": "ultrasearch",
+  "vendorDir": "src/vendor",
+  "engines": {
+    "webindex": {
+      "repo": "maxgfr/webindex",
+      "minRef": "v1.15.1",
+      "meta": "webindex.meta.json",
+      "files": [
+        {
+          "remote": "scripts/engine.mjs",
+          "local": "webindex-engine.mjs"
+        },
+        {
+          "remote": "scripts/engine.d.mts",
+          "local": "webindex-engine.d.mts"
+        }
+      ],
+      "forks": {},
+      "usageFloor": 177
+    }
+  },
+  "repin": {
+    "artifacts": [
+      "src/vendor",
+      "scripts",
+      "skills",
+      "package.json",
+      "pnpm-lock.yaml",
+      "skill.json",
+      ".github/workflows/engine-repin.yml",
+      "assets/example-dossier"
+    ],
+    "workflows": [
+      "ci.yml",
+      "release.yml"
+    ],
+    "recall": {
+      "paths": [
+        "assets/example-dossier"
+      ]
+    }
+  }
+}

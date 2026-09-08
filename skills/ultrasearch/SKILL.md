@@ -9,6 +9,8 @@ metadata:
 
 # ultrasearch — recap the web, grounded not guessed
 
+Use bundled WebIndex retrieval to inspect and cite source passages. Report unavailable sources; search snippets alone do not substantiate conclusions.
+
 **You are the search engine. The tool is the evidence machine.**
 
 The host's **native web search** is the best index in this pipeline: no container, no
