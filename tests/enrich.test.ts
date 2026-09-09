@@ -14,6 +14,22 @@ function scratch(): string {
 }
 
 describe("addSource", () => {
+  it("records an HTML API reference page under its own URL", async () => {
+    const dir = scratch();
+    try {
+      writeFixtureDossier(dir, 1);
+      installFetchMock(routes([["nodejs.org", { body: "<title>File system</title><p>fs.rename overwrites an existing destination file.</p>" }]]));
+      const url = "https://nodejs.org/api/fs.html";
+      const result = await addSource(dir, url, { question: "fs.rename" });
+      expect(result.added).toBe(true);
+      const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+      expect(sources.at(-1)!.url).toBe(url);
+      expect(readFileSync(join(dir, sources.at(-1)!.extract), "utf8")).toContain("fs.rename overwrites");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("allocates the next S# id, writes the extract and appends to sources.json", async () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);

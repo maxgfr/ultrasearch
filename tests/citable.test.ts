@@ -26,6 +26,22 @@ describe("isApiEndpoint", () => {
   });
 });
 
+describe("HTML documentation under /api", () => {
+  it.each(["https://nodejs.org/api/fs.html", "https://docs.example.test/api/reference.htm"])("keeps %s citable with its own canonical URL", (url) => {
+    expect(isApiEndpoint(url)).toBe(false);
+    expect(isCitableUrl(url)).toBe(true);
+    expect(deriveCitableUrl("Documentation body", url)).toBe(url);
+  });
+  it.each([
+    "https://nodejs.org/api/fs.html?format=json",
+    "https://api.crossref.org/api/works.html",
+    "https://example.test/api/records",
+    "ftp://nodejs.org/api/fs.html",
+  ])("still rejects machine endpoints or non-HTTP URLs: %s", (url) => {
+    expect(isCitableUrl(url)).toBe(false);
+  });
+});
+
 describe("addressedIdCount", () => {
   it.each([
     ["comma-separated", "https://any.api.test/records?id=34397876,32000520,32358266", 3],

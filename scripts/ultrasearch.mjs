@@ -5134,10 +5134,31 @@ async function runBackends(kinds, ctx) {
 import { existsSync as existsSync2, readFileSync as readFileSync6 } from "fs";
 import { join as join5 } from "path";
 
+// src/citable.ts
+function isHtmlReference(url) {
+  try {
+    const candidate = new URL(url);
+    if (!/^\/api\/.*\.html?$/i.test(candidate.pathname)) return false;
+    candidate.pathname = candidate.pathname.replace(/^\/api\//i, "/documentation/");
+    return isCitableUrl(candidate.href);
+  } catch {
+    return false;
+  }
+}
+function isApiEndpoint2(url) {
+  return isApiEndpoint(url) && !isHtmlReference(url);
+}
+function isCitableUrl2(url) {
+  return isCitableUrl(url) || isHtmlReference(url);
+}
+function deriveCitableUrl2(text, canonical) {
+  return canonical && isHtmlReference(canonical) ? canonical : deriveCitableUrl(text, canonical);
+}
+
 // src/authority.ts
 function sourceSignals(opts) {
   const hosts = externalHosts(opts.url, opts.text);
-  const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl(opts.text.slice(0, 4e3));
+  const selfIdentified = urlDeclaresIdentity(opts.url) || !!deriveCitableUrl2(opts.text.slice(0, 4e3));
   const corroboration = opts.corroboration ?? 1;
   const notes = [
     `cites ${hosts.size} external source(s) \xB7 surfaced by ${corroboration} engine(s) \xB7 ${selfIdentified ? "declares a persistent identity (DOI/arXiv/canonical)" : "declares no persistent identity"}`
@@ -6253,7 +6274,7 @@ async function prepareSource(stateOf, url, opts) {
     return { ok: false, result: { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` } };
   }
   const supplied = opts.citeUrl?.trim();
-  if (supplied && !isCitableUrl(supplied)) {
+  if (supplied && !isCitableUrl2(supplied)) {
     return { ok: false, result: { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open \u2014 pass the document's own page.` } };
   }
   const provider = resolveProvider(url);
@@ -6321,8 +6342,8 @@ async function prepareSource(stateOf, url, opts) {
   if (supplied && supplied !== url) {
     meta.textVia = url;
     via = url;
-  } else if (!isCitableUrl(citeUrl)) {
-    const derived = deriveCitableUrl(text, fetched.canonical);
+  } else if (!isCitableUrl2(citeUrl)) {
+    const derived = deriveCitableUrl2(text, fetched.canonical);
     if (!derived) {
       return {
         ok: false,
@@ -7407,7 +7428,7 @@ function runCheck(dir, opts = {}) {
   const apiCited = [];
   for (const s of sources) {
     if (!citedIds.has(s.id)) continue;
-    if (isApiEndpoint(s.url)) apiCited.push(s.id);
+    if (isApiEndpoint2(s.url)) apiCited.push(s.id);
     const text = textOf(s.id);
     if (text === null) continue;
     const wall = looksLikeJunkExtraction(text);
@@ -7532,8 +7553,8 @@ function listIssuesFrom(sources, textOf) {
   const issues = [];
   for (const s of sources) {
     const text = textOf(s);
-    if (!isCitableUrl(s.url)) {
-      const derived = text ? deriveCitableUrl(text) : void 0;
+    if (!isCitableUrl2(s.url)) {
+      const derived = text ? deriveCitableUrl2(text) : void 0;
       const twin = derived ? sources.find((o) => o.id !== s.id && o.canonicalUrl === canonicalizeUrl(derived)) : void 0;
       issues.push({
         id: s.id,
@@ -7600,7 +7621,7 @@ function applyRelink(state, id, url, textOf, opts = {}) {
   if (idx < 0) return { result: { id, relinked: false, note: `${id} is not in this dossier` } };
   const target = state.sources[idx];
   const next = url.trim();
-  if (!isCitableUrl(next)) {
+  if (!isCitableUrl2(next)) {
     return { result: { id, relinked: false, note: `${next} is not a citable page url \u2014 a citation must open in a browser` } };
   }
   const canon = canonicalizeUrl(next);
