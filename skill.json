@@ -4,7 +4,7 @@
   "engines": {
     "webindex": {
       "repo": "maxgfr/webindex",
-      "minRef": "v1.15.1",
+      "minRef": "v1.19.6",
       "meta": "webindex.meta.json",
       "files": [
         {

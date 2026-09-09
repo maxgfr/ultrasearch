@@ -1,5 +1,5 @@
 // src/version.ts
-var ENGINE_VERSION = "1.19.5";
+var ENGINE_VERSION = "1.19.6";
 
 // src/brand.ts
 var DEFAULT_BRAND = {
@@ -2084,7 +2084,7 @@ function externalHosts(url, text) {
 
 // src/citable.ts
 var API_HOSTS = /* @__PURE__ */ new Set(["eutils.ncbi.nlm.nih.gov", "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "export.arxiv.org"]);
-var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\//i, /\.(fcgi|cgi)$/i];
+var API_PATHS = [/^\/europepmc\/webservices\//i, /^\/search\/publ\/api/i, /^\/api\/(?!.*\.html?$)/i, /\.(fcgi|cgi)$/i];
 var API_FORMATS = /[?&](format|retmode|rettype|output)=(json|xml|text|atom|csv|bibtex)\b/i;
 function isApiEndpoint(url) {
   try {
