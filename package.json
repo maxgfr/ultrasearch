@@ -63,7 +63,7 @@
     "semantic-release": "^25.0.9",
     "tsup": "^8.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^5.0.0",
     "yaml": "^2.9.0",
     "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/e98ac12f7e0011e6f02f13d14818ecd8b5a890fb"
   },
