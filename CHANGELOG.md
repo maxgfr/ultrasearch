@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.35.5](https://github.com/maxgfr/ultrasearch/compare/v1.35.4...v1.35.5) (2026-09-09)
+
+
+### Bug Fixes
+
+* réépingler webindex après harmonisation du chemin d’orchestration ([b7810db](https://github.com/maxgfr/ultrasearch/commit/b7810db37ef47d19bebc8b4a009f0cab46873bf5))
+
 ## [1.35.4](https://github.com/maxgfr/ultrasearch/compare/v1.35.3...v1.35.4) (2026-09-08)
 
 
