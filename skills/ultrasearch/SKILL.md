@@ -205,7 +205,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
 | `verify` | `VERIFY.todo.json` → `VERIFY.json` — exit 2 under `--stdout` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
-| `orchestrate` | `<run>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` |
+| `orchestrate` | `<RUN>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` |
 
 ## The standard route (route S)
 

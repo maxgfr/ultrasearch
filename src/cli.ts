@@ -102,7 +102,7 @@ Deep research (the agentic tier — see references/deep-research-playbook.md):
            worklists: one launchable workflow per ready phase (gather fans out
            one gatherer per PLAN.json sub-question; verify fans skeptics over
            VERIFY.todo.json) + the agents/<role>.md dispatch contracts + a
-           sequential RUNBOOK.md, under <run>/orchestration/. Subagents return
+           sequential RUNBOOK.md, under <RUN>/orchestration/. Subagents return
            fragments; the merge / verify --apply folds stay with you.
 
 Options:
