@@ -57,6 +57,20 @@ export function readJson<T>(path: string, what: string): T {
   }
 }
 
+// Every reader must resolve a citation to the same single source record.
+export function sourceIdentityError(sources: unknown): string | undefined {
+  if (!Array.isArray(sources)) return "is not a JSON array";
+  const seen = new Set<string>();
+  for (const [index, source] of sources.entries()) {
+    if (!source || typeof source !== "object" || typeof source.id !== "string" || !source.id.trim()) {
+      return `has a missing or invalid source id at row ${index + 1}`;
+    }
+    if (seen.has(source.id)) return `contains duplicate source id: ${source.id}`;
+    seen.add(source.id);
+  }
+  return undefined;
+}
+
 // Parse the numeric suffix of an "S<n>" id.
 function idNum(id: string): number {
   const m = /^S(\d+)$/.exec(id);
@@ -336,12 +350,8 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
 // Read back a persisted dossier (for check / render / enrich).
 export function readDossier(dir: string): { sources: Source[]; manifest: Manifest } {
   const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
-  // Valid JSON that isn't an array (a `{}`/`null`/scalar) would crash every
-  // caller's `sources.map` with a raw TypeError — surface a clean named error
-  // instead (main().catch prints it), keeping the never-crash-on-malformed rule.
-  if (!Array.isArray(sources)) {
-    throw new Error(`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`);
-  }
+  const identityError = sourceIdentityError(sources);
+  if (identityError) throw new Error(`sources.json in ${dir} ${identityError} — re-run \`ultrasearch gather\`.`);
   const manifest = readJson<Manifest>(join(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }

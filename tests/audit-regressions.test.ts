@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { extractMainHtml, htmlToText, decodeEntities } from "../src/backends/fetch.js";
@@ -182,6 +182,20 @@ describe("check.ts — malformed dossier + blockquote grounding", () => {
       "# X\nRate limiting caps how many requests a client may make per window here [S1].\n> The IETF formally banned leaky buckets across all EU member states in 2024 with no source at all.",
     );
     expect(runCheck(dir).ok).toBe(false); // the blockquote claim is unsourced
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("rejects duplicate source ids instead of resolving a citation ambiguously", () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-audit-duplicate-source-"));
+    dossier(dir, 1);
+    const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"));
+    sources.push({ ...sources[0], title: "conflicting duplicate" });
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources));
+    writeFileSync(join(dir, "REPORT.md"), "# X\nRate limiting caps requests within each fixed window [S1].");
+    const result = runCheck(dir);
+    expect(result.ok).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/duplicate source id.*S1/i);
+    expect(() => runVerify(dir)).toThrow(/duplicate source id.*S1/i);
     rmSync(dir, { recursive: true, force: true });
   });
 });

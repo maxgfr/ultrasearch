@@ -12,7 +12,7 @@ import {
   TOKEN_RE,
   SOURCE_RE,
 } from "./claims.js";
-import { readSourceText } from "./dossier.js";
+import { readSourceText, sourceIdentityError } from "./dossier.js";
 import { looksLikeJunkExtraction } from "./backends/fetch.js";
 import { isApiEndpoint } from "./citable.js";
 import { bindToWorklist, reduceVerdicts } from "./verify.js";
@@ -274,11 +274,8 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${(e as Error).message}`]);
   }
-  // Valid JSON is not enough — a `{}`/`null`/scalar sources.json parses fine but
-  // isn't the Source[] the rest of check assumes; guard before `.map` throws.
-  if (!Array.isArray(sources)) {
-    return blank(false, [`sources.json in ${dir} is not a JSON array — re-run \`ultrasearch gather\`.`]);
-  }
+  const identityError = sourceIdentityError(sources);
+  if (identityError) return blank(false, [`sources.json in ${dir} ${identityError} — re-run \`ultrasearch gather\`.`]);
   const ids = new Set(sources.map((s) => s.id));
 
   const present = [...HARD_FILES, ...SOFT_FILES].filter((f) => existsSync(join(dir, f)));

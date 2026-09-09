@@ -5278,6 +5278,18 @@ function readJson(path, what) {
     throw new Error(`${what} is not valid JSON (${path}): ${e.message}`);
   }
 }
+function sourceIdentityError(sources) {
+  if (!Array.isArray(sources)) return "is not a JSON array";
+  const seen = /* @__PURE__ */ new Set();
+  for (const [index, source] of sources.entries()) {
+    if (!source || typeof source !== "object" || typeof source.id !== "string" || !source.id.trim()) {
+      return `has a missing or invalid source id at row ${index + 1}`;
+    }
+    if (seen.has(source.id)) return `contains duplicate source id: ${source.id}`;
+    seen.add(source.id);
+  }
+  return void 0;
+}
 function idNum(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
@@ -5450,9 +5462,8 @@ function renderDossierMarkdown(sources, manifest, template) {
 }
 function readDossier(dir) {
   const sources = readJson(join5(dir, "sources.json"), "sources.json");
-  if (!Array.isArray(sources)) {
-    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
-  }
+  const identityError = sourceIdentityError(sources);
+  if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const manifest = readJson(join5(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
@@ -6886,9 +6897,8 @@ function claimStrings(text) {
 }
 function buildWorklist(dir, opts = {}) {
   const sources = readJson(join11(dir, "sources.json"), "sources.json");
-  if (!Array.isArray(sources)) {
-    throw new Error(`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`);
-  }
+  const identityError = sourceIdentityError(sources);
+  if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const byId = new Map(sources.map((s) => [s.id, s]));
   const textCache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -7327,9 +7337,8 @@ function runCheck(dir, opts = {}) {
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
-  if (!Array.isArray(sources)) {
-    return blank(false, [`sources.json in ${dir} is not a JSON array \u2014 re-run \`ultrasearch gather\`.`]);
-  }
+  const identityError = sourceIdentityError(sources);
+  if (identityError) return blank(false, [`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`]);
   const ids = new Set(sources.map((s) => s.id));
   const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync10(join12(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
