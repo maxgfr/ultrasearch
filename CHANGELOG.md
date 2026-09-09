@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.35.6](https://github.com/maxgfr/ultrasearch/compare/v1.35.5...v1.35.6) (2026-09-09)
+
+
+### Bug Fixes
+
+* consume shared HTML documentation citation support ([9f31fc1](https://github.com/maxgfr/ultrasearch/commit/9f31fc196ceeb37398488dc4d12aae94e2e9bf81))
+* keep report validation bound to its evidence directory ([d6620ec](https://github.com/maxgfr/ultrasearch/commit/d6620ecea889110dd82f68eb5a80ff36b167407d))
+* reject ambiguous source identities before citation checks ([ad8e6f8](https://github.com/maxgfr/ultrasearch/commit/ad8e6f8aac3b6fa73bc2acbc61c9735e9997879f))
+* retain human-readable HTML API documentation as citable sources ([c5f0830](https://github.com/maxgfr/ultrasearch/commit/c5f083066d54b322b1286233f737b267da8027a3))
+
 ## [1.35.5](https://github.com/maxgfr/ultrasearch/compare/v1.35.4...v1.35.5) (2026-09-09)
 
 
