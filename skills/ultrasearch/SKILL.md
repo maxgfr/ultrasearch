@@ -87,6 +87,15 @@ question. You do not have to create it: `plan --run-root <RUN>` makes it and its
 `<RUN>/q1`, `<RUN>/q2`… sub-dirs, and `merge --master <RUN>` turns it into the
 master dossier. Without `--out`, `gather` picks its own dir and prints it.
 
+Write `REPORT.md` and `SUMMARY.md` in that same `<RUN>` directory, beside
+`sources.json` and `manifest.json`, then use `check --run <RUN>`. If the user
+requests an additional report path, copy the validated deliverable there after
+the gate passes; keep the dossier's report in place. A missing `sources.json`
+in the checked directory is a path mismatch, not a retrieval limitation:
+correct `--run` or the report location and rerun the gate before presenting.
+Never describe a failed check as successful completion of a written report.
+
+
 ## The sweep — do this first, on every route (I0)
 
 ```
