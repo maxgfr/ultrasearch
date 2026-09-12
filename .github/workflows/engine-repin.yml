@@ -12,4 +12,4 @@ concurrency:
   cancel-in-progress: false
 jobs:
   repin:
-    uses: maxgfr/webindex/.github/workflows/skill-repin.yml@c26540905ff27509cc5f06d419e17e09b0a31a90
+    uses: maxgfr/webindex/.github/workflows/skill-repin.yml@708b9e5efc8908ca785cc2d975867d602fff4e00
