@@ -4,7 +4,7 @@ description: Research a web topic, brainstorm research angles, and produce an ev
 disable-model-invocation: true
 license: MIT
 metadata:
-  version: 1.35.8
+  version: 1.35.9
   opencode/autoinvoke: 'false'
 ---
 
