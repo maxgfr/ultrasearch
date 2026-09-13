@@ -1674,15 +1674,20 @@ function decodeEntities(s) {
 function cleanInline(s) {
   return decodeEntities(String(s)).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
-function htmlToText(html) {
+var BLOCK_TAGS = /* @__PURE__ */ new Set(["p", "div", "section", "article", "li", "tr", "td", "th", "ul", "ol", "pre", "blockquote", "table"]);
+function htmlToText(html, opts = {}) {
   let s = html;
-  s = s.replace(/<!--[\s\S]*?-->/g, " ");
-  s = s.replace(/<(script|style|noscript|head|nav|footer|svg|template)[\s\S]*?<\/\1>/gi, " ");
-  s = s.replace(/<h([1-6])(?:\s[^>]*)?>/gi, (_m, n) => "\n" + "#".repeat(Number(n)) + " ");
-  s = s.replace(/<\/(p|div|section|article|li|tr|td|th|ul|ol|h[1-6]|pre|blockquote|br)>/gi, "\n");
-  s = s.replace(/<(p|div|section|article|li|tr|td|th|ul|ol|pre|blockquote|table)\b[^>]*>/gi, "\n");
-  s = s.replace(/<(br|hr)\s*\/?>/gi, "\n");
-  s = s.replace(/<[^>]+>/g, " ");
+  const hidden = opts.fullPage ? /<!--[\s\S]*?-->|<(script|style|noscript|head|svg|template)\b[\s\S]*?<\/\1\s*>/gi : /<!--[\s\S]*?-->|<(script|style|noscript|head|nav|footer|svg|template)\b[\s\S]*?<\/\1\s*>/gi;
+  s = s.replace(hidden, " ");
+  s = s.replace(/<[a-zA-Z!/?][^>"']*(?:(?:"[^"]*"|'[^']*')[^>"']*)*>/g, (tag2) => {
+    const name = /^<\/?([a-zA-Z][^\s/>]*)/.exec(tag2)?.[1]?.toLowerCase() ?? "";
+    if (/^h[1-6]$/.test(name)) {
+      return tag2.startsWith("</") ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
+    }
+    if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") return "\n";
+    return " ";
+  });
+  s = s.replace(/<[a-zA-Z!/?][^>]*>/g, " ");
   s = decodeEntities(s);
   s = s.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n");
   return s.split("\n").map((l) => l.trim()).filter((l) => l.length > 0).join("\n");
@@ -1773,7 +1778,7 @@ async function fetchAndExtract(url, opts = {}) {
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
   let firecrawlNote;
-  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl) {
+  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
       return {
@@ -1850,13 +1855,14 @@ async function fetchAndExtract(url, opts = {}) {
   const mime = res.contentType.split(";")[0].trim().toLowerCase();
   const ambiguousType = !mime || mime === "application/octet-stream";
   const isHtml = /^(?:text\/html|application\/xhtml\+xml)$/.test(mime) || ambiguousType && /^\s*<(?:!doctype\s+html\b|html\b|head\b|body\b|article\b|main\b|p\b|h[1-6]\b)/i.test(res.body);
-  const stripped = isHtml ? htmlToText(extractMainHtml(res.body)) : res.body;
-  const text = isHtml && opts.stripConsent ? stripConsentBoilerplate(stripped).text : stripped;
+  const stripped = isHtml ? htmlToText(opts.fullPage ? res.body : extractMainHtml(res.body), opts) : res.body;
+  const consent = isHtml && opts.stripConsent && !opts.fullPage ? stripConsentBoilerplate(stripped) : { text: stripped, dropped: 0 };
   const title = isHtml ? htmlTitle(res.body) : void 0;
   const canonical = isHtml ? htmlCanonicalUrl(res.body) : void 0;
   const metaDescription = isHtml ? metaDescriptionOf(res.body) : void 0;
   return {
-    text,
+    text: consent.text,
+    consentDropped: consent.dropped,
     title,
     canonical,
     metaDescription,
@@ -1911,11 +1917,16 @@ var CONSENT_PATTERNS = [
   /advertising partners/i,
   /legitimate interest/i
 ];
+var CONSENT_ACTIONS = [
+  /\b(?:accept|reject|decline|agree|allow|manage|preferences|settings|choices)\b/i,
+  /\b(?:opt[ -]out|we use cookies|this (?:site|website) uses cookies|by continuing)\b/i,
+  /\b(?:learn more|privacy policy|cookie policy)\b/i
+];
 function stripConsentBoilerplate(text) {
   let dropped = 0;
   const kept = text.split("\n").filter((line) => {
     const hits = CONSENT_PATTERNS.reduce((n, re) => n + (re.test(line) ? 1 : 0), 0);
-    const isBanner = hits >= 2 || hits === 1 && line.trim().length < 120;
+    const isBanner = hits >= 2 || hits === 1 && line.trim().length < 120 && CONSENT_ACTIONS.some((re) => re.test(line));
     if (isBanner) dropped++;
     return !isBanner;
   });
