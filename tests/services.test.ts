@@ -138,7 +138,9 @@ describe("container lifecycle", () => {
       run: (cmd, args) => (calls.push([cmd, ...args]), { ok: true, stdout: "", stderr: "" }),
     });
     expect(r.code).toBe(0);
-    const file = calls[0]![calls[0]!.indexOf("-f") + 1]!;
+    // The engine asks the daemon (`docker info`) before any compose call.
+    const compose = calls.find((c) => c[1] === "compose")!;
+    const file = compose[compose.indexOf("-f") + 1]!;
     expect(file).toMatch(/docker-compose\.yml$/);
     expect(existsSync(file)).toBe(true); // materialised on demand
   });
@@ -148,7 +150,7 @@ describe("container lifecycle", () => {
   it("brings SearXNG up alongside Firecrawl", () => {
     const calls: string[][] = [];
     stackControl("firecrawl", "up", { has: () => true, run: (c, a) => (calls.push([c, ...a]), { ok: true, stdout: "", stderr: "" }) });
-    expect(calls[0]).toEqual(expect.arrayContaining(["--profile", "search", "--profile", "extract"]));
+    expect(calls.find((c) => c[1] === "compose")).toEqual(expect.arrayContaining(["--profile", "search", "--profile", "extract"]));
   });
 
   it("says docker is missing instead of throwing", () => {
@@ -157,5 +159,17 @@ describe("container lifecycle", () => {
     expect(r.message).toContain("docker not found");
     // The brand reaches the engine: this is ultrasearch's message, not webindex's.
     expect(r.message.startsWith("ultrasearch searxng:")).toBe(true);
+  });
+
+  it("says the docker daemon is not answering before touching compose", () => {
+    const calls: string[][] = [];
+    const r = stackControl("searxng", "up", {
+      has: () => true,
+      run: (c, a) => (calls.push([c, ...a]), { ok: false, stdout: "", stderr: "Cannot connect to the Docker daemon" }),
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.message.startsWith("ultrasearch searxng:")).toBe(true);
+    expect(r.message).toMatch(/daemon is not answering/);
+    expect(calls.some((c) => c[1] === "compose")).toBe(false);
   });
 });
