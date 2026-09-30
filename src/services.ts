@@ -1,7 +1,7 @@
 import { runWithInput, ANYDOC_SPEC, PDF_INSPECTOR_SPEC } from "./backends/exec.js";
 import { firecrawlBase, firecrawlIsExplicit, probeFirecrawl } from "./backends/firecrawl.js";
 import { probeSearxng } from "./backends/searxng.js";
-import { searxngBase } from "./engine.js";
+import { searxngBase, searxngIsExplicit } from "./engine.js";
 import { enabledExtractors, ocrTools, ocrBudgetLeft } from "./backends/pdf.js";
 import { enabledDocExtractors } from "./backends/doc.js";
 import type { ManifestServices } from "./types.js";
@@ -70,7 +70,7 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
       run: async () => {
         const sxBase = searxngBase({ searxng: opts.searxng });
         if (!sxBase) return { name: "searxng", ok: false, detail: "disabled (--searxng off)" };
-        const up = await probeSearxng(sxBase);
+        const up = await probeSearxng(sxBase, searxngIsExplicit({ searxng: opts.searxng }));
         return {
           name: "searxng",
           ok: up,

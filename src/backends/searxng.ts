@@ -30,13 +30,16 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
     };
   }
   // Cheap gate before the real query: an absent instance costs one refused
-  // connection instead of a full 8s request timeout per page.
-  if (!(await probeSearxng(base))) {
+  // connection instead of a full 8s request timeout per page. A base the user
+  // named counts as up on any HTTP answer; the localhost default must answer
+  // SearXNG's own /healthz, so a Jupyter on 8888 is not taken for it.
+  const explicit = searxngIsExplicit({ searxng: ctx.options.searxng });
+  if (!(await probeSearxng(base, explicit))) {
     return {
       backend: "searxng",
       items: [],
       notes: [
-        searxngIsExplicit({ searxng: ctx.options.searxng })
+        explicit
           ? `SearXNG not reachable at ${base}. Skipping; consider your own WebSearch.`
           : `SearXNG not running at ${base} — start it with \`ultrasearch searxng up\` for a local, keyless discovery backend. Skipping.`,
       ],

@@ -93,7 +93,14 @@ describe("resources/read", () => {
   });
 
   it("rejects traversal out of the skill root", () => {
-    expect(() => readResource("skill://../../package.json")).toThrow(/escapes the skill root|no such resource/);
+    // Refused on the path alone, before the disk is read: only SKILL.md and
+    // references/*.md are served.
+    expect(() => readResource("skill://../../package.json")).toThrow(/not a resource this server serves/);
+  });
+
+  it("serves only SKILL.md and references/*.md", () => {
+    expect(() => readResource("skill://scripts/ultrasearch.mjs")).toThrow(/not a resource this server serves/);
+    expect(() => readResource("skill://references/nested/x.md")).toThrow(/not a resource this server serves/);
   });
 
   it("rejects a symlink that points out of the skill root", () => {
@@ -105,14 +112,23 @@ describe("resources/read", () => {
     writeFileSync(join(root, "SKILL.md"), "# skill\n\nBody.\n");
     const secret = join(tmp(), "secret.md");
     writeFileSync(secret, "top secret");
-    symlinkSync(secret, join(root, "escape.md"));
+    // Under references/, a path the server does serve, so the refusal can only
+    // come from the realpath containment check.
+    mkdirSync(join(root, "references"), { recursive: true });
+    symlinkSync(secret, join(root, "references", "escape.md"));
 
-    expect(() => readResource("skill://escape.md", join(root, "scripts"))).toThrow(/escapes the skill root/);
+    expect(() => readResource("skill://references/escape.md", join(root, "scripts"))).toThrow(/escapes the skill root/);
   });
 
   it("rejects a directory and a file that is not there", () => {
-    expect(() => readResource("skill://references")).toThrow(/not a file/);
+    expect(() => readResource("skill://references")).toThrow(/not a resource this server serves/);
     expect(() => readResource("skill://references/nope.md")).toThrow(/no such resource/);
+    // A directory whose name passes the path check is still not read.
+    const root = tmp();
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    writeFileSync(join(root, "SKILL.md"), "# skill\n\nBody.\n");
+    mkdirSync(join(root, "references", "dir.md"), { recursive: true });
+    expect(() => readResource("skill://references/dir.md", join(root, "scripts"))).toThrow(/not a file/);
   });
 
   it("explains itself when there is no payload at all", () => {

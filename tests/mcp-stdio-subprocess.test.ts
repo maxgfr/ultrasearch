@@ -199,11 +199,28 @@ describe("the bundled MCP server over stdio", () => {
     expect(s.lines.map((l) => JSON.parse(l).id)).toEqual([1, 2]);
   });
 
-  it("answers a batch with a single array frame", async () => {
-    const s = await session([INIT, [{ jsonrpc: "2.0", id: 2, method: "ping" }, INITIALIZED, { jsonrpc: "2.0", id: 3, method: "ping" }]]);
+  // JSON-RPC batches exist in MCP 2025-03-26 and were removed in 2025-06-18,
+  // so the answer depends on the negotiated protocol.
+  it("answers a batch with a single array frame on a protocol that has batches", async () => {
+    const init = { ...INIT, params: { protocolVersion: "2025-03-26" } };
+    const s = await session([init, [{ jsonrpc: "2.0", id: 2, method: "ping" }, INITIALIZED, { jsonrpc: "2.0", id: 3, method: "ping" }]]);
     const batch = JSON.parse(s.lines[1]!);
     expect(Array.isArray(batch)).toBe(true);
     expect(batch.map((m: { id: number }) => m.id)).toEqual([2, 3]);
+  });
+
+  it("refuses a batch as an invalid request once batches are gone (2025-06-18)", async () => {
+    const s = await session([
+      INIT,
+      [
+        { jsonrpc: "2.0", id: 2, method: "ping" },
+        { jsonrpc: "2.0", id: 3, method: "ping" },
+      ],
+    ]);
+    const refusal = JSON.parse(s.lines[1]!);
+    expect(Array.isArray(refusal)).toBe(false);
+    expect(refusal.error.code).toBe(-32600);
+    expect(refusal.error.message).toMatch(/batches/);
   });
 });
 
