@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.35.10](https://github.com/maxgfr/ultrasearch/compare/v1.35.9...v1.35.10) (2026-09-30)
+
+
+### Bug Fixes
+
+* tell the SearXNG probe whether the base was named ([022773f](https://github.com/maxgfr/ultrasearch/commit/022773fbda63a026284ba2ff433c7d5b160d111a))
+
 ## [1.35.9](https://github.com/maxgfr/ultrasearch/compare/v1.35.8...v1.35.9) (2026-09-13)
 
 
