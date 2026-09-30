@@ -32,10 +32,27 @@ describe("searxngBackend", () => {
   // ever queried it. It now defaults to localhost, gated by a probe.
   it("defaults to localhost:8888 when nothing is configured", async () => {
     vi.stubEnv("ULTRASEARCH_SEARXNG", undefined); // tests/setup.ts pins it to "off"
-    const spy = installFetchMock(routes([["format=json", { body: SEARX_JSON, contentType: "application/json" }]]));
+    // On the unnamed default the probe wants SearXNG's own /healthz "OK" — any
+    // other answer on 8888 (e.g. Jupyter) is not taken for SearXNG.
+    const spy = installFetchMock(
+      routes([
+        ["/healthz", { body: "OK", contentType: "text/plain" }],
+        ["format=json", { body: SEARX_JSON, contentType: "application/json" }],
+      ]),
+    );
     const r = await searxngBackend(makeCtx("rate limiting"));
     expect(r.items).toHaveLength(2);
     expect(spy.mock.calls.some((c) => String(c[0]).startsWith(SEARXNG_DEFAULT_BASE))).toBe(true);
+  });
+
+  it("does not take another app on the default port for SearXNG", async () => {
+    vi.stubEnv("ULTRASEARCH_SEARXNG", undefined);
+    // Something answers on 8888, but not SearXNG's /healthz "OK" (Jupyter's default port).
+    const spy = installFetchMock(() => ({ status: 200, body: "<html>Jupyter</html>", contentType: "text/html" }));
+    const r = await searxngBackend(makeCtx("x"));
+    expect(r.items).toHaveLength(0);
+    expect(r.notes.join(" ")).toMatch(/not running/i);
+    expect(spy.mock.calls.some((c) => String(c[0]).includes("format=json"))).toBe(false);
   });
 
   it("skips with a start-it hint when nothing is configured and no instance answers", async () => {
