@@ -101,6 +101,16 @@ describe("extractCodes — decoys", () => {
     none("Coupon FREE SHIPPING and voucher SALE today", { lang: "en", region: "gb", now: NOW, merchant: "x" });
   });
 
+  it("reads a bare word after a code keyword as a brand, not a code (live false positive, fr.coupert.com)", () => {
+    none("Découvrez comment utiliser les codes promo ASOS, étape par étape :");
+    none("Voucher ARGOS and coupon AMAZON deals this week", { lang: "en", now: NOW });
+    // …but a separator, quotes or an applying verb make the same shape a code.
+    expect(codesOf(extractCodes("Utilisez le meilleur code de réduction 'FALL' pour 35% de remise.", fr))).toEqual(["FALL"]);
+    expect(codesOf(extractCodes("Code promo : BIENVENUE pour votre première commande.", fr))).toEqual(["BIENVENUE"]);
+    expect(codesOf(extractCodes("Just use code WELCOME at checkout.", { lang: "en", now: NOW }))).toEqual(["WELCOME"]);
+    expect(codesOf(extractCodes("Commandez avec le code promo BIENVENUE.", fr))).toEqual(["BIENVENUE"]);
+  });
+
   it("rejects years, percentages, SKUs/EANs and hashes", () => {
     none("code promo 2026 et code promo -20% sur tout");
     none("code promo REF1234567 sur la page produit");

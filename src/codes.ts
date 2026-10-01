@@ -500,17 +500,24 @@ function mergeMention(a: CodeMention, b: CodeMention): CodeMention {
  */
 export function extractCodes(text: string, opts: ExtractOptions): CodeMention[] {
   if (!text) return [];
-  const anchors: { end: number }[] = [];
-  for (const re of [KEYWORD_RE, LEAD_RE]) {
-    for (const m of text.matchAll(re)) anchors.push({ end: m.index! + m[0].length });
+  // `applied` = introduced by a verb that applies a code ("use code", "avec le
+  // code promo"), as opposed to a bare keyword ("les codes promo ASOS").
+  const leads = [...text.matchAll(LEAD_RE)].map((m) => ({ start: m.index!, end: m.index! + m[0].length }));
+  const anchors: { end: number; applied: boolean }[] = leads.map((l) => ({ end: l.end, applied: true }));
+  for (const m of text.matchAll(KEYWORD_RE)) {
+    const [start, end] = [m.index!, m.index! + m[0].length];
+    anchors.push({ end, applied: leads.some((l) => l.end > start && l.end <= end) });
   }
   if (!anchors.length) return [];
   anchors.sort((a, b) => a.end - b.end);
 
   const found: { code: string; at: number; strength: CodeMention["strength"] }[] = [];
-  for (const { end } of anchors) {
+  for (const { end, applied } of anchors) {
     const strong = STRONG_RE.exec(text.slice(end, end + 40));
-    const code = strong ? acceptToken(strong[1]!, opts.merchant) : undefined;
+    // A bare word straight after a keyword names a brand ("codes promo ASOS");
+    // it is a code only with a digit, a separator or quotes, or a verb applying it.
+    const bareWord = !!strong && !applied && !/\d/.test(strong[1]!) && !/\S/.test(strong[0].slice(0, -strong[1]!.length));
+    const code = strong && !bareWord ? acceptToken(strong[1]!, opts.merchant) : undefined;
     if (code) {
       found.push({ code, at: end + strong!.index + strong![0].length - strong![1]!.length, strength: "strong" });
       continue;
