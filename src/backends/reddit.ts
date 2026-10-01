@@ -37,6 +37,17 @@ export function redditWindow(since?: string, nowMs: number = Date.now()): Reddit
   return "all";
 }
 
+// Reddit's search drops a domain it cannot tokenize: "code promo boulanger.com"
+// came back as an opera's and a video game's promo-code threads, none of them
+// about Boulanger. A site named in the question is the entity the question is
+// about, so it goes in as its quoted name, which every result must then contain.
+// Shop TLDs only — "node.js" or "next.config" are not sites.
+const SITE_RE =
+  /\b(?:https?:\/\/)?(?:www\.)?([a-z0-9][a-z0-9-]*)\.(?:co\.uk|com\.au|com|net|org|fr|de|at|ch|be|nl|es|it|pl|pt|eu|uk|us|ca|ie|se|dk|no|fi)(?:\/\S*)?(?![\w.])/gi;
+export function redditQuery(question: string): string {
+  return question.replace(SITE_RE, (_m, name: string) => `"${name}"`);
+}
+
 // One polite read of a reddit feed: a host slot first, no retry, and a refusal
 // described in words rather than a status code.
 async function readFeed(url: string): Promise<{ feed?: Feed; why?: string }> {
@@ -60,7 +71,7 @@ function fallback(q: string): string {
 export const redditBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const q = ctx.question;
-  const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&sort=relevance&t=${redditWindow(ctx.options.since)}&limit=${Math.min(25, n * 2)}`;
+  const url = `${SEARCH_URL}?q=${encodeURIComponent(redditQuery(q))}&sort=relevance&t=${redditWindow(ctx.options.since)}&limit=${Math.min(25, n * 2)}`;
   const { feed, why } = await readFeed(url);
   if (!feed) return { backend: "reddit", items: [], notes: [`Reddit search ${why}. ${fallback(q)}`] };
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { redditBackend, redditWindow } from "../src/backends/reddit.js";
+import { redditBackend, redditQuery, redditWindow } from "../src/backends/reddit.js";
 import { resetHostSchedule } from "../src/engine.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
@@ -37,6 +37,23 @@ describe("redditWindow", () => {
     expect(redditWindow("2026", now)).toBe("year");
     expect(redditWindow("2020", now)).toBe("all");
     expect(redditWindow("not a date", now)).toBe("all");
+  });
+});
+
+describe("redditQuery", () => {
+  it("quotes a site's name so reddit cannot drop it (live: boulanger.com came back as opera promo threads)", () => {
+    expect(redditQuery("code promo boulanger.com")).toBe('code promo "boulanger"');
+    expect(redditQuery("argos.co.uk voucher")).toBe('"argos" voucher');
+    expect(redditQuery("https://www.decathlon.fr/ promo")).toBe('"decathlon" promo');
+  });
+  it("leaves a question with no site — or a file name — alone", () => {
+    expect(redditQuery("decathlon promo code")).toBe("decathlon promo code");
+    expect(redditQuery("node.js ECONNRESET on next.config")).toBe("node.js ECONNRESET on next.config");
+  });
+  it("is what the backend sends", async () => {
+    const spy = installFetchMock(() => ({ body: SEARCH, contentType: ATOM }));
+    await redditBackend(makeCtx("code promo boulanger.com"));
+    expect(String(spy.mock.calls[0]![0])).toContain("q=code%20promo%20%22boulanger%22");
   });
 });
 
