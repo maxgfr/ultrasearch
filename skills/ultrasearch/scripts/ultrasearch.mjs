@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename2, join as join20, relative as relative3, resolve as resolve3 } from "path";
+import { basename as basename2, join as join22, relative as relative3, resolve as resolve3 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
 import { realpathSync as realpathSync3, existsSync as existsSync13, statSync as statSync6, readdirSync as readdirSync4, readFileSync as readFileSync15 } from "fs";
 
@@ -26,11 +26,13 @@ var ALL_BACKENDS = [
   "pubmed",
   "dblp",
   "standards",
+  "reddit",
+  "pepper",
   "generic",
   "fixture",
   "claude"
 ];
-var ALL_MODES = ["topic", "bug", "research", "learn", "startup"];
+var ALL_MODES = ["topic", "bug", "research", "learn", "startup", "deals"];
 var ALL_DEPTHS = ["summary", "standard", "deep"];
 var DEPTH_CAPS = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
@@ -168,7 +170,7 @@ var websearchBackend = async (ctx) => {
 };
 
 // src/gather.ts
-import { join as join6 } from "path";
+import { join as join10 } from "path";
 import { tmpdir as tmpdir3 } from "os";
 
 // src/modes/topic.ts
@@ -206,7 +208,7 @@ var bugMode = {
   name: "bug",
   description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
   backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
-  deepOnly: ["searxng"],
+  deepOnly: ["searxng", "reddit"],
   extras: [],
   searchAngles: [
     "the error text VERBATIM, in quotes",
@@ -299,7 +301,7 @@ var startupMode = {
   name: "startup",
   description: "Market research \u2014 competitors, market sizing, pricing, GTM (general web + public sources).",
   backends: ["duckduckgo", "searxng", "hackernews"],
-  deepOnly: ["wikipedia"],
+  deepOnly: ["wikipedia", "reddit"],
   extras: [],
   searchAngles: [
     "the product category + 'alternatives' or 'vs'",
@@ -325,13 +327,48 @@ var startupMode = {
   ].join("\n")
 };
 
+// src/modes/deals.ts
+var dealsMode = {
+  name: "deals",
+  description: "Coupon & discount-code finder for a merchant \u2014 deal communities (Dealabs/hotukdeals/mydealz\u2026), Reddit, the web; codes extracted, ranked, marked UNVERIFIED (+codes.json).",
+  backends: ["pepper", "reddit", "duckduckgo", "searxng"],
+  deepOnly: [],
+  extras: ["codes"],
+  // Ordered by yield: `queries` keeps the first 2 / 4 / 8 by depth.
+  searchAngles: [
+    "the merchant + 'promo code' in the country's language + this month and year (e.g. 'code promo decathlon octobre 2026')",
+    "site: the country's Pepper deal community (dealabs.com, hotukdeals.com, mydealz.de, chollometro.com, pepper.pl, nl.pepper.com) + the merchant",
+    "the country's coupon aggregators + the merchant (RetailMeNot, Ma-Reduc, Radins, Picodi, Sparwelt, Groupon\u2026)",
+    "site:reddit.com + the merchant + 'code', and the country's consumer forums",
+    "the merchant's OWN offers: first-order / welcome discount, newsletter sign-up, app-only codes, loyalty programme",
+    "influencer, podcast and YouTube sponsor codes for the merchant",
+    "student, healthcare / key-worker, military and teacher discounts for the merchant",
+    "cashback portals and card-linked offers for the merchant",
+    "the merchant's referral (refer-a-friend) programme and discounted gift cards",
+    "the merchant's sales calendar: seasonal sales, Black Friday, its own event days",
+    "price matching, outlet, clearance and refurbished sections",
+    "'<merchant> code not working' / 'expired' \u2014 what people report failing"
+  ],
+  template: [
+    "## TL;DR",
+    "## Candidate codes",
+    "### Codes table (code \xB7 discount \xB7 conditions \xB7 expires \xB7 sources \xB7 confidence \xB7 tested)",
+    "## Merchant's own offers",
+    "## Other ways to save",
+    "## Sales calendar",
+    "## Expired, fake or unverifiable codes",
+    "## Sources"
+  ].join("\n")
+};
+
 // src/modes/registry.ts
 var MODES = {
   topic: topicMode,
   bug: bugMode,
   research: researchMode,
   learn: learnMode,
-  startup: startupMode
+  startup: startupMode,
+  deals: dealsMode
 };
 function getMode(name) {
   return MODES[name];
@@ -1124,8 +1161,8 @@ function enginesFromEnv(name, known) {
   const unknown = asked.filter((s) => !known.includes(s));
   if (unknown.length && !warnedEngineValues.has(`${name}=${raw}`)) {
     warnedEngineValues.add(`${name}=${raw}`);
-    const fallback = picked.length ? "" : " \u2014 using the full ladder";
-    process.emitWarning(`${envName(name)}: ignoring unknown rung ${unknown.map((u) => `"${u}"`).join(", ")} (known: ${known.join(", ")}, or none)${fallback}`);
+    const fallback2 = picked.length ? "" : " \u2014 using the full ladder";
+    process.emitWarning(`${envName(name)}: ignoring unknown rung ${unknown.map((u) => `"${u}"`).join(", ")} (known: ${known.join(", ")}, or none)${fallback2}`);
   }
   return picked.length ? picked : void 0;
 }
@@ -1583,7 +1620,7 @@ function wordText(xml, budget, styles) {
   const paragraphs = [];
   const tables = [];
   let inText = 0;
-  let fallback = 0;
+  let fallback2 = 0;
   let tabStops = 0;
   let moved = 0;
   const add = (p, s) => {
@@ -1597,9 +1634,9 @@ function wordText(xml, budget, styles) {
   walkXml(xml, {
     open(name, attrs) {
       const n = local(name);
-      if (n === "Fallback") fallback++;
+      if (n === "Fallback") fallback2++;
       else if (n === "tabs") tabStops++;
-      if (fallback) return;
+      if (fallback2) return;
       const p = paragraphs[paragraphs.length - 1];
       const table = tables[tables.length - 1];
       if (n === "moveFrom") moved++;
@@ -1620,11 +1657,11 @@ function wordText(xml, budget, styles) {
     close(name) {
       const n = local(name);
       if (n === "Fallback") {
-        fallback = Math.max(0, fallback - 1);
+        fallback2 = Math.max(0, fallback2 - 1);
         return;
       }
       if (n === "tabs") tabStops = Math.max(0, tabStops - 1);
-      if (fallback) return;
+      if (fallback2) return;
       const table = tables[tables.length - 1];
       if (n === "moveFrom") moved = Math.max(0, moved - 1);
       else if (n === "t") inText = Math.max(0, inText - 1);
@@ -1643,7 +1680,7 @@ function wordText(xml, budget, styles) {
       }
     },
     text(s) {
-      if (!fallback && inText) add(paragraphs[paragraphs.length - 1], s);
+      if (!fallback2 && inText) add(paragraphs[paragraphs.length - 1], s);
     }
   });
   return joinBlocks(blocks);
@@ -1728,9 +1765,9 @@ var EXCEL_EPOCH = Date.UTC(1899, 11, 30);
 function serialDate(serial, kind, date1904) {
   const days = date1904 ? serial + 1462 : serial < 60 ? serial + 1 : serial;
   if (!(serial >= 0 && days <= 2958466)) return void 0;
-  const iso = new Date(Math.round((EXCEL_EPOCH + days * DAY_MS) / 1e3) * 1e3).toISOString();
-  const time = iso.slice(11, iso.endsWith(":00.000Z") ? 16 : 19);
-  return kind === "date" ? iso.slice(0, 10) : kind === "time" ? time : `${iso.slice(0, 10)} ${time}`;
+  const iso2 = new Date(Math.round((EXCEL_EPOCH + days * DAY_MS) / 1e3) * 1e3).toISOString();
+  const time = iso2.slice(11, iso2.endsWith(":00.000Z") ? 16 : 19);
+  return kind === "date" ? iso2.slice(0, 10) : kind === "time" ? time : `${iso2.slice(0, 10)} ${time}`;
 }
 function sheetRows(xml, shared, styles, budget) {
   const table = { rows: [] };
@@ -1810,7 +1847,7 @@ function drawingText(xml, budget, onlyBody = false) {
   const tables = [];
   let para;
   let inText = 0;
-  let fallback = 0;
+  let fallback2 = 0;
   const add = (s) => {
     if (para !== void 0 && budget.take(s.length)) para += s;
   };
@@ -1823,8 +1860,8 @@ function drawingText(xml, budget, onlyBody = false) {
   walkXml(xml, {
     open(name, attrs) {
       const n = local(name);
-      if (n === "Fallback") fallback++;
-      if (fallback) return;
+      if (n === "Fallback") fallback2++;
+      if (fallback2) return;
       const table = tables[tables.length - 1];
       if (n === "sp") shapes.push({ kind: "other", lines: [] });
       else if (n === "ph" && shapes.length) {
@@ -1840,10 +1877,10 @@ function drawingText(xml, budget, onlyBody = false) {
     close(name) {
       const n = local(name);
       if (n === "Fallback") {
-        fallback = Math.max(0, fallback - 1);
+        fallback2 = Math.max(0, fallback2 - 1);
         return;
       }
-      if (fallback) return;
+      if (fallback2) return;
       const table = tables[tables.length - 1];
       if (n === "t") inText = Math.max(0, inText - 1);
       else if (n === "p" && name.startsWith("a:") && para !== void 0) {
@@ -1869,7 +1906,7 @@ ${markdownTable(done.rows, budget)}
       }
     },
     text(s) {
-      if (!fallback && inText) add(s);
+      if (!fallback2 && inText) add(s);
     }
   });
   return { title: titles.join(" ").trim(), text: lines.join("\n").trim() };
@@ -6145,7 +6182,231 @@ var NPM_TIME_TAIL_FIRST_BYTES = 256 * 1024;
 var NPM_TIME_TAIL_BYTES = 2 * 1024 * 1024;
 var ROBOTS_TTL_MS = 24 * 60 * 60 * 1e3;
 var UNREACHABLE_TTL_MS = 5 * 60 * 1e3;
+var OPENERS = /* @__PURE__ */ new Map();
+function openerRe(name) {
+  let re = OPENERS.get(name);
+  if (!re) OPENERS.set(name, re = new RegExp(`<${name}(?=[\\s/>])`, "gi"));
+  return re;
+}
+var withoutBom = (s) => s.charCodeAt(0) === 65279 ? s.slice(1) : s;
+function markupOnly(xml) {
+  if (!xml.includes("<![CDATA[") && !xml.includes("<!--")) return xml;
+  const re = /<!\[CDATA\[|<!--/g;
+  let out = "";
+  let pos = 0;
+  let m;
+  while (m = re.exec(xml)) {
+    const close = xml.indexOf(m[0] === "<!--" ? "-->" : "]]>", m.index + m[0].length);
+    const end = close < 0 ? xml.length : close + 3;
+    out += xml.slice(pos, m.index) + " ".repeat(end - m.index);
+    pos = re.lastIndex = end;
+  }
+  return out + xml.slice(pos);
+}
+function elements(xml, name, limit = Number.POSITIVE_INFINITY) {
+  const scan = markupOnly(xml);
+  const open = openerRe(name);
+  const close = closeTagRe(name);
+  const out = [];
+  open.lastIndex = 0;
+  let m;
+  while (out.length < limit && (m = open.exec(scan))) {
+    const tagEnd = scan.indexOf(">", open.lastIndex);
+    if (tagEnd < 0) break;
+    const attrs = xml.slice(open.lastIndex, tagEnd);
+    if (attrs.endsWith("/")) {
+      out.push({ attrs: attrs.slice(0, -1), inner: "", from: m.index, to: tagEnd + 1 });
+      open.lastIndex = tagEnd + 1;
+      continue;
+    }
+    close.lastIndex = tagEnd + 1;
+    const c = close.exec(scan);
+    if (!c) break;
+    out.push({ attrs, inner: xml.slice(tagEnd + 1, c.index), from: m.index, to: c.index + c[0].length });
+    open.lastIndex = c.index + c[0].length;
+  }
+  return out;
+}
+var OPEN_TAGS = /* @__PURE__ */ new Map();
+function openTags(html, name) {
+  let re = OPEN_TAGS.get(name);
+  if (!re) OPEN_TAGS.set(name, re = new RegExp(`<${name}(?=[\\s/>])[^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>`, "gi"));
+  return [...markupOnly(html).matchAll(re)].map((m) => m[0]);
+}
+function xmlText(raw) {
+  const re = /<!\[CDATA\[|<!--/g;
+  let out = "";
+  let pos = 0;
+  let m;
+  while (m = re.exec(raw)) {
+    const cdata = m[0] !== "<!--";
+    const close = raw.indexOf(cdata ? "]]>" : "-->", m.index + m[0].length);
+    if (close < 0) break;
+    out += decodeEntities(raw.slice(pos, m.index)) + (cdata ? raw.slice(m.index + 9, close) : "");
+    pos = re.lastIndex = close + 3;
+  }
+  return out + decodeEntities(raw.slice(pos));
+}
+function fragmentText2(html) {
+  const stripped = dropElements(html, ["script", "style"], RAW_TEXT_ELEMENTS).replace(TAG_RE, (tag2) => INLINE_TAGS.has(tagName(tag2)) ? "" : " ").replace(LOOSE_TAG_RE, " ");
+  return decodeEntities(stripped).replace(/\s+/g, " ").trim();
+}
+var collapse2 = (s) => s.replace(/\s+/g, " ").trim();
+function tagText(block, ...names) {
+  for (const name of names) {
+    const el = elements(block, name, 1)[0];
+    const text = el && collapse2(xmlText(el.inner));
+    if (text) return text;
+  }
+  return void 0;
+}
 var HTML_ELEMENTS = /* @__PURE__ */ new Set([...BLOCK_TAGS, ...INLINE_TAGS, "br", "hr", "img", "h1", "h2", "h3", "h4", "h5", "h6"]);
+function looksLikeHtml(text) {
+  if (!/<\/[A-Za-z]\w*>/.test(text) && !/&#?\w+;/.test(text)) return false;
+  for (const m of text.matchAll(/<\/?([A-Za-z]\w*)/g)) if (!HTML_ELEMENTS.has(m[1].toLowerCase())) return false;
+  return true;
+}
+function proseText(block, atom, ...names) {
+  for (const name of names) {
+    const el = elements(block, name, 1)[0];
+    if (!el) continue;
+    const declared = htmlAttributes(el.attrs).get("type")?.toLowerCase();
+    const decoded = declared === "xhtml" ? "" : xmlText(el.inner);
+    const type = declared ?? (atom ? "text" : name === "title" && !looksLikeHtml(decoded) ? "text" : "html");
+    const text = type === "xhtml" ? fragmentText2(el.inner) : type === "text" || type === "text/plain" ? collapse2(decoded) : fragmentText2(decoded);
+    if (text) return text;
+  }
+  return void 0;
+}
+var SUMMARY_MAX = 500;
+function clip2(s) {
+  return s && s.length > SUMMARY_MAX ? `${s.slice(0, SUMMARY_MAX).trimEnd()}\u2026` : s;
+}
+function resolveUrl2(href, base2) {
+  if (!base2) return href;
+  try {
+    return new URL(href, base2).href;
+  } catch {
+    return href;
+  }
+}
+function rootElement(xml) {
+  let i = xml.charCodeAt(0) === 65279 ? 1 : 0;
+  for (; ; ) {
+    while (i < xml.length && /\s/.test(xml[i])) i++;
+    if (xml.startsWith("<?", i)) {
+      const end = xml.indexOf("?>", i + 2);
+      if (end < 0) return void 0;
+      i = end + 2;
+    } else if (xml.startsWith("<!--", i)) {
+      const end = xml.indexOf("-->", i + 4);
+      if (end < 0) return void 0;
+      i = end + 3;
+    } else if (xml.startsWith("<!", i)) {
+      let end = xml.indexOf(">", i);
+      const subset = xml.indexOf("[", i);
+      if (subset >= 0 && subset < end) {
+        const closed = xml.indexOf("]", subset);
+        end = closed < 0 ? -1 : xml.indexOf(">", closed);
+      }
+      if (end < 0) return void 0;
+      if (/^<!doctype\s+html\b/i.test(xml.slice(i, end))) return "html";
+      i = end + 1;
+    } else {
+      return /^<([A-Za-z_][\w.:-]*)/.exec(xml.slice(i, i + 256))?.[1]?.toLowerCase();
+    }
+  }
+}
+var NOT_THE_PAGE = /* @__PURE__ */ new Set(["self", "edit", "replies", "enclosure", "via", "related", "license"]);
+function itemUrl(block, base2) {
+  const links = openTags(block, "link").map(htmlAttributes);
+  const hrefOf = (attrs) => {
+    const href2 = attrs.get("href");
+    return href2 ? decodeEntities(href2).trim() : void 0;
+  };
+  const rels = (attrs) => attrs.get("rel")?.toLowerCase().split(/\s+/) ?? [];
+  const pick = links.find((a) => hrefOf(a) && (rels(a).length === 0 || rels(a).includes("alternate"))) ?? links.find((a) => hrefOf(a) && !rels(a).some((r) => NOT_THE_PAGE.has(r))) ?? links.find((a) => hrefOf(a));
+  const href = pick && hrefOf(pick);
+  if (href) return resolveUrl2(href, base2);
+  const text = tagText(block, "link");
+  if (text) return resolveUrl2(text, base2);
+  const guid = elements(block, "guid", 1)[0];
+  if (!guid || htmlAttributes(guid.attrs).get("ispermalink")?.toLowerCase() === "false") return void 0;
+  const value = collapse2(xmlText(guid.inner));
+  return /^https?:\/\//i.test(value) ? value : void 0;
+}
+function xmlBase(attrs, above) {
+  const declared = htmlAttributes(attrs).get("xml:base");
+  return declared ? resolveUrl2(decodeEntities(declared).trim(), above) : above;
+}
+function parseFeed(xml, baseUrl) {
+  if (withoutBom(xml).trimStart().startsWith("{")) return parseJsonFeed(xml, baseUrl);
+  const root = rootElement(xml);
+  if (!root) return void 0;
+  const kind = root === "rss" || /(^|:)rdf$/.test(root) ? "rss" : /(^|:)feed$/.test(root) ? "atom" : void 0;
+  if (!kind) return void 0;
+  const atom = kind === "atom";
+  const rootTag = atom ? openTags(xml, root)[0] : void 0;
+  const feedBase = rootTag ? xmlBase(rootTag, baseUrl) : baseUrl;
+  const blocks = elements(xml, atom ? "entry" : "item");
+  const items = [];
+  for (const block of blocks) {
+    const inner = block.inner;
+    const it = {};
+    const title2 = proseText(inner, atom, "title");
+    if (title2) it.title = title2;
+    const url = itemUrl(inner, atom ? xmlBase(block.attrs, feedBase) : feedBase);
+    if (url) it.url = url;
+    const published = tagText(inner, "pubDate", "published", "updated", "dc:date");
+    if (published) it.published = published;
+    const summary = proseText(inner, atom, "description", "summary") ?? clip2(proseText(inner, atom, "content", "content:encoded"));
+    if (summary) it.summary = summary;
+    const id = tagText(inner, "guid", "id");
+    if (id) it.id = id;
+    if (it.title || it.url) items.push(it);
+  }
+  let head = "";
+  let last = 0;
+  for (const b of blocks) {
+    head += xml.slice(last, b.from);
+    last = b.to;
+  }
+  head += xml.slice(last);
+  const title = proseText(head, atom, "title");
+  return { kind, items, ...title ? { title } : {} };
+}
+function parseJsonFeed(text, baseUrl) {
+  let doc;
+  try {
+    doc = JSON.parse(withoutBom(text));
+  } catch {
+    return void 0;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return void 0;
+  const feed = doc;
+  if (typeof feed.version !== "string" || !feed.version.startsWith("https://jsonfeed.org/version/")) return void 0;
+  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const items = [];
+  for (const raw of Array.isArray(feed.items) ? feed.items : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const entry = raw;
+    const it = {};
+    const id = typeof entry.id === "number" ? String(entry.id) : str4(entry.id);
+    if (id) it.id = id;
+    const url = str4(entry.url) ?? str4(entry.external_url);
+    if (url) it.url = resolveUrl2(url, baseUrl);
+    const title2 = str4(entry.title);
+    if (title2) it.title = title2;
+    const published = str4(entry.date_published) ?? str4(entry.date_modified);
+    if (published) it.published = published;
+    const html = str4(entry.content_html);
+    const summary = str4(entry.summary) ?? clip2(str4(entry.content_text) ?? (html ? fragmentText2(html) : void 0));
+    if (summary) it.summary = summary;
+    if (it.title || it.url) items.push(it);
+  }
+  const title = str4(feed.title);
+  return { kind: "json", items, ...title ? { title } : {} };
+}
 var SITEMAP_MAX_BYTES = 50 * 1024 * 1024;
 var gunzipAsync = promisify(gunzip);
 var INLINE_TAG = /<\/?(?:a|abbr|b|bdi|bdo|cite|code|em|i|kbd|mark|q|s|samp|small|span|strong|sub|sup|time|u|var|wbr)\b[^<>]*>/gi;
@@ -6161,6 +6422,17 @@ function ddgRedirectTarget(href) {
     }
   }
   return href.startsWith("//") ? `https:${href}` : href;
+}
+function throttleReason(status, error) {
+  if (status === 429 || status === 503) return { throttled: true, why: `rate-limited (HTTP ${status})` };
+  if (status === 403) return { throttled: true, why: "blocked this client as automated traffic (HTTP 403)" };
+  if (status === 0) return { throttled: false, why: `unreachable (${error || "no response"})` };
+  return { throttled: false, why: `unreachable (status ${status})` };
+}
+function looksLikeChallenge(body) {
+  if (body.length > 4e4) return false;
+  const head = body.slice(0, 4e3).toLowerCase();
+  return /<title>[^<]*captcha/.test(head) || head.includes("anomaly-modal") || head.includes("/anomaly.js") || head.includes("captcha-wrap") || head.includes("sending automated queries");
 }
 var attrPattern = (name) => new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>=\`]+))`, "i");
 var HREF_ATTR = attrPattern("href");
@@ -6375,13 +6647,13 @@ function readAnyCopy(url, acceptLanguage, variant) {
   return readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, [variant]) ?? readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, sameFormat(variant));
 }
 function ttlMs() {
-  const fallback = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
+  const fallback2 = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
   const hours = env("CACHE_TTL_HOURS");
   if (hours !== void 0) {
     const h = Number(hours);
-    return Number.isFinite(h) ? Math.round(Math.max(0, h) * 36e5) : fallback;
+    return Number.isFinite(h) ? Math.round(Math.max(0, h) * 36e5) : fallback2;
   }
-  return envInt("CACHE_TTL_MS", fallback);
+  return envInt("CACHE_TTL_MS", fallback2);
 }
 var mode = { refresh: false, offline: false };
 function isCacheFresh(entry, now = Date.now()) {
@@ -6539,8 +6811,8 @@ function lookup(url, acceptLanguage, ns, variant) {
   const best = readAnyNamespace(url, acceptLanguage, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
   if (ns === VIDEO_CACHE_NS && !best) return readCache(url, acceptLanguage, "native", variant);
   if (ns !== "firecrawl") return best;
-  const fallback = readCache(url, acceptLanguage, "native", variant);
-  return fallback?.fallbackFrom === "firecrawl" && (!best || fallback.cachedAt > best.cachedAt) ? fallback : best;
+  const fallback2 = readCache(url, acceptLanguage, "native", variant);
+  return fallback2?.fallbackFrom === "firecrawl" && (!best || fallback2.cachedAt > best.cachedAt) ? fallback2 : best;
 }
 var ORPHAN_GRACE_MS = 10 * 60 * 1e3;
 var COMPOSE_YAML = `# Optional, fully-local, no-API-key stack for a semantic mode, web
@@ -7015,7 +7287,42 @@ function readJsonSafe(path) {
   }
 }
 var FINGERPRINT_MAX_BYTES = 64 * 1024 * 1024;
+var nextFree = /* @__PURE__ */ new Map();
+var holdUntil = /* @__PURE__ */ new Map();
 var MAX_TIMER_MS = 2 ** 31 - 1;
+async function sleepFor(ms, signal) {
+  for (let left = ms; left > 0 && !signal?.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal);
+}
+function hostDelayMs() {
+  return envInt("POLITE_DELAY_MS", 400, 0, 5e3);
+}
+function hostOf(url) {
+  try {
+    return new URL(url).host.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+async function awaitHostSlot(url, delayMs = hostDelayMs(), now = Date.now(), signal) {
+  const host = hostOf(url);
+  if (!host) return 0;
+  const spaced = delayMs > 0;
+  let waited = 0;
+  let t = now;
+  for (; ; ) {
+    const hold = holdUntil.get(host) ?? 0;
+    const free = spaced ? Math.max(nextFree.get(host) ?? 0, hold) : hold;
+    const wait = Math.max(0, free - t);
+    if (spaced) nextFree.set(host, Math.max(free, t) + delayMs);
+    if (wait === 0 || signal?.aborted) return waited;
+    const started = Date.now();
+    await sleepFor(wait, signal);
+    if (signal?.aborted) return waited + Math.min(wait, Math.max(0, Date.now() - started));
+    waited += wait;
+    t = Date.now();
+    if ((holdUntil.get(host) ?? 0) <= t) return waited;
+  }
+}
 var TOKEN_RE2 = /\[([^\]\n]+)\](?!\()/g;
 function stripHtmlComments(text) {
   return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
@@ -7550,7 +7857,7 @@ function createServer(adapter, opts = {}) {
   const serverInfo = { name: opts.serverName ?? brand().name, version: adapter.version };
   const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES2;
   let protocol = LATEST_PROTOCOL;
-  const active = /* @__PURE__ */ new Map();
+  const active2 = /* @__PURE__ */ new Map();
   const listTools = () => adapter.listTools(protocol).map((decl) => forRevision(decl, protocol));
   const prompts = () => adapter.prompts ?? [];
   async function handle(msg, send, handleOpts = {}) {
@@ -7566,7 +7873,7 @@ function createServer(adapter, opts = {}) {
     if (msg.id === void 0 || msg.id === null) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
-        if (typeof target === "string" || typeof target === "number") active.get(target)?.cancel();
+        if (typeof target === "string" || typeof target === "number") active2.get(target)?.cancel();
       }
       return;
     }
@@ -7580,7 +7887,7 @@ function createServer(adapter, opts = {}) {
         controller.abort();
       }
     };
-    active.set(id, request);
+    active2.set(id, request);
     const lost = handleOpts.signal;
     const onLost = () => request.cancel();
     if (lost?.aborted) request.cancel();
@@ -7681,7 +7988,7 @@ function createServer(adapter, opts = {}) {
     } catch (e) {
       reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
     } finally {
-      if (active.get(id) === request) active.delete(id);
+      if (active2.get(id) === request) active2.delete(id);
       lost?.removeEventListener("abort", onLost);
     }
   }
@@ -7775,7 +8082,7 @@ async function runStdioServer(adapter, opts = {}) {
     void p.finally(() => inFlight.delete(p));
     return p;
   };
-  let active = 0;
+  let active2 = 0;
   const waiting = [];
   const queued = /* @__PURE__ */ new Map();
   let negotiated;
@@ -7784,7 +8091,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active >= MAX_IN_FLIGHT) await new Promise((resolve7) => waiting.push(resolve7));
+      while (active2 >= MAX_IN_FLIGHT) await new Promise((resolve7) => waiting.push(resolve7));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -7792,11 +8099,11 @@ async function runStdioServer(adapter, opts = {}) {
       waiting.shift()?.();
       return;
     }
-    active++;
+    active2++;
     try {
       await server.handle(msg, reply, handleOpts);
     } finally {
-      active--;
+      active2--;
       waiting.shift()?.();
     }
   };
@@ -8123,6 +8430,11 @@ var BACKEND_TRUST = {
   firecrawl: 0,
   stackexchange: 0.72,
   hackernews: 0.5,
+  // Community threads (reddit, the Pepper deal sites): the route says "people said
+  // this", nothing more — spelled out at the neutral value so the omission reads
+  // as a decision.
+  reddit: 0.5,
+  pepper: 0.5,
   // A file the user named on the command line. No floor, for the same reason the
   // discovery engines get none: the route says the operator chose it, not that
   // the document is authoritative. Spelled out at the neutral value so the
@@ -9099,6 +9411,916 @@ var standardsBackend = async (ctx) => {
   return { backend: "standards", items, notes };
 };
 
+// src/backends/reddit.ts
+var SEARCH_URL = "https://www.reddit.com/search.rss";
+var COMMENT_THREADS = 3;
+var COMMENTS_PER_THREAD = 5;
+var THREAD_RE = /^https:\/\/(?:www\.|old\.)?reddit\.com\/r\/([^/]+)\/comments\/[a-z0-9]+\//i;
+function redditWindow(since, nowMs = Date.now()) {
+  const secs = sinceEpochSeconds(since);
+  if (secs === null) return "all";
+  const days = (nowMs / 1e3 - secs) / 86400;
+  if (days <= 1) return "day";
+  if (days <= 7) return "week";
+  if (days <= 31) return "month";
+  if (days <= 366) return "year";
+  return "all";
+}
+async function readFeed(url) {
+  await awaitHostSlot(url);
+  const r = await httpGet(url, { accept: "application/atom+xml", userAgent: browserUa(), retries: 0, timeoutMs: 12e3 });
+  if (!r.ok || !r.body) return { why: throttleReason(r.status, r.error).why };
+  const feed = parseFeed(r.body, url);
+  if (!feed) return { why: "answered with a page that is not a feed (a login or challenge wall)" };
+  return { feed };
+}
+function postText(summary) {
+  return (summary ?? "").replace(/\s*submitted by\s+\/u\/\S+[\s\S]*$/i, "").trim();
+}
+function fallback(q) {
+  return `Search it with your own WebSearch instead \u2014 \`site:reddit.com ${q}\` \u2014 and ingest the threads that matter.`;
+}
+var redditBackend = async (ctx) => {
+  const n = Math.max(3, Math.min(15, ctx.options.perSource));
+  const q = ctx.question;
+  const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&sort=relevance&t=${redditWindow(ctx.options.since)}&limit=${Math.min(25, n * 2)}`;
+  const { feed, why } = await readFeed(url);
+  if (!feed) return { backend: "reddit", items: [], notes: [`Reddit search ${why}. ${fallback(q)}`] };
+  const threads = feed.items.filter((it) => it.url && THREAD_RE.test(it.url)).slice(0, n);
+  const items = threads.map((it, i) => {
+    const title = it.title ?? it.url;
+    const body = postText(it.summary);
+    const published = it.published ? new Date(it.published) : void 0;
+    const valid = published && !Number.isNaN(published.getTime());
+    return {
+      url: it.url,
+      title,
+      backend: "reddit",
+      score: threads.length - i,
+      snippet: (body || title).slice(0, 360),
+      text: body ? `${title}
+
+${body}` : title,
+      meta: {
+        subreddit: THREAD_RE.exec(it.url)[1],
+        ...valid ? { published: published.toISOString(), year: published.getUTCFullYear() } : {}
+      }
+    };
+  });
+  const notes = [items.length ? `Reddit returned ${items.length} thread(s).` : "Reddit returned no threads."];
+  if (ctx.options.depth === "deep" && items.length) notes.push(await readComments(items.slice(0, COMMENT_THREADS)));
+  return { backend: "reddit", items, notes };
+};
+async function readComments(threads) {
+  let read = 0;
+  for (const [i, t] of threads.entries()) {
+    if (i > 0 && politeDelayMs()) await sleep(politeDelayMs());
+    const { feed, why } = await readFeed(`${t.url.replace(/\/?$/, "/")}.rss`);
+    if (!feed) return `Reddit comments: read ${read} of ${threads.length} thread(s), then the feed ${why} \u2014 stopped there. ${fallback(t.title)}`;
+    const comments = feed.items.filter((c) => c.url && c.url.replace(/\/$/, "") !== t.url.replace(/\/$/, "") && c.summary).slice(0, COMMENTS_PER_THREAD).map((c) => `- ${postText(c.summary).replace(/\s+/g, " ").slice(0, 400)}`);
+    if (comments.length) t.text = `${t.text}
+
+Top comments:
+${comments.join("\n")}`;
+    read++;
+  }
+  return `Reddit comments: read the top comments of ${read} thread(s).`;
+}
+
+// src/codes.ts
+import { join as join5 } from "path";
+var KEYWORDS = [
+  // en
+  "promotional code",
+  "promo code",
+  "discount code",
+  "coupon code",
+  "voucher code",
+  "offer code",
+  "referral code",
+  "coupon",
+  "voucher",
+  // fr
+  "code de r\xE9duction",
+  "code de reduction",
+  "code r\xE9duction",
+  "code reduction",
+  "bon de r\xE9duction",
+  "bon de reduction",
+  "code de remise",
+  "code remise",
+  "code avantage",
+  "codes promo",
+  "code promo",
+  // de
+  "gutscheincode",
+  "rabattcode",
+  "aktionscode",
+  "promocode",
+  "promo-code",
+  "gutschein",
+  // es / pt
+  "c\xF3digo promocional",
+  "codigo promocional",
+  "c\xF3digo de descuento",
+  "codigo de descuento",
+  "c\xF3digo de desconto",
+  "cup\xF3n",
+  "cupon",
+  "cupom",
+  // it
+  "codice promozionale",
+  "codice sconto",
+  "codice promo",
+  "buono sconto",
+  // nl
+  "kortingscode",
+  "kortingsbon",
+  "couponcode",
+  "actiecode",
+  // pl
+  "kod rabatowy",
+  "kod promocyjny",
+  "kupon rabatowy",
+  "kupon"
+].sort((a, b) => b.length - a.length);
+var LEAD = "(?:use|using|with|enter|apply|redeem|avec|gr\xE2ce au|grace au|via|utilise[rz]?|saisi(?:ssez|r)|entrez|tape[rz]?|mit|gib|nutze|usa(?:ndo)?|con|inserisci|met|gebruik|z|u\u017Cyj|com)(?:\\s+(?:the|le|la|dem|den|el|il|lo|de|o))?\\s+(?:code|codice|c\xF3digo|codigo|kod(?:em)?)";
+var STOP_TOKENS = /* @__PURE__ */ new Set([
+  "CODE",
+  "CODES",
+  "PROMO",
+  "PROMOS",
+  "COUPON",
+  "COUPONS",
+  "VOUCHER",
+  "VOUCHERS",
+  "DISCOUNT",
+  "OFFER",
+  "OFFERS",
+  "DEAL",
+  "DEALS",
+  "FREE",
+  "SALE",
+  "SALES",
+  "OFF",
+  "NEW",
+  "BLACK",
+  "FRIDAY",
+  "CYBER",
+  "MONDAY",
+  "PRIME",
+  "EXCLUSIVE",
+  "VALID",
+  "EXPIRED",
+  "VERIFIED",
+  "HTTP",
+  "HTTPS",
+  "HTML",
+  "JSON",
+  "NULL",
+  "NONE",
+  "TRUE",
+  "FALSE",
+  "WWW",
+  "EUR",
+  "EURO",
+  "EUROS",
+  "USD",
+  "GBP",
+  "PLN",
+  "CHF",
+  "TVA",
+  "VAT",
+  "TTC",
+  "SKU",
+  "EAN",
+  "ISBN",
+  "AVEC",
+  "POUR",
+  "SANS",
+  "DANS",
+  "VALABLE",
+  "VALIDE",
+  "GRATUIT",
+  "GRATUITE",
+  "OFFERT",
+  "OFFERTE",
+  "SOLDES",
+  "REDUCTION",
+  "REMISE",
+  "LIVRAISON",
+  "EXCLU",
+  "EXCLUSIF",
+  "RABATT",
+  "GUTSCHEIN",
+  "GUTSCHEINE",
+  "AKTION",
+  "GRATIS",
+  "CUPON",
+  "CUPONES",
+  "DESCUENTO",
+  "SCONTO",
+  "CODICE",
+  "KORTING",
+  "KOD",
+  "KUPON",
+  "RABATOWY"
+]);
+var MONTHS = {};
+var MONTH_NAMES = [
+  ["january", "jan", "janvier", "janv", "januar", "j\xE4nner", "enero", "ene", "gennaio", "gen", "januari", "stycznia", "stycze\u0144", "janeiro"],
+  ["february", "feb", "f\xE9vrier", "fevrier", "f\xE9vr", "fevr", "februar", "febrero", "febbraio", "februari", "lutego", "luty", "fevereiro"],
+  ["march", "mar", "mars", "m\xE4rz", "maerz", "marz", "marzo", "maart", "marca", "marzec", "mar\xE7o", "marco"],
+  ["april", "apr", "avril", "avr", "abril", "abr", "aprile", "kwietnia", "kwiecie\u0144"],
+  ["may", "mai", "mayo", "maggio", "mag", "mei", "maja", "maj", "maio"],
+  ["june", "jun", "juin", "juni", "junio", "giugno", "giu", "czerwca", "czerwiec", "junho"],
+  ["july", "jul", "juillet", "juil", "juli", "julio", "luglio", "lug", "lipca", "lipiec", "julho"],
+  ["august", "aug", "ao\xFBt", "aout", "agosto", "ago", "augustus", "sierpnia", "sierpie\u0144"],
+  ["september", "sep", "sept", "septembre", "septiembre", "settembre", "set", "wrze\u015Bnia", "wrzesnia", "wrzesie\u0144", "setembro"],
+  ["october", "oct", "octobre", "oktober", "okt", "octubre", "ottobre", "ott", "pa\u017Adziernika", "pazdziernika", "pa\u017Adziernik", "outubro", "out"],
+  ["november", "nov", "novembre", "noviembre", "listopada", "listopad", "novembro"],
+  ["december", "dec", "d\xE9cembre", "decembre", "d\xE9c", "dezember", "dez", "diciembre", "dic", "dicembre", "grudnia", "grudzie\u0144", "dezembro"]
+];
+MONTH_NAMES.forEach((names, i) => {
+  for (const n of names) MONTHS[n] = i + 1;
+});
+for (const n of Object.keys(MONTHS)) if (n.length >= 4) STOP_TOKENS.add(deaccent(n).toUpperCase());
+var MIN_MARKER = "(?:d\xE8s|des|\xE0 partir de|a partir de|minimum(?:\\s+(?:d'achat|d\u2019achat|de commande|order|spend|purchase))?(?:\\s+(?:de|of))?|min\\.?|on orders? (?:over|of|above)|orders? (?:over|above)|when you spend|spend(?:\\s+(?:over|at least))?|over|ab(?:\\s+einem\\s+(?:Einkauf|Bestellwert)\\s+von)?|Mindestbestellwert(?:\\s+von)?|desde|compra m\xEDnima de|da|con una spesa minima di|vanaf|bij besteding van|od|przy zakupach (?:za|od)|powy\u017Cej)";
+var EXP_MARKER = "(?:expires?|expiring|expiry|exp\\.|valid (?:until|till|through|thru|to)|ends?|until|till|jusqu['\u2019]?(?:au|\xE0)|valable jusqu['\u2019]?(?:au|\xE0)|expire le|fin le|se termine le|g\xFCltig bis(?: zum)?|bis zum|bis|endet am|v\xE1lido hasta(?: el)?|valido hasta(?: el)?|hasta el|hasta|valido fino al|fino al|scade il|geldig (?:t\\/m|tot(?: en met)?)|tot en met|t\\/m|wa\u017Cny do|wazny do|do)";
+var foldText = (s) => deaccent(s.toLowerCase()).replace(/[^a-z0-9]/g, "");
+var BOUNDARY_BEFORE = "(?<![\\p{L}\\p{N}_])";
+var KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRegExp).join("|")})(?:s|e|n)?(?![\\p{L}\\p{N}])`, "giu");
+var HAS_KEYWORD = new RegExp(KEYWORD_RE.source, "iu");
+var LEAD_RE = new RegExp(`${BOUNDARY_BEFORE}${LEAD}(?![\\p{L}\\p{N}])|${BOUNDARY_BEFORE}code\\s*[:\uFF1A]`, "giu");
+var STRONG_RE = /^[\s:：=\-–—>»«"“”„'‘’*`([]{0,6}([A-Za-z0-9][A-Za-z0-9_-]{3,19})(?![A-Za-z0-9_-])/u;
+var QUOTED_RE = /(?:\*\*|__|["“”«»„'‘’`])\s*([A-Za-z0-9][A-Za-z0-9_-]{3,19})\s*(?:\*\*|__|["“”«»'‘’`])/gu;
+var WEAK_WINDOW = 60;
+var REPEAT_WINDOW = 80;
+var TOKEN_SHAPE = /^[A-Z0-9][A-Z0-9_-]{3,19}$/;
+function acceptToken(raw, merchant, structured = false) {
+  const token = raw.trim();
+  if (!structured && /[a-z]/.test(token) && !/\d/.test(token)) return void 0;
+  const up = token.toUpperCase();
+  if (!TOKEN_SHAPE.test(up) || !/[A-Z]/.test(up)) return void 0;
+  if (/\d{6,}/.test(up)) return void 0;
+  if (up.length >= 12 && /^[0-9A-F]+$/.test(up)) return void 0;
+  if (STOP_TOKENS.has(up)) return void 0;
+  if (merchant) {
+    const m = deaccent(merchant).toUpperCase();
+    if (up === m.replace(/[^A-Z0-9]/g, "")) return void 0;
+    if (m.split(/[^A-Z0-9]+/).some((w) => w.length >= 4 && w === up)) return void 0;
+  }
+  return up;
+}
+function cleanCode(raw, merchant) {
+  return raw ? acceptToken(raw, merchant, true) : void 0;
+}
+var MERCHANT_NOISE = /* @__PURE__ */ new Set([
+  ...KEYWORDS.flatMap((k) => k.split(/[\s-]+/)),
+  "code",
+  "codes",
+  "promo",
+  "promos",
+  "coupons",
+  "vouchers",
+  "discount",
+  "discounts",
+  "deal",
+  "deals",
+  "offer",
+  "offers",
+  "sale",
+  "sales",
+  "reduction",
+  "r\xE9duction",
+  "r\xE9ductions",
+  "remise",
+  "bons",
+  "plans",
+  "gutscheine",
+  "rabatt",
+  "descuento",
+  "descuentos",
+  "sconto",
+  "korting",
+  "rabat",
+  "de",
+  "du",
+  "des",
+  "le",
+  "les",
+  "pour",
+  "chez",
+  "sur",
+  "en",
+  "au",
+  "for",
+  "the",
+  "at",
+  "on",
+  "in",
+  "of",
+  "best",
+  "latest",
+  "working",
+  "valid",
+  "bei",
+  "f\xFCr",
+  "fur",
+  "von",
+  "para",
+  "en",
+  "per",
+  "voor",
+  "na",
+  "dla",
+  "w",
+  "and",
+  "et",
+  "und",
+  "y",
+  "uk",
+  "us",
+  "usa",
+  "fr",
+  "france",
+  "de",
+  "deutschland",
+  "es",
+  "espana",
+  "espa\xF1a",
+  "it",
+  "italia",
+  "nl",
+  "pl"
+]);
+function merchantOf(question) {
+  const host = /(?:https?:\/\/)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?=[/\s?#]|$)/i.exec(question.trim())?.[1];
+  if (host) {
+    const labels = host.toLowerCase().replace(/^www\d?\./, "").split(".");
+    const n = labels.length;
+    const secondLevel = n >= 3 && /^(co|com|org|net|gov|ac|edu)$/.test(labels[n - 2]) && labels[n - 1].length === 2;
+    const name = secondLevel ? labels[n - 3] : labels[n - 2];
+    if (name) return name;
+  }
+  const words = question.toLowerCase().split(/[^\p{L}\p{N}'’&-]+/u).filter((w) => w && !MERCHANT_NOISE.has(w) && !(w in MONTHS) && !/^\d+$/.test(w));
+  return words.length ? words.join(" ") : void 0;
+}
+var CURRENCY = {
+  "\u20AC": { sym: "\u20AC", prefix: false },
+  eur: { sym: "\u20AC", prefix: false },
+  euro: { sym: "\u20AC", prefix: false },
+  euros: { sym: "\u20AC", prefix: false },
+  "\xA3": { sym: "\xA3", prefix: true },
+  gbp: { sym: "\xA3", prefix: true },
+  $: { sym: "$", prefix: true },
+  usd: { sym: "$", prefix: true },
+  z\u0142: { sym: "z\u0142", prefix: false },
+  zl: { sym: "z\u0142", prefix: false },
+  pln: { sym: "z\u0142", prefix: false },
+  chf: { sym: "CHF", prefix: false }
+};
+var NUM = "(\\d{1,5}(?:[.,]\\d{1,2})?)";
+var AMOUNT = `(?:([\u20AC\xA3$])\\s?${NUM}|${NUM}\\s?(\u20AC|\xA3|\\$|z\u0142|zl|chf|eur|euros?|gbp|usd|pln)(?![\\p{L}]))`;
+var AMOUNT_RE = new RegExp(AMOUNT, "giu");
+var MIN_RE = new RegExp(`${BOUNDARY_BEFORE}${MIN_MARKER}\\s*${AMOUNT}`, "giu");
+var PERCENT_RE = /(?<![\d.,])(\d{1,2}(?:[.,]\d)?)\s?%/g;
+var FREE_SHIPPING_RE = /livraison (?:offerte|gratuite)|frais de port (?:offerts|gratuits)|free (?:shipping|delivery|postage)|versandkostenfrei|kostenlose[rn]? versand|gratis versand|env[ií]o gratis|envio gratuito|spedizione gratuita|gratis verzending|darmowa dostawa/i;
+function formatAmount(m) {
+  const sym = (m[1] ?? m[4] ?? "").toLowerCase();
+  const num5 = (m[2] ?? m[3] ?? "").replace(/[.,]00$/, "");
+  const c = CURRENCY[sym] ?? { sym, prefix: false };
+  return c.prefix ? `${c.sym}${num5}` : `${num5} ${c.sym}`;
+}
+function readDiscount(window) {
+  const out = {};
+  const minSpans = [];
+  for (const m of window.matchAll(MIN_RE)) {
+    const amount = new RegExp(AMOUNT, "iu").exec(m[0]);
+    if (!amount) continue;
+    out.minSpend ??= formatAmount(amount);
+    minSpans.push([m.index, m.index + m[0].length]);
+  }
+  const insideMin = (i) => minSpans.some(([a, b]) => i >= a && i < b);
+  const hits = [];
+  for (const m of window.matchAll(PERCENT_RE)) if (!insideMin(m.index)) hits.push({ at: m.index, value: `${m[1].replace(",", ".")}%` });
+  for (const m of window.matchAll(AMOUNT_RE)) if (!insideMin(m.index)) hits.push({ at: m.index, value: formatAmount(m) });
+  hits.sort((a, b) => a.at - b.at);
+  if (hits[0]) out.discount = hits[0].value;
+  else if (FREE_SHIPPING_RE.test(window)) out.discount = "free shipping";
+  return out;
+}
+var MONTH_WORD = `(${Object.keys(MONTHS).sort((a, b) => b.length - a.length).map(escapeRegExp).join("|")})`;
+var DATE_ISO = /^(\d{4})-(\d{1,2})-(\d{1,2})/;
+var DATE_NUM = /^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{4}|\d{2}))?(?!\d)/;
+var DATE_DM = new RegExp(`^(\\d{1,2})(?:er|st|nd|rd|th|\\.)?\\s+(?:de\\s+)?${MONTH_WORD}\\.?(?:,?\\s+(?:de\\s+)?(\\d{4}))?(?![\\p{L}])`, "iu");
+var DATE_MD = new RegExp(`^${MONTH_WORD}\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?(?![\\p{L}\\d])`, "iu");
+var EXP_RE = new RegExp(`${BOUNDARY_BEFORE}${EXP_MARKER}\\s*(?:le\\s+|the\\s+|am\\s+|el\\s+|il\\s+|on\\s+)?`, "giu");
+function iso(y, m, d) {
+  if (m < 1 || m > 12 || d < 1 || d > 31) return void 0;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  if (dt.getUTCMonth() !== m - 1) return void 0;
+  return dt.toISOString().slice(0, 10);
+}
+function parseDateAt(s, opts) {
+  const nowYear = Number(opts.now.slice(0, 4));
+  const year = (y) => !y ? nowYear : y.length === 2 ? 2e3 + Number(y) : Number(y);
+  const us = (opts.region ?? "").toLowerCase() === "us" || /-us$/i.test(opts.lang ?? "");
+  let m = DATE_ISO.exec(s);
+  if (m) return iso(Number(m[1]), Number(m[2]), Number(m[3]));
+  m = DATE_NUM.exec(s);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    return us ? iso(year(m[3]), a, b) : iso(year(m[3]), b, a);
+  }
+  m = DATE_DM.exec(s);
+  if (m) return iso(year(m[3]), MONTHS[m[2].toLowerCase()] ?? 0, Number(m[1]));
+  m = DATE_MD.exec(s);
+  if (m) return iso(year(m[3]), MONTHS[m[1].toLowerCase()] ?? 0, Number(m[2]));
+  return void 0;
+}
+function readExpiry(window, opts) {
+  for (const m of window.matchAll(EXP_RE)) {
+    const date = parseDateAt(window.slice(m.index + m[0].length), opts);
+    if (date) return date;
+  }
+  return void 0;
+}
+var SENTENCE_END2 = /[.!?;](?=\s+[\p{Lu}\d"“«(*]|\s*$)|\n/gu;
+function sentenceAround(text, at) {
+  let start = 0;
+  let end = text.length;
+  let nextEnd = text.length;
+  for (const m of text.matchAll(SENTENCE_END2)) {
+    const stop = m.index + 1;
+    if (stop <= at) start = stop;
+    else if (end === text.length) end = stop;
+    else {
+      nextEnd = stop;
+      break;
+    }
+  }
+  return { here: text.slice(Math.max(start, at - 200), Math.min(end, at + 240)), next: text.slice(end, Math.min(nextEnd, end + 240)) };
+}
+function mergeMention(a, b) {
+  const out = { ...a };
+  if (b.via === "structured") out.via = "structured";
+  if (b.strength === "strong") out.strength = "strong";
+  for (const k of ["discount", "minSpend", "expires", "context"]) if (out[k] === void 0 && b[k] !== void 0) out[k] = b[k];
+  if (b.expired) out.expired = true;
+  return out;
+}
+function extractCodes(text, opts) {
+  if (!text) return [];
+  const leads = [...text.matchAll(LEAD_RE)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const anchors = leads.map((l) => ({ end: l.end, applied: true }));
+  for (const m of text.matchAll(KEYWORD_RE)) {
+    const [start, end] = [m.index, m.index + m[0].length];
+    anchors.push({ end, applied: leads.some((l) => l.end > start && l.end <= end) });
+  }
+  if (!anchors.length) return [];
+  anchors.sort((a, b) => a.end - b.end);
+  const found = [];
+  for (const { end, applied } of anchors) {
+    const strong = STRONG_RE.exec(text.slice(end, end + 40));
+    const bareWord = !!strong && !applied && !/\d/.test(strong[1]) && !/\S/.test(strong[0].slice(0, -strong[1].length));
+    const code = strong && !bareWord ? acceptToken(strong[1], opts.merchant) : void 0;
+    if (code) {
+      found.push({ code, at: end + strong.index + strong[0].length - strong[1].length, strength: "strong" });
+      continue;
+    }
+    const window = text.slice(end, end + WEAK_WINDOW);
+    for (const q of window.matchAll(QUOTED_RE)) {
+      const weak = acceptToken(q[1], opts.merchant);
+      if (weak) {
+        found.push({ code: weak, at: end + q.index + q[0].indexOf(q[1]), strength: "weak" });
+        break;
+      }
+    }
+  }
+  const inWindow = (at) => anchors.some((a) => at >= a.end && at - a.end <= REPEAT_WINDOW);
+  const byCode = /* @__PURE__ */ new Map();
+  for (const f of found) {
+    const outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter(
+      (m) => !inWindow(m.index)
+    ).length;
+    if (outside >= 3) continue;
+    const { here, next } = sentenceAround(text, f.at);
+    const tail = next && !HAS_KEYWORD.test(next) ? next : "";
+    const terms = readDiscount(here);
+    const discount = terms.discount ?? (tail ? readDiscount(tail).discount : void 0);
+    const expires = readExpiry(here, opts) ?? (tail ? readExpiry(tail, opts) : void 0);
+    const mention = {
+      code: f.code,
+      via: "text",
+      strength: f.strength,
+      ...discount ? { discount } : {},
+      ...terms.minSpend ? { minSpend: terms.minSpend } : {},
+      ...expires ? { expires } : {},
+      context: here.replace(/\s+/g, " ").trim().slice(0, 160)
+    };
+    const prev = byCode.get(f.code);
+    byCode.set(
+      f.code,
+      prev ? prev.strength === "weak" && mention.strength === "strong" ? mergeMention(mention, prev) : mergeMention(prev, mention) : mention
+    );
+  }
+  return [...byCode.values()];
+}
+function annotateCodes(text, meta, opts) {
+  if (opts.merchant && !foldText(text).includes(foldText(opts.merchant))) return meta;
+  const extracted = extractCodes(text, opts);
+  if (!extracted.length) return meta;
+  const merged = /* @__PURE__ */ new Map();
+  for (const c of meta?.codes ?? []) merged.set(c.code, c);
+  for (const c of extracted) {
+    const prev = merged.get(c.code);
+    merged.set(c.code, prev ? mergeMention(prev, c) : c);
+  }
+  return { ...meta, codes: [...merged.values()] };
+}
+function idNum(id) {
+  return Number(/^S(\d+)$/.exec(id)?.[1] ?? 0);
+}
+function consensus(values) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const v of values) if (v) counts.set(v, (counts.get(v) ?? 0) + 1);
+  let best;
+  for (const [v, n] of counts) if (best === void 0 || n > counts.get(best)) best = v;
+  return best;
+}
+function aggregateCodes(sources, manifest) {
+  const today = manifest.builtAt.slice(0, 10);
+  const groups = /* @__PURE__ */ new Map();
+  for (const s of [...sources].sort((a, b) => idNum(a.id) - idNum(b.id))) {
+    for (const mention of s.meta?.codes ?? []) {
+      const g = groups.get(mention.code) ?? [];
+      g.push({ source: s, mention });
+      groups.set(mention.code, g);
+    }
+  }
+  const all = [];
+  for (const [code, g] of groups) {
+    const ms = g.map((x) => x.mention);
+    const structured = ms.some((m) => m.via === "structured");
+    const strength = ms.some((m) => m.strength === "strong") ? "strong" : "weak";
+    const domains = new Set(g.map((x) => x.source.domain)).size;
+    const expires = ms.map((m) => m.expires).filter((d) => !!d).sort().at(-1);
+    const future = !!expires && expires >= today;
+    const isExpired = !!expires && expires < today || ms.some((m) => m.expired) && !future;
+    const discount = consensus(ms.map((m) => m.discount));
+    const minSpend = consensus(ms.map((m) => m.minSpend));
+    const score = 3 * Number(structured) + 2 * Math.min(domains, 4) + Number(strength === "strong") + Number(!!discount) + Number(future) - 5 * Number(isExpired);
+    all.push({
+      code,
+      ...discount ? { discount } : {},
+      ...minSpend ? { minSpend } : {},
+      ...expires ? { expires } : {},
+      sources: [...new Set(g.map((x) => x.source.id))],
+      domains,
+      structured,
+      strength,
+      score,
+      confidence: score >= 8 ? "high" : score >= 5 ? "medium" : "low",
+      isExpired
+    });
+  }
+  all.sort((a, b) => b.score - a.score || b.domains - a.domains || a.code.localeCompare(b.code));
+  const strip = ({ isExpired: _, ...c }) => c;
+  return { candidates: all.filter((c) => !c.isExpired).map(strip), expired: all.filter((c) => c.isExpired).map(strip) };
+}
+function codesOptions(manifest) {
+  return { lang: manifest.lang, region: manifest.region, now: manifest.builtAt, merchant: merchantOf(manifest.question) };
+}
+var TABLE_ROWS = 15;
+function writeCodes(dir, sources, manifest) {
+  const { candidates, expired } = aggregateCodes(sources, manifest);
+  const merchant = merchantOf(manifest.question);
+  const file = {
+    ...merchant ? { merchant } : {},
+    ...manifest.region ? { region: manifest.region } : {},
+    builtAt: manifest.builtAt,
+    candidates,
+    expired
+  };
+  writeArtifact(join5(dir, "codes.json"), JSON.stringify(file, null, 2));
+  const out = [
+    "## Candidate codes (extracted \u2014 UNVERIFIED)",
+    "",
+    "> Machine-extracted from the sources below and **never tested**. Before a code goes in the report, confirm it in the `[S#]` it cites \u2014 the page must show that exact code for this merchant. **Never invent, guess or complete a code**, and never present one as working unless it was tried. Full list, with expired codes: `codes.json`.",
+    ""
+  ];
+  if (!candidates.length) {
+    out.push(
+      `_No candidate code was extracted from these sources${expired.length ? ` (${expired.length} expired one(s) are listed in codes.json)` : ""}. Search the merchant's own offers and the deal sites yourself before concluding there is none._`
+    );
+    return out;
+  }
+  out.push("| Code | Discount | Conditions | Expires | Sources | Confidence |");
+  out.push("|---|---|---|---|---|---|");
+  for (const c of candidates.slice(0, TABLE_ROWS)) {
+    out.push(
+      `| \`${c.code}\` | ${c.discount ?? "\u2014"} | ${c.minSpend ? `min. ${c.minSpend}` : "\u2014"} | ${c.expires ?? "\u2014"} | ${c.sources.map((s) => `[${s}]`).join("")} | ${c.confidence} |`
+    );
+  }
+  const more = candidates.length - TABLE_ROWS;
+  if (more > 0) out.push("", `_${more} more candidate(s) in codes.json._`);
+  if (expired.length) out.push("", `_${expired.length} expired code(s) left out of this table \u2014 see \`expired\` in codes.json._`);
+  return out;
+}
+
+// src/backends/pepper.ts
+var PEPPER_SITES = {
+  fr: { host: "www.dealabs.com", search: "/search?q={q}", vouchers: "/codes-promo/{slug}" },
+  gb: { host: "www.hotukdeals.com", search: "/search?q={q}", vouchers: "/vouchers/{slug}" },
+  de: { host: "www.mydealz.de", search: "/search?q={q}", vouchers: "/gutscheine/{slug}" },
+  at: { host: "www.preisjaeger.at", search: "/search?q={q}" },
+  es: { host: "www.chollometro.com", search: "/search?q={q}", vouchers: "/cupones/{slug}" },
+  pl: { host: "www.pepper.pl", search: "/search?q={q}", vouchers: "/kupony/{slug}" },
+  nl: { host: "nl.pepper.com", search: "/search?q={q}", vouchers: "/kortingscode/{slug}" }
+};
+var REGION_ALIASES2 = { uk: "gb" };
+function pepperSiteFor(lang, region) {
+  const [base2, sub] = lang.toLowerCase().split(/[-_]/);
+  const key = (region ?? sub ?? (base2 === "en" ? "" : base2) ?? "").toLowerCase();
+  const r = REGION_ALIASES2[key] ?? key;
+  const site = PEPPER_SITES[r];
+  return site ? { region: r, site } : void 0;
+}
+function sliceJsonObject(text, start) {
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === "\\") i++;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return text.slice(start, i + 1);
+  }
+  return void 0;
+}
+function tryJson(s) {
+  if (!s) return void 0;
+  try {
+    return JSON.parse(s);
+  } catch {
+    return void 0;
+  }
+}
+function embeddedJson(html) {
+  const out = [];
+  for (const m of html.matchAll(/\sdata-vue[23]=(?:'([^']*)'|"([^"]*)")/g)) out.push(tryJson(decodeEntities(m[1] ?? m[2] ?? "")));
+  for (const m of html.matchAll(/<script\b[^>]*type=["']application\/(?:ld\+)?json["'][^>]*>([\s\S]*?)<\/script>/gi)) out.push(tryJson(m[1].trim()));
+  const state = /__INITIAL_STATE__\s*=\s*\{/.exec(html);
+  if (state) out.push(tryJson(sliceJsonObject(html, state.index + state[0].length - 1)));
+  return out.filter((x) => x !== void 0);
+}
+var isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function collectThreads(node, out, depth = 0) {
+  if (depth > 40) return;
+  if (Array.isArray(node)) for (const v of node) collectThreads(v, out, depth + 1);
+  else if (isObj(node)) {
+    if ((typeof node.threadId === "string" || typeof node.threadId === "number") && typeof node.title === "string") out.push(node);
+    for (const v of Object.values(node)) collectThreads(v, out, depth + 1);
+  }
+}
+function regexThreads(html) {
+  const text = html.replace(/&quot;/g, '"');
+  const str4 = (win, key) => {
+    const m = new RegExp(`"${key}":"((?:[^"\\\\]|\\\\.)*)"`).exec(win);
+    return m ? tryJson(`"${m[1]}"`) : void 0;
+  };
+  const out = [];
+  for (const m of text.matchAll(/"threadId":"?(\d+)"?/g)) {
+    const win = text.slice(m.index, m.index + 4096);
+    const title = str4(win, "title");
+    if (!title) continue;
+    out.push({
+      threadId: m[1],
+      title,
+      voucherCode: str4(win, "voucherCode"),
+      isExpired: /"isExpired":true/.test(win),
+      merchant: { merchantName: str4(win, "merchantName"), merchantUrlName: str4(win, "merchantUrlName") }
+    });
+  }
+  return out;
+}
+function threadLinks(html, host) {
+  const links = /* @__PURE__ */ new Map();
+  const re = new RegExp(`href="(https://${host.replace(/\./g, "\\.")}/(?!visit/|share-deal/)[^"?#]+?-(\\d{4,}))"`, "g");
+  for (const m of html.matchAll(re)) if (!links.has(m[2])) links.set(m[2], m[1]);
+  return links;
+}
+function cardText(html, id) {
+  const m = new RegExp(`<article\\b[^>]*id="thread_${id}"[\\s\\S]*?</article>`).exec(html);
+  if (!m) return void 0;
+  const t = htmlToText(m[0].replace(/<script[\s\S]*?<\/script>/gi, "")).replace(/\s+/g, " ").trim();
+  return t ? t.slice(0, 1200) : void 0;
+}
+var num2 = (v) => typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && v.trim() && Number.isFinite(Number(v)) ? Number(v) : void 0;
+var epochIso = (v) => {
+  const n = num2(isObj(v) ? v.timestamp : v);
+  return n && n > 0 ? new Date(n * 1e3).toISOString() : void 0;
+};
+function parsePepperThreads(html, host) {
+  const raw = [];
+  for (const blob of embeddedJson(html)) collectThreads(blob, raw);
+  if (!raw.length) raw.push(...regexThreads(html));
+  const links = threadLinks(html, host);
+  const byId = /* @__PURE__ */ new Map();
+  for (const t of raw) {
+    const id = String(t.threadId);
+    if (byId.has(id)) continue;
+    const merchant = isObj(t.merchant) ? t.merchant : {};
+    const shipping = isObj(t.shipping) ? t.shipping : {};
+    const pct = num2(t.percentage);
+    const published = epochIso(t.publishedAt);
+    const expires = epochIso(t.endDate)?.slice(0, 10);
+    const code = typeof t.voucherCode === "string" ? t.voucherCode.trim() : "";
+    byId.set(id, {
+      id,
+      title: decodeEntities(String(t.title)),
+      url: links.get(id) ?? `https://${host}/share-deal/${id}`,
+      ...typeof merchant.merchantName === "string" ? { merchant: merchant.merchantName } : {},
+      ...typeof merchant.merchantUrlName === "string" ? { merchantSlug: merchant.merchantUrlName } : {},
+      ...code ? { code } : {},
+      ...num2(t.price) ? { price: num2(t.price) } : {},
+      ...pct ? { discount: `${pct}%` } : {},
+      ...shipping.isFree === 1 || shipping.isFree === true ? { freeShipping: true } : {},
+      expired: t.isExpired === true || String(t.status ?? "").toLowerCase() === "expired",
+      ...published ? { published } : {},
+      ...expires ? { expires } : {},
+      ...cardText(html, id) ? { description: cardText(html, id) } : {}
+    });
+  }
+  return [...byId.values()];
+}
+function flightText(html) {
+  const parts = [...html.matchAll(/self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g)].map((m) => tryJson(m[1]));
+  const text = parts.filter((p) => typeof p === "string").join("");
+  return text || html.replace(/\\"/g, '"');
+}
+function parsePepperVouchers(html) {
+  const text = flightText(html);
+  const listings = [...text.matchAll(/"(\w*Offers)":\{/g)].map((m) => ({ at: m.index, expired: /expired/i.test(m[1]) }));
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(/"voucher":\{/g)) {
+    const v = tryJson(sliceJsonObject(text, m.index + m[0].length - 1));
+    if (!isObj(v) || typeof v.code !== "string" || !v.code.trim()) continue;
+    const listing = listings.filter((l) => l.at < m.index).at(-1);
+    const expired = !!listing?.expired;
+    const key = `${v.code}|${expired}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const end = typeof v.endTime === "string" ? v.endTime.slice(0, 10) : void 0;
+    out.push({
+      code: v.code.trim(),
+      title: typeof v.title === "string" ? v.title : v.code,
+      ...typeof v.termsAndConditions === "string" ? { terms: v.termsAndConditions } : {},
+      ...typeof v.caption1 === "string" && /\d/.test(v.caption1) ? { discount: v.caption1.replace(/\s+/g, "") } : {},
+      ...end && /^\d{4}-\d{2}-\d{2}$/.test(end) ? { expires: end } : {},
+      expired
+    });
+  }
+  return out;
+}
+var fold = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+function aboutMerchant(t, merchant) {
+  if (!merchant) return true;
+  const m = fold(merchant);
+  return [t.merchant, t.merchantSlug, t.title].some((v) => v && fold(v).includes(m));
+}
+function threadSource(t, i, total, merchant) {
+  const code = t.code ? cleanCode(t.code, merchant) : void 0;
+  const facts = [
+    t.merchant && `Merchant: ${t.merchant}`,
+    t.price !== void 0 && `Price: ${t.price}`,
+    code && `Code: ${code}`,
+    t.discount && `Discount: ${t.discount}`,
+    t.freeShipping && "Free shipping",
+    t.expires && `Ends: ${t.expires}`,
+    t.expired && "Status: expired"
+  ].filter(Boolean);
+  const mention = code ? {
+    code,
+    via: "structured",
+    strength: "strong",
+    ...t.discount ? { discount: t.discount } : t.freeShipping ? { discount: "free shipping" } : {},
+    ...t.expires ? { expires: t.expires } : {},
+    ...t.expired ? { expired: true } : {}
+  } : void 0;
+  const year = t.published ? new Date(t.published).getUTCFullYear() : void 0;
+  return {
+    url: t.url,
+    title: t.expired ? `${t.title} (expired)` : t.title,
+    backend: "pepper",
+    // Live threads first, expired ones kept below them: an expired code is still evidence.
+    score: (t.expired ? 0 : total) + total - i,
+    snippet: [facts.join(" \xB7 "), t.description].filter(Boolean).join(" \u2014 ").slice(0, 360),
+    text: [t.title, facts.join(" \xB7 "), t.description].filter(Boolean).join("\n\n"),
+    meta: {
+      ...t.published ? { published: t.published, year } : {},
+      ...mention ? { codes: [mention] } : {}
+    }
+  };
+}
+function voucherSource(url, title, vouchers, merchant) {
+  const codes = [];
+  const lines = [];
+  for (const v of vouchers) {
+    const code = cleanCode(v.code, merchant);
+    if (!code) continue;
+    lines.push(
+      [
+        `Code ${code}${v.expired ? " (expired)" : ""} \u2014 ${v.title}`,
+        v.discount && `Discount: ${v.discount}`,
+        v.expires && `Ends: ${v.expires}`,
+        v.terms && `Terms: ${v.terms}`
+      ].filter(Boolean).join(" \xB7 ")
+    );
+    codes.push({
+      code,
+      via: "structured",
+      strength: "strong",
+      ...v.discount ? { discount: v.discount } : {},
+      ...v.expires ? { expires: v.expires } : {},
+      ...v.expired ? { expired: true } : {}
+    });
+  }
+  if (!codes.length) return void 0;
+  return {
+    url,
+    title,
+    backend: "pepper",
+    score: 1e3,
+    // the merchant's own code page outranks any single thread
+    snippet: lines.slice(0, 2).join(" \u2014 ").slice(0, 360),
+    text: [title, ...lines].join("\n\n"),
+    meta: { codes }
+  };
+}
+async function get(url, lang, region) {
+  await awaitHostSlot(url);
+  return httpGet(url, { accept: "text/html", acceptLanguage: acceptLanguageHeader(lang, region), userAgent: browserUa(), retries: 0, timeoutMs: 15e3 });
+}
+function websearchHint(host, q) {
+  return `Search it with your own WebSearch instead \u2014 \`site:${host.replace(/^www\./, "")} ${q}\`.`;
+}
+var pepperBackend = async (ctx) => {
+  const found = pepperSiteFor(ctx.options.lang, ctx.options.region);
+  if (!found) {
+    return {
+      backend: "pepper",
+      items: [],
+      notes: [
+        `Pepper: no deal community for region "${ctx.options.region ?? ctx.options.lang}" \u2014 covered: ${Object.keys(PEPPER_SITES).join(", ")} (uk = gb). Pass --region to pick one.`
+      ]
+    };
+  }
+  const { region, site } = found;
+  const merchant = merchantOf(ctx.question);
+  const q = merchant ?? ctx.question;
+  const url = `https://${site.host}${site.search.replace("{q}", encodeURIComponent(q))}`;
+  const r = await get(url, ctx.options.lang, region);
+  if (!r.ok || !r.body) {
+    return { backend: "pepper", items: [], notes: [`${site.host} search ${throttleReason(r.status, r.error).why}. ${websearchHint(site.host, q)}`] };
+  }
+  const threads = parsePepperThreads(r.body, site.host);
+  if (!threads.length) {
+    const wall = looksLikeChallenge(r.body) ? "challenge page" : looksLikeJunkExtraction(htmlToText(r.body));
+    const why = wall ? `served a ${wall} instead of results` : "returned a page with 0 parsable threads \u2014 markup changed?";
+    return { backend: "pepper", items: [], notes: [`${site.host} ${why} ${websearchHint(site.host, q)}`] };
+  }
+  const relevant = threads.filter((t) => aboutMerchant(t, merchant));
+  const items = relevant.slice(0, Math.max(5, ctx.options.perSource * 2)).map((t, i, all) => threadSource(t, i, all.length, merchant));
+  const withCodes = items.filter((it) => it.meta?.codes?.length).length;
+  const expired = relevant.filter((t) => t.expired).length;
+  const notes = [
+    `${site.host}: ${items.length} thread(s) about "${q}"` + (threads.length > relevant.length ? ` (${threads.length - relevant.length} about other merchants dropped)` : "") + `, ${withCodes} carrying a voucher code` + (expired ? `, ${expired} marked expired by the community` : "") + "."
+  ];
+  if (ctx.options.depth === "deep" && site.vouchers) {
+    const slug = relevant.find((t) => t.merchantSlug)?.merchantSlug ?? (merchant ? merchant.toLowerCase().replace(/[^a-z0-9.]+/g, "-") : void 0);
+    if (slug) {
+      const vurl = `https://${site.host}${site.vouchers.replace("{slug}", encodeURIComponent(slug))}`;
+      const vr = await get(vurl, ctx.options.lang, region);
+      const vouchers = vr.ok && vr.body ? parsePepperVouchers(vr.body) : [];
+      const title = vr.body ? /<title>([^<]*)<\/title>/i.exec(vr.body)?.[1]?.trim() ?? vurl : vurl;
+      const src = voucherSource(vurl, decodeEntities(title), vouchers, merchant);
+      if (src) {
+        items.unshift(src);
+        const kept = src.meta.codes;
+        notes.push(`${site.host} voucher page: ${kept.length} code(s) (${kept.filter((c) => c.expired).length} expired).`);
+      } else {
+        notes.push(`${site.host} voucher page ${vurl}: ${vr.ok ? "no voucher code on it" : throttleReason(vr.status, vr.error).why}.`);
+      }
+    }
+  }
+  return { backend: "pepper", items, notes };
+};
+
 // src/backends/registry.ts
 var HANDLERS = {
   claude: websearchBackend,
@@ -9121,9 +10343,22 @@ var HANDLERS = {
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
   dblp: dblpBackend,
-  standards: standardsBackend
+  standards: standardsBackend,
+  reddit: redditBackend,
+  pepper: pepperBackend
 };
-var SINGLE_QUERY = /* @__PURE__ */ new Set(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic", "claude"]);
+var SINGLE_QUERY = /* @__PURE__ */ new Set([
+  "github",
+  "stackexchange",
+  "semanticscholar",
+  "pubmed",
+  "standards",
+  "fixture",
+  "generic",
+  "claude",
+  "reddit",
+  "pepper"
+]);
 var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
 async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
@@ -9181,7 +10416,7 @@ async function runBackends(kinds, ctx) {
 
 // src/dossier.ts
 import { existsSync as existsSync3, readFileSync as readFileSync5 } from "fs";
-import { join as join5 } from "path";
+import { join as join7 } from "path";
 
 // src/authority.ts
 function sourceSignals(opts) {
@@ -9193,6 +10428,9 @@ function sourceSignals(opts) {
   ];
   return { refDiversity: hosts.size, selfIdentified, corroboration, notes };
 }
+
+// src/extras.ts
+import { join as join6 } from "path";
 
 // src/bibtex.ts
 function clean2(s) {
@@ -9235,6 +10473,51 @@ function toBibtex(sources) {
     out.push("");
   }
   return out.join("\n");
+}
+
+// src/extras.ts
+var EXTRAS = {
+  // research: a BibTeX file built from the scholarly sources' metadata.
+  bibtex: {
+    files: ["refs.bib"],
+    write: ({ dir, sources }) => {
+      writeArtifact(join6(dir, "refs.bib"), toBibtex(sources));
+      return [];
+    }
+  },
+  // learn: the model writes these into REPORT.md itself; the engine has nothing to produce.
+  glossary: { files: [] },
+  exercises: { files: [] },
+  // deals: candidate discount codes, extracted per source while the full text is
+  // in hand, then ranked across the dossier into codes.json + an UNVERIFIED table.
+  codes: {
+    files: ["codes.json"],
+    annotate: (text, source2, manifest) => annotateCodes(text, source2.meta, codesOptions(manifest)),
+    write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest)
+  }
+};
+function active(manifest) {
+  return (manifest.extras ?? []).map((e) => EXTRAS[e]).filter((s) => s !== void 0);
+}
+function annotateExtras(text, source2, manifest) {
+  let out = source2;
+  for (const spec of active(manifest)) {
+    if (!spec.annotate) continue;
+    const meta = spec.annotate(text, out, manifest);
+    if (meta !== out.meta) out = { ...out, meta };
+  }
+  return out;
+}
+function writeExtras(dir, sources, manifest) {
+  const blocks = [];
+  for (const spec of active(manifest)) {
+    const lines = spec.write?.({ dir, sources, manifest }) ?? [];
+    if (lines.length) blocks.push(lines);
+  }
+  return blocks;
+}
+function extraFiles() {
+  return [...new Set(Object.values(EXTRAS).flatMap((s) => s.files))];
 }
 
 // src/passages.ts
@@ -9339,12 +10622,12 @@ function sourceIdentityError(sources) {
   }
   return void 0;
 }
-function idNum(id) {
+function idNum2(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
 }
 function maxSourceId(sources) {
-  return sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
+  return sources.reduce((acc, s) => Math.max(acc, idNum2(s.id)), 0);
 }
 function buildSource(rs, id, builtAt, question) {
   const text = rs.text ?? rs.snippet ?? "";
@@ -9386,7 +10669,7 @@ function renderSourceExtract(s, text, depth, question = "") {
   return head + selectSourcePassages(text, question, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join5(dir, s.extract);
+  const p = join7(dir, s.extract);
   if (!existsSync3(p)) return s.snippet ?? "";
   const lines = readFileSync5(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
@@ -9394,33 +10677,31 @@ function readSourceText(dir, s) {
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth, question = "") {
-  writeArtifact(join5(dir, s.extract), renderSourceExtract(s, text, depth, question));
+  writeArtifact(join7(dir, s.extract), renderSourceExtract(s, text, depth, question));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join5(dir, "sources.json");
-  const dossierMd = join5(dir, "DOSSIER.md");
-  const manifestJson = join5(dir, "manifest.json");
+  const sourcesJson = join7(dir, "sources.json");
+  const dossierMd = join7(dir, "DOSSIER.md");
+  const manifestJson = join7(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
-  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
+  const blocks = writeExtras(dir, sources, manifest);
+  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks));
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
-function writeBibtex(dir, sources, extras) {
-  if (!extras.includes("bibtex")) return;
-  writeArtifact(join5(dir, "refs.bib"), toBibtex(sources));
-}
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join5(dir, "sources"));
+  ensureDir(join7(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
-    const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth, manifest.question);
+    const text = rs.text ?? rs.snippet ?? "";
+    const s = annotateExtras(text, buildSource(rs, id, manifest.builtAt, manifest.question), manifest);
+    writeSourceExtract(dir, s, text, manifest.depth, manifest.question);
     return s;
   });
   const m = { ...manifest, sourceCount: sources.length };
   return { dir, sources, paths: writeDossierIndex(dir, sources, m, template) };
 }
-function renderDossierMarkdown(sources, manifest, template) {
+function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   const noWrite = isNoWrite();
   const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Top them up (another WebSearch round + `ingest --run <dir> --web-results <f.json>`)";
   const out = [];
@@ -9470,6 +10751,10 @@ function renderDossierMarkdown(sources, manifest, template) {
     out.push(`_Also produce: ${manifest.extras.join(", ")}._`);
   }
   out.push("");
+  for (const block of extraBlocks) {
+    out.push(...block);
+    out.push("");
+  }
   if (manifest.notes.length) {
     out.push(`## Retrieval notes`);
     out.push("");
@@ -9510,10 +10795,10 @@ function renderDossierMarkdown(sources, manifest, template) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson(join5(dir, "sources.json"), "sources.json");
+  const sources = readJson(join7(dir, "sources.json"), "sources.json");
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
-  const manifest = readJson(join5(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson(join7(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -9682,7 +10967,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode2, question, d) {
-  return join6(tmpdir3(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
+  return join10(tmpdir3(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -10152,7 +11437,6 @@ async function runGather(options) {
   };
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode2.template);
-  writeBibtex(dir, sources, mode2.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
@@ -10168,7 +11452,7 @@ function loadState(dir) {
 }
 function commit(dir, state, p) {
   const id = `S${++state.maxId}`;
-  const s = buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question);
+  const s = annotateExtras(p.text, buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
@@ -10405,7 +11689,7 @@ async function prepareSource(stateOf, url, opts) {
 
 // src/render.ts
 import { existsSync as existsSync5, readFileSync as readFileSync11 } from "fs";
-import { join as join7 } from "path";
+import { join as join14 } from "path";
 
 // src/claims.ts
 var SOURCE_RE = /^S\d+$/;
@@ -10725,7 +12009,7 @@ function loadRenderContext(dir) {
   const tiers = [];
   const cited = /* @__PURE__ */ new Set();
   for (const tier of TIERS) {
-    const p = join7(dir, tier.file);
+    const p = join14(dir, tier.file);
     if (!existsSync5(p)) continue;
     const text = readFileSync11(p, "utf8");
     tiers.push({ tier, text });
@@ -10737,7 +12021,7 @@ function toContext(dirOrCtx) {
   return typeof dirOrCtx === "string" ? loadRenderContext(dirOrCtx) : dirOrCtx;
 }
 function readVerify(dir) {
-  const p = join7(dir, "VERIFY.json");
+  const p = join14(dir, "VERIFY.json");
   if (!existsSync5(p)) return void 0;
   try {
     return JSON.parse(readFileSync11(p, "utf8"));
@@ -10858,7 +12142,7 @@ function sourcesSection(sources, cited) {
 function writeHtml(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const html = renderHtml(ctx);
-  const path = out ?? join7(ctx.dir, "index.html");
+  const path = out ?? join14(ctx.dir, "index.html");
   return writeArtifact(path, html);
 }
 function mdLinkText(s) {
@@ -10919,18 +12203,18 @@ function buildReportMarkdown(dirOrCtx) {
 function writeReportMarkdown(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const md = buildReportMarkdown(ctx);
-  const path = out ?? join7(ctx.dir, "index.md");
+  const path = out ?? join14(ctx.dir, "index.md");
   return writeArtifact(path, md);
 }
 
 // src/check.ts
 import { existsSync as existsSync11, readFileSync as readFileSync13 } from "fs";
-import { join as join14 } from "path";
+import { join as join16 } from "path";
 
 // src/verify.ts
 import { createHash } from "crypto";
 import { existsSync as existsSync10, readFileSync as readFileSync12, readdirSync as readdirSync3 } from "fs";
-import { join as join10 } from "path";
+import { join as join15 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function pairFingerprint(claim, extract) {
@@ -10945,7 +12229,7 @@ function claimStrings(text) {
   return out;
 }
 function buildWorklist(dir, opts = {}) {
-  const sources = readJson(join10(dir, "sources.json"), "sources.json");
+  const sources = readJson(join15(dir, "sources.json"), "sources.json");
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const byId = new Map(sources.map((s) => [s.id, s]));
@@ -10970,7 +12254,7 @@ function buildWorklist(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
-    const p = join10(dir, file);
+    const p = join15(dir, file);
     if (!existsSync10(p)) continue;
     const text = readFileSync12(p, "utf8");
     for (const claim of claimStrings(text)) {
@@ -11032,8 +12316,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeArtifact(join10(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join10(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join15(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join15(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -11099,7 +12383,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
   if (!opts.strict) {
     for (const name of readdirSync3(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
       try {
-        const todo = JSON.parse(readFileSync12(join10(dir, name), "utf8"));
+        const todo = JSON.parse(readFileSync12(join15(dir, name), "utf8"));
         if (!Array.isArray(todo?.pairs)) continue;
         for (const p of todo.pairs) {
           if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
@@ -11160,7 +12444,7 @@ function applyVerdicts(dir, verdictsPath) {
   }
   const verdicts = binding.bound;
   const result = reduceVerdicts(verdicts);
-  writeArtifact(join10(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join15(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -11297,7 +12581,7 @@ function analyzeFile(file, text) {
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
-  const p = join14(dir, "VERIFY.json");
+  const p = join16(dir, "VERIFY.json");
   if (!existsSync11(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
@@ -11368,7 +12652,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync13(join14(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync13(join16(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -11376,7 +12660,7 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join14(dir, "sources.json");
+  const sourcesPath = join16(dir, "sources.json");
   if (!existsSync11(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
@@ -11389,11 +12673,11 @@ function runCheck(dir, opts = {}) {
   const identityError = sourceIdentityError(sources);
   if (identityError) return blank(false, [`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`]);
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync11(join14(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync11(join16(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync13(join14(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync13(join16(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -11444,7 +12728,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync11(join14(dir, s.extract)) ? readSourceText(dir, s) : null;
+        t = s && existsSync11(join16(dir, s.extract)) ? readSourceText(dir, s) : null;
       } catch {
         t = null;
       }
@@ -11698,7 +12982,7 @@ function refreshed(manifest, sources) {
 }
 
 // src/plan.ts
-import { join as join15 } from "path";
+import { join as join17 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -11848,7 +13132,39 @@ var FACET_PATTERNS = [
     angle: "what trends and timing are favourable now",
     terms: ["trend", "timing"]
   },
-  { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, angle: "what are the risks and moats", terms: ["risk", "moat"] }
+  { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, angle: "what are the risks and moats", terms: ["risk", "moat"] },
+  // deals — worded to stay clear of the startup facets above (timing, pricing,
+  // customer) and learn's "example": the table stops at the first match.
+  {
+    re: /candidate code|codes table|coupon|promo code/i,
+    ask: (s) => `Which discount codes for ${s} are currently reported, and where?`,
+    angle: "which discount codes are currently reported, and where",
+    terms: ["promo code", "coupon"]
+  },
+  {
+    re: /own offers/i,
+    ask: (s) => `What discounts does ${s} itself offer (first order, newsletter, app, loyalty)?`,
+    angle: "what discounts does the merchant itself offer (first order, newsletter, app, loyalty)",
+    terms: ["first order discount", "newsletter"]
+  },
+  {
+    re: /ways to save|cashback/i,
+    ask: (s) => `What other ways to save on ${s} exist (cashback, student discounts, referral, gift cards)?`,
+    angle: "what other ways to save exist (cashback, student discounts, referral, gift cards)",
+    terms: ["cashback", "student discount"]
+  },
+  {
+    re: /sales calendar/i,
+    ask: (s) => `When do ${s}'s sales and seasonal promotions run?`,
+    angle: "when do the sales and seasonal promotions run",
+    terms: ["sales", "black friday"]
+  },
+  {
+    re: /expired|fake|unverifiable/i,
+    ask: (s) => `Which ${s} codes are reported expired, fake or not working?`,
+    angle: "which codes are reported expired, fake or not working",
+    terms: ["code not working", "expired"]
+  }
 ];
 var CLAUSE_VERB = /\b(is|are|was|were|be|been|being|do|does|did|has|have|had|can|could|should|would|will|shall|may|might|must|compares?|compared|works?|worked|deploys?|deployed|builds?|creates?|uses?|implements?|runs?|configures?|installs?|handles?|manages?|scales?|optimi[sz]es?|chooses?|migrates?|fix(?:es)?|debugs?|prevents?|avoids?|improves?|reduces?|increases?|affects?|causes?|differs?|relates?|applies|integrates?|connects?|stores?|processes?|generates?|renders?|parses?|validates?|measures?|monitors?)\b/i;
 function isClausalSubject(subject) {
@@ -11935,12 +13251,12 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join15(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join17(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join15(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join17(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -11982,7 +13298,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join16 } from "path";
+import { join as join18 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -12089,8 +13405,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join16(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join16(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join18(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join18(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -12194,15 +13510,14 @@ function runMerge(options) {
   };
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode2.template);
-  writeBibtex(dir, sources, mode2.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
 // src/orchestrate.ts
-import { join as join18 } from "path";
+import { join as join20 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join17 } from "path";
+import { join as join19 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -12259,7 +13574,7 @@ function agentContracts(runAbs, engineAbs) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join17(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join19(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
@@ -12282,7 +13597,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join17(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join19(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -12308,7 +13623,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
-  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join17(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join19(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gatherPlan ? shq(gatherPlan.question) : '"<question>"';
   const mode2 = gatherPlan ? gatherPlan.mode : "<m>";
   const run = shq(runAbs);
@@ -12328,15 +13643,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join17(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join17(runAbs, "PLAN.json")}\`, apply \`${join17(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join19(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join19(runAbs, "PLAN.json")}\`, apply \`${join19(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join17(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join17(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join17(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join19(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join19(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join19(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join17(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join19(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `
   ];
 }
@@ -12344,7 +13659,7 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 // src/orchestrate.ts
 var PHASES = ["gather", "verify"];
 function mergeHint(runAbs, engineAbs, plan) {
-  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join18(runAbs, s.id.toLowerCase())) : [`${join18(runAbs, "q1")},\u2026`];
+  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join20(runAbs, s.id.toLowerCase())) : [`${join20(runAbs, "q1")},\u2026`];
   const q = plan ? plan.question : "<question>";
   const mode2 = plan ? plan.mode : "<mode>";
   return [
@@ -12385,7 +13700,7 @@ var VERIFY = {
   applyHint: (run, engineAbs) => [
     `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
     `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-    `save each returned fragment as ${join18(run, "verdicts.<i>.json")} then reassemble + gate:`,
+    `save each returned fragment as ${join20(run, "verdicts.<i>.json")} then reassemble + gate:`,
     `node ${shq(engineAbs)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
   ]
 };
@@ -12402,14 +13717,14 @@ function listPhasesFor(runDir, engineAbs) {
 
 // src/mcp/handlers.ts
 import { existsSync as existsSync12, readFileSync as readFileSync14, realpathSync as realpathSync2, statSync as statSync2 } from "fs";
-import { isAbsolute as isAbsolute2, join as join19, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+import { isAbsolute as isAbsolute2, join as join21, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
 function str2(v) {
   return typeof v === "string" && v.trim() !== "" ? v : void 0;
 }
-function num2(v) {
+function num3(v) {
   const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
   return Number.isFinite(n) ? n : void 0;
 }
@@ -12420,7 +13735,7 @@ function strArray(v) {
   return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
 }
 function positive(v, key) {
-  const n = num2(v);
+  const n = num3(v);
   if (n === void 0) return void 0;
   if (n <= 0) throw new ToolError(`\`${key}\` must be greater than 0.`);
   return n;
@@ -12430,8 +13745,8 @@ function requiredStr(args, key, hint) {
   if (!v) throw new ToolError(`\`${key}\` is required \u2014 ${hint}`);
   return v;
 }
-function oneOf(value, allowed, key, fallback) {
-  if (value === void 0) return fallback;
+function oneOf(value, allowed, key, fallback2) {
+  if (value === void 0) return fallback2;
   if (!allowed.includes(value)) {
     throw new ToolError(`\`${key}\` must be one of: ${allowed.join(", ")} (got "${value}")`);
   }
@@ -12452,7 +13767,7 @@ function requiredRun(args, defaults) {
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute2(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve2(run);
-  if (!existsSync12(join19(abs, "manifest.json"))) {
+  if (!existsSync12(join21(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -12603,9 +13918,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join19(res.dir, "DOSSIER.md"),
+    dossier_md: join21(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join19(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join21(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -12643,14 +13958,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute2(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync12(join19(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync12(join21(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
   if (master !== void 0 && !isAbsolute2(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join19(res.dir, "DOSSIER.md"),
+    dossier_md: join21(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -12710,7 +14025,7 @@ function handleRelink(args, run) {
 }
 function handleVerify(args, run) {
   const shards = positive(args.shards, "shards");
-  const shard = num2(args.shard);
+  const shard = num3(args.shard);
   if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
     throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
   }
@@ -12743,7 +14058,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute2(raw) ? raw : join19(run, raw);
+  const target = isAbsolute2(raw) ? raw : join21(run, raw);
   let real;
   try {
     real = realpathSync2(target);
@@ -12759,9 +14074,9 @@ function handleRead(args, run) {
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
   const lines = readFileSync14(real, "utf8").split("\n");
   const total = lines.length;
-  const start = Math.max(1, Math.floor(num2(args.start_line) ?? 1));
+  const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
-  const requestedEnd = Math.floor(num2(args.end_line) ?? total);
+  const requestedEnd = Math.floor(num3(args.end_line) ?? total);
   const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
   return {
     path: isAbsolute2(raw) ? real : raw,
@@ -12782,7 +14097,7 @@ var questionProp = { type: "string", description: "The topic or question, in nat
 var modeProp = {
   type: "string",
   enum: MODE_ENUM,
-  description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors). Default: topic."
+  description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant \u2014 pair with lang + region for the country; writes codes.json). Default: topic."
 };
 var langProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
 var webResultsProp = {
@@ -13111,15 +14426,34 @@ var PROMPTS = [
     title: "Review the literature on a question",
     description: "The research workflow: search the scholarly APIs, decompose a broad question into sub-questions, merge the sub-dossiers, and write a review whose every claim is traceable to a paper.",
     arguments: [{ name: "question", description: "The research question.", required: true }]
+  },
+  {
+    name: "find_coupons",
+    title: "Find discount codes for a merchant",
+    description: "The deals workflow: sweep the web and the deal communities for a merchant's coupon codes, rank what they report, and answer with a table in which every code is cited to a page that shows it \u2014 never a code guessed or remembered.",
+    arguments: [
+      { name: "merchant", description: "The shop, ideally with its domain for the country (e.g. decathlon.fr).", required: true },
+      { name: "country", description: "Two-letter country code, e.g. fr, gb, de, us. Picks the deal community and the local sites.", required: false },
+      { name: "lang", description: "Search language, e.g. fr. Default: the country's.", required: false }
+    ]
   }
 ];
+var RENDER = {
+  research_topic: researchTopic,
+  debug_error: debugError,
+  literature_review: literatureReview,
+  find_coupons: findCoupons
+};
+var RENDERED_PROMPTS = Object.keys(RENDER);
 function getPrompt(name, args = {}) {
   const decl = PROMPTS.find((p) => p.name === name);
   if (!decl) throw new PromptError(`unknown prompt: ${name || "(none given)"}`);
   for (const arg of decl.arguments ?? []) {
     if (arg.required && !str3(args[arg.name])) throw new PromptError(`\`${arg.name}\` is required for prompt "${name}"`);
   }
-  const text = name === "research_topic" ? researchTopic(args) : name === "debug_error" ? debugError(args) : literatureReview(args);
+  const render = RENDER[name];
+  if (!render) throw new PromptError(`prompt "${name}" has no renderer`);
+  const text = render(args);
   return { description: decl.description, messages: [{ role: "user", content: { type: "text", text } }] };
 }
 var CORE_RULE = `Answer only from the sources this dossier actually fetched. Your training data is stale, and on a fast-moving topic it is confidently wrong. If the dossier does not cover something, say so and gather more \u2014 never fill the gap from memory and decorate it with a nearby citation.`;
@@ -13190,6 +14524,35 @@ ${CORE_RULE}
 ${THIN}
 
 **Attribute findings to specific papers, with their limits.** "Studies show X" citing four papers is weaker than one sentence naming what one study measured, in what population, and what it did not establish. Where the literature disagrees, that disagreement IS the finding.
+
+${GATE}`;
+}
+function findCoupons(args) {
+  const merchant = str3(args.merchant);
+  const country = str3(args.country)?.toLowerCase();
+  const lang = str3(args.lang);
+  const locale = [lang && `\`lang: "${lang}"\``, country && `\`region: "${country}"\``].filter(Boolean).join(" and ");
+  const domain = /\.[a-z]{2,}$/i.test(merchant.trim()) ? merchant.trim() : void 0;
+  return `Find working discount codes for:
+
+> ${merchant}${country ? ` (${country})` : ""}
+
+${CORE_RULE}
+
+**A code is a claim like any other \u2014 it needs a source that shows it.** Never write a code you did not see on a fetched page, never "complete" a partial one, and never present a code as working unless it was actually tried.
+
+**Sequence:**
+
+1. Sweep with your own web search first \u2014 the merchant + "promo code" in the country's language with this month and year, the country's deal community (Dealabs, hotukdeals, mydealz\u2026), its coupon aggregators, and Reddit. Keep the hits.
+2. \`ultrasearch_gather\` with \`mode: "deals"\`${locale ? `, ${locale}` : ""}${domain ? `, \`seed_domains: ["${domain}"]\`` : ""}, and your hits as \`web_results\`. It returns the dossier directory.
+3. \`ultrasearch_read\` its \`codes.json\` \u2014 the ranked candidates, with the [S#] sources each was seen in \u2014 then \`DOSSIER.md\`. Confirm every candidate in the extract it cites.
+4. For a gap (no code from the merchant's own site, a candidate seen on one page only), find the page and \`ultrasearch_fetch\` it so it becomes a citable [S#].
+5. Write the report to the deals template: one row per code \u2014 code \xB7 discount \xB7 conditions \xB7 expiry \xB7 sources \xB7 confidence \xB7 tested \u2014 then the merchant's own offers, the other ways to save, and the expired or dubious codes, each cited.
+6. \`ultrasearch_check\` on the dossier, then \`ultrasearch_render\`.
+
+**Rank honestly.** A code on one aggregator page is weak; the same code on the deal community and a forum, with a future expiry, is strong. Say which is which. Mark every code "not tested" unless the user tried it in their own cart.
+
+${THIN}
 
 ${GATE}`;
 }
@@ -13593,14 +14956,14 @@ function emitArtifacts(dir, asJson, extra = {}) {
   const shown = [
     ...STDOUT_BRIEF.map(at),
     ...artifacts.filter((a) => sourceNum(a.rel) > 0).sort((a, b) => sourceNum(a.rel) - sourceNum(b.rel)),
-    at("refs.bib")
+    ...extraFiles().map(at)
   ].filter((a) => a !== void 0);
   const out = shown.map((a) => `===== ${a.rel} =====
 ${a.content.endsWith("\n") ? a.content : a.content + "\n"}`);
   if (out.length) process.stdout.write(out.join(""));
 }
-function num3(name, raw, fallback) {
-  if (raw === void 0) return fallback;
+function num4(name, raw, fallback2) {
+  if (raw === void 0) return fallback2;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) fail(`invalid --${name} "${raw}"`);
   return Math.floor(n);
@@ -13676,8 +15039,8 @@ function buildGatherOptions(p, opts = {}) {
     backends: p.values.backends ? parseBackends(p.values.backends) : void 0,
     queries: p.values.queries ? p.values.queries.split("|").map((s) => s.trim()).filter(Boolean) : void 0,
     // Unset unless asked for: no default FETCH budget (see GatherOptions).
-    maxSources: p.values["max-sources"] ? num3("max-sources", p.values["max-sources"], 0) : void 0,
-    perSource: num3("per-source", p.values["per-source"], caps.perSource),
+    maxSources: p.values["max-sources"] ? num4("max-sources", p.values["max-sources"], 0) : void 0,
+    perSource: num4("per-source", p.values["per-source"], caps.perSource),
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,
@@ -13685,14 +15048,14 @@ function buildGatherOptions(p, opts = {}) {
     webEngine,
     search,
     ...parsedWeb ? { webResults: parsedWeb.hits, webResultsRejected: parsedWeb.rejected } : {},
-    pages: p.values.pages ? Math.min(5, num3("pages", p.values.pages, 1)) : void 0,
-    webBreadth: p.values["web-breadth"] ? Math.min(5, num3("web-breadth", p.values["web-breadth"], 1)) : void 0,
+    pages: p.values.pages ? Math.min(5, num4("pages", p.values.pages, 1)) : void 0,
+    webBreadth: p.values["web-breadth"] ? Math.min(5, num4("web-breadth", p.values["web-breadth"], 1)) : void 0,
     urls: p.values.url ? parseList(p.values.url) : void 0,
     since: p.values.since,
     excludeDomains: p.values["exclude-domains"] ? parseList(p.values["exclude-domains"]) : [],
     seedDomains: p.values["seed-domains"] ? parseList(p.values["seed-domains"]) : void 0,
-    concurrency: p.values.concurrency ? num3("concurrency", p.values.concurrency, 6) : void 0,
-    rounds: p.values.rounds ? num3("rounds", p.values.rounds, 1) : void 0,
+    concurrency: p.values.concurrency ? num4("concurrency", p.values.concurrency, 6) : void 0,
+    rounds: p.values.rounds ? num4("rounds", p.values.rounds, 1) : void 0,
     // Default ON: the on-disk cache is a pure win for the deep tier's fan-out,
     // for a re-gather after a failed check, and for the `fetch --url` bridge.
     // `--cache` stays an accepted no-op so every prompt and emitted contract
@@ -13807,7 +15170,7 @@ async function main(argv = process.argv.slice(2)) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join20(resolve3(runDir), "manifest.json");
+        const mf = join22(resolve3(runDir), "manifest.json");
         if (!existsSync13(mf)) fail(`no dossier at ${resolve3(runDir)} (no manifest.json)`);
         try {
           manifest = JSON.parse(readFileSync15(mf, "utf8"));
@@ -13880,7 +15243,7 @@ ${formatServices(rows)}
     case "plan": {
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
-      const cap = p.values["max-subquestions"] ? num3("max-subquestions", p.values["max-subquestions"], 6) : void 0;
+      const cap = p.values["max-subquestions"] ? num4("max-subquestions", p.values["max-subquestions"], 6) : void 0;
       const runRoot = p.values["run-root"] ? resolve3(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
@@ -14036,7 +15399,7 @@ ${formatServices(rows)}
         if (!result.ok) process.exit(1);
         return;
       }
-      const maxVerify = p.values["max-verify"] ? num3("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
+      const maxVerify = p.values["max-verify"] ? num4("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
       const sh = parseShardArgs(p.values.shards, p.values.shard);
       if (!sh.ok) fail(sh.error);
       const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
@@ -14093,7 +15456,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join20(resolve3(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join22(resolve3(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -14148,7 +15511,7 @@ ${formatServices(rows)}
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const minSources = p.values["min-sources"] ? num3("min-sources", p.values["min-sources"], 1) : void 0;
+      const minSources = p.values["min-sources"] ? num4("min-sources", p.values["min-sources"], 1) : void 0;
       const res = runCheck(resolve3(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),

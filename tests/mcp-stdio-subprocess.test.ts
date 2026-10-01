@@ -146,7 +146,12 @@ describe("the bundled MCP server over stdio", () => {
     expect(uris).toContain("skill://SKILL.md");
     expect(uris).toContain("skill://references/citation-format.md");
 
-    expect(msgs.find((m) => m.id === 3).result.prompts.map((p: { name: string }) => p.name)).toEqual(["research_topic", "debug_error", "literature_review"]);
+    expect(msgs.find((m) => m.id === 3).result.prompts.map((p: { name: string }) => p.name)).toEqual([
+      "research_topic",
+      "debug_error",
+      "literature_review",
+      "find_coupons",
+    ]);
 
     const contents = msgs.find((m) => m.id === 4).result.contents[0];
     expect(contents.mimeType).toBe("text/markdown");
