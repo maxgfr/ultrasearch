@@ -152,6 +152,8 @@ gatherer is strictly worse than gathering it yourself.
 **`--mode` comes from the SUBJECT, independently of the route:** an error text or
 stack trace ⇒ `bug` · papers, prior art, state of the art ⇒ `research` · "teach
 me", "from scratch" ⇒ `learn` · market, competitors, pricing ⇒ `startup` ·
+a shop's coupons, promo or discount codes ⇒ `deals` (with `--lang` + `--region`
+for the country — see [Deals](#deals--discount-codes-for-a-merchant)) ·
 anything else ⇒ `topic` (the default). `modes` prints the live mode → backend
 map; trust it over any table in a doc.
 
@@ -316,8 +318,9 @@ not hand control back mid-retrieval.
    Cite every factual claim with `[S#]`; flag your own knowledge `[M]` (I1). In a
    table, the header row is structure but **every data row is a claim** and needs
    its own citation. For `research`, the engine already wrote `refs.bib` —
-   reference it. For `learn`, also write `glossary.md` (term — definition, one
-   per line).
+   reference it. For `deals`, it wrote `codes.json` — candidates, never proof
+   (see [Deals](#deals--discount-codes-for-a-merchant)). For `learn`, also write
+   `glossary.md` (term — definition, one per line).
 
 6. **Render, then gate.**
    ```
@@ -338,6 +341,32 @@ not hand control back mid-retrieval.
 
 7. **Present.** Give the user the SUMMARY, the run folder path, `index.html` and
    `index.md`, the source count, and any gaps or contradictions you found.
+
+## Deals — discount codes for a merchant
+
+Route S with `--mode deals`. The country picks the deal community (Dealabs,
+hotukdeals, mydealz, preisjaeger, chollometro, pepper.pl, nl.pepper.com), so
+always pass it. Sweep first (I0) — the merchant + "promo code" in the local
+language with this month and year, `site:` the deal community, the local coupon
+aggregators, `site:reddit.com` — then:
+```
+node <skill-dir>/scripts/ultrasearch.mjs gather --q "code promo decathlon.fr" --mode deals --lang fr --region fr --seed-domains decathlon.fr --web-results <RUN>/websearch.json --depth deep --out <RUN>/deals
+```
+The engine extracts every code a source presents into `codes.json` (ranked by
+distinct-domain corroboration, expired ones apart) and a **Candidate codes —
+UNVERIFIED** table in `DOSSIER.md`. A candidate is a lead, not a fact: confirm
+each in the `[S#]` it cites, and **never invent, guess or complete a code**.
+Every row of the codes table is a claim and carries its `[S#]`; the "tested"
+column says `no` unless the code was actually tried.
+
+**Optional — testing deal codes in the user's own cart.** Only when a browser
+tool (Claude in Chrome, computer use) is available AND the user asked for it:
+- Use the user's own cart, already filled. Try the top candidates **one at a
+  time**; record accepted/refused, the discount shown and any error message.
+- **Never pay** — stop before any payment step. **Never guess or enumerate
+  codes**: only the cited candidates are tried.
+- Stop at the first CAPTCHA or login wall and hand back to the user.
+- Fill the "tested" column with what you saw, then re-run `check`.
 
 ## Orchestration — route by harness
 

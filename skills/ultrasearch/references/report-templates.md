@@ -78,6 +78,26 @@ line; `render` links the in-report Glossary heading to it.
 ## Sources
 ```
 
+## deals  (also writes codes.json)
+```
+## TL;DR
+## Candidate codes
+### Codes table (code · discount · conditions · expires · sources · confidence · tested)
+## Merchant's own offers
+## Other ways to save
+## Sales calendar
+## Expired, fake or unverifiable codes
+## Sources
+```
+
+Start from the **Candidate codes — UNVERIFIED** table in `DOSSIER.md` (full list
+in `codes.json`), and keep only the codes you confirmed in the cited extract.
+Every data row is a claim: it carries its `[S#]`. `tested` is `no` unless the
+code was actually tried in a cart — then `accepted` / `refused` with what the
+cart said. Never write a code no source shows, and never complete a partial one.
+Expired and single-source codes go under "Expired, fake or unverifiable codes",
+cited too.
+
 The `## Sources` section is rendered automatically from `sources.json` into the
 HTML appendix — you don't need to hand-list URLs there, but you may add notable
 ones. Cite inline with `[S#]` throughout.

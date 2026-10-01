@@ -73,6 +73,22 @@ describe("SKILL.md", () => {
     expect(skill).toMatch(/parallel subagents are\s+an \*optimization\*, never a requirement/i);
   });
 
+  it("routes coupon asks to the deals mode, with the country", () => {
+    expect(skill).toMatch(/⇒ `deals`/);
+    expect(skill).toMatch(/gather --q "[^"]+" --mode deals --lang \w+ --region \w+/);
+    expect(skill).toMatch(/never invent, guess or complete a code/i);
+  });
+
+  it("keeps the optional cart-testing section opt-in and fenced by its prohibitions", () => {
+    const section = /\*\*Optional — testing deal codes in the user's own cart\.\*\*([\s\S]*?)\n## /.exec(skill)?.[1];
+    expect(section, "the cart-testing section is missing").toBeTruthy();
+    expect(section).toMatch(/AND the user asked for it/);
+    expect(section).toMatch(/\*\*Never pay\*\*/);
+    expect(section).toMatch(/\*\*Never guess or enumerate\s+codes\*\*/);
+    expect(section).toMatch(/CAPTCHA or login wall/);
+    expect(section).toMatch(/one at a\s+time/);
+  });
+
   it("references only reference files that exist on disk", () => {
     const refs = [...skill.matchAll(/references\/([a-z-]+\.md)/g)].map((m) => m[1]!);
     expect(refs.length).toBeGreaterThan(0);

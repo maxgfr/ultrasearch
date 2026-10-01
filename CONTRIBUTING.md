@@ -118,3 +118,23 @@ handful of section headings and sentences are matched literally.
 3. Document the template in
    `skills/ultrasearch/references/report-templates.md` and the profile in
    `skills/ultrasearch/references/modes.md`.
+4. Give each `## ` template heading a facet in `FACET_PATTERNS` (`src/plan.ts`)
+   that no other mode's heading matches — the table stops at the first match.
+
+## Adding an extra
+
+An extra is an artifact a mode produces besides the dossier (`refs.bib`,
+`codes.json`).
+
+1. Add the name to `ModeExtra` in `src/types.ts` — the compiler then refuses to
+   build until step 2 is done.
+2. Add its entry to `EXTRAS` in `src/extras.ts`: the `files` it writes, an
+   optional `annotate(text, source, manifest)` that records what it needs on
+   `Source.meta` while the full text is in hand (it must be idempotent — `merge`
+   re-annotates), and `write(ctx)`, which writes the artifact through
+   `writeArtifact` and returns the lines to put in DOSSIER.md (or none).
+3. List it in the mode's `extras`. Nothing else to wire: `writeDossierIndex`
+   runs it on every path that rewrites a dossier, and `--stdout` streams its
+   `files`.
+4. Test it through a real path (gather, ingest, merge) — see
+   `tests/extras.test.ts`.

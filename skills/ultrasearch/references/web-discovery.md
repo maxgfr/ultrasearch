@@ -128,6 +128,11 @@ These are scrapers and free APIs: they rate-limit, they go empty, and their
 markup shifts under them. The engine records each failure honestly in the notes
 rather than hiding it. That is why they amplify lane 1 instead of replacing it.
 
+`reddit` and `pepper` (the `deals` mode's deal communities) are **content
+backends, not part of this cascade**: they return threads that already carry
+text, `--web-engine` and `--search light` leave them alone, and they are never
+fused as discovery engines.
+
 ## Topping up an existing dossier
 
 A second WebSearch round folds in as one process, never one per URL:

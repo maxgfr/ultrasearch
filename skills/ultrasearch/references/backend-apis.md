@@ -23,7 +23,26 @@ honest notes in the dossier.
 | `europepmc` | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core` | Biomedical/life-sciences. `resultType=core` returns the abstract inline (content backend). Carries DOI + journal + year. |
 | `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract, falling back to `efetch.fcgi` when that page walls (see below). |
 | `dblp` | `GET https://dblp.org/search/publ/api?q=…&format=json` | Computer-science bibliography (research deep). Metadata-only → the gatherer hydrates the `ee`/DOI landing page; DOI/author metadata dedupes it against Crossref/OpenAlex and feeds `refs.bib`. |
+| `reddit` | `GET https://www.reddit.com/search.rss?q=…&sort=relevance&t=<window>` | Keyless Atom feed (`search.json` is a 403). `t` comes from `--since` (day/week/month/year, else all). **One request per run, never retried** — a second rapid request is a 429. At `--depth deep` it also reads the top 3 threads' comment feeds (`<thread>/.rss`) one at a time and stops at the first refusal: 4 requests at most. Communities in the results are skipped; failures become a note suggesting `site:reddit.com` in your WebSearch. Thread posting date feeds the recency score. |
+| `pepper` | `GET https://<host>/search?q=<merchant>`; deep: `GET https://<host>/<vouchers>/<slug>` | The Pepper deal network, picked by `--region` (else the `--lang` region subtag, else the language) — see the table below. Thread cards carry the voucher code as a JSON field (`data-vue3`), read structurally, with a regex window as fallback; the voucher page's Next.js payload lists active and expired codes with terms and end dates. Threads about other merchants are dropped. Cites the thread page — **never** the `/visit/` affiliate links. A region outside the table makes no request. One search + one voucher page per run. |
 | `standards` | `GET https://datatracker.ietf.org/api/v1/doc/document/?format=json&name=rfc<n>` (or `&title__icontains=…`) + `GET https://developer.mozilla.org/api/v1/search?q=…&locale=en-US` | Defining specs for standards-backed topics (topic/bug standard, learn deep). An explicit "RFC 6585" resolves directly; else a title search kept to real RFC numbers with a word-boundary relevance re-check (drops the "RFC 2429 shares digits" false friend). RFC abstract is the text; the source URL is `rfc-editor.org/rfc/rfc<n>` (clean full text on hydration). MDN hits are discovery (url + summary). |
+
+### Pepper sites by region
+
+| `--region` | Site | Voucher page | Probed 2026-10-01 |
+|---|---|---|---|
+| `fr` | www.dealabs.com | `/codes-promo/<slug>` | search + vouchers 200 |
+| `gb` (`uk`) | www.hotukdeals.com | `/vouchers/<slug>` | search + vouchers 200 |
+| `de` | www.mydealz.de | `/gutscheine/<slug>` | search + vouchers 200 |
+| `at` | www.preisjaeger.at | — (no voucher section) | search 200 |
+| `es` | www.chollometro.com | `/cupones/<slug>` | search + vouchers 200 |
+| `pl` | www.pepper.pl | `/kupony/<slug>` | search + vouchers 200 |
+| `nl` | nl.pepper.com | `/kortingscode/<slug>` | search + vouchers 200 |
+
+`<slug>` is Pepper's own merchant slug (`merchantUrlName` in the thread JSON —
+`decathlon`, `otto-de`, `allegro.pl`…), read from the search results. pepper.it
+closed on 2025-08-14 and is not listed; `us` and any other region get a note,
+no request.
 
 ## Content extraction
 
@@ -183,8 +202,10 @@ any of this can still be brought up to standard.
 ## Rate-limit etiquette
 
 - `--per-source` caps results per backend; `--depth` scales it.
-- Rate-limited backends (GitHub, StackExchange, Semantic Scholar, PubMed) are
-  queried with a **single** query variant per run (no variant fan-out).
+- Rate-limited backends (GitHub, StackExchange, Semantic Scholar, PubMed,
+  Reddit, Pepper) are queried with a **single** query variant per run (no
+  variant fan-out). Reddit and Pepper also skip the transient retry below
+  (`retries: 0`) and wait for their host's polite slot before every request.
 - The polite scholarly APIs that DO fan out across variants (arXiv, Crossref,
   OpenAlex, Europe PMC, dblp) run their per-variant calls **sequentially** with a
   small gap (`ULTRASEARCH_POLITE_DELAY_MS`, default 400ms) rather than all at
