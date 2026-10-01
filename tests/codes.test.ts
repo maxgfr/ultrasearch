@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { aggregateCodes, annotateCodes, cleanCode, extractCodes, merchantOf, writeCodes, type CodesFile, type ExtractOptions } from "../src/codes.js";
+import {
+  aggregateCodes,
+  annotateCodes,
+  cleanCode,
+  codesSummary,
+  extractCodes,
+  merchantOf,
+  writeCodes,
+  type CodesFile,
+  type ExtractOptions,
+} from "../src/codes.js";
 import type { CodeMention, Manifest, Source } from "../src/types.js";
 
 const NOW = "2026-10-01T12:00:00.000Z";
@@ -284,12 +294,42 @@ describe("writeCodes", () => {
     }
   });
 
-  it("says plainly when nothing was extracted", () => {
+  it("says plainly when nothing was extracted (DOSSIER.md block)", () => {
     const dir = mkdtempSync(join(tmpdir(), "us-codes-"));
     try {
       expect(writeCodes(dir, [], manifest).join("\n")).toMatch(/No candidate code/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("codesSummary — the list the run hands back", () => {
+  it("lists every code to try, best first, with its sources — and the expired ones by name", () => {
+    const s = codesSummary(
+      [
+        src("S1", "https://www.dealabs.com/x", [{ code: "BIENVENUE", via: "structured", strength: "strong", discount: "10€", expires: "2026-12-31" }]),
+        src("S2", "https://a.test/1", [text("PACK5", { discount: "5%", minSpend: "200 €" })]),
+        src("S3", "https://b.test/1", [text("OLD10", { expires: "2026-01-01" })]),
+      ],
+      manifest,
+    );
+    expect(s.key).toBe("codes");
+    expect(s.data).toEqual({
+      to_try: [
+        { code: "BIENVENUE", discount: "10€", expires: "2026-12-31", confidence: "high", sources: ["S1"] },
+        { code: "PACK5", discount: "5%", min_spend: "200 €", confidence: "low", sources: ["S2"] },
+      ],
+      expired: ["OLD10"],
+    });
+    const out = s.lines.join("\n");
+    expect(out).toContain("2 to try — UNVERIFIED");
+    expect(out).toMatch(/BIENVENUE\s+10€\s+until 2026-12-31\s+high\s+\[S1\]/);
+    expect(out).toMatch(/PACK5\s+5%\s+min\. 200 €\s+low\s+\[S2\]/);
+    expect(out).toContain("expired: OLD10");
+  });
+
+  it("says so when nothing was extracted", () => {
+    expect(codesSummary([], manifest).lines.join("\n")).toMatch(/codes:\s+none extracted/);
   });
 });

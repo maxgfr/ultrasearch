@@ -354,7 +354,9 @@ node <skill-dir>/scripts/ultrasearch.mjs gather --q "code promo decathlon.fr" --
 ```
 The engine extracts every code a source presents into `codes.json` (ranked by
 distinct-domain corroboration, expired ones apart) and a **Candidate codes —
-UNVERIFIED** table in `DOSSIER.md`. A candidate is a lead, not a fact: confirm
+UNVERIFIED** table in `DOSSIER.md`. `gather` also prints the codes to try with
+their `[S#]` at the end of its run (`codes` in `--json` and in the MCP result) —
+hand that list to the user. A candidate is a lead, not a fact: confirm
 each in the `[S#]` it cites, and **never invent, guess or complete a code**.
 Every row of the codes table is a claim and carries its `[S#]`; the "tested"
 column says `no` unless the code was actually tried.

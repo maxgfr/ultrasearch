@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { CodeMention, Manifest, Source, SourceMeta } from "./types.js";
 import { writeArtifact } from "./no-write.js";
+import type { ExtraSummary } from "./extras.js";
 import { deaccent, escapeRegExp } from "./util.js";
 
 // Discount-code extraction — the `codes` extra.
@@ -737,4 +738,48 @@ export function writeCodes(dir: string, sources: Source[], manifest: Pick<Manife
   if (more > 0) out.push("", `_${more} more candidate(s) in codes.json._`);
   if (expired.length) out.push("", `_${expired.length} expired code(s) left out of this table — see \`expired\` in codes.json._`);
   return out;
+}
+
+/**
+ * The codes to try, as the run hands them back (gather's report, `--json`, the
+ * MCP result) — every candidate, best first, each with the sources to confirm
+ * it in. The list is the deliverable of a deals run, so it is printed, not left
+ * in a file for the caller to discover.
+ */
+export function codesSummary(sources: Source[], manifest: Pick<Manifest, "builtAt">): ExtraSummary {
+  const { candidates, expired } = aggregateCodes(sources, manifest);
+  const data = {
+    to_try: candidates.map((c) => ({
+      code: c.code,
+      ...(c.discount ? { discount: c.discount } : {}),
+      ...(c.minSpend ? { min_spend: c.minSpend } : {}),
+      ...(c.expires ? { expires: c.expires } : {}),
+      confidence: c.confidence,
+      sources: c.sources,
+    })),
+    expired: expired.map((c) => c.code),
+  };
+  if (!candidates.length) {
+    return {
+      key: "codes",
+      data,
+      lines: [
+        `  codes:    none extracted${expired.length ? ` (${expired.length} expired: ${data.expired.join(", ")})` : ""} — search the deal sites yourself and ingest them`,
+      ],
+    };
+  }
+  const width = Math.max(...candidates.map((c) => c.code.length));
+  const disc = Math.max(...candidates.map((c) => (c.discount ?? "—").length));
+  const lines = [
+    `  codes:    ${candidates.length} to try — UNVERIFIED: confirm each in its [S#], never pay to test (full list: codes.json)`,
+    ...candidates.map(
+      (c) =>
+        `            ${c.code.padEnd(width)}  ${(c.discount ?? "—").padEnd(disc)}  ` +
+        [c.minSpend && `min. ${c.minSpend}`, c.expires && `until ${c.expires}`, c.confidence, c.sources.map((s) => `[${s}]`).join("")]
+          .filter(Boolean)
+          .join("  "),
+    ),
+    ...(expired.length ? [`            expired: ${data.expired.join(", ")}`] : []),
+  ];
+  return { key: "codes", data, lines };
 }

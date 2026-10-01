@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { EXTRAS, annotateExtras, extraFiles, writeExtras } from "../src/extras.js";
 import { listModes } from "../src/modes/registry.js";
@@ -12,6 +13,8 @@ import { installFetchMock, routes } from "./fetchmock.js";
 import type { GatherOptions, Manifest, RawSource, Source } from "../src/types.js";
 import { runGather } from "../src/gather.js";
 import { runMerge } from "../src/merge.js";
+import { gatherReport } from "../src/cli.js";
+import { callTool } from "../src/mcp/handlers.js";
 
 const DEALS_MANIFEST: Partial<Manifest> = {
   question: "code promo decathlon.fr",
@@ -181,6 +184,44 @@ function baseManifest(): Manifest {
     timings: {},
   };
 }
+
+describe("the run hands the codes back — no file to open", () => {
+  const SEARCH = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "pages", "dealabs-search.html"), "utf8");
+
+  it("gather prints the codes to try in its report", async () => {
+    const dir = scratch();
+    try {
+      installFetchMock((url) => (url.includes("dealabs.com/search") ? { body: SEARCH } : undefined));
+      const options: GatherOptions = { ...GATHER, question: "code promo decathlon.fr", mode: "deals", backends: ["pepper"], out: dir };
+      const r = await runGather(options);
+      const report = gatherReport(r, options).lines.join("\n");
+      expect(report).toMatch(/codes:\s+1 to try — UNVERIFIED/);
+      expect(report).toMatch(/APP5\s+.*\[S\d+\]/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ultrasearch_gather returns them inline, with their sources", async () => {
+    const dir = scratch();
+    try {
+      installFetchMock((url) => (url.includes("dealabs.com/search") ? { body: SEARCH } : undefined));
+      const res = await callTool("ultrasearch_gather", {
+        question: "code promo decathlon.fr",
+        mode: "deals",
+        lang: "fr",
+        region: "fr",
+        backends: ["pepper"],
+        out: dir,
+      });
+      const body = JSON.parse(res.text) as { codes: { to_try: { code: string; sources: string[] }[]; expired: string[] } };
+      expect(body.codes.to_try[0]).toMatchObject({ code: "APP5" });
+      expect(body.codes.to_try[0]!.sources.length).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("renderDossierMarkdown extra blocks", () => {
   it("places each block after the template and before the sources", () => {

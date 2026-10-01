@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { Manifest, ModeExtra, Source } from "./types.js";
 import { writeArtifact } from "./no-write.js";
 import { toBibtex } from "./bibtex.js";
-import { annotateCodes, codesOptions, writeCodes } from "./codes.js";
+import { annotateCodes, codesOptions, codesSummary, writeCodes } from "./codes.js";
 
 // A mode's extra outputs, as ONE table.
 //
@@ -34,6 +34,18 @@ export interface ExtraSpec {
   annotate?: (text: string, source: Source, manifest: Manifest) => Source["meta"];
   /** Write the artifact(s). Returns the lines to inject into DOSSIER.md — empty for none. */
   write?: (ctx: ExtraContext) => string[];
+  /**
+   * What the run itself should hand back — printed by `gather`, carried in its
+   * `--json` and in the MCP result under `key` — so the caller gets the result
+   * without opening a file. Absent = nothing worth saying up front.
+   */
+  summary?: (ctx: ExtraContext) => ExtraSummary | undefined;
+}
+
+export interface ExtraSummary {
+  key: string;
+  data: unknown;
+  lines: string[];
 }
 
 export const EXTRAS: Record<ModeExtra, ExtraSpec> = {
@@ -54,6 +66,7 @@ export const EXTRAS: Record<ModeExtra, ExtraSpec> = {
     files: ["codes.json"],
     annotate: (text, source, manifest) => annotateCodes(text, source.meta, codesOptions(manifest)),
     write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest),
+    summary: ({ sources, manifest }) => codesSummary(sources, manifest),
   },
 };
 
@@ -81,6 +94,13 @@ export function writeExtras(dir: string, sources: Source[], manifest: Manifest):
     if (lines.length) blocks.push(lines);
   }
   return blocks;
+}
+
+/** What every active extra hands back up front (see ExtraSpec.summary). */
+export function extraSummaries(sources: Source[], manifest: Manifest): ExtraSummary[] {
+  return active(manifest)
+    .map((spec) => spec.summary?.({ dir: "", sources, manifest }))
+    .filter((s): s is ExtraSummary => s !== undefined);
 }
 
 /** Every artifact any extra can write, in registry order — what `--stdout` streams. */
