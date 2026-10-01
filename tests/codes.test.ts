@@ -111,6 +111,12 @@ describe("extractCodes — decoys", () => {
     none("Coupon FREE SHIPPING and voucher SALE today", { lang: "en", region: "gb", now: NOW, merchant: "x" });
   });
 
+  it("never takes a truncated code (live: 'appliquez le code promo \"IMAG...' on an aggregator)", () => {
+    none('Pour en bénéficier, appliquez le code promo "IMAG...');
+    none("Pour en bénéficier, appliquez le code promo IMAG… sur la page");
+    expect(codesOf(extractCodes("Code promo IMAGE10. Valable sur tout le site.", fr))).toEqual(["IMAGE10"]);
+  });
+
   it("reads a bare word after a code keyword as a brand, not a code (live false positive, fr.coupert.com)", () => {
     none("Découvrez comment utiliser les codes promo ASOS, étape par étape :");
     none("Voucher ARGOS and coupon AMAZON deals this week", { lang: "en", now: NOW });
@@ -163,6 +169,14 @@ describe("annotateCodes", () => {
     ]);
     expect(once.codes![0]!.minSpend).toBe("100 €"); // a text reading fills what the structured one lacked
     expect(annotateCodes(text, once, fr)).toEqual(once);
+  });
+
+  it("counts the page's title and url as naming the merchant (live: boulanger.com's own codes page)", () => {
+    const body = "## CODES PROMO\n5% de remise immédiate\nBénéficiez de 5% de remise immédiate avec le code PACK5 dès 700€ d'achats\nPACK5\nCopier le code";
+    const boulanger = { ...fr, merchant: "boulanger" };
+    expect(annotateCodes(body, undefined, boulanger)).toBeUndefined();
+    const got = annotateCodes(body, undefined, boulanger, "Code promo Boulanger https://www.boulanger.com/evenement/codes-promo");
+    expect(got?.codes?.[0]).toMatchObject({ code: "PACK5", discount: "5%", minSpend: "700 €" });
   });
 
   it("takes no text code from a page that never names the merchant, but keeps structured ones", () => {

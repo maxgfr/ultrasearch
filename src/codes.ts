@@ -217,7 +217,7 @@ const KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRegExp)
 const HAS_KEYWORD = new RegExp(KEYWORD_RE.source, "iu"); // non-global: safe to .test()
 const LEAD_RE = new RegExp(`${BOUNDARY_BEFORE}${LEAD}(?![\\p{L}\\p{N}])|${BOUNDARY_BEFORE}code\\s*[:：]`, "giu");
 // What may sit between a keyword and its code: punctuation, quotes, emphasis.
-const STRONG_RE = /^[\s:：=\-–—>»«"“”„'‘’*`([]{0,6}([A-Za-z0-9][A-Za-z0-9_-]{3,19})(?![A-Za-z0-9_-])/u;
+const STRONG_RE = /^[\s:：=\-–—>»«"“”„'‘’*`([]{0,6}([A-Za-z0-9][A-Za-z0-9_-]{3,19})(?![A-Za-z0-9_-]|\.\.|…)/u; // "IMAG…" is a truncated code, never a code
 const QUOTED_RE = /(?:\*\*|__|["“”«»„'‘’`])\s*([A-Za-z0-9][A-Za-z0-9_-]{3,19})\s*(?:\*\*|__|["“”«»'‘’`])/gu;
 const WEAK_WINDOW = 60;
 const REPEAT_WINDOW = 80;
@@ -579,9 +579,11 @@ export function extractCodes(text: string, opts: ExtractOptions): CodeMention[] 
  * thread's real code for some other shop is still the wrong code. (Measured on a
  * live Decathlon run, where Reddit's search answered with an opera's promo code.)
  * Structured codes are kept — the backend already matched them to the merchant.
+ * `about` (the page's title and url) counts as naming it: the merchant's own
+ * codes page never repeats its name in the body (boulanger.com's doesn't).
  */
-export function annotateCodes(text: string, meta: SourceMeta | undefined, opts: ExtractOptions): SourceMeta | undefined {
-  if (opts.merchant && !foldText(text).includes(foldText(opts.merchant))) return meta;
+export function annotateCodes(text: string, meta: SourceMeta | undefined, opts: ExtractOptions, about = ""): SourceMeta | undefined {
+  if (opts.merchant && !foldText(`${about} ${text}`).includes(foldText(opts.merchant))) return meta;
   const extracted = extractCodes(text, opts);
   if (!extracted.length) return meta;
   const merged = new Map<string, CodeMention>();

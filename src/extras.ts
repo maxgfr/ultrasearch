@@ -64,7 +64,7 @@ export const EXTRAS: Record<ModeExtra, ExtraSpec> = {
   // in hand, then ranked across the dossier into codes.json + an UNVERIFIED table.
   codes: {
     files: ["codes.json"],
-    annotate: (text, source, manifest) => annotateCodes(text, source.meta, codesOptions(manifest)),
+    annotate: (text, source, manifest) => annotateCodes(text, source.meta, codesOptions(manifest), `${source.title} ${source.url}`),
     write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest),
     summary: ({ sources, manifest }) => codesSummary(sources, manifest),
   },
