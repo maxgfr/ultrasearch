@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.36.1](https://github.com/maxgfr/ultrasearch/compare/v1.36.0...v1.36.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* align the codes list gather prints ([3e07cad](https://github.com/maxgfr/ultrasearch/commit/3e07cadda78c79598ed392e35a7cd3d9ab8c6004)), closes [#35](https://github.com/maxgfr/ultrasearch/issues/35)
+
 # [1.36.0](https://github.com/maxgfr/ultrasearch/compare/v1.35.10...v1.36.0) (2026-10-01)
 
 
