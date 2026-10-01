@@ -22,6 +22,7 @@ import { pubmedBackend } from "./pubmed.js";
 import { dblpBackend } from "./dblp.js";
 import { standardsBackend } from "./standards.js";
 import { websearchBackend } from "./websearch.js";
+import { redditBackend } from "./reddit.js";
 
 // Registry of retrieval backends. Each is independent, returns candidate
 // sources + honest notes, and never throws (the runner wraps failures into
@@ -50,13 +51,15 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   pubmed: pubmedBackend,
   dblp: dblpBackend,
   standards: standardsBackend,
+  reddit: redditBackend,
 };
 
 // Backends that should be queried only ONCE per run regardless of how many
 // query variants are planned: rate-limited APIs (one shot to respect anon
 // quotas) and query-independent backends (fixture/generic). The rest fan out
-// across the variants and have their per-variant lists fused.
-const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic", "claude"]);
+// across the variants and have their per-variant lists fused. reddit answers a
+// second rapid request with a 429, so it gets exactly one.
+const SINGLE_QUERY = new Set<BackendKind>(["github", "stackexchange", "semanticscholar", "pubmed", "standards", "fixture", "generic", "claude", "reddit"]);
 
 // Backends that DO fan out across query variants but whose polite public APIs
 // dislike a burst of concurrent requests (Crossref/OpenAlex/arXiv/Europe PMC
