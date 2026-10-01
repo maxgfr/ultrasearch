@@ -1,0 +1,10 @@
+{
+  "id": "deals-fixture",
+  "question": "code promo decathlon.fr",
+  "mode": "deals",
+  "backends": ["fixture"],
+  "lang": "fr",
+  "region": "fr",
+  "minSources": 3,
+  "expectFile": "codes.json"
+}

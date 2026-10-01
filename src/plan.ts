@@ -32,7 +32,7 @@ export function subjectOf(question: string): string {
 }
 
 // Map a mode-template heading to a genuinely interrogative sub-question about
-// the subject, plus facet-specific query terms. Covers all five shipped
+// the subject, plus facet-specific query terms. Covers all six shipped
 // templates by pattern; an unmatched heading gets a generic (never the old
 // "<question> — <heading>" concat). Exported so `brainstorm` reuses it.
 //
@@ -179,6 +179,38 @@ const FACET_PATTERNS: { re: RegExp; ask: (s: string) => string; angle: string; t
     terms: ["trend", "timing"],
   },
   { re: /risks|moats/i, ask: (s) => `What are the risks and moats for ${s}?`, angle: "what are the risks and moats", terms: ["risk", "moat"] },
+  // deals — worded to stay clear of the startup facets above (timing, pricing,
+  // customer) and learn's "example": the table stops at the first match.
+  {
+    re: /candidate code|codes table|coupon|promo code/i,
+    ask: (s) => `Which discount codes for ${s} are currently reported, and where?`,
+    angle: "which discount codes are currently reported, and where",
+    terms: ["promo code", "coupon"],
+  },
+  {
+    re: /own offers/i,
+    ask: (s) => `What discounts does ${s} itself offer (first order, newsletter, app, loyalty)?`,
+    angle: "what discounts does the merchant itself offer (first order, newsletter, app, loyalty)",
+    terms: ["first order discount", "newsletter"],
+  },
+  {
+    re: /ways to save|cashback/i,
+    ask: (s) => `What other ways to save on ${s} exist (cashback, student discounts, referral, gift cards)?`,
+    angle: "what other ways to save exist (cashback, student discounts, referral, gift cards)",
+    terms: ["cashback", "student discount"],
+  },
+  {
+    re: /sales calendar/i,
+    ask: (s) => `When do ${s}'s sales and seasonal promotions run?`,
+    angle: "when do the sales and seasonal promotions run",
+    terms: ["sales", "black friday"],
+  },
+  {
+    re: /expired|fake|unverifiable/i,
+    ask: (s) => `Which ${s} codes are reported expired, fake or not working?`,
+    angle: "which codes are reported expired, fake or not working",
+    terms: ["code not working", "expired"],
+  },
 ];
 
 // Verbs that, surviving into a subjectOf residue, mark it as a CLAUSE rather

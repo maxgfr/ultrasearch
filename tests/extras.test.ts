@@ -9,11 +9,13 @@ import { renderDossierMarkdown, writeDossier } from "../src/dossier.js";
 import type { CodesFile } from "../src/codes.js";
 import { writeFixtureDossier } from "./dossierfix.js";
 import { installFetchMock, routes } from "./fetchmock.js";
-import type { Manifest, RawSource, Source } from "../src/types.js";
+import type { GatherOptions, Manifest, RawSource, Source } from "../src/types.js";
+import { runGather } from "../src/gather.js";
+import { runMerge } from "../src/merge.js";
 
 const DEALS_MANIFEST: Partial<Manifest> = {
   question: "code promo decathlon.fr",
-  mode: "topic",
+  mode: "deals",
   lang: "fr",
   region: "fr",
   builtAt: "2026-10-01T12:00:00.000Z",
@@ -104,7 +106,55 @@ describe("extras follow the index on every path that rewrites it", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("a deals gather writes codes.json even when no source carries a code", async () => {
+    const dir = scratch();
+    try {
+      await runGather({ ...GATHER, question: "code promo decathlon.fr", mode: "deals", backends: ["fixture"], out: dir });
+      expect(readCodes(dir)).toMatchObject({ merchant: "decathlon", candidates: [], expired: [] });
+      expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toContain("_No candidate code was extracted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("merge keeps each source's codes and re-ranks them across the sub-dossiers", () => {
+    const root = scratch();
+    try {
+      const manifest: Manifest = { ...baseManifest(), ...DEALS_MANIFEST, question: "code promo decathlon.fr" };
+      const structured = { codes: [{ code: "APP5", via: "structured" as const, strength: "strong" as const, discount: "5 €" }] };
+      writeDossier(
+        join(root, "q1"),
+        [{ url: "https://www.dealabs.com/t-1", title: "T", backend: "pepper", score: 1, snippet: "", text: "Bon plan.", meta: structured }],
+        manifest,
+        "## T",
+      );
+      writeDossier(
+        join(root, "q2"),
+        [{ url: "https://forum.test/p", title: "F", backend: "reddit", score: 1, snippet: "", text: "Le code promo APP5 marche." }],
+        manifest,
+        "## T",
+      );
+      const m = runMerge({ runs: [join(root, "q1"), join(root, "q2")], master: join(root, "m"), mode: "deals" });
+      expect(m.sources.find((s) => s.domain === "dealabs.com")?.meta?.codes?.[0]).toMatchObject({ code: "APP5", via: "structured" });
+      expect(readCodes(join(root, "m")).candidates[0]).toMatchObject({ code: "APP5", structured: true, domains: 2 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
+
+const GATHER: GatherOptions = {
+  question: "",
+  mode: "topic",
+  depth: "standard",
+  perSource: 6,
+  lang: "fr",
+  region: "fr",
+  webEngine: "auto",
+  excludeDomains: [],
+  json: false,
+};
 
 function baseManifest(): Manifest {
   return {

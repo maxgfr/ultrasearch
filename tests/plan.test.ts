@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runPlan, subjectOf, facetQuestion } from "../src/plan.js";
-import { DEEP_CAPS } from "../src/types.js";
+import { ALL_MODES, DEEP_CAPS, type ModeName } from "../src/types.js";
+import { getMode } from "../src/modes/registry.js";
 
 describe("runPlan", () => {
   it("is deterministic for the same (question, mode)", () => {
@@ -36,13 +37,28 @@ describe("runPlan", () => {
   });
 
   it("produces interrogative, subject-bearing facets for every mode", () => {
-    for (const mode of ["topic", "bug", "research", "learn", "startup"] as const) {
+    for (const mode of ["topic", "bug", "research", "learn", "startup", "deals"] as const) {
       const facets = runPlan("api rate limiting", mode).subQuestions.filter((s) => s.facet === "template");
       expect(facets.length).toBeGreaterThan(0);
       for (const s of facets) {
         expect(s.question).toMatch(/\?$/);
         expect(s.question).not.toContain(" — ");
       }
+    }
+  });
+
+  it("gives every deals heading its own deals facet — and never steals another mode's heading", () => {
+    const headings = (mode: ModeName) =>
+      getMode(mode)
+        .template.match(/^## .+$/gm)!
+        .map((h) => h.slice(3));
+    const DEALS_TERMS = ["promo code", "first order discount", "cashback", "sales", "code not working"];
+    const dealsFacets = headings("deals")
+      .filter((h) => !/^(TL;DR|Sources)$/.test(h))
+      .map((h) => facetQuestion("decathlon", h).terms[0]);
+    expect(dealsFacets.sort()).toEqual(["cashback", "code not working", "first order discount", "promo code", "sales"].sort());
+    for (const mode of ALL_MODES.filter((m) => m !== "deals")) {
+      for (const h of headings(mode)) expect(DEALS_TERMS, `${mode}: ${h}`).not.toContain(facetQuestion("x", h).terms[0]);
     }
   });
 

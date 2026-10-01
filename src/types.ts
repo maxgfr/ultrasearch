@@ -67,10 +67,10 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "claude",
 ];
 
-// The five report shapes. Each maps to a ModeProfile (backend priority +
+// The six report shapes. Each maps to a ModeProfile (backend priority +
 // template + extras) in src/modes.
-export type ModeName = "topic" | "bug" | "research" | "learn" | "startup";
-export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "learn", "startup"];
+export type ModeName = "topic" | "bug" | "research" | "learn" | "startup" | "deals";
+export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "learn", "startup", "deals"];
 
 // How far a run fans out. `summary` is a quick survey, `deep` runs every
 // backend (including deep-only ones) and keeps the most sources. Tiers

@@ -14,14 +14,15 @@ describe("modes registry", () => {
     }
   });
 
-  it("lists all five modes", () => {
-    expect(listModes()).toHaveLength(5);
+  it("lists all six modes", () => {
+    expect(listModes()).toHaveLength(6);
     expect(Object.keys(MODES).sort()).toEqual([...ALL_MODES].sort());
   });
 
-  it("research mode emits bibtex; learn mode emits glossary + exercises", () => {
+  it("research mode emits bibtex; learn mode emits glossary + exercises; deals emits codes", () => {
     expect(getMode("research").extras).toContain("bibtex");
     expect(getMode("learn").extras).toEqual(expect.arrayContaining(["glossary", "exercises"]));
+    expect(getMode("deals").extras).toEqual(["codes"]);
   });
 });
 
@@ -38,5 +39,26 @@ describe("resolveBackends", () => {
   it("honors an explicit --backends override", () => {
     const opts = makeCtx("x", { backends: ["fixture"] }).options;
     expect(resolveBackends(opts, getMode("topic"))).toEqual(["fixture"]);
+  });
+});
+
+describe("deals mode", () => {
+  const deals = getMode("deals");
+  it("searches the deal communities, then the web cascade", () => {
+    expect(deals.backends).toEqual(["pepper", "reddit", "duckduckgo", "searxng"]);
+  });
+  it("has twelve search angles and the codes table first in its template", () => {
+    expect(deals.searchAngles).toHaveLength(12);
+    expect(deals.template).toMatch(/## Candidate codes\n### Codes table \(code · discount · conditions · expires · sources · confidence · tested\)/);
+    expect(deals.template).toContain("## Expired, fake or unverifiable codes");
+  });
+  it("keeps its deal backends under --search light, which only drops the scraped cascade", () => {
+    const opts = makeCtx("x", { mode: "deals", search: "light" }).options;
+    expect(resolveBackends(opts, deals)).toEqual(expect.arrayContaining(["pepper", "reddit"]));
+  });
+  it("reddit is reused as a deep-only source by startup and bug, never by topic", () => {
+    expect(getMode("startup").deepOnly).toContain("reddit");
+    expect(getMode("bug").deepOnly).toContain("reddit");
+    expect([...getMode("topic").backends, ...getMode("topic").deepOnly]).not.toContain("reddit");
   });
 });
