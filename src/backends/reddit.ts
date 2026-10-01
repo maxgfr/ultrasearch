@@ -1,6 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpGet, sleep, politeDelayMs, browserUa } from "./fetch.js";
-import { awaitHostSlot, parseFeed, throttleReason } from "../engine.js";
+import { awaitHostSlot, parseFeed, throttleReason, type Feed } from "../engine.js";
 import { sinceEpochSeconds } from "../util.js";
 
 // Reddit via its keyless search feed (search.rss — Atom).
@@ -36,8 +36,6 @@ export function redditWindow(since?: string, nowMs: number = Date.now()): Reddit
   if (days <= 366) return "year";
   return "all";
 }
-
-type Feed = NonNullable<ReturnType<typeof parseFeed>>;
 
 // One polite read of a reddit feed: a host slot first, no retry, and a refusal
 // described in words rather than a status code.

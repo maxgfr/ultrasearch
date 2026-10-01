@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { CodeMention, Manifest, Source, SourceMeta } from "./types.js";
 import { writeArtifact } from "./no-write.js";
+import { deaccent, escapeRegExp } from "./util.js";
 
 // Discount-code extraction — the `codes` extra.
 //
@@ -204,19 +205,11 @@ const EXP_MARKER =
   "ważny do|wazny do|do)";
 
 // ---------------------------------------------------------------------------
-// Small helpers
+// Patterns
 // ---------------------------------------------------------------------------
 
-function deaccent(s: string): string {
-  return s.normalize("NFD").replace(/[̀-ͯ]/g, "");
-}
-
-function escapeRe(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 const BOUNDARY_BEFORE = "(?<![\\p{L}\\p{N}_])";
-const KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRe).join("|")})(?:s|e|n)?(?![\\p{L}\\p{N}])`, "giu");
+const KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRegExp).join("|")})(?:s|e|n)?(?![\\p{L}\\p{N}])`, "giu");
 const HAS_KEYWORD = new RegExp(KEYWORD_RE.source, "iu"); // non-global: safe to .test()
 const LEAD_RE = new RegExp(`${BOUNDARY_BEFORE}${LEAD}(?![\\p{L}\\p{N}])|${BOUNDARY_BEFORE}code\\s*[:：]`, "giu");
 // What may sit between a keyword and its code: punctuation, quotes, emphasis.
@@ -415,7 +408,7 @@ function readDiscount(window: string): { discount?: string; minSpend?: string } 
 
 const MONTH_WORD = `(${Object.keys(MONTHS)
   .sort((a, b) => b.length - a.length)
-  .map(escapeRe)
+  .map(escapeRegExp)
   .join("|")})`;
 const DATE_ISO = /^(\d{4})-(\d{1,2})-(\d{1,2})/;
 const DATE_NUM = /^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{4}|\d{2}))?(?!\d)/;
@@ -536,7 +529,9 @@ export function extractCodes(text: string, opts: ExtractOptions): CodeMention[] 
   const byCode = new Map<string, CodeMention>();
   for (const f of found) {
     // A product name: repeated across the page with no keyword in front of it.
-    const outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRe(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter((m) => !inWindow(m.index!)).length;
+    const outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter(
+      (m) => !inWindow(m.index!),
+    ).length;
     if (outside >= 3) continue;
     const { here, next } = sentenceAround(text, f.at);
     // The following sentence only speaks for this code if it names no code of its own.
