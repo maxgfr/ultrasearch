@@ -10054,12 +10054,19 @@ function codesSummary(sources, manifest) {
       ]
     };
   }
-  const width = Math.max(...candidates.map((c) => c.code.length));
-  const disc = Math.max(...candidates.map((c) => (c.discount ?? "\u2014").length));
+  const cells = candidates.map((c) => [
+    c.code,
+    c.discount ?? "\u2014",
+    c.minSpend ? `min. ${c.minSpend}` : "",
+    c.expires ? `until ${c.expires}` : "",
+    c.confidence,
+    c.sources.map((s) => `[${s}]`).join("")
+  ]);
+  const widths = cells[0].map((_, i) => Math.max(...cells.map((row) => row[i].length)));
   const lines = [
     `  codes:    ${candidates.length} to try \u2014 UNVERIFIED: confirm each in its [S#], never pay to test (full list: codes.json)`,
-    ...candidates.map(
-      (c) => `            ${c.code.padEnd(width)}  ${(c.discount ?? "\u2014").padEnd(disc)}  ` + [c.minSpend && `min. ${c.minSpend}`, c.expires && `until ${c.expires}`, c.confidence, c.sources.map((s) => `[${s}]`).join("")].filter(Boolean).join("  ")
+    ...cells.map(
+      (row) => `            ${row.map((cell2, i) => i === row.length - 1 ? cell2 : cell2.padEnd(widths[i])).filter((_, i) => widths[i] > 0).join("  ")}`.trimEnd()
     ),
     ...expired.length ? [`            expired: ${data.expired.join(", ")}`] : []
   ];

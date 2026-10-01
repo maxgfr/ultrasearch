@@ -346,4 +346,20 @@ describe("codesSummary — the list the run hands back", () => {
   it("says so when nothing was extracted", () => {
     expect(codesSummary([], manifest).lines.join("\n")).toMatch(/codes:\s+none extracted/);
   });
+
+  it("prints a table: every column starts at the same place on every row (live: Boulanger's list drifted)", () => {
+    const rows = codesSummary(
+      [
+        src("S1", "https://www.boulanger.com/x", [text("PACK5", { discount: "5%", minSpend: "700 €", expires: "2026-12-31" })]),
+        src("S2", "https://www.dealabs.com/y", [{ code: "BIENVENUE", via: "structured", strength: "strong", discount: "10€", expires: "2026-12-31" }]),
+        src("S3", "https://c.test/z", [text("PROMO20")]),
+      ],
+      manifest,
+    ).lines.slice(1);
+    const at = (re: RegExp) => rows.map((r) => r.search(re));
+    for (const col of [/\[S\d+\]/, /\b(high|medium|low)\b/]) expect(new Set(at(col)).size, String(col)).toBe(1);
+    const until = at(/until /).filter((i) => i >= 0);
+    expect(until).toHaveLength(2);
+    expect(new Set(until).size).toBe(1);
+  });
 });
