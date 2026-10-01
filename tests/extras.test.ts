@@ -78,8 +78,15 @@ describe("extras follow the index on every path that rewrites it", () => {
       // The code sits past what the depth-capped extract keeps — annotation must read rs.text, not the extract.
       const filler = "Lorem ipsum dolor sit amet. ".repeat(400);
       const raws: RawSource[] = [
-        { url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 2, snippet: "", text: `${filler}\nAvec le code promo RENTREE10, 10% de remise.` },
-        { url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "", text: "Code promo RENTREE10 : -10% sur tout le site." },
+        {
+          url: "https://a.test/1",
+          title: "A",
+          backend: "duckduckgo",
+          score: 2,
+          snippet: "",
+          text: `Decathlon. ${filler}\nAvec le code promo RENTREE10, 10% de remise.`,
+        },
+        { url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "", text: "Code promo RENTREE10 : -10% sur tout le site Decathlon." },
       ];
       const { sources } = writeDossier(dir, raws, manifest, "## T\n## Sources");
       expect(sources[0]!.meta?.codes?.[0]?.code).toBe("RENTREE10");
@@ -96,7 +103,7 @@ describe("extras follow the index on every path that rewrites it", () => {
     const dir = scratch();
     try {
       writeFixtureDossier(dir, 1, DEALS_MANIFEST);
-      installFetchMock(routes([["deals.test", { body: "<title>Deals</title><p>Utilisez le code promo AUTOMNE15 pour 15% de remise.</p>" }]]));
+      installFetchMock(routes([["deals.test", { body: "<title>Deals</title><p>Utilisez le code promo AUTOMNE15 pour 15% de remise chez Decathlon.</p>" }]]));
       const r = await addSource(dir, "https://deals.test/decathlon", {});
       expect(r.added).toBe(true);
       const codes = readCodes(dir);
@@ -131,7 +138,7 @@ describe("extras follow the index on every path that rewrites it", () => {
       );
       writeDossier(
         join(root, "q2"),
-        [{ url: "https://forum.test/p", title: "F", backend: "reddit", score: 1, snippet: "", text: "Le code promo APP5 marche." }],
+        [{ url: "https://forum.test/p", title: "F", backend: "reddit", score: 1, snippet: "", text: "Le code promo APP5 marche chez Decathlon." }],
         manifest,
         "## T",
       );

@@ -208,6 +208,9 @@ const EXP_MARKER =
 // Patterns
 // ---------------------------------------------------------------------------
 
+// Lower-cased, accent-free, alphanumerics only — "La Redoute" matches "laredoute.fr".
+const foldText = (s: string) => deaccent(s.toLowerCase()).replace(/[^a-z0-9]/g, "");
+
 const BOUNDARY_BEFORE = "(?<![\\p{L}\\p{N}_])";
 const KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRegExp).join("|")})(?:s|e|n)?(?![\\p{L}\\p{N}])`, "giu");
 const HAS_KEYWORD = new RegExp(KEYWORD_RE.source, "iu"); // non-global: safe to .test()
@@ -570,8 +573,14 @@ export function extractCodes(text: string, opts: ExtractOptions): CodeMention[] 
  * again over the same text changes nothing, which is what lets `merge`
  * re-annotate sources that already carry codes. Returns `meta` itself when there
  * is nothing to add.
+ *
+ * A page that never names the merchant contributes no text codes: a forum
+ * thread's real code for some other shop is still the wrong code. (Measured on a
+ * live Decathlon run, where Reddit's search answered with an opera's promo code.)
+ * Structured codes are kept — the backend already matched them to the merchant.
  */
 export function annotateCodes(text: string, meta: SourceMeta | undefined, opts: ExtractOptions): SourceMeta | undefined {
+  if (opts.merchant && !foldText(text).includes(foldText(opts.merchant))) return meta;
   const extracted = extractCodes(text, opts);
   if (!extracted.length) return meta;
   const merged = new Map<string, CodeMention>();

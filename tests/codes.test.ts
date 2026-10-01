@@ -145,7 +145,7 @@ describe("cleanCode", () => {
 describe("annotateCodes", () => {
   it("merges structured codes with text ones, and is idempotent", () => {
     const meta = { codes: [{ code: "APP5", via: "structured", strength: "strong", discount: "5 €" }] as CodeMention[] };
-    const text = "Avec le code promo APP5 dès 100€. Et le code promo RENTREE10 donne 10%.";
+    const text = "Decathlon : avec le code promo APP5 dès 100€. Et le code promo RENTREE10 donne 10%.";
     const once = annotateCodes(text, meta, fr)!;
     expect(once.codes!.map((c) => [c.code, c.via])).toEqual([
       ["APP5", "structured"],
@@ -153,6 +153,15 @@ describe("annotateCodes", () => {
     ]);
     expect(once.codes![0]!.minSpend).toBe("100 €"); // a text reading fills what the structured one lacked
     expect(annotateCodes(text, once, fr)).toEqual(once);
+  });
+
+  it("takes no text code from a page that never names the merchant, but keeps structured ones", () => {
+    const opera = "Seattle Opera responds by offering 14% off using the promo code ‘TIMOTHEE’.";
+    expect(annotateCodes(opera, undefined, fr)).toBeUndefined();
+    const meta = { codes: [{ code: "APP5", via: "structured", strength: "strong" }] as CodeMention[] };
+    expect(annotateCodes(opera, meta, fr)).toBe(meta);
+    // Accents, case and spacing do not hide the name.
+    expect(annotateCodes("Chez La Redoute, le code promo AUTOMNE20 marche.", undefined, { ...fr, merchant: "la redoute" })?.codes?.[0]?.code).toBe("AUTOMNE20");
   });
 
   it("returns the meta untouched when the text holds no code", () => {
