@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { Manifest, ModeExtra, Source } from "./types.js";
 import { writeArtifact } from "./no-write.js";
 import { toBibtex } from "./bibtex.js";
+import { annotateCodes, codesOptions, writeCodes } from "./codes.js";
 
 // A mode's extra outputs, as ONE table.
 //
@@ -47,6 +48,13 @@ export const EXTRAS: Record<ModeExtra, ExtraSpec> = {
   // learn: the model writes these into REPORT.md itself; the engine has nothing to produce.
   glossary: { files: [] },
   exercises: { files: [] },
+  // deals: candidate discount codes, extracted per source while the full text is
+  // in hand, then ranked across the dossier into codes.json + an UNVERIFIED table.
+  codes: {
+    files: ["codes.json"],
+    annotate: (text, source, manifest) => annotateCodes(text, source.meta, codesOptions(manifest)),
+    write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest),
+  },
 };
 
 function active(manifest: Manifest): ExtraSpec[] {

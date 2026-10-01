@@ -5,10 +5,22 @@ import { tmpdir } from "node:os";
 import { EXTRAS, annotateExtras, extraFiles, writeExtras } from "../src/extras.js";
 import { listModes } from "../src/modes/registry.js";
 import { addSource } from "../src/enrich.js";
-import { renderDossierMarkdown } from "../src/dossier.js";
+import { renderDossierMarkdown, writeDossier } from "../src/dossier.js";
+import type { CodesFile } from "../src/codes.js";
 import { writeFixtureDossier } from "./dossierfix.js";
 import { installFetchMock, routes } from "./fetchmock.js";
-import type { Manifest, Source } from "../src/types.js";
+import type { Manifest, RawSource, Source } from "../src/types.js";
+
+const DEALS_MANIFEST: Partial<Manifest> = {
+  question: "code promo decathlon.fr",
+  mode: "topic",
+  lang: "fr",
+  region: "fr",
+  builtAt: "2026-10-01T12:00:00.000Z",
+  extras: ["codes"],
+};
+
+const readCodes = (dir: string) => JSON.parse(readFileSync(join(dir, "codes.json"), "utf8")) as CodesFile;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -56,7 +68,62 @@ describe("extras follow the index on every path that rewrites it", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("writeDossier annotates from the FULL text and writes codes.json + the UNVERIFIED block", () => {
+    const dir = scratch();
+    try {
+      const manifest: Manifest = { ...baseManifest(), ...DEALS_MANIFEST };
+      // The code sits past what the depth-capped extract keeps — annotation must read rs.text, not the extract.
+      const filler = "Lorem ipsum dolor sit amet. ".repeat(400);
+      const raws: RawSource[] = [
+        { url: "https://a.test/1", title: "A", backend: "duckduckgo", score: 2, snippet: "", text: `${filler}\nAvec le code promo RENTREE10, 10% de remise.` },
+        { url: "https://b.test/1", title: "B", backend: "duckduckgo", score: 1, snippet: "", text: "Code promo RENTREE10 : -10% sur tout le site." },
+      ];
+      const { sources } = writeDossier(dir, raws, manifest, "## T\n## Sources");
+      expect(sources[0]!.meta?.codes?.[0]?.code).toBe("RENTREE10");
+      const codes = readCodes(dir);
+      expect(codes.merchant).toBe("decathlon");
+      expect(codes.candidates[0]).toMatchObject({ code: "RENTREE10", sources: ["S1", "S2"], domains: 2 });
+      expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toContain("Candidate codes (extracted — UNVERIFIED)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ingest folds a new page's codes into codes.json", async () => {
+    const dir = scratch();
+    try {
+      writeFixtureDossier(dir, 1, DEALS_MANIFEST);
+      installFetchMock(routes([["deals.test", { body: "<title>Deals</title><p>Utilisez le code promo AUTOMNE15 pour 15% de remise.</p>" }]]));
+      const r = await addSource(dir, "https://deals.test/decathlon", {});
+      expect(r.added).toBe(true);
+      const codes = readCodes(dir);
+      expect(codes.candidates.map((c) => c.code)).toEqual(["AUTOMNE15"]);
+      expect(codes.candidates[0]!.sources).toEqual([r.id]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+function baseManifest(): Manifest {
+  return {
+    version: "0",
+    question: "q",
+    mode: "topic",
+    depth: "standard",
+    lang: "en",
+    backends: [],
+    backendsUsed: [],
+    sourceCount: 0,
+    builtAt: "2026-01-01T00:00:00.000Z",
+    slug: "x",
+    tiers: ["SUMMARY.md", "REPORT.md"],
+    extras: [],
+    notes: [],
+    timings: {},
+  };
+}
 
 describe("renderDossierMarkdown extra blocks", () => {
   it("places each block after the template and before the sources", () => {
