@@ -32,6 +32,7 @@ export type BackendKind =
   // Community content backends: keyless public feeds/pages that already carry
   // text, so they are content backends, never part of the web DISCOVERY cascade.
   | "reddit"
+  | "pepper"
   | "generic"
   | "fixture"
   | "claude"
@@ -60,6 +61,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "dblp",
   "standards",
   "reddit",
+  "pepper",
   "generic",
   "fixture",
   "claude",

@@ -6,6 +6,7 @@ import { duckduckgoBackend } from "../src/backends/duckduckgo.js";
 import { ddgliteBackend } from "../src/backends/ddglite.js";
 import { mojeekBackend } from "../src/backends/mojeek.js";
 import { searxngBackend } from "../src/backends/searxng.js";
+import { pepperBackend } from "../src/backends/pepper.js";
 import type { RawSource } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
@@ -54,5 +55,16 @@ describe("parser drift canaries (saved fixtures)", () => {
     installFetchMock(() => ({ body: fixture("searxng.json"), contentType: "application/json" }));
     const r = await searxngBackend(makeCtx("rate limiting", { searxng: "http://localhost:8888" }));
     assertWeb(r.items, 3);
+  });
+
+  // Pepper (Dealabs & co.) embeds each thread as JSON in a data-vue3 attribute,
+  // and its voucher pages as a Next.js flight payload. Both are a redesign away
+  // from silently yielding nothing; these say so first.
+  it("pepper (Dealabs) search + voucher page still parse", async () => {
+    installFetchMock((url) => ({ body: fixture(url.includes("/codes-promo/") ? "dealabs-vouchers.html" : "dealabs-search.html") }));
+    const r = await pepperBackend(makeCtx("code promo decathlon", { lang: "fr", region: "fr", depth: "deep" }));
+    assertWeb(r.items, 3);
+    expect(r.items.some((i) => i.meta?.codes?.some((c) => c.code === "APP5" && c.via === "structured"))).toBe(true);
+    expect(r.items[0]!.url).toBe("https://www.dealabs.com/codes-promo/decathlon");
   });
 });
