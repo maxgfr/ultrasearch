@@ -9426,6 +9426,10 @@ function redditWindow(since, nowMs = Date.now()) {
   if (days <= 366) return "year";
   return "all";
 }
+var SITE_RE = /\b(?:https?:\/\/)?(?:www\.)?([a-z0-9][a-z0-9-]*)\.(?:co\.uk|com\.au|com|net|org|fr|de|at|ch|be|nl|es|it|pl|pt|eu|uk|us|ca|ie|se|dk|no|fi)(?:\/\S*)?(?![\w.])/gi;
+function redditQuery(question) {
+  return question.replace(SITE_RE, (_m, name) => `"${name}"`);
+}
 async function readFeed(url) {
   await awaitHostSlot(url);
   const r = await httpGet(url, { accept: "application/atom+xml", userAgent: browserUa(), retries: 0, timeoutMs: 12e3 });
@@ -9443,7 +9447,7 @@ function fallback(q) {
 var redditBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const q = ctx.question;
-  const url = `${SEARCH_URL}?q=${encodeURIComponent(q)}&sort=relevance&t=${redditWindow(ctx.options.since)}&limit=${Math.min(25, n * 2)}`;
+  const url = `${SEARCH_URL}?q=${encodeURIComponent(redditQuery(q))}&sort=relevance&t=${redditWindow(ctx.options.since)}&limit=${Math.min(25, n * 2)}`;
   const { feed, why } = await readFeed(url);
   if (!feed) return { backend: "reddit", items: [], notes: [`Reddit search ${why}. ${fallback(q)}`] };
   const threads = feed.items.filter((it) => it.url && THREAD_RE.test(it.url)).slice(0, n);
@@ -9652,7 +9656,7 @@ var BOUNDARY_BEFORE = "(?<![\\p{L}\\p{N}_])";
 var KEYWORD_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${KEYWORDS.map(escapeRegExp).join("|")})(?:s|e|n)?(?![\\p{L}\\p{N}])`, "giu");
 var HAS_KEYWORD = new RegExp(KEYWORD_RE.source, "iu");
 var LEAD_RE = new RegExp(`${BOUNDARY_BEFORE}${LEAD}(?![\\p{L}\\p{N}])|${BOUNDARY_BEFORE}code\\s*[:\uFF1A]`, "giu");
-var STRONG_RE = /^[\s:：=\-–—>»«"“”„'‘’*`([]{0,6}([A-Za-z0-9][A-Za-z0-9_-]{3,19})(?![A-Za-z0-9_-])/u;
+var STRONG_RE = /^[\s:：=\-–—>»«"“”„'‘’*`([]{0,6}([A-Za-z0-9][A-Za-z0-9_-]{3,19})(?![A-Za-z0-9_-]|\.\.|…)/u;
 var QUOTED_RE = /(?:\*\*|__|["“”«»„'‘’`])\s*([A-Za-z0-9][A-Za-z0-9_-]{3,19})\s*(?:\*\*|__|["“”«»'‘’`])/gu;
 var WEAK_WINDOW = 60;
 var REPEAT_WINDOW = 80;
@@ -9927,8 +9931,8 @@ function extractCodes(text, opts) {
   }
   return [...byCode.values()];
 }
-function annotateCodes(text, meta, opts) {
-  if (opts.merchant && !foldText(text).includes(foldText(opts.merchant))) return meta;
+function annotateCodes(text, meta, opts, about = "") {
+  if (opts.merchant && !foldText(`${about} ${text}`).includes(foldText(opts.merchant))) return meta;
   const extracted = extractCodes(text, opts);
   if (!extracted.length) return meta;
   const merged = /* @__PURE__ */ new Map();
@@ -10027,6 +10031,39 @@ function writeCodes(dir, sources, manifest) {
   if (more > 0) out.push("", `_${more} more candidate(s) in codes.json._`);
   if (expired.length) out.push("", `_${expired.length} expired code(s) left out of this table \u2014 see \`expired\` in codes.json._`);
   return out;
+}
+function codesSummary(sources, manifest) {
+  const { candidates, expired } = aggregateCodes(sources, manifest);
+  const data = {
+    to_try: candidates.map((c) => ({
+      code: c.code,
+      ...c.discount ? { discount: c.discount } : {},
+      ...c.minSpend ? { min_spend: c.minSpend } : {},
+      ...c.expires ? { expires: c.expires } : {},
+      confidence: c.confidence,
+      sources: c.sources
+    })),
+    expired: expired.map((c) => c.code)
+  };
+  if (!candidates.length) {
+    return {
+      key: "codes",
+      data,
+      lines: [
+        `  codes:    none extracted${expired.length ? ` (${expired.length} expired: ${data.expired.join(", ")})` : ""} \u2014 search the deal sites yourself and ingest them`
+      ]
+    };
+  }
+  const width = Math.max(...candidates.map((c) => c.code.length));
+  const disc = Math.max(...candidates.map((c) => (c.discount ?? "\u2014").length));
+  const lines = [
+    `  codes:    ${candidates.length} to try \u2014 UNVERIFIED: confirm each in its [S#], never pay to test (full list: codes.json)`,
+    ...candidates.map(
+      (c) => `            ${c.code.padEnd(width)}  ${(c.discount ?? "\u2014").padEnd(disc)}  ` + [c.minSpend && `min. ${c.minSpend}`, c.expires && `until ${c.expires}`, c.confidence, c.sources.map((s) => `[${s}]`).join("")].filter(Boolean).join("  ")
+    ),
+    ...expired.length ? [`            expired: ${data.expired.join(", ")}`] : []
+  ];
+  return { key: "codes", data, lines };
 }
 
 // src/backends/pepper.ts
@@ -10492,8 +10529,9 @@ var EXTRAS = {
   // in hand, then ranked across the dossier into codes.json + an UNVERIFIED table.
   codes: {
     files: ["codes.json"],
-    annotate: (text, source2, manifest) => annotateCodes(text, source2.meta, codesOptions(manifest)),
-    write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest)
+    annotate: (text, source2, manifest) => annotateCodes(text, source2.meta, codesOptions(manifest), `${source2.title} ${source2.url}`),
+    write: ({ dir, sources, manifest }) => writeCodes(dir, sources, manifest),
+    summary: ({ sources, manifest }) => codesSummary(sources, manifest)
   }
 };
 function active(manifest) {
@@ -10515,6 +10553,9 @@ function writeExtras(dir, sources, manifest) {
     if (lines.length) blocks.push(lines);
   }
   return blocks;
+}
+function extraSummaries(sources, manifest) {
+  return active(manifest).map((spec) => spec.summary?.({ dir: "", sources, manifest })).filter((s) => s !== void 0);
 }
 function extraFiles() {
   return [...new Set(Object.values(EXTRAS).flatMap((s) => s.files))];
@@ -13906,6 +13947,8 @@ async function handleGather(args) {
     mode: options.mode,
     depth: options.depth,
     sources: res.sources.length,
+    // The mode's own result, inline — for deals, the codes to try with their [S#].
+    ...Object.fromEntries(extraSummaries(res.sources, res.manifest).map((s) => [s.key, s.data])),
     ...res.manifest.notes?.length ? { notes: res.manifest.notes } : {}
   };
   if (isNoWrite()) {
@@ -15004,6 +15047,8 @@ function gatherReport(r, options) {
       ...fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : [],
       ...ignored.length ? [`  IGNORED:  ${ignored.join(", ")} \u2014 --backends bypasses the cascade, seed-domain and gap rounds`] : [],
       ...under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} \u2014 enrich these before ${options.stdout ? "answering" : "writing"}`] : [],
+      // What the mode's extras found (the codes to try, for deals), up front.
+      ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...options.stdout ? [
         `  next:     the dossier and every source extract are on stdout \u2014 answer inline, citing [S#].`,
         `            NO 'check' gate exists without files: never state anything the extracts do not say.`
@@ -15097,14 +15142,15 @@ async function main(argv = process.argv.slice(2)) {
       }
       const r = await runGather(options);
       const report = gatherReport(r, options);
+      const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
-        emitArtifacts(r.dir, options.json, { manifest: r.manifest });
+        emitArtifacts(r.dir, options.json, { manifest: r.manifest, ...summaries });
         process.stderr.write(report.lines.join("\n") + "\n");
         process.exitCode = report.exitCode;
         return;
       }
       if (options.json) {
-        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest, ...summaries }, null, 2) + "\n");
         process.exitCode = report.exitCode;
         return;
       }
