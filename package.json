@@ -54,22 +54,25 @@
     "url": "https://github.com/maxgfr/ultrasearch"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.3",
-    "@semantic-release/changelog": "^6.0.3",
+    "@biomejs/biome": "^2.5.15",
+    "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/exec": "^7.1.0",
-    "@semantic-release/git": "^10.0.1",
-    "@types/node": "^26.1.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@semantic-release/git": "^11.0.1",
+    "@types/node": "^26.6.3",
+    "@vitest/coverage-v8": "^4.1.11",
     "semantic-release": "^25.0.9",
     "tsup": "^8.3.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
+    "vitest": "^4.1.11",
     "yaml": "^2.9.0",
     "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/ed1b57866529534a5b106be0157f12e4c7164b5b"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild"
-    ]
+    ],
+    "overrides": {
+      "esbuild": "^0.28.1"
+    }
   }
 }
