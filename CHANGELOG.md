@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.36.0](https://github.com/maxgfr/ultrasearch/compare/v1.35.10...v1.36.0) (2026-10-01)
+
+
+### Bug Fixes
+
+* quote a site's name in the reddit query ([782dc06](https://github.com/maxgfr/ultrasearch/commit/782dc06b26a542459fc67d8749204beaa71a4e08))
+* read a bare word after a code keyword as a brand ([60cde67](https://github.com/maxgfr/ultrasearch/commit/60cde6720867b2ef7268088b9795e8c4ece898cf))
+* take no text code from a page that never names the merchant ([8610c5e](https://github.com/maxgfr/ultrasearch/commit/8610c5e8bab16a290d84997d77c94bf05ace2b82))
+* trust a merchant's own page, refuse a truncated code ([699037a](https://github.com/maxgfr/ultrasearch/commit/699037a8a763f189a7e7eda339980ef297f43e7d))
+
+
+### Features
+
+* add codes extractor ([da8c124](https://github.com/maxgfr/ultrasearch/commit/da8c124c0e1889fa442fbd9e0754e5c84c31743a))
+* add deals mode and find_coupons prompt ([f88f83a](https://github.com/maxgfr/ultrasearch/commit/f88f83ab8dfb9febe88ed5f60dd4faee3504070d))
+* add pepper backend ([fbe6c4b](https://github.com/maxgfr/ultrasearch/commit/fbe6c4b01c776ae243c11225d5c8bd8973f6efa0))
+* add reddit backend ([c357fd7](https://github.com/maxgfr/ultrasearch/commit/c357fd7ad39936c5003c59d9bc9633f8494a549a))
+* hand back the codes to try at the end of a deals run ([83c47f9](https://github.com/maxgfr/ultrasearch/commit/83c47f9af875557d6320ede571e005fd136af3b6))
+
 ## [1.35.10](https://github.com/maxgfr/ultrasearch/compare/v1.35.9...v1.35.10) (2026-09-30)
 
 
