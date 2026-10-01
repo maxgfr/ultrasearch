@@ -21,7 +21,7 @@ import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
-import { writeBibtex, writeDossier } from "./dossier.js";
+import { writeDossier } from "./dossier.js";
 import { describeServices } from "./services.js";
 import {
   domainOf,
@@ -896,6 +896,5 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  writeBibtex(dir, sources, mode.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

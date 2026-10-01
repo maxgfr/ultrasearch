@@ -12,6 +12,7 @@ import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gathe
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
+import { extraFiles } from "./extras.js";
 import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
@@ -469,7 +470,7 @@ function emitArtifacts(dir: string, asJson: boolean, extra: Record<string, unkno
   const shown = [
     ...STDOUT_BRIEF.map(at),
     ...artifacts.filter((a) => sourceNum(a.rel) > 0).sort((a, b) => sourceNum(a.rel) - sourceNum(b.rel)),
-    at("refs.bib"),
+    ...extraFiles().map(at),
   ].filter((a): a is { rel: string; content: string } => a !== undefined);
 
   const out = shown.map((a) => `===== ${a.rel} =====\n${a.content.endsWith("\n") ? a.content : a.content + "\n"}`);
