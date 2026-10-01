@@ -53,7 +53,32 @@ export const PROMPTS: PromptDecl[] = [
       "every claim is traceable to a paper.",
     arguments: [{ name: "question", description: "The research question.", required: true }],
   },
+  {
+    name: "find_coupons",
+    title: "Find discount codes for a merchant",
+    description:
+      "The deals workflow: sweep the web and the deal communities for a merchant's coupon codes, rank what they report, and answer with a table in " +
+      "which every code is cited to a page that shows it — never a code guessed or remembered.",
+    arguments: [
+      { name: "merchant", description: "The shop, ideally with its domain for the country (e.g. decathlon.fr).", required: true },
+      { name: "country", description: "Two-letter country code, e.g. fr, gb, de, us. Picks the deal community and the local sites.", required: false },
+      { name: "lang", description: "Search language, e.g. fr. Default: the country's.", required: false },
+    ],
+  },
 ];
+
+// One renderer per prompt. A Record over the declared names, so a prompt added
+// to PROMPTS without a renderer (or the reverse) is caught by the test that
+// compares the two — rather than falling through to some other workflow.
+const RENDER: Record<string, (args: Record<string, unknown>) => string> = {
+  research_topic: researchTopic,
+  debug_error: debugError,
+  literature_review: literatureReview,
+  find_coupons: findCoupons,
+};
+
+/** The prompt names that have a renderer — exported for the drift test. */
+export const RENDERED_PROMPTS = Object.keys(RENDER);
 
 export function getPrompt(name: string, args: Record<string, unknown> = {}): PromptResult {
   const decl = PROMPTS.find((p) => p.name === name);
@@ -63,7 +88,9 @@ export function getPrompt(name: string, args: Record<string, unknown> = {}): Pro
     if (arg.required && !str(args[arg.name])) throw new PromptError(`\`${arg.name}\` is required for prompt "${name}"`);
   }
 
-  const text = name === "research_topic" ? researchTopic(args) : name === "debug_error" ? debugError(args) : literatureReview(args);
+  const render = RENDER[name];
+  if (!render) throw new PromptError(`prompt "${name}" has no renderer`);
+  const text = render(args);
   return { description: decl.description, messages: [{ role: "user", content: { type: "text", text } }] };
 }
 
@@ -143,6 +170,37 @@ ${CORE_RULE}
 ${THIN}
 
 **Attribute findings to specific papers, with their limits.** "Studies show X" citing four papers is weaker than one sentence naming what one study measured, in what population, and what it did not establish. Where the literature disagrees, that disagreement IS the finding.
+
+${GATE}`;
+}
+
+function findCoupons(args: Record<string, unknown>): string {
+  const merchant = str(args.merchant)!;
+  const country = str(args.country)?.toLowerCase();
+  const lang = str(args.lang);
+  const locale = [lang && `\`lang: "${lang}"\``, country && `\`region: "${country}"\``].filter(Boolean).join(" and ");
+  const domain = /\.[a-z]{2,}$/i.test(merchant.trim()) ? merchant.trim() : undefined;
+
+  return `Find working discount codes for:
+
+> ${merchant}${country ? ` (${country})` : ""}
+
+${CORE_RULE}
+
+**A code is a claim like any other — it needs a source that shows it.** Never write a code you did not see on a fetched page, never "complete" a partial one, and never present a code as working unless it was actually tried.
+
+**Sequence:**
+
+1. Sweep with your own web search first — the merchant + "promo code" in the country's language with this month and year, the country's deal community (Dealabs, hotukdeals, mydealz…), its coupon aggregators, and Reddit. Keep the hits.
+2. \`ultrasearch_gather\` with \`mode: "deals"\`${locale ? `, ${locale}` : ""}${domain ? `, \`seed_domains: ["${domain}"]\`` : ""}, and your hits as \`web_results\`. It returns the dossier directory.
+3. \`ultrasearch_read\` its \`codes.json\` — the ranked candidates, with the [S#] sources each was seen in — then \`DOSSIER.md\`. Confirm every candidate in the extract it cites.
+4. For a gap (no code from the merchant's own site, a candidate seen on one page only), find the page and \`ultrasearch_fetch\` it so it becomes a citable [S#].
+5. Write the report to the deals template: one row per code — code · discount · conditions · expiry · sources · confidence · tested — then the merchant's own offers, the other ways to save, and the expired or dubious codes, each cited.
+6. \`ultrasearch_check\` on the dossier, then \`ultrasearch_render\`.
+
+**Rank honestly.** A code on one aggregator page is weak; the same code on the deal community and a forum, with a future expiry, is strong. Say which is which. Mark every code "not tested" unless the user tried it in their own cart.
+
+${THIN}
 
 ${GATE}`;
 }

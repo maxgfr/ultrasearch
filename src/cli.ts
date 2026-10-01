@@ -12,6 +12,7 @@ import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gathe
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
 import { buildSource } from "./dossier.js";
+import { extraFiles, extraSummaries } from "./extras.js";
 import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
@@ -469,7 +470,7 @@ function emitArtifacts(dir: string, asJson: boolean, extra: Record<string, unkno
   const shown = [
     ...STDOUT_BRIEF.map(at),
     ...artifacts.filter((a) => sourceNum(a.rel) > 0).sort((a, b) => sourceNum(a.rel) - sourceNum(b.rel)),
-    at("refs.bib"),
+    ...extraFiles().map(at),
   ].filter((a): a is { rel: string; content: string } => a !== undefined);
 
   const out = shown.map((a) => `===== ${a.rel} =====\n${a.content.endsWith("\n") ? a.content : a.content + "\n"}`);
@@ -538,6 +539,8 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
       ...(fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : []),
       ...(ignored.length ? [`  IGNORED:  ${ignored.join(", ")} — --backends bypasses the cascade, seed-domain and gap rounds`] : []),
       ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before ${options.stdout ? "answering" : "writing"}`] : []),
+      // What the mode's extras found (the codes to try, for deals), up front.
+      ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...(options.stdout
         ? [
             `  next:     the dossier and every source extract are on stdout — answer inline, citing [S#].`,
@@ -666,14 +669,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       }
       const r = await runGather(options);
       const report = gatherReport(r, options);
+      const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
-        emitArtifacts(r.dir, options.json, { manifest: r.manifest });
+        emitArtifacts(r.dir, options.json, { manifest: r.manifest, ...summaries });
         process.stderr.write(report.lines.join("\n") + "\n");
         process.exitCode = report.exitCode;
         return;
       }
       if (options.json) {
-        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest, ...summaries }, null, 2) + "\n");
         process.exitCode = report.exitCode;
         return;
       }

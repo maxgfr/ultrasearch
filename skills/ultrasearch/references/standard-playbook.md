@@ -13,6 +13,7 @@ verified loop see `references/deep-research-playbook.md`.
 | a survey of the academic literature | `research` |
 | to learn the topic from scratch | `learn` |
 | market/competitor/pricing research | `startup` |
+| coupons / promo / discount codes for a shop | `deals` (+ `--lang`, `--region`) |
 
 Default to `topic` when unsure. Mode sets both the **backends** and the **report
 template** (`references/modes.md`, `references/report-templates.md`). `modes`

@@ -73,7 +73,7 @@ whose product **is** a file for a later process — `merge`, `fetch`, `verify`,
 `REPORT.md` against a `sources.json`, so with no files there is no mechanical
 grounding gate. See `skills/ultrasearch/references/operations.md`.
 
-## Five modes
+## Six modes
 
 Each mode is a **report template** + a **backend-priority profile**:
 
@@ -84,6 +84,7 @@ Each mode is a **report template** + a **backend-priority profile**:
 | `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed, dblp (+ `refs.bib`) |
 | `learn` | learning a topic from scratch | general web + docs → glossary, lesson, exercises, rich HTML |
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
+| `deals` | coupons & discount codes for a merchant, by country | Dealabs/hotukdeals/mydealz…, Reddit, general web → ranked, UNVERIFIED candidates (+ `codes.json`) |
 
 ## How it's used (the agent's loop)
 
@@ -350,6 +351,7 @@ deletes a dossier, and every write lands in a directory the caller named.
 | `research_topic` | `question`, `depth?` | gather → read every source → cited report → `ultrasearch_check` → render |
 | `debug_error` | `error`, `context?` | `mode: bug` against StackOverflow/GitHub/HN, with the version caveat spelled out |
 | `literature_review` | `question` | plan → gather per sub-question → merge → one review against the merged ids |
+| `find_coupons` | `merchant`, `country?`, `lang?` | WebSearch sweep → `mode: deals` → read `codes.json` → every code cited to a page that shows it → `ultrasearch_check` |
 
 Each carries the invariant the skill exists for: the report says what the
 **fetched sources** say, not what the model remembers.

@@ -29,6 +29,10 @@ export type BackendKind =
   | "pubmed"
   | "dblp"
   | "standards"
+  // Community content backends: keyless public feeds/pages that already carry
+  // text, so they are content backends, never part of the web DISCOVERY cascade.
+  | "reddit"
+  | "pepper"
   | "generic"
   | "fixture"
   | "claude"
@@ -56,15 +60,17 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "pubmed",
   "dblp",
   "standards",
+  "reddit",
+  "pepper",
   "generic",
   "fixture",
   "claude",
 ];
 
-// The five report shapes. Each maps to a ModeProfile (backend priority +
+// The six report shapes. Each maps to a ModeProfile (backend priority +
 // template + extras) in src/modes.
-export type ModeName = "topic" | "bug" | "research" | "learn" | "startup";
-export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "learn", "startup"];
+export type ModeName = "topic" | "bug" | "research" | "learn" | "startup" | "deals";
+export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "learn", "startup", "deals"];
 
 // How far a run fans out. `summary` is a quick survey, `deep` runs every
 // backend (including deep-only ones) and keeps the most sources. Tiers
@@ -250,6 +256,9 @@ export interface SourceMeta {
   // never return the same pool, which made the question unanswerable).
   rank?: { rrf: number; content: number; trust: number; recency: number };
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
+  published?: string; // ISO timestamp the item was posted (feeds, forum threads)
+  subreddit?: string; // reddit: the community a thread was posted in
+  codes?: CodeMention[]; // discount codes the source mentions (the `codes` extra, src/codes.ts)
   [k: string]: unknown;
 }
 
@@ -308,7 +317,23 @@ export interface BackendResult {
 
 export type Backend = (ctx: RunContext) => Promise<BackendResult>;
 
-export type ModeExtra = "bibtex" | "glossary" | "exercises";
+export type ModeExtra = "bibtex" | "glossary" | "exercises" | "codes";
+
+// One discount code a source mentions, as recorded on SourceMeta.codes by the
+// `codes` extra (src/codes.ts). `structured` = a deal site's own voucher field;
+// `text` = pulled out of the page by keyword-anchored patterns. Never verified:
+// a code here is a candidate the reader must confirm in the cited source.
+export interface CodeMention {
+  code: string;
+  via: "structured" | "text";
+  /** strong = keyword + code ("code promo X", "use code X"); weak = a quoted/bold token near a keyword. Structured is strong. */
+  strength: "strong" | "weak";
+  discount?: string; // "15%", "10 €", "free shipping"
+  minSpend?: string; // "50 €"
+  expires?: string; // ISO date, YYYY-MM-DD
+  expired?: boolean; // the source itself marks the code expired
+  context?: string; // the words around it, for the reader
+}
 
 // A mode = a backend-priority profile + a report template + extra outputs.
 export interface ModeProfile {

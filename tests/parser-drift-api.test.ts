@@ -13,6 +13,7 @@ import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
 import { hackernewsBackend } from "../src/backends/hackernews.js";
+import { redditBackend } from "../src/backends/reddit.js";
 import type { Backend, RawSource } from "../src/types.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
@@ -40,7 +41,7 @@ function assertScholarly(items: RawSource[], min: number) {
 interface Canary {
   name: string;
   backend: Backend;
-  fixtures: [string, string][]; // [url-substring, fixture-file] (json unless .xml)
+  fixtures: [string, string][]; // [url-substring, fixture-file] (json unless .xml/.atom)
   min: number;
 }
 
@@ -66,6 +67,7 @@ const CANARIES: Canary[] = [
   { name: "semanticscholar", backend: semanticscholarBackend, fixtures: [["api.semanticscholar.org", "semanticscholar.json"]], min: 2 },
   { name: "europepmc", backend: europepmcBackend, fixtures: [["ebi.ac.uk/europepmc", "europepmc.json"]], min: 2 },
   { name: "hackernews", backend: hackernewsBackend, fixtures: [["hn.algolia.com", "hackernews.json"]], min: 2 },
+  { name: "reddit", backend: redditBackend, fixtures: [["reddit.com/search.rss", "reddit-search.atom"]], min: 3 },
   {
     name: "pubmed",
     backend: pubmedBackend,
@@ -82,7 +84,7 @@ describe("API parser drift canaries (saved real responses)", () => {
     it(`${c.name} still parses its real-API response`, async () => {
       const pairs: [string, { body: string; contentType: string }][] = c.fixtures.map(([frag, file]) => [
         frag,
-        { body: apiFixture(file), contentType: file.endsWith(".xml") ? "application/atom+xml" : "application/json" },
+        { body: apiFixture(file), contentType: /\.(xml|atom)$/.test(file) ? "application/atom+xml" : "application/json" },
       ]);
       installFetchMock(routes(pairs));
       const r = await c.backend(makeCtx("rate limiting"));

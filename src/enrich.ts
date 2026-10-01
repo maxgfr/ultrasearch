@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import type { BackendKind, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
+import { annotateExtras } from "./extras.js";
 import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
 import { extractPdf } from "./backends/pdf.js";
 import { extractDocument, docFormatForUrl, DOC_EXTENSIONS } from "./backends/doc.js";
@@ -77,7 +78,9 @@ function loadState(dir: string): IngestState {
 // batch recoverable, and it is not the cost the batching removed.
 function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   const id = `S${++state.maxId}`; // shares the S<n> scheme the grounding contract depends on
-  const s = buildSource(p.raw, id, new Date().toISOString(), p.question);
+  // Annotated now, while the full page text is in hand: the extract on disk is
+  // capped, and the extras (src/extras.ts) re-aggregate from meta at flush.
+  const s = annotateExtras(p.text, buildSource(p.raw, id, new Date().toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);

@@ -123,6 +123,11 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   firecrawl: 0,
   stackexchange: 0.72,
   hackernews: 0.5,
+  // Community threads (reddit, the Pepper deal sites): the route says "people said
+  // this", nothing more — spelled out at the neutral value so the omission reads
+  // as a decision.
+  reddit: 0.5,
+  pepper: 0.5,
   // A file the user named on the command line. No floor, for the same reason the
   // discovery engines get none: the route says the operator chose it, not that
   // the document is authoritative. Spelled out at the neutral value so the

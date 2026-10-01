@@ -101,10 +101,24 @@ extracts, so it costs no extra retrieval. See
   locale nor an extractor is ever served the other's body, TTL-bounded,
   successes only, shared across the deep tier's fan-out gathers.
 - `dossier.ts` — `writeDossier` / `writeDossierIndex` / `writeSourceExtract` /
-  `writeBibtex` / `readDossier` / `buildSource` / `nextSourceId` / `readJson`
-  (guarded parse) and the DOSSIER.md renderer; the `CITATION_RULES` blocks (one
-  for a normal run, one for a run that wrote nothing and therefore has no
-  `check` gate to invoke).
+  `readDossier` / `buildSource` / `nextSourceId` / `readJson` (guarded parse) and
+  the DOSSIER.md renderer; the `CITATION_RULES` blocks (one for a normal run, one
+  for a run that wrote nothing and therefore has no `check` gate to invoke).
+- `extras.ts` — the mode extras as ONE table (`EXTRAS: Record<ModeExtra,
+  ExtraSpec>`): each declares the `files` it writes (what `--stdout` streams), an
+  optional `annotate(text, source, manifest)` run while a source's full text is
+  still in hand (its result lands on `Source.meta`), and `write(ctx)`, which
+  writes the artifact and returns the DOSSIER.md block. Called from
+  `writeDossierIndex`, the one function gather, merge, ingest/fetch and relink
+  all pass through — so `refs.bib` and `codes.json` can never lag the index.
+- `codes.ts` — the `codes` extra (deals mode). Pure and deterministic:
+  `extractCodes` (keyword-anchored, multilingual, stop lists, product-name
+  repetition guard; discount, minimum spend, expiry with dd/mm except in the US),
+  `annotateCodes` (idempotent merge with a backend's structured codes),
+  `aggregateCodes` (distinct-domain corroboration, expiry against the run's
+  `builtAt` — never the wall clock — score, confidence, stable sort) and
+  `writeCodes` (`codes.json` + the UNVERIFIED table). `merchantOf` pulls the
+  merchant out of a question.
 - `no-write.ts` — the `--stdout` / `ULTRASEARCH_NO_WRITE` gate. Every `mkdirSync`
   and `writeFileSync` in `src/` goes through its `ensureDir` / `writeArtifact`,
   which collect artifacts in memory instead of writing when the gate is on, so
@@ -174,11 +188,17 @@ extracts, so it costs no extra retrieval. See
   and a wrong answer is worse than none. The refusal is the feature — a `.docx`
   is a ZIP, so the fall-through this replaced put kilobytes of U+FFFD into
   dossiers as citable evidence, silently.
-- `modes/` — the five `ModeProfile`s + their registry.
+- `modes/` — the six `ModeProfile`s + their registry.
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the
   polite-sequential fan-out), and one file per backend (web discovery, scholarly
   incl. `dblp`, community).
+- `backends/reddit.ts` — the keyless `search.rss` feed: one request, never
+  retried, deep-only comment feeds read sequentially up to the first refusal.
+- `backends/pepper.ts` — the Pepper deal network (`PEPPER_SITES`, region →
+  host): `parsePepperThreads` deep-walks every embedded JSON blob for thread
+  objects (regex window as fallback), `parsePepperVouchers` reads a voucher
+  page's Next.js payload. Cites thread pages, never `/visit/` affiliate links.
 - `backends/firecrawl.ts` — the self-hosted Firecrawl client: base resolution
   (`--firecrawl` > `ULTRASEARCH_FIRECRAWL` > `http://localhost:3002`, `off`
   disables), a memoised 2s availability probe, the `/v2`→`/v1` prefix fallback,

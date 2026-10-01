@@ -5,7 +5,7 @@ import { UNDER_COVERED_MIN } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
 import { sourceSignals } from "./authority.js";
 import { ensureDir, isNoWrite, writeArtifact } from "./no-write.js";
-import { toBibtex } from "./bibtex.js";
+import { annotateExtras, writeExtras } from "./extras.js";
 import { focusedSnippet } from "./backends/fetch.js";
 import { selectSourcePassages } from "./passages.js";
 
@@ -172,24 +172,19 @@ export function writeSourceExtract(dir: string, s: Source, text: string, depth: 
 
 // Persist the three index files every reader of a dossier depends on:
 // sources.json (what `check` validates against), manifest.json, and DOSSIER.md
-// (the model-facing brief). Shared by writeDossier and the `fetch`/enrich path,
-// which used to hand-roll its own copy of these three writes and could drift.
+// (the model-facing brief) — plus the mode's extras (src/extras.ts), so refs.bib
+// and codes.json track the index on every path that rewrites it: gather, merge,
+// ingest/fetch and relink alike. Shared by all of them, which used to hand-roll
+// their own copies of these writes and could drift.
 export function writeDossierIndex(dir: string, sources: Source[], manifest: Manifest, template: string): DossierPaths {
   const sourcesJson = join(dir, "sources.json");
   const dossierMd = join(dir, "DOSSIER.md");
   const manifestJson = join(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
-  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template));
+  const blocks = writeExtras(dir, sources, manifest);
+  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks));
   return { dir, sourcesJson, dossierMd, manifestJson };
-}
-
-// The research mode's extra: a BibTeX file built from the scholarly sources.
-// Called by both producers of a dossier (`gather` and `merge`) — it lived
-// duplicated verbatim in each before.
-export function writeBibtex(dir: string, sources: Source[], extras: readonly string[]): void {
-  if (!extras.includes("bibtex")) return;
-  writeArtifact(join(dir, "refs.bib"), toBibtex(sources));
 }
 
 // Persist a run's dossier: sources/S#.md (cleaned extracts) plus the three index
@@ -200,8 +195,10 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
 
   const sources: Source[] = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
-    const s = buildSource(rs, id, manifest.builtAt, manifest.question);
-    writeSourceExtract(dir, s, rs.text ?? rs.snippet ?? "", manifest.depth, manifest.question);
+    const text = rs.text ?? rs.snippet ?? "";
+    // Extras annotate here, while the FULL text is in hand — the extract on disk is capped.
+    const s = annotateExtras(text, buildSource(rs, id, manifest.builtAt, manifest.question), manifest);
+    writeSourceExtract(dir, s, text, manifest.depth, manifest.question);
     return s;
   });
 
@@ -217,7 +214,11 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
 // the reader to write REPORT.md, run `check`, or `fetch --url` a gap: none of
 // those exist in a read-only phase, and a brief that prescribes impossible steps
 // is worse than one that prescribes none.
-export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string): string {
+//
+// `extraBlocks` are the sections the mode's extras contribute (src/extras.ts) —
+// the candidate-codes table, say — placed right after the template so the
+// reader meets them before the source list.
+export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string, extraBlocks: string[][] = []): string {
   const noWrite = isNoWrite();
   const enrich = noWrite
     ? "Search further yourself (your own WebSearch) and read those pages directly"
@@ -289,6 +290,10 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     out.push(`_Also produce: ${manifest.extras.join(", ")}._`);
   }
   out.push("");
+  for (const block of extraBlocks) {
+    out.push(...block);
+    out.push("");
+  }
 
   if (manifest.notes.length) {
     out.push(`## Retrieval notes`);

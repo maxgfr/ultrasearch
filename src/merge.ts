@@ -1,6 +1,6 @@
 import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
 import { ALL_DEPTHS, VERSION } from "./types.js";
-import { readDossier, readSourceText, writeBibtex, writeDossier } from "./dossier.js";
+import { readDossier, readSourceText, writeDossier } from "./dossier.js";
 import { fuse, defaultRunDir } from "./gather.js";
 import { dedupeNearDuplicates, identityKey, slugify, RUN_SLUG } from "./util.js";
 import { getMode } from "./modes/registry.js";
@@ -125,6 +125,5 @@ export function runMerge(options: MergeOptions): MergeResult {
 
   const dir = options.master ?? defaultRunDir(modeName, question);
   const { sources } = writeDossier(dir, merged, manifest, mode.template);
-  writeBibtex(dir, sources, mode.extras);
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

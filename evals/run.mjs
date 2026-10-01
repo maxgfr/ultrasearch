@@ -43,13 +43,17 @@ const fail = (m) => {
   failures++;
 };
 
+// A case may pin the country it searches in (the deals mode's deal community
+// is chosen by it).
+const localeArgs = (c) => [...(c.lang ? ["--lang", c.lang] : []), ...(c.region ? ["--region", c.region] : [])];
+
 function offline() {
   console.log("ultrasearch evals — offline (deterministic)\n");
 
   for (const c of loadCases("offline")) {
     const out = mkdtempSync(join(tmpdir(), "us-eval-"));
     try {
-      const r = run(["gather", "--q", c.question, "--mode", c.mode, "--backends", (c.backends || ["fixture"]).join(","), "--out", out]);
+      const r = run(["gather", "--q", c.question, "--mode", c.mode, "--backends", (c.backends || ["fixture"]).join(","), ...localeArgs(c), "--out", out]);
       if (r.status !== 0) {
         fail(`[${c.id}] gather exited ${r.status}: ${r.stderr?.trim()?.split("\n").pop()}`);
         continue;
@@ -206,7 +210,7 @@ function network() {
   for (const c of loadCases("network")) {
     const out = mkdtempSync(join(tmpdir(), "us-eval-net-"));
     try {
-      const r = run(["gather", "--q", c.question, "--mode", c.mode, "--backends", (c.backends || []).join(","), "--out", out]);
+      const r = run(["gather", "--q", c.question, "--mode", c.mode, "--backends", (c.backends || []).join(","), ...localeArgs(c), "--out", out]);
       if (r.status !== 0) {
         console.log(`  · [${c.id}] gather exited ${r.status} (network)`);
         recall.push({ id: c.id, backends: (c.backends || []).join(","), count: null, note: `gather exited ${r.status}` });

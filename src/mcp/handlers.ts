@@ -9,6 +9,7 @@ import { parseWebResults } from "../backends/websearch.js";
 import { runGather } from "../gather.js";
 import { runMerge } from "../merge.js";
 import { getMode, listModes } from "../modes/registry.js";
+import { extraSummaries } from "../extras.js";
 import { runPlan } from "../plan.js";
 import { autoRelink, listIssues, relink } from "../relink.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "../render.js";
@@ -305,6 +306,8 @@ async function handleGather(args: Record<string, unknown>): Promise<unknown> {
     mode: options.mode,
     depth: options.depth,
     sources: res.sources.length,
+    // The mode's own result, inline — for deals, the codes to try with their [S#].
+    ...Object.fromEntries(extraSummaries(res.sources, res.manifest).map((s) => [s.key, s.data])),
     ...(res.manifest.notes?.length ? { notes: res.manifest.notes } : {}),
   };
   // Under no-write there is no dossier to point ultrasearch_read at, so the

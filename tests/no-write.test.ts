@@ -147,6 +147,16 @@ describe("gather --stdout", () => {
     expect(Object.keys(parsed.artifacts)).toEqual(expect.arrayContaining(["DOSSIER.md", "sources.json", "manifest.json", "sources/S1.md"]));
   });
 
+  it("streams a mode's extra artifacts after the extracts — codes.json for deals", async () => {
+    const out = join(sandbox, "deals-never-created");
+    const r = await run(["gather", "--q", "code promo decathlon.fr", "--mode", "deals", "--backends", "fixture", "--stdout", "--out", out]);
+    const headers = [...r.out.matchAll(/^===== (.+) =====$/gm)].map((m) => m[1]!);
+
+    expect(existsSync(out)).toBe(false);
+    expect(headers.at(-1)).toBe("codes.json");
+    expect(r.out).toContain("Candidate codes (extracted — UNVERIFIED)");
+  });
+
   it("still writes the full dossier without the flag (the default is untouched)", async () => {
     const out = join(sandbox, "normal");
     const r = await run([...GATHER, "--out", out]);

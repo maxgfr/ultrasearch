@@ -5,7 +5,7 @@ export const bugMode: ModeProfile = {
   name: "bug",
   description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
   backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
-  deepOnly: ["searxng"],
+  deepOnly: ["searxng", "reddit"],
   extras: [],
   searchAngles: [
     "the error text VERBATIM, in quotes",

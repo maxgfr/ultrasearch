@@ -8,10 +8,11 @@ modes`.
 | Mode | Backends (standard) | + deep-only | Extras |
 |------|--------------------|-------------|--------|
 | `topic` | wikipedia, searxng, duckduckgo, standards | — | — |
-| `bug` | stackexchange, github, duckduckgo, hackernews, standards | searxng | — |
+| `bug` | stackexchange, github, duckduckgo, hackernews, standards | searxng, reddit | — |
 | `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, duckduckgo, wikipedia | `bibtex` (refs.bib) |
 | `learn` | wikipedia, duckduckgo, searxng | standards | `glossary`, `exercises` |
-| `startup` | duckduckgo, searxng, hackernews | wikipedia | — |
+| `startup` | duckduckgo, searxng, hackernews | wikipedia, reddit | — |
+| `deals` | pepper, reddit, duckduckgo, searxng | — | `codes` (codes.json) |
 
 `standards` surfaces the defining spec for standards-backed topics via two
 keyless JSON APIs — IETF Datatracker (RFCs; an explicit "RFC 6585" resolves
@@ -23,7 +24,7 @@ Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers,
 computer-science bibliography — so research mode spans physics/CS, biomed and
 clinical literature.
 
-All five modes compose with the **deep research tier** (`plan` / `merge` /
+All six modes compose with the **deep research tier** (`plan` / `merge` /
 `verify`): `plan` derives its sub-question facets from the mode's report
 template, so the decomposition is mode-aware. See
 `references/deep-research-playbook.md`.
@@ -71,12 +72,27 @@ when the answer will be acted on. Both report tiers are always written.
   line); it renders as its own tab/section in the HTML.
 - **exercises** — include `## Exercises` and `## Solutions` sections in the
   learn report.
+- **codes** — the engine pulls every discount code a source presents (keyword-
+  anchored, FR/EN/DE/ES/IT/NL/PL; a deal site's own voucher field counts as
+  structured) into `codes.json`, ranked by distinct-domain corroboration with
+  discount, minimum spend, expiry and a high/medium/low confidence. Expired codes
+  (expiry before the run's `builtAt`, or marked expired by their source) are
+  listed apart. `DOSSIER.md` carries the top 15 as a **Candidate codes —
+  UNVERIFIED** table. Candidates only: confirm each in its `[S#]`, never invent
+  or complete one.
+
+Every extra is refreshed whenever the dossier index is rewritten — `gather`,
+`merge`, `ingest`/`fetch` and `relink` alike — so `refs.bib` and `codes.json`
+always match `sources.json`.
 
 ## Backends
 
 `searxng` and `duckduckgo` are *discovery* backends — they return candidate URLs
 that the gatherer then fetches and cleans. The rest are *content* backends — they
 return text directly (a Wikipedia summary, a Stack Overflow answer, an abstract).
+`reddit` (keyless search feed) and `pepper` (the Dealabs/hotukdeals/mydealz deal
+network, chosen by `--region`) are community content backends — never part of
+the discovery cascade.
 `generic` fetches explicit `--url`s; `fixture` is the offline CI backend;
 `claude` is the provenance label stamped on sources you add via `fetch`.
 

@@ -5,7 +5,7 @@ export const startupMode: ModeProfile = {
   name: "startup",
   description: "Market research — competitors, market sizing, pricing, GTM (general web + public sources).",
   backends: ["duckduckgo", "searxng", "hackernews"],
-  deepOnly: ["wikipedia"],
+  deepOnly: ["wikipedia", "reddit"],
   extras: [],
   searchAngles: [
     "the product category + 'alternatives' or 'vs'",
