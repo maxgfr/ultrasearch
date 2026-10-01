@@ -770,16 +770,24 @@ export function codesSummary(sources: Source[], manifest: Pick<Manifest, "builtA
       ],
     };
   }
-  const width = Math.max(...candidates.map((c) => c.code.length));
-  const disc = Math.max(...candidates.map((c) => (c.discount ?? "—").length));
+  // One cell per column, padded to the column's widest, so the list reads as a
+  // table — a missing minimum or expiry is a blank cell, not a shift left.
+  const cells = candidates.map((c) => [
+    c.code,
+    c.discount ?? "—",
+    c.minSpend ? `min. ${c.minSpend}` : "",
+    c.expires ? `until ${c.expires}` : "",
+    c.confidence,
+    c.sources.map((s) => `[${s}]`).join(""),
+  ]);
+  const widths = cells[0]!.map((_, i) => Math.max(...cells.map((row) => row[i]!.length)));
   const lines = [
     `  codes:    ${candidates.length} to try — UNVERIFIED: confirm each in its [S#], never pay to test (full list: codes.json)`,
-    ...candidates.map(
-      (c) =>
-        `            ${c.code.padEnd(width)}  ${(c.discount ?? "—").padEnd(disc)}  ` +
-        [c.minSpend && `min. ${c.minSpend}`, c.expires && `until ${c.expires}`, c.confidence, c.sources.map((s) => `[${s}]`).join("")]
-          .filter(Boolean)
-          .join("  "),
+    ...cells.map((row) =>
+      `            ${row
+        .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(widths[i]!)))
+        .filter((_, i) => widths[i]! > 0)
+        .join("  ")}`.trimEnd(),
     ),
     ...(expired.length ? [`            expired: ${data.expired.join(", ")}`] : []),
   ];
