@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.36.3](https://github.com/maxgfr/ultrasearch/compare/v1.36.2...v1.36.3) (2026-10-02)
+
+
+### Bug Fixes
+
+* **engine:** update shared engines and maintenance tool ([ffad7f1](https://github.com/maxgfr/ultrasearch/commit/ffad7f18dfb7234786b57711ff242ffa28a5e62b))
+
 ## [1.36.2](https://github.com/maxgfr/ultrasearch/compare/v1.36.1...v1.36.2) (2026-10-02)
 
 
