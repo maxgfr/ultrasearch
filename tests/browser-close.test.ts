@@ -4,16 +4,22 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
 import { callTool } from "../src/mcp/handlers.js";
+import { closeBrowserOnSignal } from "../src/browser.js";
 
 // Every command that may read pages closes the browser its reads launched, on
 // the way out — errors included — so no window is ever left behind. The engine
 // is stubbed at closeBrowserReads (nothing launches in a test anyway), and the
 // page reads at src/cache.js.
 
-const { close, fetchPage } = vi.hoisted(() => ({ close: vi.fn(async () => ({ closed: false })), fetchPage: vi.fn() }));
+const { close, fetchPage, openSession } = vi.hoisted(() => ({
+  close: vi.fn(async (_opts?: { waitMs?: number }) => ({ closed: false })),
+  fetchPage: vi.fn(),
+  openSession: vi.fn(),
+}));
 vi.mock("../src/engine.js", async (original) => ({
   ...(await original<typeof import("../src/engine.js")>()),
   closeBrowserReads: close,
+  openBrowserSession: openSession,
 }));
 vi.mock("../src/cache.js", async (original) => ({
   ...(await original<typeof import("../src/cache.js")>()),
@@ -119,5 +125,108 @@ describe("the MCP server closes the browser after each tool call that read pages
   it("not after a call that reads no page", async () => {
     await callTool("ultrasearch_modes", {});
     expect(close).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCP calls share one browser", () => {
+  // The stdio server runs up to four tool calls at once. One call closing the
+  // browser while a sibling is still rendering in it would cut that read off.
+  it("closes only when the LAST page-reading call in flight ends", async () => {
+    await run(["gather", "--q", "rate limiting", "--backends", "fixture", "--out", dir]);
+    const other = mkdtempSync(join(tmpdir(), "us-browser-close-b-"));
+    try {
+      await run(["gather", "--q", "rate limiting", "--backends", "fixture", "--out", other]);
+      close.mockClear();
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      fetchPage.mockImplementation(async (url: string) => {
+        if (url.includes("slow")) await gate;
+        return { text: ARTICLE, title: "Rate limiting", finalUrl: url, status: 200 };
+      });
+      const slow = callTool("ultrasearch_ingest", { run: other, urls: ["https://slow.test/a"] });
+      await callTool("ultrasearch_ingest", { run: dir, urls: ["https://fast.test/b"] });
+      expect(close).not.toHaveBeenCalled(); // the slow call is still reading
+      release();
+      await slow;
+      expect(close).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a signal closes the browser before the process goes", () => {
+  it("SIGTERM: close without waiting for reads, then exit 143; uninstalls cleanly", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const before = process.listenerCount("SIGTERM");
+    const uninstall = closeBrowserOnSignal();
+    try {
+      expect(process.listenerCount("SIGTERM")).toBe(before + 1);
+      process.emit("SIGTERM", "SIGTERM");
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(143));
+      expect(close).toHaveBeenCalledWith({ waitMs: 0 });
+    } finally {
+      uninstall();
+      exit.mockRestore();
+    }
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+  });
+});
+
+describe("browser open — the human's half of a challenge", () => {
+  const session = (spawned: boolean, navigate = vi.fn(async () => ({ url: "x", loaderId: "1" }))) => ({
+    spawned,
+    navigate,
+    takeNotes: vi.fn(() => []),
+    detach: vi.fn(async () => {}),
+    shutdown: vi.fn(async () => {}),
+  });
+
+  afterEach(() => openSession.mockReset());
+
+  it("refuses a URL that is not absolute http(s), without opening anything", async () => {
+    expect((await run(["browser", "open", "file:///etc/passwd"])).exit).toBe(1);
+    expect((await run(["browser", "nope"])).exit).toBe(1);
+    expect(openSession).not.toHaveBeenCalled();
+  });
+
+  it("opens the page and only detaches: the window is the human's", async () => {
+    const s = session(true);
+    openSession.mockResolvedValue(s);
+    const r = await run(["browser", "open", "https://challenge.test/page"]);
+    expect(r.exit).toBeUndefined();
+    expect(s.navigate).toHaveBeenCalledWith("https://challenge.test/page", expect.anything());
+    expect(s.detach).toHaveBeenCalled();
+    expect(s.shutdown).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
+
+  it("shuts down a browser it launched when the page cannot be opened", async () => {
+    const s = session(
+      true,
+      vi.fn(async () => {
+        throw new Error("net::ERR_NAME_NOT_RESOLVED");
+      }),
+    );
+    openSession.mockResolvedValue(s);
+    const r = await run(["browser", "open", "https://nowhere.test/"]);
+    expect(r.exit).toBe(1);
+    expect(r.err).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(s.shutdown).toHaveBeenCalled();
+  });
+
+  it("leaves a browser it only reused running when the page cannot be opened", async () => {
+    const s = session(
+      false,
+      vi.fn(async () => {
+        throw new Error("timeout");
+      }),
+    );
+    openSession.mockResolvedValue(s);
+    await run(["browser", "open", "https://nowhere.test/"]);
+    expect(s.shutdown).not.toHaveBeenCalled();
+    expect(s.detach).toHaveBeenCalled();
   });
 });

@@ -284,7 +284,12 @@ export const TOOLS: ToolDecl[] = [
       "that a gather would return a shallow dossier about the wrong thing.",
     inputSchema: {
       type: "object",
-      properties: { question: questionProp, mode: modeProp, out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." } },
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." },
+        browser: browserProp,
+      },
       required: ["question"],
     },
   },

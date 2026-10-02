@@ -23,7 +23,7 @@ import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
 import { describeServices } from "./services.js";
-import { rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
+import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
   domainOf,
   rrf,
@@ -417,6 +417,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // can't fan out into dozens of archive.org round-trips.
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
+  // The browser rescue's budget (see the hydrate step): pages already tried this
+  // run, and how many renders it has spent.
+  const browserTried = new Set<string>();
+  let browserRescues = 0;
   // Pages whose text came from a self-hosted Firecrawl rather than the built-in
   // reader. Reported as ONE note (like the cache-hit count) instead of one per
   // page, so a dossier says how it was extracted without drowning in notes.
@@ -594,18 +598,18 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         }
       }
 
-      // Junk rescue via the browser rung: the keyless way past the same walls,
-      // for when Firecrawl is not running or could not get past one either. A
-      // real, separate browser renders the page — it never clicks "accept" on a
-      // consent wall for the user and never solves a challenge, so what it reads
-      // is what the page shows; that is still the article on most consent walls,
-      // and the junk check below keeps whatever is not. Skipped when the text
-      // already came from the browser (asking again returns the same page).
-      // An EMPTY read is rendered too, when the engine's own fallback skipped it
-      // (a 402 paywall gate: the browser gets the article's opening).
-      const emptyRead = !text && rescuesEmptyRead(res.status, browser);
-      if (((text && junk) || emptyRead) && browser !== "off" && res.extractor !== "browser") {
-        const wall = junk ? `a ${junk}` : `an empty HTTP ${res.status || "0"} answer`;
+      // Empty-read rescue via the browser rung. Walls and JS shells are NOT
+      // handled here: the engine's own fallback renders those during the read
+      // above, and a page it could not get is not worth a second browser read.
+      // What it skips is an EMPTY 402 — a paywall gate (Le Monde) that hands a
+      // browser the article's opening — so that one read is rendered here. Once
+      // per page per run (the gap round re-assembles the same pages) and capped
+      // like Wayback: each render is a serialized browser read of up to 30 s.
+      // The browser reads what the page shows; it never accepts a consent wall
+      // for the user and never solves a challenge.
+      if (!text && rescuesEmptyRead(res.status, browser) && !browserTried.has(key) && browserRescues < BROWSER_RESCUE_CAP) {
+        browserTried.add(key); // reserved before the await, so the cap holds under concurrency
+        browserRescues++;
         const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
         if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
           text = rendered.text;
@@ -615,9 +619,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           // Folded back like the Firecrawl rescue: the gap round reuses it, and
           // the run counts this page once.
           hydrateCache.set(key, Promise.resolve({ ...res, text: rendered.text, title, extractor: "browser" }));
-          hydrateNotes.push(`Recovered ${it.url} in a real browser — the built-in read was ${wall}.`);
+          hydrateNotes.push(`Recovered ${it.url} in a real browser — the built-in read was an empty HTTP ${res.status} answer.`);
         } else if (rendered.note) {
-          hydrateNotes.push(rendered.note);
+          // The browser's own account (a challenge to hand to the human), without
+          // the plain read's note it ends with — that one is already in the run.
+          const own = res.note ? rendered.note.replace(res.note, "").trim() : rendered.note;
+          if (own) hydrateNotes.push(own);
         }
       }
 

@@ -24,7 +24,7 @@ import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, emitOrchestration, listPhasesFor } from "./orchestrate.js";
 import { type CommandArgs, type ParsedArgs, closeBrowserReads, openBrowserSession, parseArgs, runStdioServer, startHttpServer, UsageError } from "./engine.js";
-import { resolveBrowserRung } from "./browser.js";
+import { closeBrowserOnSignal, resolveBrowserRung, withBrowserClosed } from "./browser.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
@@ -131,7 +131,7 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
-  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search /
+  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search / brainstorm /
                        fetch / ingest / orchestrate: a real, separate Chrome or
                        Brave (own profile) renders the pages the built-in reader
                        cannot — JS shells, consent and anti-bot walls. A window
@@ -143,7 +143,9 @@ Options:
                        off      = never
                        (env ULTRASEARCH_BROWSER_FETCH; default: fallback when a
                        Chrome/Brave/Chromium/Edge is installed and a window can
-                       be shown — macOS, Windows, Linux with a display — else off)
+                       be shown — macOS, Windows, Linux with a display — else
+                       off; always off by default under --stdout, which writes
+                       nothing, not even the browser's profile)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, …]
                        (a bare array of URLs, or '-' for stdin, also work). This
                        is the PRIMARY discovery lane — the strongest index here,
@@ -692,17 +694,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   if (!PAGE_COMMANDS.has(p.command)) return dispatch(p);
   // A browser the engine launched is a detached process: a Ctrl-C that killed
   // only this one would leave its window behind.
-  const onSignal = (sig: NodeJS.Signals) => {
-    void closeBrowserReads({ waitMs: 0 }).finally(() => process.exit(sig === "SIGINT" ? 130 : 143));
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  const uninstall = closeBrowserOnSignal();
   try {
-    await dispatch(p);
+    await withBrowserClosed(() => dispatch(p));
   } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await closeBrowserReads();
+    uninstall();
   }
 }
 
@@ -848,11 +844,21 @@ async function dispatch(p: Parsed): Promise<void> {
       if (!url || !/^https?:\/\//i.test(url)) fail("browser open: expected an absolute http(s) URL");
       let session: Awaited<ReturnType<typeof openBrowserSession>>;
       try {
-        session = await openBrowserSession({ url, newTab: true });
+        session = await openBrowserSession({ newTab: true });
       } catch (e) {
         fail(`browser open: ${(e as Error).message}`);
       }
       for (const n of session.takeNotes()) process.stderr.write(`ultrasearch: ${n}\n`);
+      try {
+        // The human takes it from here: no need to wait for every subresource.
+        await session.navigate(url, { waitUntil: "domcontentloaded" });
+      } catch (e) {
+        // A browser this command started for nothing is closed again; one it
+        // only reused (the human's, maybe mid-challenge) is left as it was.
+        if (session.spawned) await session.shutdown();
+        else await session.detach();
+        fail(`browser open: ${(e as Error).message}`);
+      }
       // Detach only: the window is the human's now.
       await session.detach();
       process.stderr.write(`ultrasearch: opened ${url} in the dedicated browser — deal with the check there, then re-run the read.\n`);
@@ -1187,7 +1193,15 @@ async function dispatch(p: Parsed): Promise<void> {
       if (transport === "stdio") {
         // Nothing is written to stdout here: from this point stdout carries
         // JSON-RPC frames only, and runStdioServer guards that.
-        await runStdioServer(ultrasearchAdapter(options), options);
+        // A server killed mid-call would leave the browser that call launched:
+        // close it on the signal, and once the client hangs up.
+        const uninstall = closeBrowserOnSignal();
+        try {
+          await runStdioServer(ultrasearchAdapter(options), options);
+        } finally {
+          uninstall();
+          await closeBrowserReads({ waitMs: 0 });
+        }
         return;
       }
 
@@ -1217,8 +1231,13 @@ async function dispatch(p: Parsed): Promise<void> {
       process.stderr.write(`ultrasearch: MCP server listening on ${running.url}\n`);
       process.stderr.write(`  client: claude mcp add --transport http ultrasearch ${running.url}\n`);
       for (const sig of ["SIGINT", "SIGTERM"] as const) {
+        // The browser first, without waiting for reads in flight: a call still
+        // running would hold running.close() open, and process.exit skips the
+        // call's own close. Then the server, then out.
         process.once(sig, () => {
-          void running.close().then(() => process.exit(0));
+          void closeBrowserReads({ waitMs: 0 })
+            .then(() => running.close())
+            .finally(() => process.exit(0));
         });
       }
       // Resolve only when the server stops, so `run()` doesn't return while it

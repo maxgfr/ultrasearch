@@ -388,18 +388,17 @@ async function prepareSource(
       rendered = false;
     }
   }
-  // …and the keyless way past the same wall when Firecrawl is not running or
-  // failed too: the browser rung, forced on for this one page. It reads what the
-  // page renders — it never accepts a consent wall for the user and never solves
-  // a challenge — and the junk check keeps refusing whatever is still a wall.
-  // Skipped when the browser already produced this text.
+  // An EMPTY 402 — a paywall gate (Le Monde) that hands a browser the article's
+  // opening — is the one read the engine's own fallback does not render, so it
+  // is rendered here. Walls and JS shells are not: the engine's fallback already
+  // rendered those during the read, and a page it could not get is not worth a
+  // second browser read. The browser reads what the page shows: it never accepts
+  // a consent wall for the user and never solves a challenge.
   let note: string | undefined;
-  const emptyRead = !text?.trim() && rescuesEmptyRead(fetched.status, browser);
-  if (((text?.trim() && wall) || emptyRead) && browser !== "off" && fetched.extractor !== "browser") {
-    const why = wall ? `a ${wall}` : `an empty HTTP ${fetched.status || "0"} answer`;
+  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser)) {
     const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
     if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
-      note = `Recovered ${readUrl} in a real browser — the built-in read was ${why}.`;
+      note = `Recovered ${readUrl} in a real browser — the built-in read was an empty HTTP ${fetched.status} answer.`;
       text = page.text;
       title = title || page.title;
       wall = undefined;
@@ -410,7 +409,7 @@ async function prepareSource(
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
       title = title || wb.title;

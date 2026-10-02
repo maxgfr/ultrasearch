@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { canShowWindow, describeBrowserRung, resolveBrowserRung } from "../src/browser.js";
+import { canShowWindow, describeBrowserRung, rescuesEmptyRead, resolveBrowserRung } from "../src/browser.js";
 import { describeServices, probeServices } from "../src/services.js";
 import { buildGatherOptions, parseCli, HELP } from "../src/cli.js";
 import { emitOrchestration } from "../src/orchestrate.js";
@@ -59,6 +59,44 @@ describe("resolveBrowserRung — the default", () => {
     expect(canShowWindow("win32", {})).toBe(true);
     expect(canShowWindow("linux", {})).toBe(false);
     expect(canShowWindow("linux", { DISPLAY: ":1" })).toBe(true);
+  });
+});
+
+describe("resolveBrowserRung — no-write", () => {
+  // --stdout / ULTRASEARCH_NO_WRITE=1 promise that nothing is written, and a
+  // launched browser creates its profile under ~/.ultrasearch/browser.
+  it("defaults to off when nothing may be written", () => {
+    const r = resolveBrowserRung({ env: {}, platform: "darwin", detect: brave, noWrite: true });
+    expect(r.mode).toBe("off");
+    expect(r.reason).toMatch(/--stdout|ULTRASEARCH_NO_WRITE/);
+  });
+
+  it("reads ULTRASEARCH_NO_WRITE when not told", () => {
+    vi.stubEnv("ULTRASEARCH_NO_WRITE", "1");
+    vi.stubEnv("ULTRASEARCH_BROWSER_FETCH", "");
+    expect(resolveBrowserRung({ platform: "darwin", detect: brave }).mode).toBe("off");
+  });
+
+  it("an explicit flag still wins", () => {
+    expect(resolveBrowserRung({ flag: "fallback", env: {}, platform: "darwin", detect: brave, noWrite: true }).mode).toBe("fallback");
+  });
+});
+
+describe("resolveBrowserRung — detection is only paid for when it decides something", () => {
+  it("does not look for a browser when the flag or the env turns the rung off", () => {
+    const detect = vi.fn(brave);
+    resolveBrowserRung({ flag: "off", env: {}, platform: "darwin", detect });
+    resolveBrowserRung({ env: { ULTRASEARCH_BROWSER_FETCH: "off" }, platform: "darwin", detect });
+    expect(detect).not.toHaveBeenCalled();
+  });
+});
+
+describe("rescuesEmptyRead", () => {
+  it("is a 402 in fallback, and nothing else", () => {
+    expect(rescuesEmptyRead(402, "fallback")).toBe(true);
+    for (const s of [0, 200, 400, 401, 403, 404, 410, 429, 451, 500, 503]) expect(rescuesEmptyRead(s, "fallback")).toBe(false);
+    expect(rescuesEmptyRead(402, "always")).toBe(false);
+    expect(rescuesEmptyRead(402, "off")).toBe(false);
   });
 });
 
@@ -128,8 +166,9 @@ describe("the run's accounting", () => {
 });
 
 describe("--browser on the CLI", () => {
-  it("is a documented value flag", () => {
+  it("is a documented value flag, for every command that reads pages", () => {
     expect(HELP).toMatch(/--browser <m>/);
+    expect(HELP).toMatch(/for gather \/ search \/ brainstorm \/\s+fetch \/ ingest \/ orchestrate/);
   });
 
   it("is resolved once into the gather options, flag first", () => {
@@ -181,9 +220,12 @@ describe("--browser on orchestrate", () => {
 });
 
 describe("--browser on the MCP tools", () => {
-  it.each(["ultrasearch_gather", "ultrasearch_fetch", "ultrasearch_ingest", "ultrasearch_search"])("%s takes a browser mode", (name) => {
-    const t = TOOLS.find((x) => x.name === name)!;
-    const prop = t.inputSchema.properties.browser as { enum?: string[] } | undefined;
-    expect(prop?.enum).toEqual(["always", "fallback", "off"]);
-  });
+  it.each(["ultrasearch_gather", "ultrasearch_fetch", "ultrasearch_ingest", "ultrasearch_search", "ultrasearch_brainstorm"])(
+    "%s takes a browser mode",
+    (name) => {
+      const t = TOOLS.find((x) => x.name === name)!;
+      const prop = t.inputSchema.properties.browser as { enum?: string[] } | undefined;
+      expect(prop?.enum).toEqual(["always", "fallback", "off"]);
+    },
+  );
 });

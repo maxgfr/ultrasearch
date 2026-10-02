@@ -12148,38 +12148,38 @@ function canShowWindow(platform, env2) {
 function resolveBrowserRung(opts = {}) {
   const env2 = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
-  let binary;
-  let detectError;
-  try {
-    binary = (opts.detect ?? (() => detectBrowserBinary({ processEnv: env2, platform, env: (suffix) => env2[`ULTRASEARCH_${suffix}`] })))() ?? void 0;
-  } catch (e) {
-    detectError = e instanceof Error ? e.message : String(e);
-  }
-  const missing = detectError ?? NO_BINARY;
-  const withBinary = (r) => binary ? { ...r, binary } : r;
-  if (opts.flag !== void 0) {
-    if (opts.flag === "off") return withBinary({ mode: "off", source: "flag", reason: "--browser off" });
-    return withBinary({ mode: opts.flag, source: "flag", ...binary ? {} : { reason: missing } });
-  }
+  const detect = () => {
+    try {
+      const found = (opts.detect ?? (() => detectBrowserBinary({ processEnv: env2, platform, env: (suffix) => env2[`ULTRASEARCH_${suffix}`] })))();
+      return found ? { binary: found, missing: NO_BINARY } : { missing: NO_BINARY };
+    } catch (e) {
+      return { missing: e instanceof Error ? e.message : String(e) };
+    }
+  };
+  const on = (mode2, source2) => {
+    const { binary: binary2, missing: missing2 } = detect();
+    return binary2 ? { mode: mode2, source: source2, binary: binary2 } : { mode: mode2, source: source2, reason: missing2 };
+  };
+  if (opts.flag !== void 0) return opts.flag === "off" ? { mode: "off", source: "flag", reason: "--browser off" } : on(opts.flag, "flag");
   const raw = env2[ENV]?.trim();
   if (raw) {
     const m = raw.toLowerCase();
-    if (m === "always" || m === "fallback") return withBinary({ mode: m, source: "env", ...binary ? {} : { reason: missing } });
-    return withBinary({ mode: "off", source: "env", reason: `${ENV}=${raw}` });
+    return m === "always" || m === "fallback" ? on(m, "env") : { mode: "off", source: "env", reason: `${ENV}=${raw}` };
   }
+  if (opts.noWrite ?? isNoWrite()) {
+    return { mode: "off", source: "default", reason: "--stdout / ULTRASEARCH_NO_WRITE: nothing may be written, and a browser writes its profile" };
+  }
+  const { binary, missing } = detect();
   if (!binary) return { mode: "off", source: "default", reason: missing };
   if (!canShowWindow(platform, env2)) {
-    return withBinary({ mode: "off", source: "default", reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" });
+    return { mode: "off", source: "default", binary, reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" };
   }
-  return withBinary({ mode: "fallback", source: "default" });
+  return { mode: "fallback", source: "default", binary };
 }
-var ENGINE_RENDERS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
-var GONE = /* @__PURE__ */ new Set([404, 410, 451]);
 function rescuesEmptyRead(status, mode2) {
-  if (mode2 !== "fallback") return false;
-  if (status >= 200 && status < 300) return false;
-  return !ENGINE_RENDERS.has(status) && !GONE.has(status);
+  return mode2 === "fallback" && status === 402;
 }
+var BROWSER_RESCUE_CAP = 8;
 function describeBrowserRung(r) {
   if (r.mode === "off") return { name: "browser", ok: false, detail: `off \u2014 ${r.reason ?? "disabled"}` };
   if (!r.binary) return { name: "browser", ok: false, detail: `${r.mode} (from ${originOf(r)}), but ${r.reason ?? NO_BINARY}` };
@@ -12193,12 +12193,25 @@ function describeBrowserRung(r) {
 function originOf(r) {
   return r.source === "flag" ? "--browser" : r.source === "env" ? ENV : "default: a browser is installed and a window can be shown";
 }
+var sharing = 0;
 async function withBrowserClosed(fn) {
+  sharing++;
   try {
     return await fn();
   } finally {
-    await closeBrowserReads();
+    if (--sharing === 0) await closeBrowserReads();
   }
+}
+function closeBrowserOnSignal() {
+  const on = (sig) => {
+    void closeBrowserReads({ waitMs: 0 }).finally(() => process.exit(sig === "SIGINT" ? 130 : 143));
+  };
+  process.once("SIGINT", on);
+  process.once("SIGTERM", on);
+  return () => {
+    process.off("SIGINT", on);
+    process.off("SIGTERM", on);
+  };
 }
 
 // src/backends/generic.ts
@@ -14546,6 +14559,8 @@ async function runGather(options) {
   let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
+  const browserTried = /* @__PURE__ */ new Set();
+  let browserRescues = 0;
   const extractorUse = /* @__PURE__ */ new Map();
   const prehydratedTallied = /* @__PURE__ */ new Set();
   const docExtractorUse = /* @__PURE__ */ new Map();
@@ -14644,9 +14659,9 @@ async function runGather(options) {
           hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} \u2014 re-extracted it with Firecrawl.`);
         }
       }
-      const emptyRead = !text && rescuesEmptyRead(res.status, browser);
-      if ((text && junk || emptyRead) && browser !== "off" && res.extractor !== "browser") {
-        const wall = junk ? `a ${junk}` : `an empty HTTP ${res.status || "0"} answer`;
+      if (!text && rescuesEmptyRead(res.status, browser) && !browserTried.has(key) && browserRescues < BROWSER_RESCUE_CAP) {
+        browserTried.add(key);
+        browserRescues++;
         const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
         if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
           text = rendered.text;
@@ -14654,9 +14669,10 @@ async function runGather(options) {
           title = title || rendered.title;
           tallyExtractor({ extractor: "browser" });
           hydrateCache.set(key, Promise.resolve({ ...res, text: rendered.text, title, extractor: "browser" }));
-          hydrateNotes.push(`Recovered ${it.url} in a real browser \u2014 the built-in read was ${wall}.`);
+          hydrateNotes.push(`Recovered ${it.url} in a real browser \u2014 the built-in read was an empty HTTP ${res.status} answer.`);
         } else if (rendered.note) {
-          hydrateNotes.push(rendered.note);
+          const own = res.note ? rendered.note.replace(res.note, "").trim() : rendered.note;
+          if (own) hydrateNotes.push(own);
         }
       }
       if (text && !junk) {
@@ -15058,12 +15074,10 @@ async function prepareSource(stateOf, url, opts) {
     }
   }
   let note;
-  const emptyRead = !text?.trim() && rescuesEmptyRead(fetched.status, browser);
-  if ((text?.trim() && wall || emptyRead) && browser !== "off" && fetched.extractor !== "browser") {
-    const why = wall ? `a ${wall}` : `an empty HTTP ${fetched.status || "0"} answer`;
+  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser)) {
     const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
     if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
-      note = `Recovered ${readUrl} in a real browser \u2014 the built-in read was ${why}.`;
+      note = `Recovered ${readUrl} in a real browser \u2014 the built-in read was an empty HTTP ${fetched.status} answer.`;
       text = page.text;
       title = title || page.title;
       wall = void 0;
@@ -15071,7 +15085,7 @@ async function prepareSource(stateOf, url, opts) {
     }
   }
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
       title = title || wb.title;
@@ -17766,7 +17780,12 @@ var TOOLS = [
     description: "Turn a question too vague to research into angles worth taking and the clarifying questions worth asking first. Use it when the ask is broad enough that a gather would return a shallow dossier about the wrong thing.",
     inputSchema: {
       type: "object",
-      properties: { question: questionProp, mode: modeProp, out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." } },
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." },
+        browser: browserProp
+      },
       required: ["question"]
     }
   },
@@ -18147,7 +18166,7 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
-  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search /
+  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search / brainstorm /
                        fetch / ingest / orchestrate: a real, separate Chrome or
                        Brave (own profile) renders the pages the built-in reader
                        cannot \u2014 JS shells, consent and anti-bot walls. A window
@@ -18159,7 +18178,9 @@ Options:
                        off      = never
                        (env ULTRASEARCH_BROWSER_FETCH; default: fallback when a
                        Chrome/Brave/Chromium/Edge is installed and a window can
-                       be shown \u2014 macOS, Windows, Linux with a display \u2014 else off)
+                       be shown \u2014 macOS, Windows, Linux with a display \u2014 else
+                       off; always off by default under --stdout, which writes
+                       nothing, not even the browser's profile)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, \u2026]
                        (a bare array of URLs, or '-' for stdin, also work). This
                        is the PRIMARY discovery lane \u2014 the strongest index here,
@@ -18576,17 +18597,11 @@ async function main(argv = process.argv.slice(2)) {
     return;
   }
   if (!PAGE_COMMANDS.has(p.command)) return dispatch2(p);
-  const onSignal = (sig) => {
-    void closeBrowserReads({ waitMs: 0 }).finally(() => process.exit(sig === "SIGINT" ? 130 : 143));
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  const uninstall = closeBrowserOnSignal();
   try {
-    await dispatch2(p);
+    await withBrowserClosed(() => dispatch2(p));
   } finally {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    await closeBrowserReads();
+    uninstall();
   }
 }
 async function dispatch2(p) {
@@ -18719,12 +18734,19 @@ ${formatServices(rows)}
       if (!url || !/^https?:\/\//i.test(url)) fail("browser open: expected an absolute http(s) URL");
       let session;
       try {
-        session = await openBrowserSession({ url, newTab: true });
+        session = await openBrowserSession({ newTab: true });
       } catch (e) {
         fail(`browser open: ${e.message}`);
       }
       for (const n of session.takeNotes()) process.stderr.write(`ultrasearch: ${n}
 `);
+      try {
+        await session.navigate(url, { waitUntil: "domcontentloaded" });
+      } catch (e) {
+        if (session.spawned) await session.shutdown();
+        else await session.detach();
+        fail(`browser open: ${e.message}`);
+      }
       await session.detach();
       process.stderr.write(`ultrasearch: opened ${url} in the dedicated browser \u2014 deal with the check there, then re-run the read.
 `);
@@ -19027,7 +19049,13 @@ ${formatServices(rows)}
         maxResponseBytes
       };
       if (transport === "stdio") {
-        await runStdioServer(ultrasearchAdapter(options), options);
+        const uninstall = closeBrowserOnSignal();
+        try {
+          await runStdioServer(ultrasearchAdapter(options), options);
+        } finally {
+          uninstall();
+          await closeBrowserReads({ waitMs: 0 });
+        }
         return;
       }
       const port = p.values.port ? Number(p.values.port) : 7339;
@@ -19051,7 +19079,7 @@ ${formatServices(rows)}
 `);
       for (const sig of ["SIGINT", "SIGTERM"]) {
         process.once(sig, () => {
-          void running.close().then(() => process.exit(0));
+          void closeBrowserReads({ waitMs: 0 }).then(() => running.close()).finally(() => process.exit(0));
         });
       }
       await new Promise((resolve8) => running.server.once("close", resolve8));
