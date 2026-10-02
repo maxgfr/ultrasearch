@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.27.0";
+declare const ENGINE_VERSION = "1.27.1";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1089,6 +1089,8 @@ interface NavigationResult {
     loaderId: string;
     /** The HTTP status of the document, when the page exposes it. */
     status?: number;
+    /** The new document committed but did not finish loading in time (see navigate). */
+    note?: string;
 }
 interface BrowserTab {
     id: string;
@@ -1170,10 +1172,17 @@ declare class BrowserSession {
      * Load `url` in the current tab and wait for the new document's `load` (or
      * `DOMContentLoaded`, or nothing). The tab's refs are cleared: they named
      * nodes of the document that is going away. A navigation the browser refuses
-     * (`errorText`: DNS failure, refused connection…) rejects.
+     * (`errorText`: DNS failure, refused connection…) rejects, and so does one
+     * that did not even commit in time. One that committed but has not loaded
+     * (a cold server, a render-blocking script that holds even DOMContentLoaded)
+     * is the page now, still loading: it resolves, with a `note`.
      */
     navigate(url: string, opts?: NavigateOptions): Promise<NavigationResult>;
-    /** Run a history move or a reload and wait until the main frame shows another document (or the same one, scrolled). */
+    /**
+     * Run a history move or a reload and wait until the main frame shows another
+     * document (or the same one, scrolled). One that committed but has not loaded
+     * in time resolves with a `note`, as in navigate.
+     */
     private settle;
     private history;
     back(opts?: {
@@ -1240,6 +1249,8 @@ declare function decodeEntities(s: string): string;
 
 /** When fetchAndExtract renders a page in the browser: every time, only when the built-in read fails, or never. */
 type BrowserFetchMode = "always" | "fallback" | "off";
+
+declare function looksLikeJunkExtraction(text: string): string | undefined;
 
 /**
  * A realistic desktop-browser User-Agent. Several keyless web endpoints (DDG,
@@ -1549,7 +1560,6 @@ declare function rescueViaWayback(url: string, opts?: {
     snapshotUrl: string;
     timestamp: string;
 } | undefined>;
-declare function looksLikeJunkExtraction(text: string): string | undefined;
 /**
  * Drop consent-banner lines from extracted text, and say how many went.
  *
@@ -1652,7 +1662,7 @@ interface AXNode {
 interface RenderOptions {
     /** Only nodes that have a ref, flat (no indentation, no text, no `/url` lines). */
     interactive?: boolean;
-    /** Cut the tree at a line boundary once it is longer than this. No limit by default. */
+    /** Cut the tree at a line boundary once it is longer than this (a first line longer than all of it is cut itself). No limit by default. */
     maxChars?: number;
     /** Render only the subtree of this node. */
     rootBackendId?: number;
@@ -1767,6 +1777,8 @@ interface ActionResult {
     /** An anti-bot challenge on the page after the action; null when none. */
     challenge?: Challenge | null;
     value?: unknown;
+    /** The page the move landed on committed but was still loading when the wait ran out. */
+    note?: string;
 }
 
 declare const PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
@@ -3382,6 +3394,13 @@ interface CacheEntry extends Extract {
      * TTL paid for the same failed scrape plus a fresh download.
      */
     fallbackFrom?: "firecrawl";
+    /**
+     * Set on a built-in or Firecrawl read stored while the browser fallback was
+     * on, that the fallback would retry: the browser was tried and did no better.
+     * Served until its TTL like any other entry, rather than rendered again on
+     * every call.
+     */
+    browserTried?: true;
 }
 declare function cacheDir(): string;
 declare function cachePath(url: string, acceptLanguage?: string, extractor?: CacheNamespace, variant?: CacheVariant): string;
