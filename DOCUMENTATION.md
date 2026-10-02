@@ -25,8 +25,10 @@ plan query variants (full question + keywords + identifiers, by depth)
   │  fuse (RRF over DOI/arXiv-id identity, else canonical URL) + exclude-domains
   │  hydrate a candidate pool (bounded concurrency, retry on 429/503, on-disk
   │   cache; HTML via a self-hosted Firecrawl when one answers, else the
-  │   built-in reader; junk/consent-wall extractions re-tried through Firecrawl
-  │   then rejected; dead links → Wayback)
+  │   built-in reader; a refused, walled or empty page rendered in a real
+  │   browser — the browser rung, --browser fallback by default; junk/consent-
+  │   wall extractions re-tried through Firecrawl, then the browser, then
+  │   rejected; dead links → Wayback)
   │  re-rank by content keyword-coverage + fusion rank + trust, then re-order
   │   for DIVERSITY (MMR: the fourth restatement of an argument already covered
   │   loses its slot to the first source covering new ground). No cap: every
@@ -160,6 +162,12 @@ extracts, so it costs no extra retrieval. See
 - `render.ts` — the zero-dependency markdown→HTML renderer + page assembly
   (verdict badges + sub-question tree in deep mode).
 - `bibtex.ts` — `toBibtex` for research mode's `refs.bib`.
+- `browser.ts` — the browser rung as ultrasearch decides it: `resolveBrowserRung`
+  (`--browser` > `ULTRASEARCH_BROWSER_FETCH` > `fallback` when a browser is
+  detected and a window can be shown, else `off`), the `doctor` row, and
+  `withBrowserClosed`, which every page-reading command and MCP call runs under
+  so the browser its reads launched is closed on the way out. The rendering
+  itself is the engine's.
 - `services.ts` — the optional helpers as one surface: `probeServices` (what is
   reachable right now, behind `doctor`), `describeServices` (the one-line
   `Helpers:` run summary) and `compose` (`searxng|firecrawl up|down`). Exists

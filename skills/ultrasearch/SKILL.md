@@ -22,7 +22,9 @@ report built on snippets is a report built on guesses. So the split is:
   a sweep — and hand over the hits.
 - **The engine** (`scripts/ultrasearch.mjs`, zero-dependency Node) fetches every
   page, cleans it, ranks it, de-duplicates it and writes the dossier **with
-  code**.
+  code**. A page the plain fetch cannot read (a JS shell, a consent or anti-bot
+  wall) is rendered in a real, separate browser — **the browser rung, on by
+  default** wherever Chrome or Brave is installed (Tuning).
 - **You read the fetched text** and write a precise, **cited**, tiered report.
   `ultrasearch check` mechanically fails it if any citation is dangling or any
   claim in REPORT is unsourced and unflagged.
@@ -203,21 +205,22 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | Command | Writes | Flags that matter |
 |---|---|---|
 | `queries` | nothing (prints) | `--q` · `--mode` · `--depth` · `--lang` · `--json`. Your WebSearch worklist: how many distinct queries to run, and the angles to cover. Start every route here (I0). |
-| `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--backends` (⚠ Tuning) |
-| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` · `--urls a,b,c` · `--q` (excerpt hint) · `--json`. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
+| `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--browser fallback\|always\|off` (the browser rung, Tuning) · `--backends` (⚠ Tuning) |
+| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` · `--urls a,b,c` · `--q` (excerpt hint) · `--browser` · `--json`. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
-| `doctor` | nothing (prints) | `--json`. Which optional helpers are live: the SearXNG / Firecrawl containers and the PDF ladder. They are skipped in SILENCE when absent, so this is how you learn a container is up but unused, or that a stronger PDF reader is missing. |
+| `doctor` | nothing (prints) | `--json`. Which optional helpers are live: the SearXNG / Firecrawl containers, the browser rung (which binary, which mode, why it is off) and the PDF ladder. They are skipped in SILENCE when absent, so this is how you learn a container is up but unused, or that a stronger PDF reader is missing. |
 | `searxng` · `firecrawl` | containers | `up` · `down` · `status`. Both are auto-detected on localhost, so a plain `gather` uses them with no flag once they are up. |
+| `browser open <url>` | nothing (opens a window) | Hands a CAPTCHA / anti-bot check a read reported to the **human**: opens the page in the rung's dedicated browser and leaves it open. Never solve it yourself. |
 | `brainstorm` | `BRAINSTORM.md` + `.json` (`--stdout`: streams the `.md`) | `--q` · `--mode` · `--out` · `--json`. Route C only. |
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
 | `verify` | `VERIFY.todo.json` → `VERIFY.json` — exit 2 under `--stdout` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
-| `orchestrate` | `<RUN>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` |
+| `orchestrate` | `<RUN>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` · `--browser` (carried into the gatherers' commands) |
 
 ## The standard route (route S)
 
@@ -236,7 +239,9 @@ not hand control back mid-retrieval.
    It prints the dossier path and, on the `websearch:` line, how many of your
    hits survived. A local Firecrawl (`http://localhost:3002`) is picked up
    automatically in every profile and needs no flag; it extracts pages, it does
-   not find them.
+   not find them. So does the **browser rung**, keylessly: a Chrome or Brave
+   window may open during the run to read a walled or JS-only page, and closes
+   when the command ends (`--browser off` to prevent it).
 
    **Widen only when it pays** (measured on two real runs, same engine):
 
@@ -463,8 +468,19 @@ in `references/operations.md`.
   ask for `--search full`.
 - **A walled page** (a host throttling you — some answer with a consent wall or
   a reCAPTCHA page under HTTP **200**) is never banked as text. The ladder runs
-  itself: same-document alternate → Firecrawl → Wayback → `⚠ snippet only`, and
-  `fetch` refuses outright rather than store boilerplate.
+  itself: same-document alternate → Firecrawl → the browser rung → Wayback →
+  `⚠ snippet only`, and `fetch` refuses outright rather than store boilerplate.
+- **The browser rung** (`--browser fallback|always|off`, env
+  `ULTRASEARCH_BROWSER_FETCH`) renders pages in a real, separate Chrome or Brave
+  with its own profile — never the user's. It is **on by default** (`fallback`:
+  only pages that were refused, walled or empty) when a browser is installed and
+  a window can be shown, `off` otherwise; `doctor` says which and why. **A window
+  may appear during a run**; every command closes it on the way out. It **never
+  accepts a consent wall** on the user's behalf — it reads what the page shows,
+  and a page still walled stays refused. A CAPTCHA or anti-bot **challenge is
+  handed to the human, never bypassed**: the note names
+  `ultrasearch browser open <url>`; tell the user, and re-read once they have
+  passed it. `--browser off` for a run that must open nothing.
 - **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine —
   going through an API to get past a wall is the smart move. It records the URL
   the payload names for itself (canonical link → DOI → arXiv id → PMID) and
@@ -480,8 +496,8 @@ in `references/operations.md`.
   have on disk, `ingest --run <dir> --files <p,...>`; its contents then live in
   the dossier and in anything rendered from it. `doctor` shows which converters
   are available (`references/backend-apis.md`).
-- **Extraction quality**: an optional self-hosted Firecrawl
-  (`ultrasearch firecrawl up`) extracts
+- **Extraction quality**: the browser rung above needs no setup. An optional
+  self-hosted Firecrawl (`ultrasearch firecrawl up`) extracts
   HTML with a real browser instead of the built-in stripper, and re-reads the
   consent-wall / anti-bot pages that would otherwise land as `⚠ snippet only`.
   Zero config — it is used when it answers on `http://localhost:3002` and
