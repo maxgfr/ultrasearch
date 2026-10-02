@@ -8,7 +8,7 @@ import {
   shq,
 } from "./engine.js";
 import { agentContracts, GATHER_SCHEMA, runbookPreamble, VERIFY_SCHEMA } from "./orchestrate-templates.js";
-import type { ClaimEvidencePair, PlanResult } from "./types.js";
+import type { BrowserMode, ClaimEvidencePair, PlanResult } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // `ultrasearch orchestrate` — the run's two phases, declared.
@@ -120,8 +120,16 @@ export { BATCH_SIZE, listPhases, orchestrateRun, SMALL_WORKLIST, type Orchestrat
  * shadowing `orchestrateRun`, which the usage gate would refuse and which would
  * make it impossible to tell at a call site whose implementation was running.
  */
-export function emitOrchestration(runDir: string, engineAbs: string, opts: EngineOrchestrateOptions = {}): EngineOrchestrateResult {
-  return engineOrchestrateRun(runDir, engineAbs, PHASE_DEFS, agentContracts, {
+export function emitOrchestration(
+  runDir: string,
+  engineAbs: string,
+  { browser, ...opts }: EngineOrchestrateOptions & { browser?: BrowserMode } = {},
+): EngineOrchestrateResult {
+  // An explicit --browser is carried into the commands the gatherers run, so a
+  // fan-out reads pages the way the orchestrator was asked to. Unset, nothing
+  // is added and each gather resolves its own default.
+  const contracts = (runAbs: string, engine: string) => agentContracts(runAbs, engine, { browser });
+  return engineOrchestrateRun(runDir, engineAbs, PHASE_DEFS, contracts, {
     ...opts,
     runbookPreamble: runbookPreamble(listPhasesFor(runDir, engineAbs), runDir, engineAbs),
   });

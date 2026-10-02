@@ -3,6 +3,7 @@ import { cachedFetchAndExtract } from "../cache.js";
 import { acceptLanguageHeader } from "../locale.js";
 import { mapLimit } from "../util.js";
 import { bestExcerpt } from "./fetch.js";
+import { resolveBrowserRung } from "../browser.js";
 
 // Fetch an explicit set of URLs (from --url) and turn each into a source with
 // full text. This is what `search --backend generic --url a,b` and
@@ -28,7 +29,13 @@ export const genericBackend: Backend = async (ctx): Promise<BackendResult> => {
       notes: ["generic backend needs --url <u,...>; nothing to fetch."],
     };
   }
-  const extractOpts = { acceptLanguage: acceptLanguageHeader(ctx.options.lang, ctx.options.region), firecrawl: ctx.options.firecrawl };
+  // `browser` is the run's resolved rung (runGather and the CLI set it); a
+  // library caller that left it unset gets the same default, resolved here.
+  const extractOpts = {
+    acceptLanguage: acceptLanguageHeader(ctx.options.lang, ctx.options.region),
+    firecrawl: ctx.options.firecrawl,
+    browser: ctx.options.browser ?? resolveBrowserRung().mode,
+  };
   const fetched = await mapLimit(urls, ctx.options.concurrency ?? 6, (url) => cachedFetchAndExtract(url, extractOpts, !!ctx.options.cache));
   const items: RawSource[] = [];
   const notes: string[] = [];

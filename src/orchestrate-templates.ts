@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { oneWriterFooter, type PhaseInfo, shq } from "./engine.js";
-import type { PlanResult } from "./types.js";
+import type { BrowserMode, PlanResult } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Templates for `ultrasearch orchestrate` — the generator that turns the run's
@@ -83,7 +83,8 @@ export const VERIFY_SCHEMA = {
   },
 };
 
-export function agentContracts(runAbs: string, engineAbs: string): Record<string, string> {
+export function agentContracts(runAbs: string, engineAbs: string, opts: { browser?: BrowserMode } = {}): Record<string, string> {
+  const browserFlag = opts.browser ? ` --browser ${opts.browser}` : "";
   const gathererFooter = GATHERER_FOOTER.replaceAll("<RUN>", runAbs);
   const skepticFooter = ONE_WRITER_FOOTER.replaceAll("<RUN>", runAbs);
   return {
@@ -101,10 +102,10 @@ For EACH of your sub-questions:
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
    names how many DISTINCT queries to run and which angles to cover. Run your WebSearch once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":…,"title":…,"snippet":…}, …]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your WebSearch queries into that language when the run targets a non-English audience):
-   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"\`
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND WebSearch round at that gap and fold the whole round in with ONE call:
-   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"\`
+   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN — landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a … wall", the host is throttling you: that is a refusal, not a setback to work around — take another source, or pass the provider's text endpoint and let the engine record the page.
 4. Do NOT write any report tier.
 

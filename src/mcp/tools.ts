@@ -1,4 +1,4 @@
-import { ALL_BACKENDS, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_WEB_ENGINES } from "../types.js";
+import { ALL_BACKENDS, ALL_BROWSER_MODES, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_WEB_ENGINES } from "../types.js";
 import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "../engine.js";
 import { isNoWrite } from "../no-write.js";
 
@@ -56,6 +56,16 @@ const firecrawlProp: JsonSchemaProp = {
     "Self-hosted Firecrawl base URL for browser-rendered extraction; 'off' disables it. Auto-detected on localhost:3002. Extraction only — it does not discover.",
 };
 
+const browserProp: JsonSchemaProp = {
+  type: "string",
+  enum: [...ALL_BROWSER_MODES].sort(),
+  description:
+    "The browser rung: a real, separate Chrome or Brave (its own profile) renders the pages the built-in reader cannot — JS shells, consent and anti-bot walls. " +
+    "'fallback' = only a page that was refused, walled or empty; 'always' = every web page (slow); 'off' = never. Default: fallback when a browser is " +
+    "installed and a window can be shown, else off (ULTRASEARCH_BROWSER_FETCH overrides it). A window may appear while the call runs; it is closed when the " +
+    "call ends. It never accepts a consent wall for the user and never solves a challenge.",
+};
+
 // The line every retrieval tool carries. The whole point of this skill is that
 // the answer comes from fetched pages, and a model that treats a dossier as
 // optional has already lost the property it was reaching for.
@@ -81,6 +91,7 @@ export const TOOLS: ToolDecl[] = [
         },
         lang: langProp,
         max_sources: { type: "number", description: "Cap on results returned (default 10)." },
+        browser: browserProp,
       },
       required: ["query", "backend"],
     },
@@ -118,6 +129,7 @@ export const TOOLS: ToolDecl[] = [
         web_engine: webEngineProp,
         searxng: searxngProp,
         firecrawl: firecrawlProp,
+        browser: browserProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." },
       },
       required: ["question"],
@@ -137,6 +149,7 @@ export const TOOLS: ToolDecl[] = [
         urls: { type: "array", items: { type: "string" }, description: "Plain list of absolute http(s) URLs (alternative to web_results)." },
         question: { type: "string", description: "What you're looking for on these pages — ranks the excerpts kept. Defaults to the dossier's question." },
         firecrawl: firecrawlProp,
+        browser: browserProp,
       },
       required: ["run"],
     },
@@ -158,6 +171,7 @@ export const TOOLS: ToolDecl[] = [
           type: "string",
           description: "Read the text from `url` but record THIS page as the citation. For when `url` is an API endpoint whose document you already know.",
         },
+        browser: browserProp,
       },
       required: ["run", "url"],
     },
@@ -270,7 +284,12 @@ export const TOOLS: ToolDecl[] = [
       "that a gather would return a shallow dossier about the wrong thing.",
     inputSchema: {
       type: "object",
-      properties: { question: questionProp, mode: modeProp, out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." } },
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." },
+        browser: browserProp,
+      },
       required: ["question"],
     },
   },

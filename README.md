@@ -140,6 +140,21 @@ disagree. Retrieval flags two more quality signals to act on: a **thin dossier**
 **snippet-only** sources (the page fetch failed, so only the search snippet is on
 file, marked `⚠ snippet only`).
 
+## The browser rung (on by default, no setup)
+
+A page the built-in reader cannot read — a JS shell, a consent wall, an anti-bot
+interstitial — is rendered in a **real, separate Chrome or Brave** with its own
+profile (`~/.ultrasearch/browser`, never yours), and the better read is kept.
+It is on (`--browser fallback`) wherever a Chrome, Brave, Chromium or Edge is
+installed and a window can be shown (macOS, Windows, Linux with a display), off
+otherwise; `ULTRASEARCH_BROWSER_FETCH` overrides the default and `--browser
+fallback|always|off` overrides both. A window may appear during a run; every
+command that reads pages closes it on the way out. It never accepts a consent
+wall for you and never solves a challenge: a CAPTCHA is handed to the human with
+`ultrasearch browser open <url>`. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
+is off unless asked for, since a browser writes its profile. `ultrasearch doctor`
+shows the binary, the mode and why it is off when it is.
+
 ## Optional self-hosted containers
 
 Two things can run locally, both keyless, both optional. The compose file is
@@ -189,7 +204,8 @@ the case worth seeing, and `ultrasearch doctor` says why.
   snippet. No configuration — it is used when it answers on
   `http://localhost:3002` and silently skipped when it does not, so runs never
   fail because of it (`--firecrawl <url>` / `ULTRASEARCH_FIRECRAWL`, `off` to
-  disable). Costs ~3 GB of images and ~4 GB of RAM. The compose file
+  disable). Costs ~3 GB of images and ~4 GB of RAM. The browser rung above is
+  the keyless alternative for the same walls. The compose file
   and its env ship inside the vendored engine and are written out on first use
   (`ultrasearch firecrawl up`); there is no `docker/` directory in this repo.
 

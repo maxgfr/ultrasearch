@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BackendKind, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
+import type { BackendKind, BrowserMode, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { annotateExtras } from "./extras.js";
@@ -10,6 +10,7 @@ import { extractPdf } from "./backends/pdf.js";
 import { extractDocument, docFormatForUrl, DOC_EXTENSIONS } from "./backends/doc.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { cachedFetchAndExtract } from "./cache.js";
+import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, titleFromText } from "./util.js";
@@ -57,6 +58,8 @@ interface Prepared {
   backend: BackendKind;
   text: string;
   question: string;
+  /** Said on success too: how the text was had, when that is worth knowing (a browser rescue). */
+  note?: string;
 }
 type PrepareResult = Prepared | { ok: false; result: EnrichResult };
 
@@ -85,7 +88,7 @@ function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [...new Set([...state.manifest.backendsUsed, p.backend])] };
-  return { id, added: true };
+  return { id, added: true, ...(p.note ? { note: p.note } : {}) };
 }
 
 // Persist the three index files — sources.json, manifest.json, DOSSIER.md —
@@ -113,8 +116,12 @@ function flushIndex(dir: string, state: IngestState): void {
 export async function addSources(
   dir: string,
   hits: (string | WebSearchHit)[],
-  opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
+  opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode } = {},
 ): Promise<IngestResult> {
+  // Resolved once for the whole batch, not once per URL — and so is the browser
+  // rescue's budget: each render is a serialized browser read of up to 30 s.
+  opts = { ...opts, browser: opts.browser ?? resolveBrowserRung().mode };
+  const rescues = { left: BROWSER_RESCUE_CAP };
   const results: IngestOutcome[] = [];
   let state: IngestState | undefined;
   const stateOf = (): IngestState => (state ??= loadState(dir));
@@ -122,7 +129,7 @@ export async function addSources(
   try {
     for (const hit of hits) {
       const { url, title } = typeof hit === "string" ? { url: hit, title: undefined } : hit;
-      const p = await prepareSource(stateOf, url, { ...opts, title });
+      const p = await prepareSource(stateOf, url, { ...opts, title, rescues });
       let r: EnrichResult;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -274,7 +281,7 @@ async function prepareFile(stateOf: () => IngestState, abs: string, opts: { ques
 export async function addSource(
   dir: string,
   url: string,
-  opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string } = {},
+  opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode } = {},
 ): Promise<EnrichResult> {
   const state = loadState(dir);
   const p = await prepareSource(() => state, url, opts);
@@ -291,7 +298,17 @@ export async function addSource(
 async function prepareSource(
   stateOf: () => IngestState,
   url: string,
-  opts: { question?: string; title?: string; citeUrl?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string },
+  opts: {
+    question?: string;
+    title?: string;
+    citeUrl?: string;
+    backend?: BackendKind;
+    cache?: boolean;
+    firecrawl?: string;
+    browser?: BrowserMode;
+    /** The batch's browser-rescue budget, shared across its URLs. */
+    rescues?: { left: number };
+  },
 ): Promise<PrepareResult> {
   const state = stateOf();
   const question = opts.question ?? state.manifest.question;
@@ -333,8 +350,14 @@ async function prepareSource(
   // "succeeds" and the full text is never fetched at all.
   const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
   const readUrl = supplied ? url : preferred;
-  const fetched = await cachedFetchAndExtract(readUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+  const browser = opts.browser ?? resolveBrowserRung().mode;
+  const readOpts = { firecrawl: opts.firecrawl, browser };
+  const fetched = await cachedFetchAndExtract(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
+  // Whether the text in hand was rendered by the browser rung — recorded on the
+  // source, as gather's backends record theirs, so a dossier says which pages a
+  // real browser read.
+  let rendered = fetched.extractor === "browser";
   let wall = text?.trim() ? looksLikeJunkExtraction(text) : undefined;
   // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA") —
   // drop it with the body, or a rescued source ends up labelled by the wall.
@@ -354,11 +377,12 @@ async function prepareSource(
   // came back empty (a paywalled or image-only PDF).
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await cachedFetchAndExtract(fallbackUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+    const alt = await cachedFetchAndExtract(fallbackUrl, readOpts, !!opts.cache);
     if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
       text = alt.text;
       title = title || alt.title;
       wall = undefined;
+      rendered = alt.extractor === "browser";
       via = fallbackUrl === citeUrl ? undefined : fallbackUrl;
       if (via) meta.textVia = via;
       else delete meta.textVia;
@@ -373,17 +397,38 @@ async function prepareSource(
       text = fc.data.markdown;
       title = title || fc.data.title;
       wall = undefined;
+      rendered = false;
+    }
+  }
+  // An EMPTY 402 — a paywall gate (Le Monde) that hands a browser the article's
+  // opening — is the one read the engine's own fallback does not render, so it
+  // is rendered here. Walls and JS shells are not: the engine's fallback already
+  // rendered those during the read, and a page it could not get is not worth a
+  // second browser read. The browser reads what the page shows: it never accepts
+  // a consent wall for the user and never solves a challenge.
+  let note: string | undefined;
+  const rescues = opts.rescues ?? { left: BROWSER_RESCUE_CAP };
+  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser) && rescues.left > 0) {
+    rescues.left--;
+    const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
+    if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
+      note = `Recovered ${readUrl} in a real browser — the built-in read was an empty HTTP ${fetched.status} answer.`;
+      text = page.text;
+      title = title || page.title;
+      wall = undefined;
+      rendered = true;
     }
   }
   // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
       title = title || wb.title;
       wall = undefined;
+      rendered = false;
       meta.waybackSnapshot = wb.timestamp;
     }
   }
@@ -430,6 +475,7 @@ async function prepareSource(
     if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
 
+  if (rendered) meta.extractor = "browser";
   const backend: BackendKind = opts.backend ?? "claude";
   const raw: RawSource = {
     url: citeUrl,
@@ -442,5 +488,5 @@ async function prepareSource(
     text,
     ...(Object.keys(meta).length ? { meta } : {}),
   };
-  return { ok: true, raw, backend, text, question };
+  return { ok: true, raw, backend, text, question, ...(note ? { note } : {}) };
 }

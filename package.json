@@ -32,6 +32,7 @@
     "eval:network": "node evals/run.mjs --suite network",
     "bench:pdf": "ULTRASEARCH_BENCH=1 vitest run tests/bench-pdf.test.ts",
     "bench:offline": "ULTRASEARCH_BENCH=1 vitest run tests/bench-offline.test.ts",
+    "e2e:browser": "ULTRASEARCH_E2E_BROWSER=1 vitest run tests/browser-live.test.ts",
     "release": "semantic-release",
     "verify:engine": "node scripts/verify-engine-usage.mjs",
     "engine:prepare": "pnpm run build && node scripts/ultrasearch.mjs render --run assets/example-dossier && node scripts/check-artifact-recall.mjs",

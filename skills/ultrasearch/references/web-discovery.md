@@ -79,7 +79,8 @@ here, because it *looks* exhaustive.
 Two consequences worth knowing:
 
 - **Firecrawl stays on in `light`.** It *extracts* pages, it does not find them —
-  so it keeps rescuing consent walls in either profile. Only SearXNG, a discovery
+  so it keeps rescuing consent walls in either profile. So does the browser rung
+  (`--browser`), for the same reason. Only SearXNG, a discovery
   engine, drops out.
 - **`light` has no discovery engine**, so `--seed-domains` and `--rounds 2` have
   nothing to run their queries on. The run says so in its notes rather than
@@ -207,6 +208,23 @@ Once it answers on `http://localhost:3002` (override with `--firecrawl <url>` or
 > Firecrawl's markdown is **richer** than the stripped text, so it reaches the
 > `--depth` extract caps (4k `summary` / 8k `standard`, uncapped on `deep`)
 > sooner. If a long page reads as truncated, that is why — use `--depth deep`.
+
+## The browser rung — the keyless alternative (on by default)
+
+Firecrawl reads JS shells and consent walls with a browser inside a ~3 GB stack.
+The engine's **browser rung** does the same job keylessly, with no container: it
+renders the page in a real, separate Chrome or Brave (its own profile under
+`~/.ultrasearch/browser`). `--browser fallback` — the default wherever a browser
+is installed and a window can be shown — renders only the pages the built-in
+read was refused, walled or handed a JS shell for, and keeps the better read;
+`always` renders every web page; `off` never does. When Firecrawl answers it
+goes first, and the browser still renders a page Firecrawl came back walled or empty on.
+
+It reads what the page shows: it **never accepts a consent wall** on the user's
+behalf, and a CAPTCHA or anti-bot check is **handed to the human**
+(`ultrasearch browser open <url>`), never bypassed. A window may appear during
+the run; it is closed when the command ends. `references/operations.md` has the
+full behaviour, the env vars and the troubleshooting rows.
 
 > **`--backends` is a bigger hammer than it looks.** It replaces the whole mode
 > profile, and in doing so silently turns OFF four things: the resilient web

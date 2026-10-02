@@ -63,6 +63,7 @@ var DEEP_CAPS = {
 };
 var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
 var ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"];
+var ALL_BROWSER_MODES = ["fallback", "always", "off"];
 
 // src/backends/websearch.ts
 var URL_KEYS = ["url", "link", "href", "uri"];
@@ -6416,31 +6417,31 @@ function extractTables(html) {
     const top = stack[stack.length - 1];
     if (top) top.text(src.slice(last, m.index));
     last = tag2.lastIndex;
-    const closing = m[1] === "/";
+    const closing2 = m[1] === "/";
     const name = m[2].toLowerCase();
-    if (top && (buried || name === "table" && !closing && stack.length >= MAX_DEPTH)) {
-      if (name === "table") buried += closing ? -1 : 1;
+    if (top && (buried || name === "table" && !closing2 && stack.length >= MAX_DEPTH)) {
+      if (name === "table") buried += closing2 ? -1 : 1;
       top.text(" ");
       continue;
     }
     if (name === "table") {
-      if (!closing) stack.push(new OpenTable(order++));
+      if (!closing2) stack.push(new OpenTable(order++));
       else if (top) closeTable(stack, done);
       continue;
     }
     if (!top) continue;
     if (name === "td" || name === "th") {
-      if (closing) top.endCell();
+      if (closing2) top.endCell();
       else top.startCell(name === "th", htmlAttributes(m[0]));
     } else if (name === "tr") {
       top.endRow();
-      if (!closing) top.startRow();
+      if (!closing2) top.startRow();
     } else if (name === "caption") {
       top.endRow();
-      top.inCaption = !closing;
+      top.inCaption = !closing2;
     } else {
       top.endRow();
-      top.inHead = name === "thead" && !closing;
+      top.inHead = name === "thead" && !closing2;
     }
   }
   while (stack.length) closeTable(stack, done);
@@ -6565,14 +6566,14 @@ function markdownAgainst(html, base2, fullPage) {
     if (m.index > last) w.text(s.slice(last, m.index));
     last = tag2.lastIndex;
     const t = m[0];
-    const closing = t[1] === "/";
-    const adjacent = m.index === prevEnd && prevClosed && !closing;
+    const closing2 = t[1] === "/";
+    const adjacent = m.index === prevEnd && prevClosed && !closing2;
     prevEnd = tag2.lastIndex;
-    prevClosed = closing;
+    prevClosed = closing2;
     const name = tagName(t);
     if (!name) continue;
     if (name === "div") {
-      if (closing) {
+      if (closing2) {
         if (divOverflow) divOverflow--;
         else divs.pop();
       } else if (divs.length < MAX_BLOCK_DEPTH * 4) divs.push(t);
@@ -6583,7 +6584,7 @@ function markdownAgainst(html, base2, fullPage) {
       if (heading) {
         w.flush();
         headingEnd = -1;
-        if (closing) continue;
+        if (closing2) continue;
       } else if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") {
         if (headingEnd >= 0 && m.index < headingEnd) {
           w.space();
@@ -6595,14 +6596,14 @@ function markdownAgainst(html, base2, fullPage) {
     }
     if (heading) {
       w.flush();
-      if (closing) continue;
+      if (closing2) continue;
       w.heading = heading;
       headingEdge.lastIndex = tag2.lastIndex;
       const edge = headingEdge.exec(s);
       headingEnd = edge && edge[0][1] === "/" ? edge.index : -1;
       continue;
     }
-    if (name === "pre" && !closing && !preUnclosed) {
+    if (name === "pre" && !closing2 && !preUnclosed) {
       const close = closeTagRe("pre");
       close.lastIndex = tag2.lastIndex;
       const c = close.exec(s);
@@ -6615,7 +6616,7 @@ function markdownAgainst(html, base2, fullPage) {
       }
       preUnclosed = true;
     }
-    if (name === "table" && !closing) {
+    if (name === "table" && !closing2) {
       const region = tables.get(m.index);
       const table = region && !isLayoutTable(t, s, region) ? extractTables(s.slice(region.from, region.to))[0] : void 0;
       if (region && table) {
@@ -6635,17 +6636,17 @@ function markdownAgainst(html, base2, fullPage) {
       case "ul":
       case "ol":
         w.flush();
-        if (closing) w.closeList();
+        if (closing2) w.closeList();
         else w.openList(name === "ol", listStart(t));
         continue;
       case "li":
         w.flush();
-        if (closing) w.closeItem();
+        if (closing2) w.closeItem();
         else w.openItem();
         continue;
       case "blockquote":
         w.flush();
-        if (closing) w.closeQuote();
+        if (closing2) w.closeQuote();
         else w.openQuote();
         continue;
       case "hr":
@@ -6661,7 +6662,7 @@ function markdownAgainst(html, base2, fullPage) {
     }
     const kind = INLINE_KIND[name];
     if (kind) {
-      if (closing) {
+      if (closing2) {
         w.close(kind);
         continue;
       }
@@ -7900,13 +7901,13 @@ function htmlToText(html, opts = {}) {
   let prevEnd = -1;
   let prevClosed = false;
   s = s.replace(TAG_RE, (tag2, at) => {
-    const closing = tag2[1] === "/";
-    const adjacent = at === prevEnd && prevClosed && !closing;
+    const closing2 = tag2[1] === "/";
+    const adjacent = at === prevEnd && prevClosed && !closing2;
     prevEnd = at + tag2.length;
-    prevClosed = closing;
+    prevClosed = closing2;
     const name = tagName(tag2);
     if (/^h[1-6]$/.test(name)) {
-      return closing ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
+      return closing2 ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
     }
     if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") return "\n";
     if (INLINE_TAGS.has(name)) return adjacent ? " " : "";
@@ -11383,7 +11384,7 @@ async function runStdioServer(adapter, opts = {}) {
       waiting.shift()?.();
     }
   };
-  const dispatch2 = async (msg, reply) => {
+  const dispatch3 = async (msg, reply) => {
     if (msg !== null && typeof msg === "object" && !Array.isArray(msg)) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
@@ -11420,7 +11421,7 @@ async function runStdioServer(adapter, opts = {}) {
         track2(
           (async () => {
             const out = [];
-            await Promise.all(batch.map((m) => dispatch2(m, (r) => void out.push(r))));
+            await Promise.all(batch.map((m) => dispatch3(m, (r) => void out.push(r))));
             if (out.length) emit(JSON.stringify(out) + "\n");
           })().catch(reportInternal(send))
         );
@@ -11430,7 +11431,7 @@ async function runStdioServer(adapter, opts = {}) {
         send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
         continue;
       }
-      track2(dispatch2(parsed, send).catch(reportInternal(send)));
+      track2(dispatch3(parsed, send).catch(reportInternal(send)));
     }
     await Promise.all(inFlight);
   } finally {
@@ -12137,6 +12138,90 @@ var wikipediaBackend = async (ctx) => {
   return { backend: "wikipedia", items, notes };
 };
 
+// src/browser.ts
+var ENV = "ULTRASEARCH_BROWSER_FETCH";
+var NO_BINARY = "no Chrome, Brave, Chromium or Edge found (install one, or point ULTRASEARCH_BROWSER_BIN at it)";
+function canShowWindow(platform, env2) {
+  if (platform === "darwin" || platform === "win32") return true;
+  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
+}
+function resolveBrowserRung(opts = {}) {
+  const env2 = opts.env ?? process.env;
+  const platform = opts.platform ?? process.platform;
+  const detect = () => {
+    try {
+      const found = (opts.detect ?? (() => detectBrowserBinary({ processEnv: env2, platform, env: (suffix) => env2[`ULTRASEARCH_${suffix}`] })))();
+      return found ? { binary: found, missing: NO_BINARY } : { missing: NO_BINARY };
+    } catch (e) {
+      return { missing: e instanceof Error ? e.message : String(e) };
+    }
+  };
+  const on = (mode2, source2) => {
+    const { binary: binary2, missing: missing2 } = detect();
+    return binary2 ? { mode: mode2, source: source2, binary: binary2 } : { mode: mode2, source: source2, reason: missing2 };
+  };
+  if (opts.flag !== void 0) return opts.flag === "off" ? { mode: "off", source: "flag", reason: "--browser off" } : on(opts.flag, "flag");
+  const raw = env2[ENV]?.trim();
+  if (raw) {
+    const m = raw.toLowerCase();
+    return m === "always" || m === "fallback" ? on(m, "env") : { mode: "off", source: "env", reason: `${ENV}=${raw}` };
+  }
+  if (opts.noWrite ?? isNoWrite()) {
+    return { mode: "off", source: "default", reason: "--stdout / ULTRASEARCH_NO_WRITE: nothing may be written, and a browser writes its profile" };
+  }
+  const { binary, missing } = detect();
+  if (!binary) return { mode: "off", source: "default", reason: missing };
+  if (!canShowWindow(platform, env2)) {
+    return { mode: "off", source: "default", binary, reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" };
+  }
+  return { mode: "fallback", source: "default", binary };
+}
+function rescuesEmptyRead(status, mode2) {
+  return mode2 === "fallback" && status === 402;
+}
+var BROWSER_RESCUE_CAP = 8;
+function describeBrowserRung(r) {
+  if (r.mode === "off") return { name: "browser", ok: false, detail: `off \u2014 ${r.reason ?? "disabled"}` };
+  if (!r.binary) return { name: "browser", ok: false, detail: `${r.mode} (from ${originOf(r)}), but ${r.reason ?? NO_BINARY}` };
+  const what = r.mode === "always" ? "renders every web page" : "renders a page the built-in reader was refused, walled or handed a JS shell for";
+  return {
+    name: "browser",
+    ok: true,
+    detail: `${r.mode} (${originOf(r)}) \u2014 ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). A window may open during a run. \`--browser off\` to disable.`
+  };
+}
+function originOf(r) {
+  return r.source === "flag" ? "--browser" : r.source === "env" ? ENV : "default: a browser is installed and a window can be shown";
+}
+var sharing = 0;
+var closing;
+async function withBrowserClosed(fn) {
+  while (closing) await closing;
+  sharing++;
+  try {
+    return await fn();
+  } finally {
+    if (--sharing === 0) {
+      const done = closeBrowserReads().finally(() => {
+        if (closing === done) closing = void 0;
+      });
+      closing = done;
+      await done;
+    }
+  }
+}
+function closeBrowserOnSignal() {
+  const on = (sig) => {
+    void closeBrowserReads({ waitMs: 0 }).finally(() => process.exit(sig === "SIGINT" ? 130 : 143));
+  };
+  process.once("SIGINT", on);
+  process.once("SIGTERM", on);
+  return () => {
+    process.off("SIGINT", on);
+    process.off("SIGTERM", on);
+  };
+}
+
 // src/backends/generic.ts
 var genericBackend = async (ctx) => {
   const urls = ctx.options.urls ?? [];
@@ -12147,7 +12232,11 @@ var genericBackend = async (ctx) => {
       notes: ["generic backend needs --url <u,...>; nothing to fetch."]
     };
   }
-  const extractOpts = { acceptLanguage: acceptLanguageHeader(ctx.options.lang, ctx.options.region), firecrawl: ctx.options.firecrawl };
+  const extractOpts = {
+    acceptLanguage: acceptLanguageHeader(ctx.options.lang, ctx.options.region),
+    firecrawl: ctx.options.firecrawl,
+    browser: ctx.options.browser ?? resolveBrowserRung().mode
+  };
   const fetched = await mapLimit(urls, ctx.options.concurrency ?? 6, (url) => cachedFetchAndExtract(url, extractOpts, !!ctx.options.cache));
   const items = [];
   const notes = [];
@@ -14177,6 +14266,13 @@ async function probeServices(opts = {}, only) {
       }
     },
     {
+      // The keyless rung next to the container that does the same job: a real
+      // browser that reads JS shells and consent walls. Not probed by launching
+      // it — detection and the mode are what decide whether a run will use it.
+      name: "browser",
+      run: async () => describeBrowserRung(resolveBrowserRung({ flag: opts.browser }))
+    },
+    {
       name: "pdf-inspector",
       run: async () => {
         if (!rungs.includes("pdf-inspector")) return { name: "pdf-inspector", ok: false, detail: "skipped (ULTRASEARCH_NO_NPX / ULTRASEARCH_PDF_ENGINE)" };
@@ -14247,6 +14343,7 @@ function describeServices(s) {
     s.searxng.requested ? `searxng ${s.searxng.sources ? `\u2713 ${s.searxng.sources} result(s)` : "\u2717 no results"}` : "searxng not in this mode's backends"
   );
   parts.push(s.firecrawl.pages ? `firecrawl \u2713 ${s.firecrawl.pages} page(s)` : "firecrawl \u2717 not used");
+  if (s.browser) parts.push(s.browser.pages ? `browser \u2713 ${s.browser.pages} page(s)` : "browser \u2717 not used");
   const pdf = Object.entries(s.pdf);
   if (pdf.length) parts.push(`pdf ${pdf.map(([k, n]) => `${k} \u2713 ${n}`).join(", ")}`);
   const doc = Object.entries(s.doc ?? {});
@@ -14437,6 +14534,7 @@ async function runGather(options) {
   options.pages = effPages;
   const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
   const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
+  const browser = options.browser ??= resolveBrowserRung().mode;
   const ctx = { question: options.question, mode: mode2, options, variants };
   const explicit = !!options.backends?.length;
   const webBackends = backends.filter((b) => DISCOVERY.includes(b));
@@ -14469,6 +14567,8 @@ async function runGather(options) {
   let cacheHits = 0;
   let waybackUsed = 0;
   const WAYBACK_CAP = 5;
+  const browserTried = /* @__PURE__ */ new Set();
+  let browserRescues = 0;
   const extractorUse = /* @__PURE__ */ new Map();
   const prehydratedTallied = /* @__PURE__ */ new Set();
   const docExtractorUse = /* @__PURE__ */ new Map();
@@ -14479,7 +14579,7 @@ async function runGather(options) {
       docExtractorUse.set(k, (docExtractorUse.get(k) ?? 0) + 1);
     }
   };
-  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
+  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl, browser };
   const hydrate = (url, key) => {
     let p = hydrateCache.get(key);
     if (!p) {
@@ -14565,6 +14665,22 @@ async function runGather(options) {
           tallyExtractor({ extractor: "firecrawl" });
           hydrateCache.set(key, Promise.resolve({ ...res, text: fc.data.markdown, title, extractor: "firecrawl" }));
           hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} \u2014 re-extracted it with Firecrawl.`);
+        }
+      }
+      if (!text && rescuesEmptyRead(res.status, browser) && !browserTried.has(key) && browserRescues < BROWSER_RESCUE_CAP) {
+        browserTried.add(key);
+        browserRescues++;
+        const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
+        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
+          text = rendered.text;
+          junk = void 0;
+          title = title || rendered.title;
+          tallyExtractor({ extractor: "browser" });
+          hydrateCache.set(key, Promise.resolve({ ...res, text: rendered.text, title, extractor: "browser" }));
+          hydrateNotes.push(`Recovered ${it.url} in a real browser \u2014 the built-in read was an empty HTTP ${res.status} answer.`);
+        } else if (rendered.note) {
+          const own = res.note ? rendered.note.replace(res.note, "").trim() : rendered.note;
+          if (own) hydrateNotes.push(own);
         }
       }
       if (text && !junk) {
@@ -14670,7 +14786,9 @@ async function runGather(options) {
     pdf: Object.fromEntries(
       [...extractorUse].filter(([k]) => k === "pdf-inspector" || k === "pdftotext" || k === "anydoc" || k === "ocr").map(([k, n]) => [k, n - (docExtractorUse.get(k) ?? 0)]).filter(([, n]) => n > 0)
     ),
-    ...docExtractorUse.size ? { doc: Object.fromEntries(docExtractorUse) } : {}
+    ...docExtractorUse.size ? { doc: Object.fromEntries(docExtractorUse) } : {},
+    // Absent when the rung was off: nothing could have been rendered.
+    ...browser !== "off" || extractorUse.has("browser") ? { browser: { mode: browser, pages: extractorUse.get("browser") ?? 0 } } : {}
   };
   const notes = [
     ...results.flatMap((res) => res.notes),
@@ -14712,7 +14830,7 @@ async function runGather(options) {
         `\u26A0 max asked for SearXNG and it contributed nothing. Its own note above says why (a stopped container, or its upstream engines throttling). \`ultrasearch doctor\` tells the two apart.`
       ] : [],
       ...services.firecrawl.pages === 0 ? [
-        `\u26A0 max asked for Firecrawl and no page came back through it \u2014 the stack is down. Start it: \`ultrasearch firecrawl up\`. Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`
+        `\u26A0 max asked for Firecrawl and no page came back through it \u2014 the stack is down. Start it: \`ultrasearch firecrawl up\`. Without it you lose Firecrawl's extraction and its consent-wall rescue, so this run is max-minus-the-stack. ` + (browser !== "off" ? `The browser rung (${browser}) was on, so walled and JS-rendered pages still went through a real browser \u2014 the keyless alternative to the stack.` : `The keyless alternative is the browser rung: \`--browser fallback\` renders walled and JS-rendered pages in a real Chrome or Brave, no container needed.`)
       ] : []
     ] : [],
     ...profile === "light" && !explicit ? [
@@ -14724,6 +14842,9 @@ async function runGather(options) {
     ] : [],
     ...cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : [],
     ...services.firecrawl.pages > 0 ? [`Firecrawl cleaned ${services.firecrawl.pages} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`] : [],
+    ...services.browser?.pages ? [
+      `Rendered ${services.browser.pages} page(s) in a real browser (the keyless browser rung, --browser ${browser}): JS shells and walls the built-in reader could not see past.`
+    ] : [],
     // The optional helpers are silent by design when absent, so ONE line per run
     // says what they actually did. Without it a container can be up for weeks,
     // never be queried, and leave no trace of the fact anywhere.
@@ -14782,12 +14903,14 @@ function commit(dir, state, p) {
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
-  return { id, added: true };
+  return { id, added: true, ...p.note ? { note: p.note } : {} };
 }
 function flushIndex(dir, state) {
   writeDossierIndex(dir, state.sources, state.manifest, state.template);
 }
 async function addSources(dir, hits, opts = {}) {
+  opts = { ...opts, browser: opts.browser ?? resolveBrowserRung().mode };
+  const rescues = { left: BROWSER_RESCUE_CAP };
   const results = [];
   let state;
   const stateOf = () => state ??= loadState(dir);
@@ -14795,7 +14918,7 @@ async function addSources(dir, hits, opts = {}) {
   try {
     for (const hit of hits) {
       const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
-      const p = await prepareSource(stateOf, url, { ...opts, title });
+      const p = await prepareSource(stateOf, url, { ...opts, title, rescues });
       let r;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -14924,8 +15047,11 @@ async function prepareSource(stateOf, url, opts) {
   }
   const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
   const readUrl = supplied ? url : preferred;
-  const fetched = await cachedFetchAndExtract(readUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+  const browser = opts.browser ?? resolveBrowserRung().mode;
+  const readOpts = { firecrawl: opts.firecrawl, browser };
+  const fetched = await cachedFetchAndExtract(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
+  let rendered = fetched.extractor === "browser";
   let wall = text?.trim() ? looksLikeJunkExtraction(text) : void 0;
   if (wall) title = void 0;
   const meta = {};
@@ -14936,11 +15062,12 @@ async function prepareSource(stateOf, url, opts) {
   }
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await cachedFetchAndExtract(fallbackUrl, { firecrawl: opts.firecrawl }, !!opts.cache);
+    const alt = await cachedFetchAndExtract(fallbackUrl, readOpts, !!opts.cache);
     if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
       text = alt.text;
       title = title || alt.title;
       wall = void 0;
+      rendered = alt.extractor === "browser";
       via = fallbackUrl === citeUrl ? void 0 : fallbackUrl;
       if (via) meta.textVia = via;
       else delete meta.textVia;
@@ -14952,14 +15079,29 @@ async function prepareSource(stateOf, url, opts) {
       text = fc.data.markdown;
       title = title || fc.data.title;
       wall = void 0;
+      rendered = false;
+    }
+  }
+  let note;
+  const rescues = opts.rescues ?? { left: BROWSER_RESCUE_CAP };
+  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser) && rescues.left > 0) {
+    rescues.left--;
+    const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
+    if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
+      note = `Recovered ${readUrl} in a real browser \u2014 the built-in read was an empty HTTP ${fetched.status} answer.`;
+      text = page.text;
+      title = title || page.title;
+      wall = void 0;
+      rendered = true;
     }
   }
   if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
-    const wb = await rescueViaWayback(readUrl, { firecrawl: opts.firecrawl });
+    const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
       title = title || wb.title;
       wall = void 0;
+      rendered = false;
       meta.waybackSnapshot = wb.timestamp;
     }
   }
@@ -14997,6 +15139,7 @@ async function prepareSource(stateOf, url, opts) {
     const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
     if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
+  if (rendered) meta.extractor = "browser";
   const backend = opts.backend ?? "claude";
   const raw = {
     url: citeUrl,
@@ -15009,7 +15152,7 @@ async function prepareSource(stateOf, url, opts) {
     text,
     ...Object.keys(meta).length ? { meta } : {}
   };
-  return { ok: true, raw, backend, text, question };
+  return { ok: true, raw, backend, text, question, ...note ? { note } : {} };
 }
 
 // src/render.ts
@@ -16891,7 +17034,8 @@ var VERIFY_SCHEMA = {
     }
   }
 };
-function agentContracts(runAbs, engineAbs) {
+function agentContracts(runAbs, engineAbs, opts = {}) {
+  const browserFlag = opts.browser ? ` --browser ${opts.browser}` : "";
   const gathererFooter = GATHERER_FOOTER.replaceAll("<RUN>", runAbs);
   const skepticFooter = ONE_WRITER_FOOTER.replaceAll("<RUN>", runAbs);
   return {
@@ -16909,10 +17053,10 @@ For EACH of your sub-questions:
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
    names how many DISTINCT queries to run and which angles to cover. Run your WebSearch once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your WebSearch queries into that language when the run targets a non-English audience):
-   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"\`
+   \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND WebSearch round at that gap and fold the whole round in with ONE call:
-   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"\`
+   \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
 4. Do NOT write any report tier.
 
@@ -17030,8 +17174,9 @@ var VERIFY = {
   ]
 };
 var PHASE_DEFS = [GATHER, VERIFY];
-function emitOrchestration(runDir, engineAbs, opts = {}) {
-  return orchestrateRun(runDir, engineAbs, PHASE_DEFS, agentContracts, {
+function emitOrchestration(runDir, engineAbs, { browser, ...opts } = {}) {
+  const contracts = (runAbs, engine) => agentContracts(runAbs, engine, { browser });
+  return orchestrateRun(runDir, engineAbs, PHASE_DEFS, contracts, {
     ...opts,
     runbookPreamble: runbookPreamble(listPhasesFor(runDir, engineAbs), runDir, engineAbs)
   });
@@ -17087,6 +17232,10 @@ function webResultsArg(v) {
   }
   return { hits: parsed.hits, rejected: parsed.rejected };
 }
+function browserArg(args) {
+  const v = str2(args.browser);
+  return resolveBrowserRung({ flag: v === void 0 ? void 0 : oneOf(v, ALL_BROWSER_MODES, "browser", "fallback") }).mode;
+}
 function requiredRun(args, defaults) {
   const run = str2(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
@@ -17129,12 +17278,15 @@ function gatherOptions(args) {
     since: str2(args.since),
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
+    browser: browserArg(args),
     out,
     json: true
   };
 }
+var PAGE_TOOLS = /* @__PURE__ */ new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
 async function callTool(name, args, defaults = {}) {
-  const result = await dispatch(name, args, defaults);
+  const run = () => dispatch(name, args, defaults);
+  const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
   return outcome(name, result);
 }
 var NO_WRITE_REFUSED_TOOLS = {
@@ -17301,7 +17453,7 @@ function handleMerge(args) {
 async function handleFetch(args, run) {
   const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
-  const res = await addSource(run, url, { question: str2(args.question), title: str2(args.title), citeUrl: str2(args.cite_url) });
+  const res = await addSource(run, url, { question: str2(args.question), title: str2(args.title), citeUrl: str2(args.cite_url), browser: browserArg(args) });
   return { run, url, ...res };
 }
 async function handleIngest(args, run) {
@@ -17312,7 +17464,7 @@ async function handleIngest(args, run) {
   }
   const hits = [...listed, ...web?.hits ?? []];
   if (!hits.length) throw new ToolError("`web_results` or `urls` is required \u2014 the URLs to fold into the dossier.");
-  const res = await addSources(run, hits, { question: str2(args.question), firecrawl: str2(args.firecrawl), cache: true });
+  const res = await addSources(run, hits, { question: str2(args.question), firecrawl: str2(args.firecrawl), cache: true, browser: browserArg(args) });
   return {
     run,
     ...res,
@@ -17447,6 +17599,11 @@ var firecrawlProp = {
   type: "string",
   description: "Self-hosted Firecrawl base URL for browser-rendered extraction; 'off' disables it. Auto-detected on localhost:3002. Extraction only \u2014 it does not discover."
 };
+var browserProp = {
+  type: "string",
+  enum: [...ALL_BROWSER_MODES].sort(),
+  description: "The browser rung: a real, separate Chrome or Brave (its own profile) renders the pages the built-in reader cannot \u2014 JS shells, consent and anti-bot walls. 'fallback' = only a page that was refused, walled or empty; 'always' = every web page (slow); 'off' = never. Default: fallback when a browser is installed and a window can be shown, else off (ULTRASEARCH_BROWSER_FETCH overrides it). A window may appear while the call runs; it is closed when the call ends. It never accepts a consent wall for the user and never solves a challenge."
+};
 var GROUNDING_NOTE = "Returns SOURCES, not an answer \u2014 you write the report from them, citing [S#], and prove it with ultrasearch_check.";
 var TOOLS = [
   {
@@ -17463,7 +17620,8 @@ var TOOLS = [
           description: "Which backend to query. There is no default: a general web sweep is what ultrasearch_gather does, and picking one here is the point of this tool. Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web."
         },
         lang: langProp,
-        max_sources: { type: "number", description: "Cap on results returned (default 10)." }
+        max_sources: { type: "number", description: "Cap on results returned (default 10)." },
+        browser: browserProp
       },
       required: ["query", "backend"]
     }
@@ -17496,6 +17654,7 @@ var TOOLS = [
         web_engine: webEngineProp,
         searxng: searxngProp,
         firecrawl: firecrawlProp,
+        browser: browserProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." }
       },
       required: ["question"]
@@ -17512,7 +17671,8 @@ var TOOLS = [
         web_results: webResultsProp,
         urls: { type: "array", items: { type: "string" }, description: "Plain list of absolute http(s) URLs (alternative to web_results)." },
         question: { type: "string", description: "What you're looking for on these pages \u2014 ranks the excerpts kept. Defaults to the dossier's question." },
-        firecrawl: firecrawlProp
+        firecrawl: firecrawlProp,
+        browser: browserProp
       },
       required: ["run"]
     }
@@ -17531,7 +17691,8 @@ var TOOLS = [
         cite_url: {
           type: "string",
           description: "Read the text from `url` but record THIS page as the citation. For when `url` is an API endpoint whose document you already know."
-        }
+        },
+        browser: browserProp
       },
       required: ["run", "url"]
     }
@@ -17630,7 +17791,12 @@ var TOOLS = [
     description: "Turn a question too vague to research into angles worth taking and the clarifying questions worth asking first. Use it when the ask is broad enough that a gather would return a shallow dossier about the wrong thing.",
     inputSchema: {
       type: "object",
-      properties: { question: questionProp, mode: modeProp, out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." } },
+      properties: {
+        question: questionProp,
+        mode: modeProp,
+        out: { type: "string", description: "Absolute directory to write BRAINSTORM.md to." },
+        browser: browserProp
+      },
       required: ["question"]
     }
   },
@@ -17931,7 +18097,8 @@ Usage:
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
-  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list]
+  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
+  ultrasearch browser open <url>
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -17960,12 +18127,15 @@ Commands:
            --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
   doctor   Report the state of the engine and its optional helpers: the SearXNG
-           and Firecrawl containers, the PDF extractor ladder. The helpers are
+           and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
            With --run <dossier-dir>, also says whether THAT run had a WebSearch
            lane \u2014 a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
+  browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
+           for YOU to deal with \u2014 the CAPTCHA or anti-bot check a read reported.
+           The engine never solves one; once you have, the next read gets the page.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
            (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
@@ -18007,6 +18177,21 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
+  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search / brainstorm /
+                       fetch / ingest / orchestrate: a real, separate Chrome or
+                       Brave (own profile) renders the pages the built-in reader
+                       cannot \u2014 JS shells, consent and anti-bot walls. A window
+                       may appear during the run; it is closed when the command
+                       ends. It never accepts a consent wall for you and never
+                       solves a challenge.
+                       fallback = only a page that was refused, walled or empty
+                       always   = every web page (slow)
+                       off      = never
+                       (env ULTRASEARCH_BROWSER_FETCH; default: fallback when a
+                       Chrome/Brave/Chromium/Edge is installed and a window can
+                       be shown \u2014 macOS, Windows, Linux with a display \u2014 else
+                       off; always off by default under --stdout, which writes
+                       nothing, not even the browser's profile)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, \u2026]
                        (a bare array of URLs, or '-' for stdin, also work). This
                        is the PRIMARY discovery lane \u2014 the strongest index here,
@@ -18102,7 +18287,8 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "mcp",
   "doctor",
   "searxng",
-  "firecrawl"
+  "firecrawl",
+  "browser"
 ]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
@@ -18124,6 +18310,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "region",
   "searxng",
   "firecrawl",
+  "browser",
   "web-engine",
   "web-results",
   "search",
@@ -18343,6 +18530,15 @@ function gatherReport(r, options) {
     ]
   };
 }
+function browserMode(p) {
+  const flag = p.values.browser === void 0 ? void 0 : oneOf2("browser", p.values.browser, ALL_BROWSER_MODES);
+  return resolveBrowserRung({ flag }).mode;
+}
+var PAGE_COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm"]);
+async function exitClosed(code) {
+  await closeBrowserReads();
+  process.exit(code);
+}
 function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
@@ -18390,6 +18586,7 @@ function buildGatherOptions(p, opts = {}) {
     // `--cache` stays an accepted no-op so every prompt and emitted contract
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
+    browser: browserMode(p),
     out: p.values.out ? resolve4(p.values.out) : void 0,
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
@@ -18410,6 +18607,15 @@ async function main(argv = process.argv.slice(2)) {
     process.exitCode = 2;
     return;
   }
+  if (!PAGE_COMMANDS.has(p.command)) return dispatch2(p);
+  const uninstall = closeBrowserOnSignal();
+  try {
+    await withBrowserClosed(() => dispatch2(p));
+  } finally {
+    uninstall();
+  }
+}
+async function dispatch2(p) {
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
@@ -18508,7 +18714,14 @@ async function main(argv = process.argv.slice(2)) {
           fail(`could not read ${mf}: ${e.message}`);
         }
       }
-      const rows = [describeWebSearchLane(manifest), ...await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng })];
+      const rows = [
+        describeWebSearchLane(manifest),
+        ...await probeServices({
+          firecrawl: p.values.firecrawl,
+          searxng: p.values.searxng,
+          browser: p.values.browser === void 0 ? void 0 : oneOf2("browser", p.values.browser, ALL_BROWSER_MODES)
+        })
+      ];
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
@@ -18517,6 +18730,36 @@ async function main(argv = process.argv.slice(2)) {
       process.stdout.write(`${head}
 
 ${formatServices(rows)}
+`);
+      return;
+    }
+    // The human's half of the browser rung. A read that meets a CAPTCHA or an
+    // anti-bot check reports it and moves on — it is never solved for anyone.
+    // This opens the page in the same dedicated browser (its own profile), and
+    // leaves it open: once the human has passed the check there, the next read
+    // of that host gets the page.
+    case "browser": {
+      const action = p.positional[0];
+      const url = p.positional[1] ?? p.values.url;
+      if (action !== "open") fail(`browser: unknown action '${action ?? ""}' (expected: open <url>)`);
+      if (!url || !/^https?:\/\//i.test(url)) fail("browser open: expected an absolute http(s) URL");
+      let session;
+      try {
+        session = await openBrowserSession({ newTab: true });
+      } catch (e) {
+        fail(`browser open: ${e.message}`);
+      }
+      for (const n of session.takeNotes()) process.stderr.write(`ultrasearch: ${n}
+`);
+      try {
+        await session.navigate(url, { waitUntil: "domcontentloaded" });
+      } catch (e) {
+        if (session.spawned) await session.shutdown();
+        else await session.detach();
+        fail(`browser open: ${e.message}`);
+      }
+      await session.detach();
+      process.stderr.write(`ultrasearch: opened ${url} in the dedicated browser \u2014 deal with the check there, then re-run the read.
 `);
       return;
     }
@@ -18621,8 +18864,9 @@ ${formatServices(rows)}
         title: p.values.title,
         citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
-        cache: !p.bools.has("no-cache")
+        cache: !p.bools.has("no-cache"),
         // same default-on policy as gather
+        browser: browserMode(p)
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
@@ -18631,13 +18875,15 @@ ${formatServices(rows)}
 `);
         process.stderr.write(`ultrasearch: added ${r.id} \u2190 ${url}
 `);
+        if (r.note) process.stderr.write(`ultrasearch: ${r.note}
+`);
       } else {
         process.stderr.write(`ultrasearch: ${r.note ?? "not added"}
 `);
         if (r.id) process.stdout.write(`${r.id}
 `);
       }
-      if (!r.id) process.exit(1);
+      if (!r.id) await exitClosed(1);
       return;
     }
     case "ingest": {
@@ -18660,7 +18906,8 @@ ${formatServices(rows)}
       const enrichOpts = {
         question: p.values.q ?? p.values.question,
         cache: !p.bools.has("no-cache"),
-        firecrawl: p.values.firecrawl
+        firecrawl: p.values.firecrawl,
+        browser: browserMode(p)
       };
       const web = hits.length ? await addSources(resolve4(dir), hits, enrichOpts) : void 0;
       const local2 = files.length ? await addFiles(resolve4(dir), files, enrichOpts) : void 0;
@@ -18676,12 +18923,14 @@ ${formatServices(rows)}
           process.stdout.write(o.added ? `${o.id}	${o.url}
 ` : `-	${o.url}	${o.note ?? "not added"}
 `);
+          if (o.added && o.note) process.stderr.write(`ultrasearch: ${o.note}
+`);
         }
         const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve4(dir)}
 `);
       }
-      if (!r.added) process.exit(1);
+      if (!r.added) await exitClosed(1);
       return;
     }
     case "render": {
@@ -18771,7 +19020,10 @@ ${formatServices(rows)}
       }
       const res = emitOrchestration(dir, engineAbs, {
         phase: p.values.phase,
-        eco: p.bools.has("eco")
+        eco: p.bools.has("eco"),
+        // Only an EXPLICIT flag is carried into the gatherers' commands; each
+        // gather otherwise resolves its own default, in its own environment.
+        ...p.values.browser === void 0 ? {} : { browser: oneOf2("browser", p.values.browser, ALL_BROWSER_MODES) }
       });
       if (res.exitCode !== 0) {
         for (const e of res.errors) process.stderr.write(`ultrasearch orchestrate: ${e}
@@ -18808,7 +19060,13 @@ ${formatServices(rows)}
         maxResponseBytes
       };
       if (transport === "stdio") {
-        await runStdioServer(ultrasearchAdapter(options), options);
+        const uninstall = closeBrowserOnSignal();
+        try {
+          await runStdioServer(ultrasearchAdapter(options), options);
+        } finally {
+          uninstall();
+          await closeBrowserReads({ waitMs: 0 });
+        }
         return;
       }
       const port = p.values.port ? Number(p.values.port) : 7339;
@@ -18832,7 +19090,7 @@ ${formatServices(rows)}
 `);
       for (const sig of ["SIGINT", "SIGTERM"]) {
         process.once(sig, () => {
-          void running.close().then(() => process.exit(0));
+          void closeBrowserReads({ waitMs: 0 }).then(() => running.close()).finally(() => process.exit(0));
         });
       }
       await new Promise((resolve8) => running.server.once("close", resolve8));
@@ -18931,6 +19189,7 @@ export {
   HELP,
   NO_WRITE_REFUSED,
   VALUE_FLAGS,
+  browserMode,
   buildGatherOptions,
   gatherReport,
   main,

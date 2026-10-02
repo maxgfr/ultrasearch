@@ -43,3 +43,11 @@ process.env.ULTRASEARCH_DOC_ENGINE = "none";
 // dependent, and seconds per page. A budget of 0 switches the rung off for the
 // whole suite; tests/pdf-ocr.test.ts drives it with the subprocess layer stubbed.
 process.env.ULTRASEARCH_OCR_MAX = "0";
+
+// The browser rung renders a page in a real, separate Chrome/Brave whenever the
+// built-in read is refused or walled — and it is ON by default wherever a
+// browser is installed and a window can be shown, which is every developer
+// laptop. A test that reached it would open a window, depend on which browser
+// the machine has, and touch the network. Force it off for the whole suite;
+// the tests of the rung itself inject detection and stub the engine's reads.
+process.env.ULTRASEARCH_BROWSER_FETCH = "off";

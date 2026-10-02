@@ -75,6 +75,11 @@ more than saving ten seconds.
 | `ULTRASEARCH_SEARXNG` | `http://localhost:8888` | SearXNG base URL (same as `--searxng`). Opt-in: unset ⇒ the backend skips without calling out. |
 | `ULTRASEARCH_FIRECRAWL` | `http://localhost:3002` | Self-hosted Firecrawl base URL (same as `--firecrawl`). `off` disables it. Unreachable ⇒ silently skipped after one 2s probe. |
 | `ULTRASEARCH_FIRECRAWL_KEY` | unset | Optional `Authorization: Bearer` for the Firecrawl API. Not needed self-hosted — only to point the same client at Firecrawl Cloud. |
+| `ULTRASEARCH_BROWSER_FETCH` | see below | The browser rung: `fallback`, `always` or `off` (same as `--browser`, which wins). Unset ⇒ `fallback` when a Chrome, Brave, Chromium or Edge is installed and a window can be shown (macOS, Windows, Linux with `DISPLAY`/`WAYLAND_DISPLAY`), else `off`. Any other value reads as `off`. |
+| `ULTRASEARCH_BROWSER_BIN` | unset | The browser binary to launch. A path that does not exist turns the rung off (`doctor` says why) rather than silently using another browser. |
+| `ULTRASEARCH_BROWSER_KIND` | unset | Only this kind of browser: `chrome`, `brave`, `chromium` or `edge`. |
+| `ULTRASEARCH_BROWSER_TIMEOUT_MS` | 30000 | Ceiling for rendering ONE page in the browser; the tab is closed when it runs out. |
+| `ULTRASEARCH_BROWSER_CONCURRENCY` | 1 | Pages rendered at once (1-4). |
 | `ULTRASEARCH_PDF_ENGINE` | unset | Force ONE rung of the PDF extractor ladder: `pdf-inspector`, `anydoc`, `firecrawl`, `pdftotext`, `native` or `ocr`. Unset ⇒ the full ladder, strongest first. |
 | `ULTRASEARCH_DOC_ENGINE` | unset | Force ONE rung of the office-document ladder (`anydoc`, `firecrawl`), or `none` to disable it — office documents are then refused rather than read. |
 | `ULTRASEARCH_NO_NPX` | unset | Set to skip both rungs that need an implicit `npx` install (`pdf-inspector`, `anydoc`). Useful offline, or where an unattended install is not acceptable. |
@@ -146,6 +151,57 @@ and a memoised 2s probe decides per process whether it is there. When it is not,
 every extraction uses the built-in reader exactly as before. `docker/firecrawl/README.md`
 has the smoke tests and the tunables.
 
+## The browser rung
+
+The keyless way past what the built-in reader cannot read. When a page is
+refused (HTTP 0/401/403/429/503), comes back a consent or anti-bot wall, or is
+an empty JS shell, the engine renders it in a **real, separate Chrome or Brave**
+with its own profile under `~/.ultrasearch/browser`, and keeps the better read.
+It is **on by default** (`fallback`) wherever a browser is installed and a window
+can be shown; `doctor` prints which binary, which mode, and why it is off when it is.
+
+| `--browser` | Renders |
+|---|---|
+| `fallback` *(default with a browser + a display)* | only a page the built-in read was refused, walled or handed a JS shell for |
+| `always` | every web page, ahead of Firecrawl — slow, for a JS-heavy sweep |
+| `off` *(default otherwise)* | nothing |
+
+What to expect:
+
+- **A window may appear during a run.** It is the dedicated browser, not yours:
+  your own profile, tabs and logins are never touched. Every command that reads
+  pages (`gather`, `search`, `fetch`, `ingest`, `brainstorm`) closes it when it
+  ends — on an error, Ctrl-C and SIGTERM too. The MCP server closes it when the
+  last page-reading call in flight ends (concurrent calls share it), and when it
+  is stopped.
+- **Consent walls are never accepted for the user.** The page is read as it
+  renders; on most news sites the article is in the page under the banner, and
+  that is what is kept. When it is not, the junk check still sees a wall and the
+  page stays `⚠ snippet only` (`gather`) or is refused (`fetch` / `ingest`).
+- **Challenges are handed to the human, never bypassed.** A CAPTCHA or anti-bot
+  check is reported in the run's notes with the command to open it:
+  `ultrasearch browser open <url>` opens it in the same dedicated browser and
+  leaves it open. Once the human has passed it there, the next read of that host
+  gets the page.
+- **Accounting.** `gather` notes `Rendered N page(s) in a real browser` and the
+  `Helpers:` line counts `browser ✓ N page(s)`. `fetch` / `ingest` record
+  `meta.extractor: "browser"` on a source the browser read.
+- **When it renders.** A walled, refused or JS-only page is rendered by the
+  engine *during the read* (`fallback`), once; a page that read could not get
+  is not rendered again. The one read the engine skips is an **empty `402`** —
+  a paywall gate (Le Monde) that still hands a browser the article's opening —
+  so ultrasearch renders that one itself, noted `Recovered <url> in a real
+  browser`: once per page per run, at most 8 per `gather`. After that the
+  ladder goes on: same-document alternate → Firecrawl (when it answers) →
+  Wayback (dead links) → `⚠ snippet only`.
+- **Off under `--stdout` / `ULTRASEARCH_NO_WRITE=1` by default**: that mode
+  writes nothing, and a launched browser writes its profile. An explicit
+  `--browser` (or `ULTRASEARCH_BROWSER_FETCH`) still turns it on.
+- `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not
+  open anything: CI, a remote shell, a deterministic benchmark.
+- Developing it: `pnpm run e2e:browser` reads a real JS shell through a real
+  browser and checks no process is left behind (never in CI).
+
 ## Offline and deterministic runs
 
 - `--backends fixture` gives a canned 3-source dossier about rate limiting with
@@ -186,6 +242,9 @@ around them:
 | `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own WebSearch + `fetch --url`. Stop after two empty attempts and report the gap. |
 | `searxng` backend skipped although containers are running | A bare `docker compose up` on some other stack starts nothing here — every service is behind a profile | `ultrasearch searxng up` |
 | Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
+| A browser window opened during a run | The browser rung (`fallback` by default) rendered a walled or JS-only page | Expected; it closes when the command ends. `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not open one. |
+| A note says "challenge — open it with `ultrasearch browser open <url>`" | The page put a CAPTCHA / anti-bot check in front of the browser | Hand it to the human: `ultrasearch browser open <url>`, let them pass it, then re-read the page. Never try to solve it yourself. |
+| `doctor`: `browser ✗ off — no Chrome, Brave, Chromium or Edge found` | No supported browser installed, or `ULTRASEARCH_BROWSER_BIN` points nowhere | Install one, or set `ULTRASEARCH_BROWSER_BIN`. The run is unaffected otherwise — walls fall back to Firecrawl / the snippet. |
 | Extracts look truncated since enabling Firecrawl | Its markdown is richer, so it reaches the 4k/8k `--depth` cap sooner | Use `--depth deep` (uncapped extracts), or read `sources/S#.md` directly. |
 | Thin dossier every time | Query too narrow, or a niche/commercial topic | Add `--queries` variants, raise `--web-breadth`/`--pages`, add `--seed-domains` for hosts you know. |
 | `--seed-domains` / `--rounds` did nothing | `--backends` was also passed — it pins retrieval and voids them | Drop `--backends`. The run now says `IGNORED:` when this happens. |

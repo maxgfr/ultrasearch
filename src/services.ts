@@ -4,7 +4,8 @@ import { probeSearxng } from "./backends/searxng.js";
 import { searxngBase, searxngIsExplicit } from "./engine.js";
 import { enabledExtractors, ocrTools, ocrBudgetLeft } from "./backends/pdf.js";
 import { enabledDocExtractors } from "./backends/doc.js";
-import type { ManifestServices } from "./types.js";
+import { describeBrowserRung, resolveBrowserRung } from "./browser.js";
+import type { BrowserMode, ManifestServices } from "./types.js";
 
 // What the optional helpers are doing right now, and how to start them.
 //
@@ -23,7 +24,7 @@ export interface ServiceStatus {
 }
 
 /** The rows `probeServices` can produce, in the order `doctor` prints them. */
-export type ServiceName = "searxng" | "firecrawl" | "pdf-inspector" | "pdftotext" | "ocr" | "pdf ladder" | "anydoc" | "doc ladder";
+export type ServiceName = "searxng" | "firecrawl" | "browser" | "pdf-inspector" | "pdftotext" | "ocr" | "pdf ladder" | "anydoc" | "doc ladder";
 
 const VERSION_PROBE_TIMEOUT_MS = 20_000;
 
@@ -43,7 +44,10 @@ async function toolVersion(cmd: string, args: string[]): Promise<string | undefi
  * all, which is the difference between one HTTP round-trip and two npx spawns.
  * It never reorders: whatever order it is given, the answer keeps the table's.
  */
-export async function probeServices(opts: { firecrawl?: string; searxng?: string } = {}, only?: readonly ServiceName[]): Promise<ServiceStatus[]> {
+export async function probeServices(
+  opts: { firecrawl?: string; searxng?: string; browser?: BrowserMode } = {},
+  only?: readonly ServiceName[],
+): Promise<ServiceStatus[]> {
   // Both ladders are read once and shared: two rows each depend on them, and
   // asking twice could straddle a change to the environment mid-probe.
   const rungs = enabledExtractors();
@@ -95,6 +99,13 @@ export async function probeServices(opts: { firecrawl?: string; searxng?: string
               `not running at ${fcBase}${explicit ? "" : " (or the port is held by another app)"} — \`ultrasearch firecrawl up\``,
         };
       },
+    },
+    {
+      // The keyless rung next to the container that does the same job: a real
+      // browser that reads JS shells and consent walls. Not probed by launching
+      // it — detection and the mode are what decide whether a run will use it.
+      name: "browser",
+      run: async () => describeBrowserRung(resolveBrowserRung({ flag: opts.browser })),
     },
     {
       name: "pdf-inspector",
@@ -182,6 +193,9 @@ export function describeServices(s: ManifestServices): string {
     s.searxng.requested ? `searxng ${s.searxng.sources ? `✓ ${s.searxng.sources} result(s)` : "✗ no results"}` : "searxng not in this mode's backends",
   );
   parts.push(s.firecrawl.pages ? `firecrawl ✓ ${s.firecrawl.pages} page(s)` : "firecrawl ✗ not used");
+  // Only when the rung was on: with it off nothing could have been rendered, and
+  // `doctor` is where "why is it off" is answered.
+  if (s.browser) parts.push(s.browser.pages ? `browser ✓ ${s.browser.pages} page(s)` : "browser ✗ not used");
   const pdf = Object.entries(s.pdf);
   if (pdf.length) parts.push(`pdf ${pdf.map(([k, n]) => `${k} ✓ ${n}`).join(", ")}`);
   const doc = Object.entries(s.doc ?? {});
