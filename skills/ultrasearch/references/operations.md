@@ -170,8 +170,10 @@ What to expect:
 
 - **A window may appear during a run.** It is the dedicated browser, not yours:
   your own profile, tabs and logins are never touched. Every command that reads
-  pages (`gather`, `search`, `fetch`, `ingest`, `brainstorm`, each MCP call that
-  reads pages) closes it when it ends — on an error and on Ctrl-C too.
+  pages (`gather`, `search`, `fetch`, `ingest`, `brainstorm`) closes it when it
+  ends — on an error, Ctrl-C and SIGTERM too. The MCP server closes it when the
+  last page-reading call in flight ends (concurrent calls share it), and when it
+  is stopped.
 - **Consent walls are never accepted for the user.** The page is read as it
   renders; on most news sites the article is in the page under the banner, and
   that is what is kept. When it is not, the junk check still sees a wall and the
@@ -182,16 +184,23 @@ What to expect:
   leaves it open. Once the human has passed it there, the next read of that host
   gets the page.
 - **Accounting.** `gather` notes `Rendered N page(s) in a real browser` and the
-  `Helpers:` line counts `browser ✓ N page(s)`; a walled page the browser got
-  past is noted `Recovered <url> in a real browser`. `fetch` / `ingest` print
-  the same note and record `meta.extractor: "browser"` on the source.
-- **Rescue order on a wall:** same-document alternate → Firecrawl (when it
-  answers) → the browser → Wayback (dead links) → `⚠ snippet only`.
-  An **empty** read the engine's own fallback does not render — a `402`
-  paywall gate, a `400`, a `5xx` — is rendered too (in `fallback`); a gone page
-  (`404`/`410`/`451`) never is.
+  `Helpers:` line counts `browser ✓ N page(s)`. `fetch` / `ingest` record
+  `meta.extractor: "browser"` on a source the browser read.
+- **When it renders.** A walled, refused or JS-only page is rendered by the
+  engine *during the read* (`fallback`), once; a page that read could not get
+  is not rendered again. The one read the engine skips is an **empty `402`** —
+  a paywall gate (Le Monde) that still hands a browser the article's opening —
+  so ultrasearch renders that one itself, noted `Recovered <url> in a real
+  browser`: once per page per run, at most 8 per `gather`. After that the
+  ladder goes on: same-document alternate → Firecrawl (when it answers) →
+  Wayback (dead links) → `⚠ snippet only`.
+- **Off under `--stdout` / `ULTRASEARCH_NO_WRITE=1` by default**: that mode
+  writes nothing, and a launched browser writes its profile. An explicit
+  `--browser` (or `ULTRASEARCH_BROWSER_FETCH`) still turns it on.
 - `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not
   open anything: CI, a remote shell, a deterministic benchmark.
+- Developing it: `pnpm run e2e:browser` reads a real JS shell through a real
+  browser and checks no process is left behind (never in CI).
 
 ## Offline and deterministic runs
 

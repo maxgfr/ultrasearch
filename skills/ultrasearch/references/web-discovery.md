@@ -218,7 +218,7 @@ renders the page in a real, separate Chrome or Brave (its own profile under
 is installed and a window can be shown — renders only the pages the built-in
 read was refused, walled or handed a JS shell for, and keeps the better read;
 `always` renders every web page; `off` never does. When Firecrawl answers it
-goes first, and the browser still re-reads the walls Firecrawl could not get past.
+goes first, and the browser still renders a page Firecrawl came back walled or empty on.
 
 It reads what the page shows: it **never accepts a consent wall** on the user's
 behalf, and a CAPTCHA or anti-bot check is **handed to the human**

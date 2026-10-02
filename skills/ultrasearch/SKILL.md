@@ -468,8 +468,8 @@ in `references/operations.md`.
   ask for `--search full`.
 - **A walled page** (a host throttling you — some answer with a consent wall or
   a reCAPTCHA page under HTTP **200**) is never banked as text. The ladder runs
-  itself: same-document alternate → Firecrawl → the browser rung → Wayback →
-  `⚠ snippet only`, and `fetch` refuses outright rather than store boilerplate.
+  itself: the browser rung renders it during the read → same-document alternate
+  → Firecrawl → Wayback → `⚠ snippet only`, and `fetch` refuses outright rather than store boilerplate.
 - **The browser rung** (`--browser fallback|always|off`, env
   `ULTRASEARCH_BROWSER_FETCH`) renders pages in a real, separate Chrome or Brave
   with its own profile — never the user's. It is **on by default** (`fallback`:
@@ -480,7 +480,8 @@ in `references/operations.md`.
   and a page still walled stays refused. A CAPTCHA or anti-bot **challenge is
   handed to the human, never bypassed**: the note names
   `ultrasearch browser open <url>`; tell the user, and re-read once they have
-  passed it. `--browser off` for a run that must open nothing.
+  passed it. `--browser off` for a run that must open nothing; under `--stdout`
+  it is off unless you ask for it.
 - **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine —
   going through an API to get past a wall is the smart move. It records the URL
   the payload names for itself (canonical link → DOI → arXiv id → PMID) and

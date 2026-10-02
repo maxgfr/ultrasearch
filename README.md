@@ -151,8 +151,9 @@ otherwise; `ULTRASEARCH_BROWSER_FETCH` overrides the default and `--browser
 fallback|always|off` overrides both. A window may appear during a run; every
 command that reads pages closes it on the way out. It never accepts a consent
 wall for you and never solves a challenge: a CAPTCHA is handed to the human with
-`ultrasearch browser open <url>`. `ultrasearch doctor` shows the binary, the mode
-and why it is off when it is.
+`ultrasearch browser open <url>`. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
+is off unless asked for, since a browser writes its profile. `ultrasearch doctor`
+shows the binary, the mode and why it is off when it is.
 
 ## Optional self-hosted containers
 
