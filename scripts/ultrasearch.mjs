@@ -5000,6 +5000,7 @@ function isVersionWord(a) {
 var EXIT_OK;
 var EXIT_FAILURE;
 var EXIT_USAGE;
+var EXIT_HUMAN;
 var UsageError;
 var init_cli_kit = __esm({
   "src/cli-kit.ts"() {
@@ -5009,6 +5010,7 @@ var init_cli_kit = __esm({
     EXIT_OK = 0;
     EXIT_FAILURE = 1;
     EXIT_USAGE = 2;
+    EXIT_HUMAN = 3;
     UsageError = class extends Error {
       exitCode = EXIT_USAGE;
     };

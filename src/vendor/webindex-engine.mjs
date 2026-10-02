@@ -5134,7 +5134,7 @@ function isInvokedDirectly(argv1 = process.argv[1], cli = brand().cli) {
   if (!argv1) return false;
   return basename(argv1).replace(/\.(mjs|cjs|js)$/, "") === cli;
 }
-var EXIT_OK, EXIT_FAILURE, EXIT_USAGE, UsageError;
+var EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_HUMAN, UsageError;
 var init_cli_kit = __esm({
   "src/cli-kit.ts"() {
     "use strict";
@@ -5143,6 +5143,7 @@ var init_cli_kit = __esm({
     EXIT_OK = 0;
     EXIT_FAILURE = 1;
     EXIT_USAGE = 2;
+    EXIT_HUMAN = 3;
     UsageError = class extends Error {
       exitCode = EXIT_USAGE;
     };
@@ -9530,7 +9531,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.30.0";
+var ENGINE_VERSION = "1.31.0";
 
 // src/index.ts
 init_brand();
@@ -9577,6 +9578,7 @@ var CONTAINER_ROLES = /* @__PURE__ */ new Set(["table", "figure", "article", "ma
 var NAMED_CONTAINER_ROLES = /* @__PURE__ */ new Set(["region", "image", "img"]);
 var VALUE_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider"]);
 var FIELD_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
+var HINT_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton", "checkbox", "radio", "button"]);
 var str2 = (v) => typeof v?.value === "string" ? v.value : typeof v?.value === "number" ? String(v.value) : "";
 var squash = (s) => s.replace(/\s+/g, " ").trim();
 function buildTree(nodes) {
@@ -9623,17 +9625,21 @@ function states(n) {
   return out;
 }
 var Renderer = class {
-  constructor(table, frames) {
+  constructor(table, frames, hints = {}) {
     this.frames = frames;
+    this.hints = hints;
     this.refs = { ...table.refs };
     this.containers = new Set(table.containers ?? []);
     this.next = table.next;
   }
   frames;
+  hints;
   refs;
   /** The refs that name a container only, never a control. */
   containers;
   next;
+  /** The form controls rendered, in document order, with the name each was shown with. */
+  controls = [];
   seen = /* @__PURE__ */ new Set();
   trees = /* @__PURE__ */ new Map();
   refFor(backendId) {
@@ -9695,6 +9701,10 @@ var Renderer = class {
       if (acts) this.containers.delete(ref);
       else this.containers.add(ref);
       head += ` [ref=${ref}]`;
+      const id = n.backendDOMNodeId;
+      if (acts && HINT_ROLES.has(role)) this.controls.push({ id, name });
+      const hint = this.hints[id];
+      if (hint) head += ` ${hint}`;
     }
     for (const s of states(n)) head += ` ${s}`;
     let kids;
@@ -9735,7 +9745,7 @@ function flat(items, out) {
   }
 }
 function renderSnapshot(nodes, opts) {
-  const r = new Renderer(opts.refs, opts.frames ?? {});
+  const r = new Renderer(opts.refs, opts.frames ?? {}, opts.hints);
   const main = buildTree(nodes);
   const all = [];
   let items = [];
@@ -9792,8 +9802,14 @@ function renderSnapshot(nodes, opts) {
       ...r.containers.size ? { containers: [...r.containers].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))) } : {}
     },
     truncated: tail !== "",
-    refCount: kept.filter((l) => l.ref).length
+    refCount: kept.filter((l) => l.ref).length,
+    unclear: unclearControls(r.controls)
   };
+}
+function unclearControls(controls) {
+  const count = /* @__PURE__ */ new Map();
+  for (const c of controls) count.set(c.name, (count.get(c.name) ?? 0) + 1);
+  return controls.filter((c) => c.name === "" || (count.get(c.name) ?? 0) > 1).map((c) => c.id);
 }
 
 // src/browser.ts
@@ -15012,6 +15028,7 @@ export {
   ERR_METHOD_NOT_FOUND,
   EVIDENCE_TOKEN,
   EXIT_FAILURE,
+  EXIT_HUMAN,
   EXIT_OK,
   EXIT_USAGE,
   FILE_LINE_TOKEN,
