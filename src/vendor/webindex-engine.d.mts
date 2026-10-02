@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.29.2";
+declare const ENGINE_VERSION = "1.29.3";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1431,6 +1431,11 @@ declare function htmlCanonicalUrl(html: string): string | undefined;
  * Inline scripts count as characters but are not text: a sidebar holding a chat
  * widget's JSON outscored the article, and a `__NEXT_DATA__` blob outside
  * `<main>` inflated the page until the size gate refused the real region.
+ *
+ * A candidate that is mostly link text — a row of related-article cards, which
+ * news sites mark up as `<article>`s while the story itself sits in a plain
+ * `<div>` — does not win on length alone: the prose under the page's `<h1>`
+ * does, those lists cut out, when there is enough of it.
  */
 declare function extractMainHtml(html: string): string;
 declare const PDF_URL_RE: RegExp;

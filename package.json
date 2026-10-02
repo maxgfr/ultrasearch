@@ -66,7 +66,7 @@
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
     "yaml": "^2.9.0",
-    "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/f3946cbb0c7598d23111973f665301a359b8d16f"
+    "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/1e98f3bf6380d866d61c8f0a2f74367115a28879"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

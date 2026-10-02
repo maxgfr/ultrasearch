@@ -7978,10 +7978,102 @@ function blockKind(open2) {
   const firstClass = (htmlAttributes(open2).get("class") ?? "").trim().split(/\s+/)[0];
   return `${tag2} ${firstClass.replace(/\d+/g, "0")}`;
 }
+function textProfile(html) {
+  const at = [];
+  const len = [];
+  const link = [];
+  const prose = [];
+  let inA = false;
+  let inP = false;
+  let total = 0;
+  let linked = 0;
+  let para = 0;
+  let last = 0;
+  for (const m of html.matchAll(LOOSE_TAG_RE)) {
+    const n = html.slice(last, m.index).replace(/\s+/g, " ").trim().length;
+    total += n;
+    if (inA) linked += n;
+    else if (inP) para += n;
+    at.push(m.index);
+    len.push(total);
+    link.push(linked);
+    prose.push(para);
+    last = m.index + m[0].length;
+    const name = tagName(m[0]);
+    const closing2 = m[0][1] === "/";
+    if (name === "a") inA = !closing2;
+    else if (name === "p") inP = !closing2;
+    else if (!closing2 && CLOSES_P.has(name)) inP = false;
+  }
+  const index = (pos) => {
+    let lo = 0;
+    let hi = at.length - 1;
+    while (lo < hi) {
+      const mid = lo + hi + 1 >> 1;
+      if (at[mid] <= pos) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  return (from, to) => {
+    if (!at.length) return { len: 0, link: 0, prose: 0 };
+    const i = index(from);
+    const j = index(to);
+    return { len: len[j] - len[i], link: link[j] - link[i], prose: prose[j] - prose[i] };
+  };
+}
+function headlineProse(clean3, stats, lists, minProse) {
+  const firstAtOrAfter = (pos) => {
+    let lo = 0;
+    let hi = lists.length;
+    while (lo < hi) {
+      const mid = lo + hi >> 1;
+      if (lists[mid].from < pos) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  };
+  const inList = (pos) => {
+    const k = firstAtOrAfter(pos + 1) - 1;
+    return k >= 0 && pos < lists[k].to;
+  };
+  const h1 = [...clean3.matchAll(/<h1(?=[\s/>])/gi)].map((m) => m.index).find((pos) => !inList(pos));
+  if (h1 === void 0) return void 0;
+  const ancestors = ["div", "section", "article", "main"].flatMap((tag2) => balancedRegions(clean3, tag2, () => true)).filter((r) => r.start <= h1 && h1 < r.end).sort((a, b) => a.end - a.start - (b.end - b.start));
+  const cum = [{ len: 0, link: 0, prose: 0 }];
+  for (const r of lists) {
+    const s = stats(r.from, r.to);
+    const p = cum[cum.length - 1];
+    cum.push({ len: p.len + s.len, link: p.link + s.link, prose: p.prose + s.prose });
+  }
+  const measure = (r) => {
+    const i2 = firstAtOrAfter(r.start);
+    const j2 = Math.max(i2, firstAtOrAfter(r.end));
+    const s = stats(r.start, r.end);
+    const cut = { len: cum[j2].len - cum[i2].len, link: cum[j2].link - cum[i2].link, prose: cum[j2].prose - cum[i2].prose };
+    return { region: r, i: i2, j: j2, cut: cut.len, len: s.len - cut.len, link: s.link - cut.link, prose: s.prose - cut.prose };
+  };
+  let best;
+  for (const r of ancestors) {
+    const m = measure(r);
+    if (m.prose < minProse || m.prose < m.cut || isLinkList(m)) continue;
+    if (!best || m.prose >= best.prose * 1.3) best = m;
+  }
+  if (!best) return void 0;
+  const { region, i, j } = best;
+  let out = "";
+  let last = region.start;
+  for (const r of lists.slice(i, j)) {
+    out += `${clean3.slice(last, r.from)} `;
+    last = r.to;
+  }
+  return out + clean3.slice(last, region.end);
+}
 function extractMainHtml(html) {
   const clean3 = dropElements(html, ["script", "style", "template", "svg"]);
   const roleMainTags = /* @__PURE__ */ new Set(["main"]);
   for (const m of clean3.matchAll(ROLE_MAIN_TAG)) roleMainTags.add(m[1].toLowerCase());
+  const stats = textProfile(clean3);
   const tiers = [
     { tags: [...roleMainTags], isCandidate: (open2) => /^<main[\s/>]/i.test(open2) || ROLE_MAIN.test(open2) },
     { tags: ["article"], isCandidate: () => true },
@@ -7999,8 +8091,15 @@ function extractMainHtml(html) {
     }
     let best = outer[0];
     for (const r of outer) if (r.len > best.len) best = r;
+    const linkList = (r) => isLinkList(stats(r.start, r.end));
     const kind = blockKind(best.open);
-    const kept = outer.filter((r) => r === best || blockKind(r.open) === kind);
+    const bestIsList = linkList(best);
+    const kept = outer.filter((r) => r === best || blockKind(r.open) === kind && (bestIsList || !linkList(r)));
+    if (bestIsList) {
+      const listProse = kept.reduce((n, r) => n + stats(r.start, r.end).prose, 0);
+      const prose = headlineProse(clean3, stats, outer.filter(linkList), Math.max(MIN_PROSE, listProse + 1));
+      if (prose !== void 0) return prose;
+    }
     const keptLen = kept.reduce((n, r) => n + r.len, 0);
     if (keptLen < 500 && keptLen < visibleLength(clean3) * 0.3) return html;
     if (kept.length === 1) return clean3.slice(best.start, best.end);
@@ -8329,6 +8428,9 @@ var ROLE_MAIN;
 var ROLE_MAIN_TAG;
 var CONTENT_WORDS;
 var CHROME_WORDS;
+var CLOSES_P;
+var isLinkList;
+var MIN_PROSE;
 var PDF_URL_RE;
 var PDF_ROUTE_RE;
 var NON_PDF_TAIL_RE;
@@ -8411,6 +8513,35 @@ ${NUL2}${i}${NUL2}
       "ads",
       "promo"
     ]);
+    CLOSES_P = /* @__PURE__ */ new Set([
+      "address",
+      "article",
+      "aside",
+      "blockquote",
+      "div",
+      "dl",
+      "fieldset",
+      "figure",
+      "footer",
+      "form",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "header",
+      "hr",
+      "main",
+      "nav",
+      "ol",
+      "pre",
+      "section",
+      "table",
+      "ul"
+    ]);
+    isLinkList = (s) => s.len > 0 && s.link > s.len * 0.5;
+    MIN_PROSE = 200;
     PDF_URL_RE = /\.pdf($|[?#])/i;
     PDF_ROUTE_RE = /\/pdf\/[^/?#]+($|[?#])/i;
     NON_PDF_TAIL_RE = /\.(html?|php|aspx?|jsp|json|xml|txt|md|csv)($|[?#])/i;
