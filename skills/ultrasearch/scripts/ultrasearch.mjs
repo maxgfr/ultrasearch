@@ -6558,8 +6558,7 @@ function markdownAgainst(html, base2, fullPage) {
   let headingEnd = -1;
   const divs = [];
   let divOverflow = 0;
-  let prevEnd = -1;
-  let prevClosed = false;
+  let prevAEnd = -1;
   let last = 0;
   let m;
   while (m = tag2.exec(s)) {
@@ -6567,10 +6566,9 @@ function markdownAgainst(html, base2, fullPage) {
     last = tag2.lastIndex;
     const t = m[0];
     const closing2 = t[1] === "/";
-    const adjacent = m.index === prevEnd && prevClosed && !closing2;
-    prevEnd = tag2.lastIndex;
-    prevClosed = closing2;
     const name = tagName(t);
+    const adjacentLinks = name === "a" && !closing2 && m.index === prevAEnd;
+    prevAEnd = name === "a" && closing2 ? tag2.lastIndex : -1;
     if (!name) continue;
     if (name === "div") {
       if (closing2) {
@@ -6610,8 +6608,7 @@ function markdownAgainst(html, base2, fullPage) {
       if (c) {
         w.flush();
         w.codeBlock(s.slice(tag2.lastIndex, c.index), codeLanguage(t, s.slice(tag2.lastIndex, c.index), divs));
-        last = tag2.lastIndex = prevEnd = c.index + c[0].length;
-        prevClosed = true;
+        last = tag2.lastIndex = c.index + c[0].length;
         continue;
       }
       preUnclosed = true;
@@ -6627,8 +6624,7 @@ function markdownAgainst(html, base2, fullPage) {
           rows: table.rows.map((row) => row.map((cell2) => escapeText(cell2)))
         };
         w.block(tableToMarkdown(escaped).split("\n"));
-        last = tag2.lastIndex = prevEnd = region.to;
-        prevClosed = true;
+        last = tag2.lastIndex = region.to;
         continue;
       }
     }
@@ -6666,7 +6662,7 @@ function markdownAgainst(html, base2, fullPage) {
         w.close(kind);
         continue;
       }
-      if (adjacent) w.space();
+      if (adjacentLinks) w.space();
       if (kind === "a") {
         w.close("a");
         const href = htmlAttributes(t).get("href");
@@ -6675,9 +6671,7 @@ function markdownAgainst(html, base2, fullPage) {
       continue;
     }
     if (BLOCK_TAGS.has(name)) w.flush();
-    else if (INLINE_TAGS.has(name)) {
-      if (adjacent) w.space();
-    } else w.space();
+    else if (!INLINE_TAGS.has(name)) w.space();
   }
   if (last < s.length) w.text(s.slice(last));
   return w.finish();
@@ -7898,19 +7892,17 @@ function htmlToText(html, opts = {}) {
   if (!opts.fullPage) s = dropLandmarks(s, CHROME_ROLES);
   const pre = [];
   s = flattenHeadings(setAsidePre(s, pre));
-  let prevEnd = -1;
-  let prevClosed = false;
+  let prevAEnd = -1;
   s = s.replace(TAG_RE, (tag2, at) => {
     const closing2 = tag2[1] === "/";
-    const adjacent = at === prevEnd && prevClosed && !closing2;
-    prevEnd = at + tag2.length;
-    prevClosed = closing2;
     const name = tagName(tag2);
+    const adjacentLinks = name === "a" && !closing2 && at === prevAEnd;
+    prevAEnd = name === "a" && closing2 ? at + tag2.length : -1;
     if (/^h[1-6]$/.test(name)) {
       return closing2 ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
     }
     if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") return "\n";
-    if (INLINE_TAGS.has(name)) return adjacent ? " " : "";
+    if (INLINE_TAGS.has(name)) return adjacentLinks ? " " : "";
     return " ";
   });
   s = s.replace(LOOSE_TAG_RE, " ");
