@@ -1,7 +1,11 @@
+import { EventEmitter } from 'node:events';
+import { Socket } from 'node:net';
+import { SpawnOptions } from 'node:child_process';
+import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.26.1";
+declare const ENGINE_VERSION = "1.27.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -30,6 +34,17 @@ interface Brand {
      * two. Declaring the directory it already uses makes adoption free.
      */
     repoDir?: string;
+    /**
+     * Home of the dedicated browser: its profiles (logins live there), the saved
+     * session and the snapshots' refs. Defaults to `~/.<name>/browser`.
+     *
+     * Under the home directory rather than the temp dir on purpose: a tmp sweeper
+     * would silently log the user out of every site, and a login is the one thing
+     * the user cannot regenerate by re-running the command. A consumer that
+     * already keeps such state somewhere declares it here instead of having it
+     * orphaned.
+     */
+    browserDir?: string;
     /**
      * How long a cached page stays fresh. Defaults to 24h.
      *
@@ -785,25 +800,426 @@ declare function fetchVideoCorpus(url: string, root: string, opts?: VideoLadderO
     onVideo?: (done: number, total: number, title: string) => void;
 }): Promise<CorpusResult>;
 
-declare const PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
-declare const ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
-interface RunResult {
-    ok: boolean;
-    stdout: string;
-    /** Short cause when `ok` is false: "not installed", "timed out", "exit 2"… */
-    error?: string;
-    /** What the tool wrote to stderr — its first and last ~1 KB — when `ok` is false and it wrote any. */
-    stderr?: string;
+interface WsOptions {
+    /** Handshake budget (default 10 s). */
+    connectTimeoutMs?: number;
+    /** How long `close()` waits for the peer before dropping the socket (default 2 s). */
+    closeTimeoutMs?: number;
+    /** Largest message accepted, fragments included (default 64 MiB). */
+    maxMessageSize?: number;
 }
 /**
- * Spawn `cmd args…`, write `input` to its stdin, resolve with its stdout.
- * Never throws and never leaves a child behind: a missing binary, a non-zero
- * exit and a timeout all come back as `{ ok: false, error }` — with the tail
- * of stderr, when the tool wrote one, so a caller can say WHY.
+ * An open connection. Events: `'message'` (string), `'close'` ({ code, reason },
+ * emitted once) and `'error'` (Error, followed by `'close'`).
  */
-declare function runWithInput(cmd: string, args: string[], input: Buffer, timeoutMs: number, opts?: {
-    env?: NodeJS.ProcessEnv;
-}): Promise<RunResult>;
+declare class WsClient extends EventEmitter {
+    private readonly socket;
+    private readonly parser;
+    private readonly max;
+    private readonly closeTimeoutMs;
+    private fragments;
+    private fragmentBytes;
+    private started;
+    private closing;
+    private done;
+    constructor(socket: Socket, opts?: WsOptions, head?: Buffer);
+    send(text: string): void;
+    /** Send a close frame, then wait (bounded) for the peer to answer or hang up. */
+    close(code?: number, reason?: string): Promise<void>;
+    /** Drop the socket without a closing handshake. */
+    terminate(): void;
+    private writeClose;
+    private feed;
+    private deliver;
+    /** Handle one frame; returns the text of a message it completed. */
+    private onFrame;
+    /** Protocol or socket failure: tell the peer why (when we can), surface the error, close. */
+    private fail;
+    private finish;
+}
+
+/** What the client needs from a socket; `WsClient` satisfies it, tests may inject their own. */
+type CdpSocket = Pick<WsClient, "send" | "on" | "terminate"> & {
+    close(code?: number, reason?: string): Promise<void> | void;
+};
+type CdpConnector = (url: string, opts: {
+    timeoutMs: number;
+}) => Promise<CdpSocket>;
+interface CdpConnectOptions {
+    timeoutMs?: number;
+    /** Replaces the real WebSocket connector (tests). */
+    transport?: CdpConnector;
+}
+interface CdpSendOptions {
+    sessionId?: string;
+    timeoutMs?: number;
+}
+interface CdpOnceOptions {
+    predicate?: (params: any) => boolean;
+    timeoutMs?: number;
+    sessionId?: string;
+}
+type CdpHandler = (params: any) => void;
+/** A client bound to one flat-mode session. */
+interface CdpSession {
+    readonly sessionId: string;
+    send<T = unknown>(method: string, params?: object, opts?: {
+        timeoutMs?: number;
+    }): Promise<T>;
+    on(method: string, handler: CdpHandler): void;
+    off(method: string, handler: CdpHandler): void;
+    once(method: string, opts?: Omit<CdpOnceOptions, "sessionId">): Promise<any>;
+}
+declare class CdpClient {
+    private readonly ws;
+    private nextId;
+    private readonly pending;
+    private readonly handlers;
+    private readonly closeHandlers;
+    private isClosed;
+    private constructor();
+    static connect(wsUrl: string, opts?: CdpConnectOptions): Promise<CdpClient>;
+    get closed(): boolean;
+    send<T = unknown>(method: string, params?: object, opts?: CdpSendOptions): Promise<T>;
+    on(method: string, handler: CdpHandler, sessionId?: string): void;
+    off(method: string, handler: CdpHandler, sessionId?: string): void;
+    /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
+    once(method: string, opts?: CdpOnceOptions): Promise<any>;
+    /** A view of this client bound to one session (`Target.attachToTarget({ flatten: true })`). */
+    session(sessionId: string): CdpSession;
+    /** Run `handler` once the connection is closed (at once if it already is). Returns its unsubscribe. */
+    onClose(handler: () => void): () => void;
+    /** Close the connection (the browser keeps running). */
+    close(): Promise<void>;
+    private onMessage;
+    private onClosed;
+}
+
+type BrowserKind = "chrome" | "brave" | "chromium" | "edge";
+interface BrowserBinary {
+    kind: BrowserKind;
+    path: string;
+}
+interface DetectOptions {
+    /** Tried first, before the usual order. */
+    prefer?: BrowserKind;
+    /** Reads `<PREFIX>_<suffix>`; defaults to the brand's own environment. */
+    env?: (suffix: string) => string | undefined;
+    /** The system environment (`PATH`, `ProgramFiles`, `LOCALAPPDATA`); defaults to `process.env`. */
+    processEnv?: Record<string, string | undefined>;
+    platform?: NodeJS.Platform;
+    /** The home directory `~/Applications` is looked up in. */
+    home?: string;
+    /** Whether a path is a launchable file. */
+    exists?: (path: string) => boolean;
+}
+/**
+ * The browser to launch: `<PREFIX>_BROWSER_BIN` if set, then `prefer`, then
+ * Chrome, Brave, Chromium, Edge. `null` when none is installed.
+ *
+ * An explicit path that does not exist throws rather than falling through: a
+ * user who named a binary and was handed a different one would drive the wrong
+ * browser without knowing it.
+ */
+declare function detectBrowserBinary(opts?: DetectOptions): BrowserBinary | null;
+
+interface BrowserVersion {
+    Browser?: string;
+    "Protocol-Version"?: string;
+    "User-Agent"?: string;
+    webSocketDebuggerUrl: string;
+    [key: string]: unknown;
+}
+interface TargetInfo {
+    id: string;
+    type: string;
+    title?: string;
+    url: string;
+    webSocketDebuggerUrl?: string;
+    [key: string]: unknown;
+}
+interface CdpEndpoint {
+    host: string;
+    port: number;
+    /** Set when the input was a `ws://` URL. */
+    wsUrl?: string;
+}
+/** Throw unless `host` is a loopback name (127.0.0.1, ::1 or localhost). Returns it without brackets. */
+declare function assertLoopback(host: string): string;
+/**
+ * A browser socket URL a DevTools endpoint handed back (/json/version, /json/new),
+ * refused unless it is ws:// on loopback too: the HTTP hop being local says
+ * nothing of where its answer points. Returned as given.
+ */
+declare function loopbackSocketUrl(wsUrl: string): string;
+/** Accepts `9222`, `127.0.0.1:9222`, `http://localhost:9222`, `ws://[::1]:9222/devtools/browser/x`. */
+declare function parseCdpEndpoint(input: string): CdpEndpoint;
+/**
+ * The address to dial for a loopback host. `localhost` is dialled as 127.0.0.1:
+ * Node >= 17 keeps the resolver's order, which often puts ::1 first, while
+ * Chrome's DevTools server listens on 127.0.0.1 only — so `localhost:9222`
+ * would be refused against a browser that is plainly running.
+ */
+declare function dialHost(host: string): string;
+declare function getVersion(port: number, host?: string): Promise<BrowserVersion>;
+declare function listTargets(port: number, host?: string): Promise<TargetInfo[]>;
+declare function listPages(port: number, host?: string): Promise<TargetInfo[]>;
+/** Open a tab. Chrome >= 111 wants PUT; older and other builds only answer GET. */
+declare function newTarget(port: number, url?: string, host?: string): Promise<TargetInfo>;
+declare function closeTarget(port: number, id: string, host?: string): Promise<void>;
+declare function activateTarget(port: number, id: string, host?: string): Promise<void>;
+/** True when something answers DevTools on `port`. Never throws. */
+declare function isPortAlive(port: number, host?: string): Promise<boolean>;
+
+type discovery_BrowserVersion = BrowserVersion;
+type discovery_CdpEndpoint = CdpEndpoint;
+type discovery_TargetInfo = TargetInfo;
+declare const discovery_activateTarget: typeof activateTarget;
+declare const discovery_assertLoopback: typeof assertLoopback;
+declare const discovery_closeTarget: typeof closeTarget;
+declare const discovery_dialHost: typeof dialHost;
+declare const discovery_getVersion: typeof getVersion;
+declare const discovery_isPortAlive: typeof isPortAlive;
+declare const discovery_listPages: typeof listPages;
+declare const discovery_listTargets: typeof listTargets;
+declare const discovery_loopbackSocketUrl: typeof loopbackSocketUrl;
+declare const discovery_newTarget: typeof newTarget;
+declare const discovery_parseCdpEndpoint: typeof parseCdpEndpoint;
+declare namespace discovery {
+  export { type discovery_BrowserVersion as BrowserVersion, type discovery_CdpEndpoint as CdpEndpoint, type discovery_TargetInfo as TargetInfo, discovery_activateTarget as activateTarget, discovery_assertLoopback as assertLoopback, discovery_closeTarget as closeTarget, discovery_dialHost as dialHost, discovery_getVersion as getVersion, discovery_isPortAlive as isPortAlive, discovery_listPages as listPages, discovery_listTargets as listTargets, discovery_loopbackSocketUrl as loopbackSocketUrl, discovery_newTarget as newTarget, discovery_parseCdpEndpoint as parseCdpEndpoint };
+}
+
+/** The slice of a child process the launcher uses. */
+interface SpawnedProcess {
+    pid?: number;
+    kill(signal?: NodeJS.Signals | number): boolean;
+    on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
+    /** A binary that cannot be started emits this instead of "exit"; unheard, it would crash the process. */
+    on(event: "error", listener: (err: Error) => void): unknown;
+    unref(): void;
+}
+/** The slice of node:fs/promises the state and launch code use. */
+interface BrowserFs {
+    readFile(path: string, encoding: BufferEncoding): Promise<string>;
+    writeFile(path: string, data: string | Uint8Array, opts?: {
+        mode?: number;
+    }): Promise<void>;
+    rename(from: string, to: string): Promise<void>;
+    mkdir(path: string, opts?: {
+        recursive?: boolean;
+        mode?: number;
+    }): Promise<unknown>;
+    rm(path: string, opts?: {
+        recursive?: boolean;
+        force?: boolean;
+    }): Promise<void>;
+    stat(path: string): Promise<{
+        isFile(): boolean;
+        isDirectory(): boolean;
+        mtimeMs: number;
+        size: number;
+    }>;
+    /** `open(path, "wx")` is how the lock file is created: it fails if the file exists. */
+    open(path: string, flags: string, mode?: number): Promise<Pick<FileHandle, "writeFile" | "close">>;
+}
+interface BrowserDeps {
+    spawn(cmd: string, args: string[], opts: SpawnOptions): SpawnedProcess;
+    fs: BrowserFs;
+    now(): number;
+    sleep(ms: number): Promise<void>;
+    connectCdp(wsUrl: string): Promise<CdpClient>;
+    discovery: typeof discovery;
+    /** Which browser to launch when none is named (`detectBrowserBinary`). */
+    detectBrowser(): BrowserBinary | null;
+    /** Signal a process we launched in an earlier call, known only by its pid. */
+    kill(pid: number, signal: NodeJS.Signals): void;
+    /** Reads `WEBINDEX_<name>` (brand-aware), like the rest of the library. */
+    env(name: string): string | undefined;
+    platform: NodeJS.Platform;
+}
+
+interface LaunchOptions {
+    /** An already-running browser: a port, `host:port` or URL (loopback only). */
+    cdp?: string | number;
+    /** Dedicated profile name; `default` when unset. */
+    profile?: string;
+    headless?: boolean;
+    /** The browser binary; detected when unset. */
+    binary?: string;
+    /**
+     * Never a saved browser this library did not launch (one `attach` or `--cdp`
+     * named): the user lent it for the agent's session, not for reads in the
+     * background. Ours is used, or launched, instead. An explicit `cdp` still wins.
+     */
+    ownOnly?: boolean;
+    deps?: Partial<BrowserDeps>;
+}
+interface Endpoint {
+    /** Loopback address to dial (never `localhost`, see `dialHost`). */
+    host: string;
+    port: number;
+    /** True only for a browser this library started: only that one may be closed. */
+    launchedByUs: boolean;
+    pid?: number;
+    profile: string;
+    headless: boolean;
+}
+
+interface OpenOptions extends LaunchOptions {
+    /** Work in a fresh tab instead of the one used last time. */
+    newTab?: boolean;
+    /** Navigate there once attached. */
+    url?: string;
+    /**
+     * Work in a fresh tab that is nobody's: session.json is never written, so
+     * the agent's current tab and tab ids stay as they were. The caller closes
+     * the tab when done (a page read for `fetch`, see read.ts).
+     */
+    scratch?: boolean;
+}
+type WaitUntil = "load" | "domcontentloaded" | "none";
+interface NavigateOptions {
+    /** Which lifecycle event of the new document to wait for; `load` by default. */
+    waitUntil?: WaitUntil;
+    timeoutMs?: number;
+}
+interface NavigationResult {
+    url: string;
+    /** Identifies the document; refs taken on another one are stale. */
+    loaderId: string;
+    /** The HTTP status of the document, when the page exposes it. */
+    status?: number;
+}
+interface BrowserTab {
+    id: string;
+    targetId: string;
+    url: string;
+    title: string;
+    active: boolean;
+}
+interface BrowserStatus {
+    alive: boolean;
+    port?: number;
+    launchedByUs?: boolean;
+    profile?: string;
+    headless?: boolean;
+    targetId?: string;
+    url?: string;
+    title?: string;
+    tabs?: BrowserTab[];
+}
+interface CloseOptions {
+    /** Also wipe the refs and network logs of every tab, not only ours. */
+    all?: boolean;
+}
+/** A JavaScript dialog as the page announces it (Page.javascriptDialogOpening). */
+interface DialogEvent {
+    type: string;
+    message: string;
+    url?: string;
+}
+/** Hears a dialog, with the page session that heard it: the one that can answer it. */
+type DialogListener = (d: DialogEvent, page: CdpSession) => void;
+declare class BrowserSession {
+    /** The browser-level connection. */
+    readonly cdp: CdpClient;
+    private readonly endpoint;
+    private readonly wsBrowserUrl;
+    private readonly deps;
+    /** A scratch tab's session: it saves nothing. */
+    private readonly scratch;
+    private tabs;
+    private current;
+    /** Targets closed by this session that /json/list may still report for a moment. */
+    private readonly closed;
+    /** Dialog listeners, each bound to the current tab's session and moved with it. */
+    private readonly dialogListeners;
+    private ended;
+    /** @internal use openBrowserSession */
+    constructor(
+    /** The browser-level connection. */
+    cdp: CdpClient, endpoint: Endpoint, wsBrowserUrl: string, deps: BrowserDeps, targetId: string, sessionId: string, tabs: Record<string, string>, 
+    /** A scratch tab's session: it saves nothing. */
+    scratch?: boolean);
+    get port(): number;
+    get host(): string;
+    get launchedByUs(): boolean;
+    get pid(): number | undefined;
+    get profile(): string;
+    get headless(): boolean;
+    get targetId(): string;
+    get sessionId(): string;
+    /** The current tab's flat session. It changes with selectTab/newTab/closeTab: read it, do not keep it. */
+    get page(): CdpSession;
+    /** Write session.json (port, ownership, current tab, tab ids). A no-op once shut down, and for a scratch tab. */
+    save(): void;
+    private frame;
+    currentUrl(): Promise<string>;
+    loaderId(): Promise<string>;
+    title(): Promise<string>;
+    /** The document's HTTP status from the Navigation Timing entry; undefined when the page does not say. */
+    private responseStatus;
+    private loaded;
+    /**
+     * Start recording navigation events BEFORE the command that causes them: the
+     * browser may report the new document's lifecycle before it answers the
+     * command itself, and an event listened for too late never comes again.
+     */
+    private watch;
+    /**
+     * Load `url` in the current tab and wait for the new document's `load` (or
+     * `DOMContentLoaded`, or nothing). The tab's refs are cleared: they named
+     * nodes of the document that is going away. A navigation the browser refuses
+     * (`errorText`: DNS failure, refused connection…) rejects.
+     */
+    navigate(url: string, opts?: NavigateOptions): Promise<NavigationResult>;
+    /** Run a history move or a reload and wait until the main frame shows another document (or the same one, scrolled). */
+    private settle;
+    private history;
+    back(opts?: {
+        timeoutMs?: number;
+    }): Promise<NavigationResult>;
+    forward(opts?: {
+        timeoutMs?: number;
+    }): Promise<NavigationResult>;
+    reload(opts?: {
+        timeoutMs?: number;
+    }): Promise<NavigationResult>;
+    /** The browser's tabs with their stable short ids; the map is refreshed and saved. */
+    listTabs(): Promise<BrowserTab[]>;
+    /**
+     * Hear the JavaScript dialogs of whichever tab is current, across tab
+     * switches, each with the page session that can answer it. Returns its unsubscribe.
+     */
+    onDialog(listener: DialogListener): () => void;
+    private hookDialogs;
+    /** Move this session onto another tab: attach to it, let go of the old one, bring it to the front. */
+    private switchTo;
+    selectTab(id: string): Promise<BrowserTab>;
+    /** Open a tab, make it current and, given a url, load it. */
+    newTab(url?: string, opts?: NavigateOptions): Promise<BrowserTab>;
+    /**
+     * Close a tab and forget its refs and network log. Closing the current tab
+     * moves to another one first; closing the last opens a blank one, since a
+     * browser left with no tab may quit.
+     */
+    closeTab(id: string): Promise<void>;
+    /** Close the socket only. The browser and its tabs keep running; the next call reconnects. */
+    detach(): Promise<void>;
+    /**
+     * End the session. A browser we launched is closed (`Browser.close`, then
+     * SIGTERM to its pid if it refuses); one we attached to is left running. Either
+     * way session.json and our tabs' refs and network logs go (every tab's with `all`).
+     */
+    shutdown(opts?: CloseOptions): Promise<void>;
+    status(): Promise<BrowserStatus>;
+}
+/**
+ * Connect to the browser (attaching to, reusing or launching one by the launch
+ * policy) and attach to a tab: a new one when asked (or a scratch one), else
+ * the saved one if it still exists, else the first page, else a fresh one.
+ */
+declare function openBrowserSession(opts?: OpenOptions): Promise<BrowserSession>;
 
 /**
  * Decode named and decimal/hex numeric character references, in ONE
@@ -821,6 +1237,9 @@ declare function runWithInput(cmd: string, args: string[], input: Buffer, timeou
  * than guessed at or blanked.
  */
 declare function decodeEntities(s: string): string;
+
+/** When fetchAndExtract renders a page in the browser: every time, only when the built-in read fails, or never. */
+type BrowserFetchMode = "always" | "fallback" | "off";
 
 /**
  * A realistic desktop-browser User-Agent. Several keyless web endpoints (DDG,
@@ -1000,7 +1419,7 @@ declare const PDF_URL_RE: RegExp;
  * preferred rung — whenever a Firecrawl container happens to be up.
  */
 declare function looksLikePdfUrl(url: string): boolean;
-type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext" | "anydoc" | "ocr" | "builtin" | "manual-subs" | "auto-subs" | "whisper";
+type ExtractorId = "native" | "firecrawl" | "pdf-inspector" | "pdftotext" | "anydoc" | "ocr" | "builtin" | "manual-subs" | "auto-subs" | "whisper" | "browser";
 interface ExtractResult {
     text: string;
     consentDropped?: number;
@@ -1089,6 +1508,15 @@ declare function fetchAndExtract(url: string, opts?: {
     /** Passed to httpGet: told before a transient answer is waited out and retried. */
     onBackOff?: (url: string, waitMs: number) => void;
     /**
+     * Render the page in the dedicated browser (see src/browser/read.ts):
+     * `always` for every web page, ahead of Firecrawl; `fallback` only when the
+     * built-in read was refused (HTTP 0/401/403/429/503), came back a consent
+     * or anti-bot wall, or found almost no text — the better read is kept.
+     * `<PREFIX>_BROWSER_FETCH` by default; off unless set. Never with
+     * `authorizeUrl`, and never for a PDF, an office document or a video.
+     */
+    browser?: BrowserFetchMode;
+    /**
      * Abandons the fetch: the built-in request is aborted, and no extraction
      * ladder starts after it. A Firecrawl request already sent finishes — it is
      * short, and an aborted one would read to the probe as a Firecrawl that is
@@ -1096,6 +1524,20 @@ declare function fetchAndExtract(url: string, opts?: {
      */
     signal?: AbortSignal;
 }): Promise<ExtractResult>;
+/**
+ * Read an HTML page the way fetchAndExtract reads one: main-content isolation
+ * (unless `fullPage`), text or Markdown, consent lines dropped on request, and
+ * the title, canonical URL and description off the whole page. `finalUrl` is
+ * the address the HTML came from, which relative links and the canonical are
+ * resolved against. For a caller that already holds the HTML — a page a
+ * browser rendered — and wants the same text a fetch would have given.
+ */
+declare function extractFromHtml(html: string, finalUrl: string, opts?: {
+    format?: "text" | "markdown";
+    fullPage?: boolean;
+    stripConsent?: boolean;
+    keepHtml?: boolean;
+}): Pick<ExtractResult, "text" | "consentDropped" | "title" | "canonical" | "metaDescription" | "html">;
 declare const DEAD_LINK_STATUS: Set<number>;
 declare function rescueViaWayback(url: string, opts?: {
     acceptLanguage?: string;
@@ -1149,6 +1591,203 @@ declare function focusedSnippet(text: string, question: string, opts?: {
 }): string;
 declare function bestExcerpt(text: string, question: string, maxChars?: number): string;
 declare function capExtract(text: string, depth: "summary" | "standard" | "deep"): string;
+
+interface ReadPageOptions extends LaunchOptions {
+    /** As fetchAndExtract's: the shape of the text. */
+    format?: "text" | "markdown";
+    fullPage?: boolean;
+    stripConsent?: boolean;
+    keepHtml?: boolean;
+    /**
+     * The whole render, from the moment a tab is free; BROWSER_TIMEOUT_MS
+     * (30 s) by default. The tab is closed when it runs out.
+     */
+    timeoutMs?: number;
+    /** Abandons the read, or the wait for a free tab. */
+    signal?: AbortSignal;
+    /**
+     * `load` reads as soon as the page has loaded; `idle` then waits for a quiet
+     * network for up to half the timeout. By default, load and up to 3 s of quiet.
+     * Waiting for quiet is never fatal: a page that keeps polling is read anyway.
+     */
+    waitUntil?: "load" | "idle";
+}
+/**
+ * Render `url` in a scratch tab of the dedicated browser and extract it as
+ * fetchAndExtract would have (`extractor: "browser"`; `status` is the main
+ * document's HTTP status). Throws when the browser cannot be had or the page
+ * cannot be loaded, when the read runs out of time, and when it is cancelled.
+ */
+declare function readRenderedPage(url: string, opts?: ReadPageOptions): Promise<ExtractResult>;
+
+interface RefTable {
+    /** Document the refs belong to; a navigation changes it and makes them stale. */
+    loaderId: string;
+    url: string;
+    /** The number the next new ref gets (`e<next>`). */
+    next: number;
+    refs: Record<string, number>;
+}
+
+/** A CDP Accessibility.AXValue, reduced to what we read. */
+interface AXValue {
+    type?: string;
+    value?: unknown;
+}
+/** A CDP Accessibility.AXNode, reduced to what we read. */
+interface AXNode {
+    nodeId: string;
+    ignored?: boolean;
+    role?: AXValue;
+    name?: AXValue;
+    value?: AXValue;
+    properties?: {
+        name: string;
+        value: AXValue;
+    }[];
+    childIds?: string[];
+    backendDOMNodeId?: number;
+    parentId?: string;
+}
+interface RenderOptions {
+    /** Only nodes that have a ref, flat (no indentation, no text, no `/url` lines). */
+    interactive?: boolean;
+    /** Cut the tree at a line boundary once it is longer than this. No limit by default. */
+    maxChars?: number;
+    /** Render only the subtree of this node. */
+    rootBackendId?: number;
+    /** The refs seen so far; never mutated, an updated copy is returned. */
+    refs: RefTable;
+    /** Same-process iframe trees, keyed by the iframe's backendDOMNodeId as a string. */
+    frames?: Record<string, AXNode[]>;
+}
+interface RenderResult {
+    text: string;
+    refs: RefTable;
+    truncated: boolean;
+    /** Refs visible in `text`. */
+    refCount: number;
+}
+/**
+ * Render AX nodes as a compact text tree (2 spaces per level, one node per line),
+ * giving refs to what an agent can act on. In `interactive` mode only the nodes
+ * with refs are printed, flat; no landmark context is added, to keep it cheap.
+ */
+declare function renderSnapshot(nodes: AXNode[], opts: RenderOptions): RenderResult;
+interface SnapshotOptions {
+    interactive?: boolean;
+    maxChars?: number;
+    /** Render only this ref's subtree. */
+    ref?: string;
+}
+interface SnapshotResult {
+    text: string;
+    url: string;
+    title: string;
+    loaderId: string;
+    refCount: number;
+    truncated: boolean;
+}
+
+type ChallengeKind = "datadome" | "cloudflare" | "recaptcha" | "hcaptcha" | "arkose" | "perimeterx" | "akamai" | "imperva" | "generic";
+interface Challenge {
+    kind: ChallengeKind;
+    /** A full-page interstitial the page cannot be used through, as opposed to a widget inside a normal page. */
+    blocking: boolean;
+    /** What matched, for the agent and the logs. */
+    signals: string[];
+}
+interface ChallengeSignature {
+    url: string;
+    title: string;
+    /** The first ~4 KB of `document.body.innerText`. */
+    text?: string;
+    frameUrls?: string[];
+    scriptUrls?: string[];
+    /** Names (never values) of the cookies script can see. */
+    cookieNames?: string[];
+    /** Which of CHALLENGE_SELECTORS matched an element. */
+    selectors?: string[];
+    /** The document's HTTP status, when the page exposes it. */
+    status?: number;
+}
+/**
+ * Decide from a probe whether the page is, or carries, an anti-bot challenge.
+ * `blocking` separates an interstitial (vendor interstitial title or frame,
+ * status 403/429/503, almost no text) from a widget inside a normal page (a
+ * reCAPTCHA checkbox on a login form).
+ */
+declare function classifyChallenge(sig: ChallengeSignature): Challenge | null;
+
+/**
+ * Where the browser keeps its state: `<PREFIX>_BROWSER_DIR`, then the brand's
+ * declared `browserDir`, then `~/.<name>/browser`.
+ */
+declare function browserHome(): string;
+
+interface NetworkEntry {
+    /** 1-based and stable within the log file. */
+    n: number;
+    /** ISO time the response finished. */
+    at: string;
+    method: string;
+    url: string;
+    status: number;
+    mime: string;
+    resourceType: string;
+    /** The request's postData, cut to 4 KiB. */
+    requestBody?: string;
+    /** Body size in bytes (the wire size when the body was not fetched). */
+    size: number;
+    json?: unknown;
+    text?: string;
+    bodyTruncated?: boolean;
+    error?: string;
+}
+
+interface DialogInfo {
+    /** "alert", "confirm", "prompt" or "beforeunload". */
+    type: string;
+    message: string;
+    /** The CLI dismissed it before its command ended: it is no longer open. */
+    dismissed?: boolean;
+    /** Someone closed it in the window before the CLI could dismiss it. */
+    closed?: boolean;
+}
+interface ActionResult {
+    ok: true;
+    action: string;
+    ref?: string;
+    /** The main frame loaded another document because of the action. */
+    navigated: boolean;
+    url: string;
+    title: string;
+    /** A dialog the action opened; it is still open. */
+    dialog?: DialogInfo;
+    /** An anti-bot challenge on the page after the action; null when none. */
+    challenge?: Challenge | null;
+    value?: unknown;
+}
+
+declare const PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
+declare const ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
+interface RunResult {
+    ok: boolean;
+    stdout: string;
+    /** Short cause when `ok` is false: "not installed", "timed out", "exit 2"… */
+    error?: string;
+    /** What the tool wrote to stderr — its first and last ~1 KB — when `ok` is false and it wrote any. */
+    stderr?: string;
+}
+/**
+ * Spawn `cmd args…`, write `input` to its stdin, resolve with its stdout.
+ * Never throws and never leaves a child behind: a missing binary, a non-zero
+ * exit and a timeout all come back as `{ ok: false, error }` — with the tail
+ * of stderr, when the tool wrote one, so a caller can say WHY.
+ */
+declare function runWithInput(cmd: string, args: string[], input: Buffer, timeoutMs: number, opts?: {
+    env?: NodeJS.ProcessEnv;
+}): Promise<RunResult>;
 
 interface MarkdownOptions {
     /**
@@ -2796,6 +3435,8 @@ declare function cachedFetchAndExtract(url: string, opts?: {
     format?: "text" | "markdown";
     timeoutMs?: number;
     signal?: AbortSignal;
+    /** The browser rung (see fetchAndExtract); its reads are cached under their own namespace. */
+    browser?: BrowserFetchMode;
 }, enabled?: boolean, now?: number): Promise<Extract & {
     cached?: boolean;
 }>;
@@ -2866,11 +3507,14 @@ declare function writeArtifact(path: string, content: string): string;
  * the temp file is a SIBLING so it always is one — a temp in os.tmpdir() would
  * cross a mount point and silently degrade to a copy.
  *
+ * `mode` sets the permission bits of the new file (e.g. 0o600 for state that
+ * holds a login); omitted, the file gets the usual umask-derived default.
+ *
  * Bypasses the no-write gate on purpose: this is the durability primitive, and
  * `writeArtifact` above is the gated caller. A caller holding a path of its own
  * that must not be written under `--stdout` calls `writeArtifact`, not this.
  */
-declare function writeFileAtomic(path: string, content: string | Uint8Array): void;
+declare function writeFileAtomic(path: string, content: string | Uint8Array, mode?: number): void;
 /** Drain the collected artifacts. Empty when writes actually went to disk. */
 declare function takeArtifacts(): Artifact[];
 /** Test seam: clear both the switch and anything collected under it. */
@@ -4030,6 +4674,14 @@ interface PromptResult {
 interface ToolOutcome {
     text: string;
     artifact?: string;
+    /**
+     * Images sent after the text as `image` content blocks (a screenshot).
+     * The response cap measures the text only: a tool bounds its own images.
+     */
+    images?: {
+        data: string;
+        mimeType: string;
+    }[];
 }
 /**
  * Thrown for anything the caller can fix by calling again differently. The
@@ -4166,4 +4818,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, BATCHES_REMOVED_IN, BATCH_SIZE, type Bm25Doc, type Bm25Index, type Brand, COMPOSE_YAML, CP1252_C1, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, type ChangeVerdict, type ClaimUnit, type ClaimUnitOptions, type CliSpec, type CommandArgs, type CorpusResult, type CorpusVideo, type CrawlOptions, type CrawlResult, type CrawledPage, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, EVIDENCE_TOKEN, EXIT_FAILURE, EXIT_OK, EXIT_USAGE, type EmbedResult, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FILE_LINE_TOKEN, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, FRAME_EFFORT, type Feed, type FeedItem, type Fingerprint, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type FirecrawlSearchOptions, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type FrameEffort, type FrameKind, type FramesResult, type HandleOptions, type HttpOptions, type HttpResult, type HybridDoc, type HybridHit, InvalidParamsError, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type ListedVideo, type MarkdownOptions, type McpAdapter, type McpServer, type OrchestrateOptions, type OrchestrateResult, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROGRESS_MESSAGE_SINCE, PROTOCOL_VERSIONS, type PackageFacts, type PackageLookup, type PackageResolution, type PageMetadata, type ParsedArgs, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PhaseDefinition, type PhaseEmission, type PhaseInfo, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoFactsResult, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RungOutcome, type RungReport, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, SMALL_WORKLIST, SOURCE_TOKEN, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type SearchRung, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, TOKEN_RE, type Table, type ToolAnnotations, type ToolCallContext, type ToolDecl, ToolError, type ToolOutcome, UsageError, VIDEO_TRANSCRIBERS, type VectorHit, type VectorPoint, type VideoChapter, type VideoCorpus, type VideoDeps, type VideoFrame, type VideoHit, type VideoLadderOptions, type VideoMeta, type VideoProbe, type VideoRunMeta, type VideoRunResult, type VideoRunner, type VideoSegment, type VideoSource, type VideoTranscriberId, type VideoTranscript, WORKFLOW_FORBIDDEN, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, appendixMask, applyRelevanceFloor, argBool, argInt, argList, argOneOf, argValue, arxivIdFromUrl, assessExtractedText, assessPdfText, assessTranscript, awaitHostSlot, backOffHost, baseLang, batchRefusal, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, bracketedTokensIn, brand, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, citationTokensIn, classifyYtdlpError, cleanInline, codeMask, collectCitations, configure, contactUa, contentCoverage, contentHash, corpusLabels, corpusMarkdown, cosine, crawlConcurrency, crawlSite, createServer, danglingTokens, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, decodeLocal, dedupeByUrl, dedupeNearDuplicates, defaultUa, deleteCollection, deriveCitableUrl, detectRateLimited, discoverFeeds, diversify, docFlagRegex, docFormatForContentType, docFormatForUrl, documentedFlags, doiFromUrl, domainOf, downloadSubtitle, embed, embedModel, embedOne, embedPrefixes, embeddingsDisabled, emitWorkflowScript, enabledDocExtractors, enabledExtractors, enabledTranscribers, ensureClone, ensureCollection, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractClaimUnits, extractDocument, extractFrames, extractJsonLd, extractMainHtml, extractMetaTags, extractNumerals, extractPdf, extractTables, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, fetchVideoCorpus, fetchVideoRun, fingerprint, firecrawlBase, firecrawlIsExplicit, fnv1a64, fnv1a64Words, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, forgeRef, formatStamp, hammingDistance, hasChanged, have, headCommit, helpCoversFlag, hostDelayMs, htmlCanonicalUrl, htmlTitle, htmlToMarkdown, htmlToText, httpGet, httpJson, hybridSearch, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isInvokedDirectly, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, jsonLine, keylessEngines, keywords, knownVideo, linksFrom, listPhases, listReleases, listResources, listTags, listVideoRuns, listVideos, looksLikeChallenge, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, lookupPackageResult, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, markedQuoteMask, matcherFromTokens, maxCrawlDelayMs, mergeSegments, metaDescriptionOf, missingFromHelp, nearestHeading, negotiateProtocol, normalize, normalizeDoi, normalizeNumeralText, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, officeToText, ollamaBase, oneWriterFooter, orMasks, orchestrateRun, originUrl, pageDelayMs, pageMetadata, parseArgs, parseDdgHtml, parseDdgLite, parseFeed, parseFileLine, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, parseVtt, pdfToText, pipedEnum, politeDelayMs, positionalText, probeFirecrawl, probeOllama, probeQdrant, probeSearxng, probeVideo, pubmedAbstractUrl, qdrantBase, rankedKeywords, readCapped, readCappedBytes, readJsonSafe, readManifest, readResource, readVideoRun, recencyScore, renderAsset, repoCacheRoot, repoFacts, repoFactsResult, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetHostSchedule, resetNoWrite, resetOcrBudget, resetOcrTools, resetOllamaProbe, resetPdfLadderCache, resetQdrantProbe, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resetVideoLadderCache, resolvePackage, resolvePackageResult, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runId, runStdioServer, runWithInput, runbookMd, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchVectors, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searchVideoRuns, searxngBase, searxngIsExplicit, searxngLanguage, setCacheMode, setNoWrite, setVideoDeps, sh, shAsync, shq, simhash, siteOf, skillName, sleep, slugify, sniffDocument, stackControl, startHttpServer, stripConsentBoilerplate, stripHtmlComments, stripInlineCode, stripTags, structuredContentFor, subtokens, tableToMarkdown, takeArtifacts, throttleReason, toBatches, transcribeVideo, transcriptMarkdown, uncitedIds, unitTexts, unknownEngines, upsert, urlDeclaresIdentity, validateArgs, videoMetaFromInfo, videoRoot, videoRunKey, videoSource, videoUrlAt, whisperBudgetLeft, whisperModel, withRunLock, writeArtifact, writeFileAtomic, writeManifest, youtubeListKind, youtubeVideoId, ytdlpVersionAge };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, BATCHES_REMOVED_IN, BATCH_SIZE, type Bm25Doc, type Bm25Index, type Brand, type AXNode as BrowserAXNode, type ActionResult as BrowserActionResult, type BrowserBinary, type Challenge as BrowserChallenge, type ChallengeSignature as BrowserChallengeSignature, type DetectOptions as BrowserDetectOptions, type BrowserKind, type NetworkEntry as BrowserNetworkEntry, type OpenOptions as BrowserOpenOptions, type ReadPageOptions as BrowserReadOptions, type RenderOptions as BrowserRenderOptions, type RenderResult as BrowserRenderResult, BrowserSession, type SnapshotOptions as BrowserSnapshotOptions, type SnapshotResult as BrowserSnapshotResult, COMPOSE_YAML, CP1252_C1, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, type ChangeVerdict, type ClaimUnit, type ClaimUnitOptions, type CliSpec, type CommandArgs, type CorpusResult, type CorpusVideo, type CrawlOptions, type CrawlResult, type CrawledPage, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, EVIDENCE_TOKEN, EXIT_FAILURE, EXIT_OK, EXIT_USAGE, type EmbedResult, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FILE_LINE_TOKEN, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, FRAME_EFFORT, type Feed, type FeedItem, type Fingerprint, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type FirecrawlSearchOptions, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type FrameEffort, type FrameKind, type FramesResult, type HandleOptions, type HttpOptions, type HttpResult, type HybridDoc, type HybridHit, InvalidParamsError, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type ListedVideo, type MarkdownOptions, type McpAdapter, type McpServer, type OrchestrateOptions, type OrchestrateResult, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROGRESS_MESSAGE_SINCE, PROTOCOL_VERSIONS, type PackageFacts, type PackageLookup, type PackageResolution, type PageMetadata, type ParsedArgs, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PhaseDefinition, type PhaseEmission, type PhaseInfo, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoFactsResult, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RungOutcome, type RungReport, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, SMALL_WORKLIST, SOURCE_TOKEN, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type SearchRung, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, TOKEN_RE, type Table, type ToolAnnotations, type ToolCallContext, type ToolDecl, ToolError, type ToolOutcome, UsageError, VIDEO_TRANSCRIBERS, type VectorHit, type VectorPoint, type VideoChapter, type VideoCorpus, type VideoDeps, type VideoFrame, type VideoHit, type VideoLadderOptions, type VideoMeta, type VideoProbe, type VideoRunMeta, type VideoRunResult, type VideoRunner, type VideoSegment, type VideoSource, type VideoTranscriberId, type VideoTranscript, WORKFLOW_FORBIDDEN, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, appendixMask, applyRelevanceFloor, argBool, argInt, argList, argOneOf, argValue, arxivIdFromUrl, assessExtractedText, assessPdfText, assessTranscript, awaitHostSlot, backOffHost, baseLang, batchRefusal, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, bracketedTokensIn, brand, browserHome, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, charsetFromContentType, charsetFromHtml, citationTokensIn, classifyChallenge as classifyBrowserChallenge, classifyYtdlpError, cleanInline, codeMask, collectCitations, configure, contactUa, contentCoverage, contentHash, corpusLabels, corpusMarkdown, cosine, crawlConcurrency, crawlSite, createServer, danglingTokens, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, decodeLocal, dedupeByUrl, dedupeNearDuplicates, defaultUa, deleteCollection, deriveCitableUrl, detectBrowserBinary, detectRateLimited, discoverFeeds, diversify, docFlagRegex, docFormatForContentType, docFormatForUrl, documentedFlags, doiFromUrl, domainOf, downloadSubtitle, embed, embedModel, embedOne, embedPrefixes, embeddingsDisabled, emitWorkflowScript, enabledDocExtractors, enabledExtractors, enabledTranscribers, ensureClone, ensureCollection, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractClaimUnits, extractDocument, extractFrames, extractFromHtml, extractJsonLd, extractMainHtml, extractMetaTags, extractNumerals, extractPdf, extractTables, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, fetchVideoCorpus, fetchVideoRun, fingerprint, firecrawlBase, firecrawlIsExplicit, fnv1a64, fnv1a64Words, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, forgeRef, formatStamp, hammingDistance, hasChanged, have, headCommit, helpCoversFlag, hostDelayMs, htmlCanonicalUrl, htmlTitle, htmlToMarkdown, htmlToText, httpGet, httpJson, hybridSearch, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isInvokedDirectly, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, jsonLine, keylessEngines, keywords, knownVideo, linksFrom, listPhases, listReleases, listResources, listTags, listVideoRuns, listVideos, looksLikeChallenge, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, lookupPackage, lookupPackageResult, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, markedQuoteMask, matcherFromTokens, maxCrawlDelayMs, mergeSegments, metaDescriptionOf, missingFromHelp, nearestHeading, negotiateProtocol, normalize, normalizeDoi, normalizeNumeralText, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, officeToText, ollamaBase, oneWriterFooter, openBrowserSession, orMasks, orchestrateRun, originUrl, pageDelayMs, pageMetadata, parseArgs, parseDdgHtml, parseDdgLite, parseFeed, parseFileLine, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, parseVtt, pdfToText, pipedEnum, politeDelayMs, positionalText, probeFirecrawl, probeOllama, probeQdrant, probeSearxng, probeVideo, pubmedAbstractUrl, qdrantBase, rankedKeywords, readCapped, readCappedBytes, readJsonSafe, readManifest, readRenderedPage, readResource, readVideoRun, recencyScore, renderAsset, renderSnapshot as renderBrowserSnapshot, repoCacheRoot, repoFacts, repoFactsResult, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetHostSchedule, resetNoWrite, resetOcrBudget, resetOcrTools, resetOllamaProbe, resetPdfLadderCache, resetQdrantProbe, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resetVideoLadderCache, resolvePackage, resolvePackageResult, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runId, runStdioServer, runWithInput, runbookMd, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchVectors, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searchVideoRuns, searxngBase, searxngIsExplicit, searxngLanguage, setCacheMode, setNoWrite, setVideoDeps, sh, shAsync, shq, simhash, siteOf, skillName, sleep, slugify, sniffDocument, stackControl, startHttpServer, stripConsentBoilerplate, stripHtmlComments, stripInlineCode, stripTags, structuredContentFor, subtokens, tableToMarkdown, takeArtifacts, throttleReason, toBatches, transcribeVideo, transcriptMarkdown, uncitedIds, unitTexts, unknownEngines, upsert, urlDeclaresIdentity, validateArgs, videoMetaFromInfo, videoRoot, videoRunKey, videoSource, videoUrlAt, whisperBudgetLeft, whisperModel, withRunLock, writeArtifact, writeFileAtomic, writeManifest, youtubeListKind, youtubeVideoId, ytdlpVersionAge };

@@ -1,14 +1,19 @@
-// src/version.ts
-var ENGINE_VERSION = "1.26.1";
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 
 // src/brand.ts
-var DEFAULT_BRAND = {
-  name: "webindex",
-  envPrefix: "WEBINDEX",
-  cli: "webindex",
-  contactUrl: "https://github.com/maxgfr/webindex"
-};
-var current = { ...DEFAULT_BRAND };
 function configure(next) {
   if (!next.envPrefix || !/^[A-Z][A-Z0-9_]*$/.test(next.envPrefix)) {
     throw new Error(`webindex: envPrefix must be UPPER_SNAKE, got ${JSON.stringify(next.envPrefix)}`);
@@ -54,51 +59,22 @@ function envInt(suffix, def, min = 0, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isFinite(n)) return def;
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
+var DEFAULT_BRAND, current;
+var init_brand = __esm({
+  "src/brand.ts"() {
+    "use strict";
+    DEFAULT_BRAND = {
+      name: "webindex",
+      envPrefix: "WEBINDEX",
+      cli: "webindex",
+      contactUrl: "https://github.com/maxgfr/webindex"
+    };
+    current = { ...DEFAULT_BRAND };
+  }
+});
 
 // src/pdf/native.ts
 import { inflateRawSync, inflateSync } from "zlib";
-var MAX_STREAM_BYTES = 32 * 1024 * 1024;
-var MAX_TOTAL_BYTES = 128 * 1024 * 1024;
-var DICT_WINDOW = 4096;
-var WIN_ANSI_C1 = [
-  8364,
-  8226,
-  8218,
-  402,
-  8222,
-  8230,
-  8224,
-  8225,
-  710,
-  8240,
-  352,
-  8249,
-  338,
-  8226,
-  381,
-  8226,
-  8226,
-  8216,
-  8217,
-  8220,
-  8221,
-  8226,
-  8211,
-  8212,
-  732,
-  8482,
-  353,
-  8250,
-  339,
-  8226,
-  382,
-  376
-];
-var winAnsi = (c) => {
-  const code = c.charCodeAt(0);
-  return code === 127 ? "\u2022" : String.fromCharCode(WIN_ANSI_C1[code - 128]);
-};
-var ESCAPES = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
 function decodePdfString(tok) {
   return tok.slice(1, -1).replace(/\\(?:([nrtbf()\\])|([0-7]{1,3})|(\r\n|\r|\n)|([\s\S]))/g, (_m, esc, oct, _eol, other) => {
     if (esc) return ESCAPES[esc];
@@ -125,84 +101,6 @@ function decodeTJArray(items) {
   }
   return out;
 }
-var isWhite = (c) => c === 32 || c === 10 || c === 13 || c === 9 || c === 12 || c === 0;
-var isDelimiter = (c) => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
-var isHexDigit = (c) => c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102;
-var isNumberChar = (c) => c >= 48 && c <= 57 || c === 45 || c === 43 || c === 46;
-var Lexer = class {
-  constructor(s) {
-    this.s = s;
-  }
-  s;
-  // Cleared by the first literal string whose parentheses never balance: from
-  // then on strings are read flat, which is what every string was before
-  // nesting was supported, and costs no more than the next parenthesis.
-  nested = true;
-  // Cleared by the first array that runs to the end of the stream. Every later
-  // `[` is scanned through the same segmentation and reaches the same end, so
-  // scanning them would re-pay the whole stream each time.
-  arrays = true;
-  /** End (exclusive) of the literal string opening at `i`, or -1. */
-  stringEnd(i) {
-    const s = this.s;
-    if (this.nested) {
-      let depth = 0;
-      for (let j = i; j < s.length; j++) {
-        const c = s.charCodeAt(j);
-        if (c === 92) j++;
-        else if (c === 40) depth++;
-        else if (c === 41 && --depth === 0) return j + 1;
-      }
-      this.nested = false;
-    }
-    for (let j = i + 1; j < s.length; j++) {
-      const c = s.charCodeAt(j);
-      if (c === 92) j++;
-      else if (c === 41) return j + 1;
-      else if (c === 40) return -1;
-    }
-    return -1;
-  }
-  /** End (exclusive) of the hex string opening at `i`, or -1. */
-  hexEnd(i) {
-    const s = this.s;
-    for (let j = i + 1; j < s.length; j++) {
-      const c = s.charCodeAt(j);
-      if (c === 62) return j + 1;
-      if (!isHexDigit(c) && !isWhite(c)) return -1;
-    }
-    return -1;
-  }
-  /**
-   * The array opening at `i`: its strings and numbers, and where it ends.
-   *
-   * A `]` inside one of its strings does not close it. That detail is
-   * load-bearing: `[(] and gated recurrent [)-250(7)]` truncated at the inner
-   * `]` silently dropped the rest of the array — on a real paper, whole clauses
-   * from the middle of sentences, leaving fluent, citable prose.
-   */
-  array(i) {
-    if (!this.arrays) return void 0;
-    const s = this.s;
-    const items = [];
-    for (let j = i + 1; j < s.length; ) {
-      const c = s.charCodeAt(j);
-      if (c === 93) return { end: j + 1, items };
-      const end = c === 40 ? this.stringEnd(j) : c === 60 ? this.hexEnd(j) : -1;
-      if (end > 0) {
-        items.push(s.slice(j, end));
-        j = end;
-      } else if (isNumberChar(c)) {
-        let e = j + 1;
-        while (e < s.length && isNumberChar(s.charCodeAt(e))) e++;
-        items.push(Number(s.slice(j, e)));
-        j = e;
-      } else j++;
-    }
-    this.arrays = false;
-    return void 0;
-  }
-};
 function inlineImageEnd(s, from) {
   for (let k = s.indexOf("EI", from); k >= 0; k = s.indexOf("EI", k + 1)) {
     const after = k + 2 >= s.length || isWhite(s.charCodeAt(k + 2)) || isDelimiter(s.charCodeAt(k + 2));
@@ -259,7 +157,6 @@ function extractTextOps(s) {
   }
   return out;
 }
-var TOO_BIG = /* @__PURE__ */ Symbol("too big");
 function ascii85Decode(text, cap) {
   const out = Buffer.allocUnsafe(Math.min(cap, 4 * text.length));
   let n = 0;
@@ -312,7 +209,6 @@ function filtersOf(dict) {
   const m = /\/Filter\s*(\[[^\]]*\]|\/[^\s/<>[\]()]+)/.exec(dict);
   return m ? (m[1].match(/\/[^\s/<>[\]()]+/g) ?? []).map((f) => f.slice(1)) : void 0;
 }
-var NOT_TEXT_RE = /\/Subtype\s*\/Image\b|\/Length[123]\b/;
 function* contentStreams(buf) {
   const s = buf.toString("latin1");
   const re = /(?<!end)stream\r?\n/g;
@@ -375,22 +271,140 @@ function pdfToText(buf) {
   }
   return out.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
+var MAX_STREAM_BYTES, MAX_TOTAL_BYTES, DICT_WINDOW, WIN_ANSI_C1, winAnsi, ESCAPES, isWhite, isDelimiter, isHexDigit, isNumberChar, Lexer, TOO_BIG, NOT_TEXT_RE;
+var init_native = __esm({
+  "src/pdf/native.ts"() {
+    "use strict";
+    MAX_STREAM_BYTES = 32 * 1024 * 1024;
+    MAX_TOTAL_BYTES = 128 * 1024 * 1024;
+    DICT_WINDOW = 4096;
+    WIN_ANSI_C1 = [
+      8364,
+      8226,
+      8218,
+      402,
+      8222,
+      8230,
+      8224,
+      8225,
+      710,
+      8240,
+      352,
+      8249,
+      338,
+      8226,
+      381,
+      8226,
+      8226,
+      8216,
+      8217,
+      8220,
+      8221,
+      8226,
+      8211,
+      8212,
+      732,
+      8482,
+      353,
+      8250,
+      339,
+      8226,
+      382,
+      376
+    ];
+    winAnsi = (c) => {
+      const code = c.charCodeAt(0);
+      return code === 127 ? "\u2022" : String.fromCharCode(WIN_ANSI_C1[code - 128]);
+    };
+    ESCAPES = { n: "\n", r: "\r", t: "	", b: "\b", f: "\f", "(": "(", ")": ")", "\\": "\\" };
+    isWhite = (c) => c === 32 || c === 10 || c === 13 || c === 9 || c === 12 || c === 0;
+    isDelimiter = (c) => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
+    isHexDigit = (c) => c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102;
+    isNumberChar = (c) => c >= 48 && c <= 57 || c === 45 || c === 43 || c === 46;
+    Lexer = class {
+      constructor(s) {
+        this.s = s;
+      }
+      s;
+      // Cleared by the first literal string whose parentheses never balance: from
+      // then on strings are read flat, which is what every string was before
+      // nesting was supported, and costs no more than the next parenthesis.
+      nested = true;
+      // Cleared by the first array that runs to the end of the stream. Every later
+      // `[` is scanned through the same segmentation and reaches the same end, so
+      // scanning them would re-pay the whole stream each time.
+      arrays = true;
+      /** End (exclusive) of the literal string opening at `i`, or -1. */
+      stringEnd(i) {
+        const s = this.s;
+        if (this.nested) {
+          let depth = 0;
+          for (let j = i; j < s.length; j++) {
+            const c = s.charCodeAt(j);
+            if (c === 92) j++;
+            else if (c === 40) depth++;
+            else if (c === 41 && --depth === 0) return j + 1;
+          }
+          this.nested = false;
+        }
+        for (let j = i + 1; j < s.length; j++) {
+          const c = s.charCodeAt(j);
+          if (c === 92) j++;
+          else if (c === 41) return j + 1;
+          else if (c === 40) return -1;
+        }
+        return -1;
+      }
+      /** End (exclusive) of the hex string opening at `i`, or -1. */
+      hexEnd(i) {
+        const s = this.s;
+        for (let j = i + 1; j < s.length; j++) {
+          const c = s.charCodeAt(j);
+          if (c === 62) return j + 1;
+          if (!isHexDigit(c) && !isWhite(c)) return -1;
+        }
+        return -1;
+      }
+      /**
+       * The array opening at `i`: its strings and numbers, and where it ends.
+       *
+       * A `]` inside one of its strings does not close it. That detail is
+       * load-bearing: `[(] and gated recurrent [)-250(7)]` truncated at the inner
+       * `]` silently dropped the rest of the array — on a real paper, whole clauses
+       * from the middle of sentences, leaving fluent, citable prose.
+       */
+      array(i) {
+        if (!this.arrays) return void 0;
+        const s = this.s;
+        const items = [];
+        for (let j = i + 1; j < s.length; ) {
+          const c = s.charCodeAt(j);
+          if (c === 93) return { end: j + 1, items };
+          const end = c === 40 ? this.stringEnd(j) : c === 60 ? this.hexEnd(j) : -1;
+          if (end > 0) {
+            items.push(s.slice(j, end));
+            j = end;
+          } else if (isNumberChar(c)) {
+            let e = j + 1;
+            while (e < s.length && isNumberChar(s.charCodeAt(e))) e++;
+            items.push(Number(s.slice(j, e)));
+            j = e;
+          } else j++;
+        }
+        this.arrays = false;
+        return void 0;
+      }
+    };
+    TOO_BIG = /* @__PURE__ */ Symbol("too big");
+    NOT_TEXT_RE = /\/Subtype\s*\/Image\b|\/Length[123]\b/;
+  }
+});
 
 // src/pdf/quality.ts
-var MIN_CHARS_FOR_SHAPE_CHECKS = 200;
-var CONTROL_RATIO_MAX = 5e-3;
-var REPLACEMENT_RATIO_MAX = 5e-3;
-var LONGEST_RUN_MAX = 300;
-var LETTER_RATIO_MIN = 0.5;
 function isControlCode(c) {
   if (c >= 9 && c <= 13) return false;
   return c < 32 || c >= 127 && c <= 159;
 }
-var REPLACEMENT_CODE = 65533;
-var SPACE_RE = /\s/;
-var isSpace = (c) => c < 128 ? c === 32 || c >= 9 && c <= 13 : SPACE_RE.test(String.fromCharCode(c));
-var LETTER_RE = /[\p{L}\p{N}]/u;
-var isRuleChar = (c) => c === 95 || c === 45 || c === 46 || c === 61;
 function scanShape(t) {
   let control = 0;
   let replacement = 0;
@@ -429,7 +443,6 @@ function scanShape(t) {
   endRun();
   return { control: control / t.length, replacement: replacement / t.length, longestRun: longestRun2, letterRatio: nonSpace ? letters / nonSpace : 0 };
 }
-var NO_TEXT_LAYER = "no text layer (scanned or image-only PDF?)";
 function assessPdfText(text) {
   return assessExtractedText(text, NO_TEXT_LAYER);
 }
@@ -449,14 +462,23 @@ function assessExtractedText(text, emptyReason) {
   }
   return { ok: true };
 }
-
-// src/pdf/ocr.ts
-import { mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
-
-// src/pdf/exec.ts
-import { spawn as spawn2 } from "child_process";
+var MIN_CHARS_FOR_SHAPE_CHECKS, CONTROL_RATIO_MAX, REPLACEMENT_RATIO_MAX, LONGEST_RUN_MAX, LETTER_RATIO_MIN, REPLACEMENT_CODE, SPACE_RE, isSpace, LETTER_RE, isRuleChar, NO_TEXT_LAYER;
+var init_quality = __esm({
+  "src/pdf/quality.ts"() {
+    "use strict";
+    MIN_CHARS_FOR_SHAPE_CHECKS = 200;
+    CONTROL_RATIO_MAX = 5e-3;
+    REPLACEMENT_RATIO_MAX = 5e-3;
+    LONGEST_RUN_MAX = 300;
+    LETTER_RATIO_MIN = 0.5;
+    REPLACEMENT_CODE = 65533;
+    SPACE_RE = /\s/;
+    isSpace = (c) => c < 128 ? c === 32 || c >= 9 && c <= 13 : SPACE_RE.test(String.fromCharCode(c));
+    LETTER_RE = /[\p{L}\p{N}]/u;
+    isRuleChar = (c) => c === 95 || c === 45 || c === 46 || c === 61;
+    NO_TEXT_LAYER = "no text layer (scanned or image-only PDF?)";
+  }
+});
 
 // src/process-tree.ts
 import { spawn, spawnSync } from "child_process";
@@ -476,13 +498,13 @@ function treeFromProc() {
   const tree = /* @__PURE__ */ new Map();
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
-    let stat;
+    let stat2;
     try {
-      stat = readFileSync(`/proc/${entry}/stat`, "latin1");
+      stat2 = readFileSync(`/proc/${entry}/stat`, "latin1");
     } catch {
       continue;
     }
-    const ppid = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+    const ppid = Number(stat2.slice(stat2.lastIndexOf(")") + 2).split(" ")[1]);
     if (ppid > 0) addChild(tree, ppid, Number(entry));
   }
   return tree;
@@ -501,12 +523,12 @@ function descendants(pid) {
   const tree = (process.platform === "linux" ? treeFromProc() : void 0) ?? treeFromPs();
   if (!tree) return [];
   const found = /* @__PURE__ */ new Set();
-  const queue = [pid];
-  while (queue.length) {
-    for (const child of tree.get(queue.shift()) ?? []) {
+  const queue2 = [pid];
+  while (queue2.length) {
+    for (const child of tree.get(queue2.shift()) ?? []) {
       if (found.has(child) || child === pid) continue;
       found.add(child);
-      queue.push(child);
+      queue2.push(child);
     }
   }
   return [...found];
@@ -533,17 +555,19 @@ function killTree(child) {
   child.stderr?.destroy();
   child.unref();
 }
+var init_process_tree = __esm({
+  "src/process-tree.ts"() {
+    "use strict";
+  }
+});
 
 // src/pdf/exec.ts
-var PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
-var ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
-var MAX_STDOUT_BYTES = 24 * 1024 * 1024;
-var STDERR_END_CHARS = 1024;
+import { spawn as spawn2 } from "child_process";
 function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
-  return new Promise((resolve7) => {
+  return new Promise((resolve8) => {
     let child;
     try {
       const bin = binaryName(cmd);
@@ -552,7 +576,7 @@ function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
       const common = { stdio: ["pipe", "pipe", "pipe"], ...opts.env ? { env: opts.env } : {} };
       child = viaShell ? spawn2([bin, ...args].map(quote).join(" "), { ...common, shell: true, windowsHide: true }) : spawn2(bin, args, common);
     } catch (e) {
-      resolve7({ ok: false, stdout: "", error: e.message });
+      resolve8({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -571,7 +595,7 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve7(r);
+      resolve8(r);
     };
     const timer = setTimeout(() => {
       killTree(child);
@@ -607,12 +631,22 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
     child.stdin?.end(input);
   });
 }
+var PDF_INSPECTOR_SPEC, ANYDOC_SPEC, MAX_STDOUT_BYTES, STDERR_END_CHARS;
+var init_exec = __esm({
+  "src/pdf/exec.ts"() {
+    "use strict";
+    init_process_tree();
+    PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
+    ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
+    MAX_STDOUT_BYTES = 24 * 1024 * 1024;
+    STDERR_END_CHARS = 1024;
+  }
+});
 
 // src/pdf/ocr.ts
-var DEFAULT_TIMEOUT_MS = 3e5;
-var DEFAULT_MAX_DOCS = 3;
-var DEFAULT_LANG = "eng";
-var spent = 0;
+import { mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync, existsSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 function resetOcrBudget() {
   spent = 0;
 }
@@ -629,7 +663,6 @@ async function ocrTools() {
   }
   return toolsProbe;
 }
-var toolsProbe;
 function resetOcrTools() {
   toolsProbe = void 0;
 }
@@ -663,18 +696,24 @@ async function ocrAttempt(bytes) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+var DEFAULT_TIMEOUT_MS, DEFAULT_MAX_DOCS, DEFAULT_LANG, spent, toolsProbe;
+var init_ocr = __esm({
+  "src/pdf/ocr.ts"() {
+    "use strict";
+    init_brand();
+    init_exec();
+    DEFAULT_TIMEOUT_MS = 3e5;
+    DEFAULT_MAX_DOCS = 3;
+    DEFAULT_LANG = "eng";
+    spent = 0;
+  }
+});
 
 // src/pdf/npx.ts
 import { isAbsolute } from "path";
 function npxTimeoutMs() {
   return envInt("NPX_TIMEOUT_MS", 9e4, 1e3, 6e5);
 }
-var FAIL_FAST = {
-  npm_config_fetch_retries: "1",
-  npm_config_fetch_retry_mintimeout: "1000",
-  npm_config_fetch_retry_maxtimeout: "2000",
-  npm_config_fetch_timeout: "30000"
-};
 function npxEnv() {
   const env2 = { ...process.env };
   for (const [key, value] of Object.entries(FAIL_FAST)) {
@@ -682,21 +721,6 @@ function npxEnv() {
   }
   return env2;
 }
-var NPM_ERROR_RE = /^npm (?:ERR!|error) code (\S+)/m;
-var NETWORK_CODES = /* @__PURE__ */ new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ETIMEDOUT",
-  "ESOCKETTIMEDOUT",
-  "EHOSTUNREACH",
-  "ENETUNREACH",
-  "ENOTCACHED",
-  "ERR_SOCKET_TIMEOUT"
-]);
-var proven = /* @__PURE__ */ new Set();
-var registryDown;
 function resetNpxState() {
   proven.clear();
   registryDown = void 0;
@@ -718,7 +742,6 @@ function unavailability(r, spec) {
 function npxBinName(spec) {
   return spec.replace(/^@[^/]+\//, "").replace(/@.*$/, "");
 }
-var installed = /* @__PURE__ */ new Map();
 function findInstalled(spec) {
   let hit = installed.get(spec);
   if (!hit) {
@@ -761,10 +784,6 @@ async function runNpx(spec, args, input) {
 function skipNpxHint() {
   return `set ${envName("NO_NPX")}=1 to skip the rungs that install through npx`;
 }
-var NOISE_RE = /^(?:npm (?:warn|WARN|notice)\b|\(node:\d+\)|\(Use `node --|\^+$|at\s|Node\.js v\d)/;
-var THROW_SITE_RE = /^(?:file:\/\/|\/|[A-Za-z]:\\)\S*:\d+$/;
-var ERROR_LINE_RE = /^\w*error\b/i;
-var PATH_RE = /(?<![\w:/.\\])(?:file:\/\/\/?(?:[A-Za-z]:)?|[A-Za-z]:(?=\\))?(?:[/\\][^\s/\\:'"()]+)+/g;
 function failureDetail(tool, r) {
   const lines = [];
   let source2 = false;
@@ -781,18 +800,47 @@ function failureDetail(tool, r) {
   const detail = (line ?? r.error ?? "failed").replace(PATH_RE, (p) => p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1)).slice(0, 200);
   return detail.startsWith(`${tool}:`) ? detail : `${tool}: ${detail}`;
 }
+var FAIL_FAST, NPM_ERROR_RE, NETWORK_CODES, proven, registryDown, installed, NOISE_RE, THROW_SITE_RE, ERROR_LINE_RE, PATH_RE;
+var init_npx = __esm({
+  "src/pdf/npx.ts"() {
+    "use strict";
+    init_brand();
+    init_exec();
+    FAIL_FAST = {
+      npm_config_fetch_retries: "1",
+      npm_config_fetch_retry_mintimeout: "1000",
+      npm_config_fetch_retry_maxtimeout: "2000",
+      npm_config_fetch_timeout: "30000"
+    };
+    NPM_ERROR_RE = /^npm (?:ERR!|error) code (\S+)/m;
+    NETWORK_CODES = /* @__PURE__ */ new Set([
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "ETIMEDOUT",
+      "ESOCKETTIMEDOUT",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENOTCACHED",
+      "ERR_SOCKET_TIMEOUT"
+    ]);
+    proven = /* @__PURE__ */ new Set();
+    installed = /* @__PURE__ */ new Map();
+    NOISE_RE = /^(?:npm (?:warn|WARN|notice)\b|\(node:\d+\)|\(Use `node --|\^+$|at\s|Node\.js v\d)/;
+    THROW_SITE_RE = /^(?:file:\/\/|\/|[A-Za-z]:\\)\S*:\d+$/;
+    ERROR_LINE_RE = /^\w*error\b/i;
+    PATH_RE = /(?<![\w:/.\\])(?:file:\/\/\/?(?:[A-Za-z]:)?|[A-Za-z]:(?=\\))?(?:[/\\][^\s/\\:'"()]+)+/g;
+  }
+});
 
 // src/pdf/ladder.ts
-var PDF_EXTRACTORS = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"];
-var PDFTOTEXT_TIMEOUT_MS = 6e4;
-var dead = /* @__PURE__ */ new Map();
 function resetPdfLadderCache() {
   dead.clear();
   resetNpxState();
   resetOcrBudget();
   resetOcrTools();
 }
-var warnedEngineValues = /* @__PURE__ */ new Set();
 function enginesFromEnv(name, known) {
   const raw = env(name)?.trim();
   if (!raw) return void 0;
@@ -892,54 +940,35 @@ async function extractPdf(bytes, opts = {}) {
   const reason = [...new Set([lastReason, ...failures, ...hints].filter(Boolean))].join("; ");
   return { text: "", reason: reason || "no PDF extractor available" };
 }
+var PDF_EXTRACTORS, PDFTOTEXT_TIMEOUT_MS, dead, warnedEngineValues;
+var init_ladder = __esm({
+  "src/pdf/ladder.ts"() {
+    "use strict";
+    init_brand();
+    init_exec();
+    init_npx();
+    init_quality();
+    init_native();
+    init_ocr();
+    PDF_EXTRACTORS = ["pdf-inspector", "anydoc", "firecrawl", "pdftotext", "native", "ocr"];
+    PDFTOTEXT_TIMEOUT_MS = 6e4;
+    dead = /* @__PURE__ */ new Map();
+    warnedEngineValues = /* @__PURE__ */ new Set();
+  }
+});
+
+// src/pdf.ts
+var init_pdf = __esm({
+  "src/pdf.ts"() {
+    "use strict";
+    init_native();
+    init_quality();
+    init_ocr();
+    init_ladder();
+  }
+});
 
 // src/doc/formats.ts
-var BINARY = { textFallback: false };
-var CSV = { format: "csv", textFallback: true };
-var BY_EXTENSION = {
-  // Word
-  doc: BINARY,
-  docx: BINARY,
-  docm: BINARY,
-  odt: BINARY,
-  rtf: BINARY,
-  // PowerPoint
-  ppt: BINARY,
-  pps: BINARY,
-  pot: BINARY,
-  pptx: BINARY,
-  pptm: BINARY,
-  ppsx: BINARY,
-  ppsm: BINARY,
-  odp: BINARY,
-  // Excel
-  xls: BINARY,
-  xlsx: BINARY,
-  xlsm: BINARY,
-  xlsb: BINARY,
-  ods: BINARY,
-  // Everything else the converter reads
-  epub: BINARY,
-  csv: CSV
-};
-var BY_CONTENT_TYPE = {
-  "application/msword": BINARY,
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": BINARY,
-  "application/vnd.ms-word.document.macroenabled.12": BINARY,
-  "application/vnd.oasis.opendocument.text": BINARY,
-  "application/rtf": BINARY,
-  "text/rtf": BINARY,
-  "application/vnd.ms-powerpoint": BINARY,
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation": BINARY,
-  "application/vnd.oasis.opendocument.presentation": BINARY,
-  "application/vnd.ms-excel": BINARY,
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": BINARY,
-  "application/vnd.ms-excel.sheet.binary.macroenabled.12": BINARY,
-  "application/vnd.oasis.opendocument.spreadsheet": BINARY,
-  "application/epub+zip": BINARY,
-  "text/csv": CSV
-};
-var DOC_EXTENSIONS = Object.keys(BY_EXTENSION);
 function docFormatForUrl(url) {
   const m = /\.([a-z0-9]{2,5})(?:$|[?#])/i.exec(url);
   return m ? BY_EXTENSION[m[1].toLowerCase()] : void 0;
@@ -948,8 +977,6 @@ function docFormatForContentType(contentType) {
   const type = contentType.split(";")[0]?.trim().toLowerCase();
   return type ? BY_CONTENT_TYPE[type] : void 0;
 }
-var PDF_HEADER_RE = /(?:^|[\r\n])%PDF-\d/;
-var OLE_SIGNATURE = Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]);
 function sniffDocument(bytes) {
   const head = bytes.subarray(0, 1024).toString("latin1");
   if (PDF_HEADER_RE.test(head)) return "pdf";
@@ -958,70 +985,63 @@ function sniffDocument(bytes) {
   if (head.startsWith("PK") && (head.startsWith("mimetype", 30) || bytes.includes("[Content_Types].xml"))) return BINARY;
   return void 0;
 }
+var BINARY, CSV, BY_EXTENSION, BY_CONTENT_TYPE, DOC_EXTENSIONS, PDF_HEADER_RE, OLE_SIGNATURE;
+var init_formats = __esm({
+  "src/doc/formats.ts"() {
+    "use strict";
+    BINARY = { textFallback: false };
+    CSV = { format: "csv", textFallback: true };
+    BY_EXTENSION = {
+      // Word
+      doc: BINARY,
+      docx: BINARY,
+      docm: BINARY,
+      odt: BINARY,
+      rtf: BINARY,
+      // PowerPoint
+      ppt: BINARY,
+      pps: BINARY,
+      pot: BINARY,
+      pptx: BINARY,
+      pptm: BINARY,
+      ppsx: BINARY,
+      ppsm: BINARY,
+      odp: BINARY,
+      // Excel
+      xls: BINARY,
+      xlsx: BINARY,
+      xlsm: BINARY,
+      xlsb: BINARY,
+      ods: BINARY,
+      // Everything else the converter reads
+      epub: BINARY,
+      csv: CSV
+    };
+    BY_CONTENT_TYPE = {
+      "application/msword": BINARY,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": BINARY,
+      "application/vnd.ms-word.document.macroenabled.12": BINARY,
+      "application/vnd.oasis.opendocument.text": BINARY,
+      "application/rtf": BINARY,
+      "text/rtf": BINARY,
+      "application/vnd.ms-powerpoint": BINARY,
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation": BINARY,
+      "application/vnd.oasis.opendocument.presentation": BINARY,
+      "application/vnd.ms-excel": BINARY,
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": BINARY,
+      "application/vnd.ms-excel.sheet.binary.macroenabled.12": BINARY,
+      "application/vnd.oasis.opendocument.spreadsheet": BINARY,
+      "application/epub+zip": BINARY,
+      "text/csv": CSV
+    };
+    DOC_EXTENSIONS = Object.keys(BY_EXTENSION);
+    PDF_HEADER_RE = /(?:^|[\r\n])%PDF-\d/;
+    OLE_SIGNATURE = Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]);
+  }
+});
 
 // src/doc/office.ts
 import { inflateRawSync as inflateRawSync2 } from "zlib";
-var MAX_ENTRIES = 1e4;
-var MAX_ENTRY_BYTES = 64 * 1024 * 1024;
-var MAX_TOTAL_BYTES2 = 256 * 1024 * 1024;
-var MAX_OUTPUT_CHARS = 24 * 1024 * 1024;
-var MAX_COLUMNS = 256;
-var MAX_REPEAT = 1e3;
-var Refused = class extends Error {
-};
-var Zip = class {
-  constructor(buf, entries) {
-    this.buf = buf;
-    this.entries = entries;
-  }
-  buf;
-  entries;
-  inflated = 0;
-  has(name) {
-    return this.entries.has(name);
-  }
-  /** An entry's bytes, or undefined when there is no such entry. Throws Refused on anything it will not read. */
-  read(name) {
-    const e = this.entries.get(name);
-    if (!e) return void 0;
-    if (e.flags & 1) throw new Refused("encrypted ZIP entries");
-    if (e.compressedSize === 4294967295 || e.size === 4294967295 || e.localHeader === 4294967295) throw new Refused("ZIP64 archives are not supported");
-    const buf = this.buf;
-    const lh = e.localHeader;
-    if (lh + 30 > buf.length || buf.readUInt32LE(lh) !== 67324752) throw new Refused("truncated or corrupt ZIP archive");
-    const start = lh + 30 + buf.readUInt16LE(lh + 26) + buf.readUInt16LE(lh + 28);
-    const end = start + e.compressedSize;
-    if (end > buf.length) throw new Refused("truncated or corrupt ZIP archive");
-    const cap = Math.min(MAX_ENTRY_BYTES, MAX_TOTAL_BYTES2 - this.inflated);
-    const tooLarge = () => new Refused(
-      cap < MAX_ENTRY_BYTES ? `the archive inflates past ${MAX_TOTAL_BYTES2 >> 20} MB` : `an entry inflates past ${MAX_ENTRY_BYTES >> 20} MB (a decompression bomb?)`
-    );
-    if (cap <= 0) throw tooLarge();
-    let out;
-    if (e.method === 0) {
-      if (e.compressedSize > cap) throw tooLarge();
-      out = buf.subarray(start, end);
-    } else if (e.method === 8) {
-      try {
-        out = inflateRawSync2(buf.subarray(start, end), { maxOutputLength: cap });
-      } catch (err) {
-        throw err.code === "ERR_BUFFER_TOO_LARGE" ? tooLarge() : new Refused("truncated or corrupt ZIP archive");
-      }
-    } else {
-      throw new Refused(`unsupported ZIP compression method ${e.method}`);
-    }
-    this.inflated += out.length;
-    return out;
-  }
-  /** An XML part as text: UTF-8, or UTF-16LE when it says so with a BOM. */
-  text(name) {
-    const b = this.read(name);
-    if (!b) return void 0;
-    if (b[0] === 255 && b[1] === 254) return b.subarray(2).toString("utf16le");
-    const s = b.toString("utf8");
-    return s.charCodeAt(0) === 65279 ? s.slice(1) : s;
-  }
-};
 function openZip(buf) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65535); i--) {
@@ -1057,32 +1077,6 @@ function openZip(buf) {
   }
   return new Zip(buf, entries);
 }
-var Budget = class {
-  left = MAX_OUTPUT_CHARS;
-  rulesLeft = MAX_OUTPUT_CHARS;
-  /** Spend `n` characters: false, and nothing spent, once they no longer fit — the caller drops them. */
-  take(n) {
-    if (n > this.left) {
-      this.left = 0;
-      return false;
-    }
-    this.left -= n;
-    return true;
-  }
-  /** The same, for `n` characters of table rules. */
-  takeRules(n) {
-    if (n > this.rulesLeft) {
-      this.rulesLeft = 0;
-      return false;
-    }
-    this.rulesLeft -= n;
-    return true;
-  }
-  get spent() {
-    return this.left <= 0 || this.rulesLeft <= 0;
-  }
-};
-var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
 function decodeXml(s) {
   if (!s.includes("&")) return s;
   return s.replace(/&(?:#x([0-9a-fA-F]{1,6})|#([0-9]{1,7})|([a-zA-Z]{2,4}));/g, (m, hex, dec, name) => {
@@ -1091,7 +1085,6 @@ function decodeXml(s) {
     return cp > 0 && cp <= 1114111 ? String.fromCodePoint(cp) : m;
   });
 }
-var local = (name) => name.slice(name.indexOf(":") + 1);
 function walkXml(xml, v) {
   let i = 0;
   while (i < xml.length) {
@@ -1129,7 +1122,6 @@ function walkXml(xml, v) {
     if (selfClosing) v.close?.(name);
   }
 }
-var attrPatterns = /* @__PURE__ */ new Map();
 function attr(attrs, name) {
   let re = attrPatterns.get(name);
   if (!re) {
@@ -1140,7 +1132,6 @@ function attr(attrs, name) {
   const m = re.exec(attrs);
   return m ? decodeXml(m[1] ?? m[2] ?? "") : void 0;
 }
-var cell = (s) => s.replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
 function blankRow(row, width) {
   for (let c = 0; c < row.length && c < width; c++) if (row[c]?.trim()) return false;
   return true;
@@ -1216,9 +1207,6 @@ function resolvePart(dir, target) {
   }
   return segments.join("/");
 }
-var HEADING_STYLE_RE = /^(?:heading|titre|berschrift|überschrift|kop|titolo|encabezado|ttulo|título)\s?([1-6])$/i;
-var TITLE_STYLE_RE = /^(?:title|titel|titre|titolo|ttulo|título)$/i;
-var LIST_STYLE_RE = /^list ?(?:bullet|number)/i;
 function stylePrefix(name, outline) {
   const level = HEADING_STYLE_RE.exec(name)?.[1] ?? (outline !== void 0 && outline >= 0 && outline < 6 ? String(outline + 1) : void 0);
   if (level) return `${"#".repeat(Number(level))} `;
@@ -1269,7 +1257,7 @@ function wordText(xml, budget, styles) {
   let fallback = 0;
   let tabStops = 0;
   let moved = 0;
-  const add = (p, s) => {
+  const add2 = (p, s) => {
     if (p && !moved && budget.take(s.length)) p.text += s;
   };
   const emit = (block) => {
@@ -1288,9 +1276,9 @@ function wordText(xml, budget, styles) {
       if (n === "moveFrom") moved++;
       else if (n === "p") paragraphs.push({ text: "", prefix: "" });
       else if (n === "t") inText++;
-      else if (n === "tab" && !tabStops) add(p, "	");
-      else if (n === "br" || n === "cr") add(p, "\n");
-      else if (n === "noBreakHyphen") add(p, "-");
+      else if (n === "tab" && !tabStops) add2(p, "	");
+      else if (n === "br" || n === "cr") add2(p, "\n");
+      else if (n === "noBreakHyphen") add2(p, "-");
       else if (n === "pStyle" && p) {
         const id = attr(attrs, "w:val") ?? "";
         const prefix = styles?.has(id) ? styles.get(id) : stylePrefix(id);
@@ -1326,14 +1314,14 @@ function wordText(xml, budget, styles) {
       }
     },
     text(s) {
-      if (!fallback && inText) add(paragraphs[paragraphs.length - 1], s);
+      if (!fallback && inText) add2(paragraphs[paragraphs.length - 1], s);
     }
   });
   return joinBlocks(blocks);
 }
 function sharedStrings(xml) {
-  const strings = [];
-  if (!xml) return strings;
+  const strings2 = [];
+  if (!xml) return strings2;
   let current2;
   let inText = 0;
   let phonetic = 0;
@@ -1347,7 +1335,7 @@ function sharedStrings(xml) {
     close(name) {
       const n = local(name);
       if (n === "si" && current2 !== void 0) {
-        strings.push(current2);
+        strings2.push(current2);
         current2 = void 0;
       } else if (n === "t") inText = Math.max(0, inText - 1);
       else if (n === "rPh") phonetic = Math.max(0, phonetic - 1);
@@ -1356,7 +1344,7 @@ function sharedStrings(xml) {
       if (current2 !== void 0 && inText && !phonetic) current2 += s;
     }
   });
-  return strings;
+  return strings2;
 }
 function columnOf(ref) {
   const letters = ref && /^[A-Za-z]{1,3}/.exec(ref)?.[0];
@@ -1365,19 +1353,6 @@ function columnOf(ref) {
   for (const ch of letters.toUpperCase()) col = col * 26 + (ch.charCodeAt(0) - 64);
   return col - 1;
 }
-var BUILTIN_TEMPORAL = {
-  14: "date",
-  15: "date",
-  16: "date",
-  17: "date",
-  18: "time",
-  19: "time",
-  20: "time",
-  21: "time",
-  22: "datetime",
-  45: "time",
-  47: "time"
-};
 function temporalOf(code) {
   if (code.length > 255 || /\[[hms]+\]/i.test(code)) return void 0;
   const bare = code.replace(/"[^"]*"|[\\_*].|\[[^[\]]*\]|General|E[+-]/gi, "");
@@ -1406,8 +1381,6 @@ function cellTemporals(xml) {
   });
   return kinds;
 }
-var DAY_MS = 864e5;
-var EXCEL_EPOCH = Date.UTC(1899, 11, 30);
 function serialDate(serial, kind, date1904) {
   const days = date1904 ? serial + 1462 : serial < 60 ? serial + 1 : serial;
   if (!(serial >= 0 && days <= 2958466)) return void 0;
@@ -1494,7 +1467,7 @@ function drawingText(xml, budget, onlyBody = false) {
   let para;
   let inText = 0;
   let fallback = 0;
-  const add = (s) => {
+  const add2 = (s) => {
     if (para !== void 0 && budget.take(s.length)) para += s;
   };
   const emit = (line) => {
@@ -1515,7 +1488,7 @@ function drawingText(xml, budget, onlyBody = false) {
         shapes[shapes.length - 1].kind = type === "title" || type === "ctrTitle" ? "title" : type === "body" ? "body" : "other";
       } else if (n === "p" && name.startsWith("a:")) para = "";
       else if (n === "t") inText++;
-      else if (n === "br") add("\n");
+      else if (n === "br") add2("\n");
       else if (name === "a:tbl") tables.push({ rows: [] });
       else if (name === "a:tr" && table) table.row = [];
       else if (name === "a:tc" && table?.row) table.cell = [];
@@ -1552,7 +1525,7 @@ ${markdownTable(done.rows, budget)}
       }
     },
     text(s) {
-      if (!fallback && inText) add(s);
+      if (!fallback && inText) add2(s);
     }
   });
   return { title: titles.join(" ").trim(), text: lines.join("\n").trim() };
@@ -1581,7 +1554,6 @@ Notes: ${notes}` : ""}`);
   }
   return blocks.join("\n\n");
 }
-var ODF_ASIDES = /* @__PURE__ */ new Set(["text:note", "office:annotation", "text:tracked-changes"]);
 function openDocumentText(xml, budget) {
   const blocks = [];
   const paragraphs = [];
@@ -1595,7 +1567,7 @@ function openDocumentText(xml, budget) {
   let inNotes = 0;
   const title = [];
   const notes = [];
-  const add = (p, s) => {
+  const add2 = (p, s) => {
     if (p && budget.take(s.length)) p.text += s;
   };
   const emit = (block) => {
@@ -1617,9 +1589,9 @@ function openDocumentText(xml, budget) {
         paragraphs.push({ text: "", prefix: level ? `${"#".repeat(level)} ` : listItem && !table ? "- " : "" });
         listItem = false;
       } else if (name === "text:list-item") listItem = true;
-      else if (name === "text:s") add(p, " ".repeat(Math.min(100, Number(attr(attrs, "text:c")) || 1)));
-      else if (name === "text:tab") add(p, "	");
-      else if (name === "text:line-break") add(p, "\n");
+      else if (name === "text:s") add2(p, " ".repeat(Math.min(100, Number(attr(attrs, "text:c")) || 1)));
+      else if (name === "text:tab") add2(p, "	");
+      else if (name === "text:line-break") add2(p, "\n");
       else if (name === "office:spreadsheet") spreadsheet = true;
       else if (name === "draw:page") {
         heading = blocks.push(`## Slide ${++slide}`) - 1;
@@ -1678,12 +1650,11 @@ function openDocumentText(xml, budget) {
       }
     },
     text(s) {
-      if (!skip) add(paragraphs[paragraphs.length - 1], s.replace(/[ \t\r\n]+/g, " "));
+      if (!skip) add2(paragraphs[paragraphs.length - 1], s.replace(/[ \t\r\n]+/g, " "));
     }
   });
   return joinBlocks(blocks);
 }
-var OLE_SIGNATURE2 = Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]);
 function mainPart(zip) {
   const officeDocument = relatedPart(relationships(zip, ""), "officeDocument");
   if (officeDocument && zip.has(officeDocument)) return officeDocument;
@@ -1721,10 +1692,124 @@ function readOffice(bytes) {
 function officeToText(bytes) {
   return readOffice(bytes).text;
 }
+var MAX_ENTRIES, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES2, MAX_OUTPUT_CHARS, MAX_COLUMNS, MAX_REPEAT, Refused, Zip, Budget, ENTITIES, local, attrPatterns, cell, HEADING_STYLE_RE, TITLE_STYLE_RE, LIST_STYLE_RE, BUILTIN_TEMPORAL, DAY_MS, EXCEL_EPOCH, ODF_ASIDES, OLE_SIGNATURE2;
+var init_office = __esm({
+  "src/doc/office.ts"() {
+    "use strict";
+    MAX_ENTRIES = 1e4;
+    MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+    MAX_TOTAL_BYTES2 = 256 * 1024 * 1024;
+    MAX_OUTPUT_CHARS = 24 * 1024 * 1024;
+    MAX_COLUMNS = 256;
+    MAX_REPEAT = 1e3;
+    Refused = class extends Error {
+    };
+    Zip = class {
+      constructor(buf, entries) {
+        this.buf = buf;
+        this.entries = entries;
+      }
+      buf;
+      entries;
+      inflated = 0;
+      has(name) {
+        return this.entries.has(name);
+      }
+      /** An entry's bytes, or undefined when there is no such entry. Throws Refused on anything it will not read. */
+      read(name) {
+        const e = this.entries.get(name);
+        if (!e) return void 0;
+        if (e.flags & 1) throw new Refused("encrypted ZIP entries");
+        if (e.compressedSize === 4294967295 || e.size === 4294967295 || e.localHeader === 4294967295) throw new Refused("ZIP64 archives are not supported");
+        const buf = this.buf;
+        const lh = e.localHeader;
+        if (lh + 30 > buf.length || buf.readUInt32LE(lh) !== 67324752) throw new Refused("truncated or corrupt ZIP archive");
+        const start = lh + 30 + buf.readUInt16LE(lh + 26) + buf.readUInt16LE(lh + 28);
+        const end = start + e.compressedSize;
+        if (end > buf.length) throw new Refused("truncated or corrupt ZIP archive");
+        const cap = Math.min(MAX_ENTRY_BYTES, MAX_TOTAL_BYTES2 - this.inflated);
+        const tooLarge = () => new Refused(
+          cap < MAX_ENTRY_BYTES ? `the archive inflates past ${MAX_TOTAL_BYTES2 >> 20} MB` : `an entry inflates past ${MAX_ENTRY_BYTES >> 20} MB (a decompression bomb?)`
+        );
+        if (cap <= 0) throw tooLarge();
+        let out;
+        if (e.method === 0) {
+          if (e.compressedSize > cap) throw tooLarge();
+          out = buf.subarray(start, end);
+        } else if (e.method === 8) {
+          try {
+            out = inflateRawSync2(buf.subarray(start, end), { maxOutputLength: cap });
+          } catch (err) {
+            throw err.code === "ERR_BUFFER_TOO_LARGE" ? tooLarge() : new Refused("truncated or corrupt ZIP archive");
+          }
+        } else {
+          throw new Refused(`unsupported ZIP compression method ${e.method}`);
+        }
+        this.inflated += out.length;
+        return out;
+      }
+      /** An XML part as text: UTF-8, or UTF-16LE when it says so with a BOM. */
+      text(name) {
+        const b = this.read(name);
+        if (!b) return void 0;
+        if (b[0] === 255 && b[1] === 254) return b.subarray(2).toString("utf16le");
+        const s = b.toString("utf8");
+        return s.charCodeAt(0) === 65279 ? s.slice(1) : s;
+      }
+    };
+    Budget = class {
+      left = MAX_OUTPUT_CHARS;
+      rulesLeft = MAX_OUTPUT_CHARS;
+      /** Spend `n` characters: false, and nothing spent, once they no longer fit — the caller drops them. */
+      take(n) {
+        if (n > this.left) {
+          this.left = 0;
+          return false;
+        }
+        this.left -= n;
+        return true;
+      }
+      /** The same, for `n` characters of table rules. */
+      takeRules(n) {
+        if (n > this.rulesLeft) {
+          this.rulesLeft = 0;
+          return false;
+        }
+        this.rulesLeft -= n;
+        return true;
+      }
+      get spent() {
+        return this.left <= 0 || this.rulesLeft <= 0;
+      }
+    };
+    ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+    local = (name) => name.slice(name.indexOf(":") + 1);
+    attrPatterns = /* @__PURE__ */ new Map();
+    cell = (s) => s.replace(/\s+/g, " ").trim().replace(/\|/g, "\\|");
+    HEADING_STYLE_RE = /^(?:heading|titre|berschrift|überschrift|kop|titolo|encabezado|ttulo|título)\s?([1-6])$/i;
+    TITLE_STYLE_RE = /^(?:title|titel|titre|titolo|ttulo|título)$/i;
+    LIST_STYLE_RE = /^list ?(?:bullet|number)/i;
+    BUILTIN_TEMPORAL = {
+      14: "date",
+      15: "date",
+      16: "date",
+      17: "date",
+      18: "time",
+      19: "time",
+      20: "time",
+      21: "time",
+      22: "datetime",
+      45: "time",
+      47: "time"
+    };
+    DAY_MS = 864e5;
+    EXCEL_EPOCH = Date.UTC(1899, 11, 30);
+    ODF_ASIDES = /* @__PURE__ */ new Set(["text:note", "office:annotation", "text:tracked-changes"]);
+    OLE_SIGNATURE2 = Buffer.from([208, 207, 17, 224, 161, 177, 26, 225]);
+  }
+});
 
 // src/doc/ladder.ts
-var DOC_EXTRACTORS = ["anydoc", "firecrawl", "builtin"];
-var dead2 = /* @__PURE__ */ new Map();
 function resetDocLadderCache() {
   dead2.clear();
   resetNpxState();
@@ -1779,10 +1864,32 @@ async function extractDocument(bytes, fmt, opts = {}) {
   const reason = [lastReason, ...failures].filter(Boolean).join("; ");
   return { text: "", reason: reason || "no document converter available" };
 }
+var DOC_EXTRACTORS, dead2;
+var init_ladder2 = __esm({
+  "src/doc/ladder.ts"() {
+    "use strict";
+    init_brand();
+    init_exec();
+    init_ladder();
+    init_npx();
+    init_quality();
+    init_office();
+    DOC_EXTRACTORS = ["anydoc", "firecrawl", "builtin"];
+    dead2 = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/doc.ts
+var init_doc = __esm({
+  "src/doc.ts"() {
+    "use strict";
+    init_formats();
+    init_ladder2();
+    init_office();
+  }
+});
 
 // src/url.ts
-var TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|gclsrc$|dclid$|msclkid$|yclid$|twclid$|ttclid$|li_fat_id$|mkt_tok$|_gl$|mc_|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$|igsh$)/i;
-var SHARE_SI_HOSTS = /(^|\.)(youtube\.com|youtu\.be|spotify\.com)$/;
 function canonicalizeUrl(raw) {
   try {
     const u = new URL(raw.trim());
@@ -1815,12 +1922,6 @@ function domainOf(raw) {
     return "";
   }
 }
-var LOCAL_FILE_DOMAIN = "local file";
-var FNV_OFFSET_HI = 3421674724;
-var FNV_OFFSET_LO = 2216829733;
-var FNV_PRIME_LOW = 435;
-var laneHi = 0;
-var laneLo = 0;
 function fnvMix(s) {
   let hi = laneHi;
   let lo = laneLo;
@@ -1848,10 +1949,22 @@ function fnv1a64Words(pieces, out) {
   out[0] = laneHi;
   out[1] = laneLo;
 }
+var TRACKING_PARAMS, SHARE_SI_HOSTS, LOCAL_FILE_DOMAIN, FNV_OFFSET_HI, FNV_OFFSET_LO, FNV_PRIME_LOW, laneHi, laneLo;
+var init_url = __esm({
+  "src/url.ts"() {
+    "use strict";
+    TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|gclsrc$|dclid$|msclkid$|yclid$|twclid$|ttclid$|li_fat_id$|mkt_tok$|_gl$|mc_|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$|igsh$)/i;
+    SHARE_SI_HOSTS = /(^|\.)(youtube\.com|youtu\.be|spotify\.com)$/;
+    LOCAL_FILE_DOMAIN = "local file";
+    FNV_OFFSET_HI = 3421674724;
+    FNV_OFFSET_LO = 2216829733;
+    FNV_PRIME_LOW = 435;
+    laneHi = 0;
+    laneLo = 0;
+  }
+});
 
 // src/video/url.ts
-var VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
-var YOUTUBE_HOSTS = ["youtube.com", "youtube-nocookie.com"];
 function parse(url) {
   try {
     const u = new URL(url);
@@ -1860,7 +1973,6 @@ function parse(url) {
     return void 0;
   }
 }
-var onHost = (host, domain) => host === domain || host.endsWith(`.${domain}`);
 function isYoutubeHost(host) {
   const h = host.toLowerCase();
   return YOUTUBE_HOSTS.some((d) => onHost(h, d));
@@ -1884,74 +1996,6 @@ function youtubeListKind(url) {
   if (/^\/(?:@[^/]+|channel\/[^/]+|c\/[^/]+|user\/[^/]+)/.test(u.pathname)) return "channel";
   return void 0;
 }
-var HOSTS = [
-  {
-    site: "vimeo",
-    domains: ["vimeo.com"],
-    // vimeo.com/<id>, vimeo.com/<id>/<hash> (unlisted), vimeo.com/channels/<c>/<id>,
-    // vimeo.com/groups/<g>/videos/<id>, player.vimeo.com/video/<id>.
-    video: /^\/(?:video\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{5,})(?:\/([0-9a-f]{6,}))?\/?$/,
-    // The player URL, because vimeo.com's own page now answers yt-dlp with a
-    // login wall while the player serves a public video — and its subtitles.
-    canonical: (m, u) => {
-      const hash = m[2] ?? u.searchParams.get("h") ?? void 0;
-      return { id: m[1], url: `https://player.vimeo.com/video/${m[1]}${hash ? `?h=${hash}` : ""}` };
-    }
-  },
-  {
-    site: "dailymotion",
-    domains: ["dailymotion.com"],
-    video: /^\/(?:embed\/)?video\/([a-z0-9]{5,})(?:_[^/]*)?\/?$/i,
-    canonical: (m) => ({ id: m[1], url: `https://www.dailymotion.com/video/${m[1]}` })
-  },
-  {
-    site: "dailymotion",
-    domains: ["dai.ly"],
-    video: /^\/([a-z0-9]{5,})\/?$/i,
-    canonical: (m) => ({ id: m[1], url: `https://www.dailymotion.com/video/${m[1]}` })
-  },
-  // Where the URL names the video, its key does too: a video read once is
-  // reused with no yt-dlp call at all, as on YouTube.
-  {
-    site: "twitch",
-    domains: ["twitch.tv"],
-    video: /^\/videos\/(\d+)\/?$/,
-    canonical: (m) => ({ id: m[1], url: `https://www.twitch.tv/videos/${m[1]}` })
-  },
-  { site: "twitch", domains: ["twitch.tv"], video: /^\/[^/]+\/clip\/[^/]+\/?$/ },
-  {
-    site: "ted",
-    domains: ["ted.com"],
-    video: /^\/talks\/([\w-]+)\/?$/,
-    canonical: (m) => ({ id: m[1], url: `https://www.ted.com/talks/${m[1]}` })
-  },
-  {
-    site: "loom",
-    domains: ["loom.com"],
-    video: /^\/(?:share|embed)\/([0-9a-f]{16,})\/?$/,
-    canonical: (m) => ({ id: m[1], url: `https://www.loom.com/share/${m[1]}` })
-  },
-  {
-    site: "tiktok",
-    domains: ["tiktok.com"],
-    video: /^\/(@[^/]+)\/video\/(\d+)\/?$/,
-    canonical: (m) => ({ id: m[2], url: `https://www.tiktok.com/${m[1]}/video/${m[2]}` })
-  },
-  { site: "instagram", domains: ["instagram.com"], video: /^\/(?:reel|reels|tv)\/[\w-]+\/?$/ },
-  { site: "facebook", domains: ["facebook.com"], video: /^\/(?:[^/]+\/videos\/[^/]+|reel\/\d+)\/?$/ },
-  { site: "facebook", domains: ["fb.watch"], video: /^\/[\w-]{6,}\/?$/ },
-  {
-    site: "x",
-    domains: ["x.com", "twitter.com"],
-    video: /^\/([^/]+)\/status\/(\d+)(?:\/video\/\d)?\/?$/,
-    canonical: (m) => ({ id: m[2], url: `https://x.com/${m[1]}/status/${m[2]}` })
-  },
-  { site: "bilibili", domains: ["bilibili.com"], video: /^\/video\/(?:BV\w+|av\d+)\/?$/i },
-  { site: "rumble", domains: ["rumble.com"], video: /^\/v[\w-]+\.html$/ },
-  { site: "peertube", domains: ["framatube.org", "tilvids.com"], video: /^\/(?:w|videos\/watch)\/[\w-]+\/?$/ }
-];
-var safeKey = (site, id) => `${site}-${id}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
-var shortHash = (text) => fnv1a64(text).toString(16).padStart(16, "0").slice(0, 8);
 function knownVideo(url) {
   const id = youtubeVideoId(url);
   if (id) return { site: "youtube", url: `https://www.youtube.com/watch?v=${id}`, key: id };
@@ -1993,16 +2037,87 @@ function videoUrlAt(webpageUrl, seconds3) {
   else return webpageUrl;
   return u.toString();
 }
-
-// src/video/ytdlp.ts
-import { mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
-import { tmpdir as tmpdir2 } from "os";
-import { join as join2 } from "path";
+var VIDEO_ID, YOUTUBE_HOSTS, onHost, HOSTS, safeKey, shortHash;
+var init_url2 = __esm({
+  "src/video/url.ts"() {
+    "use strict";
+    init_url();
+    VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+    YOUTUBE_HOSTS = ["youtube.com", "youtube-nocookie.com"];
+    onHost = (host, domain) => host === domain || host.endsWith(`.${domain}`);
+    HOSTS = [
+      {
+        site: "vimeo",
+        domains: ["vimeo.com"],
+        // vimeo.com/<id>, vimeo.com/<id>/<hash> (unlisted), vimeo.com/channels/<c>/<id>,
+        // vimeo.com/groups/<g>/videos/<id>, player.vimeo.com/video/<id>.
+        video: /^\/(?:video\/|channels\/[^/]+\/|groups\/[^/]+\/videos\/)?(\d{5,})(?:\/([0-9a-f]{6,}))?\/?$/,
+        // The player URL, because vimeo.com's own page now answers yt-dlp with a
+        // login wall while the player serves a public video — and its subtitles.
+        canonical: (m, u) => {
+          const hash = m[2] ?? u.searchParams.get("h") ?? void 0;
+          return { id: m[1], url: `https://player.vimeo.com/video/${m[1]}${hash ? `?h=${hash}` : ""}` };
+        }
+      },
+      {
+        site: "dailymotion",
+        domains: ["dailymotion.com"],
+        video: /^\/(?:embed\/)?video\/([a-z0-9]{5,})(?:_[^/]*)?\/?$/i,
+        canonical: (m) => ({ id: m[1], url: `https://www.dailymotion.com/video/${m[1]}` })
+      },
+      {
+        site: "dailymotion",
+        domains: ["dai.ly"],
+        video: /^\/([a-z0-9]{5,})\/?$/i,
+        canonical: (m) => ({ id: m[1], url: `https://www.dailymotion.com/video/${m[1]}` })
+      },
+      // Where the URL names the video, its key does too: a video read once is
+      // reused with no yt-dlp call at all, as on YouTube.
+      {
+        site: "twitch",
+        domains: ["twitch.tv"],
+        video: /^\/videos\/(\d+)\/?$/,
+        canonical: (m) => ({ id: m[1], url: `https://www.twitch.tv/videos/${m[1]}` })
+      },
+      { site: "twitch", domains: ["twitch.tv"], video: /^\/[^/]+\/clip\/[^/]+\/?$/ },
+      {
+        site: "ted",
+        domains: ["ted.com"],
+        video: /^\/talks\/([\w-]+)\/?$/,
+        canonical: (m) => ({ id: m[1], url: `https://www.ted.com/talks/${m[1]}` })
+      },
+      {
+        site: "loom",
+        domains: ["loom.com"],
+        video: /^\/(?:share|embed)\/([0-9a-f]{16,})\/?$/,
+        canonical: (m) => ({ id: m[1], url: `https://www.loom.com/share/${m[1]}` })
+      },
+      {
+        site: "tiktok",
+        domains: ["tiktok.com"],
+        video: /^\/(@[^/]+)\/video\/(\d+)\/?$/,
+        canonical: (m) => ({ id: m[2], url: `https://www.tiktok.com/${m[1]}/video/${m[2]}` })
+      },
+      { site: "instagram", domains: ["instagram.com"], video: /^\/(?:reel|reels|tv)\/[\w-]+\/?$/ },
+      { site: "facebook", domains: ["facebook.com"], video: /^\/(?:[^/]+\/videos\/[^/]+|reel\/\d+)\/?$/ },
+      { site: "facebook", domains: ["fb.watch"], video: /^\/[\w-]{6,}\/?$/ },
+      {
+        site: "x",
+        domains: ["x.com", "twitter.com"],
+        video: /^\/([^/]+)\/status\/(\d+)(?:\/video\/\d)?\/?$/,
+        canonical: (m) => ({ id: m[2], url: `https://x.com/${m[1]}/status/${m[2]}` })
+      },
+      { site: "bilibili", domains: ["bilibili.com"], video: /^\/video\/(?:BV\w+|av\d+)\/?$/i },
+      { site: "rumble", domains: ["rumble.com"], video: /^\/v[\w-]+\.html$/ },
+      { site: "peertube", domains: ["framatube.org", "tilvids.com"], video: /^\/(?:w|videos\/watch)\/[\w-]+\/?$/ }
+    ];
+    safeKey = (site, id) => `${site}-${id}`.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+    shortHash = (text) => fnv1a64(text).toString(16).padStart(16, "0").slice(0, 8);
+  }
+});
 
 // src/exec.ts
 import { spawn as spawn3, spawnSync as spawnSync2 } from "child_process";
-var STDOUT_CAP = 24 * 1024 * 1024;
-var defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3);
 function toResult(status, stdout, stderr, err) {
   const missing = err?.code === "ENOENT";
   return {
@@ -2013,7 +2128,6 @@ function toResult(status, stdout, stderr, err) {
     ...missing ? { missing: true } : {}
   };
 }
-var havePresence = /* @__PURE__ */ new Map();
 function have(cmd) {
   let hit = havePresence.get(cmd);
   if (hit === void 0) {
@@ -2045,7 +2159,7 @@ function sh(cmd, args, opts = {}) {
 function shAsync(cmd, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs();
   if (opts.signal?.aborted) return Promise.resolve({ ok: false, status: 130, stdout: "", stderr: "aborted" });
-  return new Promise((resolve7) => {
+  return new Promise((resolve8) => {
     let settled = false;
     let timer;
     let onAbort;
@@ -2054,7 +2168,7 @@ function shAsync(cmd, args, opts = {}) {
       settled = true;
       clearTimeout(timer);
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-      resolve7(r);
+      resolve8(r);
     };
     let child;
     try {
@@ -2088,11 +2202,22 @@ function shAsync(cmd, args, opts = {}) {
     child.on("close", (code) => done(toResult(code, stdout, stderr)));
   });
 }
+var STDOUT_CAP, defaultTimeoutMs, havePresence;
+var init_exec2 = __esm({
+  "src/exec.ts"() {
+    "use strict";
+    init_brand();
+    init_process_tree();
+    STDOUT_CAP = 24 * 1024 * 1024;
+    defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3);
+    havePresence = /* @__PURE__ */ new Map();
+  }
+});
 
 // src/video/ytdlp.ts
-var defaultVideoRunner = (cmd, args, opts) => shAsync(cmd, args, opts);
-var PROBE_TIMEOUT_MS = 12e4;
-var SUBTITLE_TIMEOUT_MS = 12e4;
+import { mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
+import { tmpdir as tmpdir2 } from "os";
+import { join as join2 } from "path";
 function ytdlpExtraArgs() {
   return (env("YTDLP_ARGS") ?? "").split(/\s+/).filter(Boolean);
 }
@@ -2101,9 +2226,6 @@ function runYtdlp(args, opts = {}) {
   const argv = [...strict, ...args, ...ytdlpExtraArgs(), ...opts.url ? ["--", opts.url] : []];
   return (opts.run ?? defaultVideoRunner)("yt-dlp", argv, { timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS, signal: opts.signal });
 }
-var str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
-var httpUrl = (v) => v && /^https?:\/\//i.test(v) ? v : void 0;
-var num = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
 function siteOf(extractor) {
   const e = extractor.toLowerCase().split(":")[0].replace(/[^a-z0-9]/g, "");
   const known = [
@@ -2250,15 +2372,27 @@ async function downloadMedia(args, dir, stem, opts) {
   }
   return { error: classifyYtdlpError(stderr) };
 }
+var defaultVideoRunner, PROBE_TIMEOUT_MS, SUBTITLE_TIMEOUT_MS, str, httpUrl, num;
+var init_ytdlp = __esm({
+  "src/video/ytdlp.ts"() {
+    "use strict";
+    init_brand();
+    init_exec2();
+    init_url2();
+    defaultVideoRunner = (cmd, args, opts) => shAsync(cmd, args, opts);
+    PROBE_TIMEOUT_MS = 12e4;
+    SUBTITLE_TIMEOUT_MS = 12e4;
+    str = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+    httpUrl = (v) => v && /^https?:\/\//i.test(v) ? v : void 0;
+    num = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
+  }
+});
 
 // src/video/vtt.ts
-var TIMING = /^((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/;
-var MIN_CUE_S = 0.05;
 function seconds(stamp) {
   const parts = stamp.replace(",", ".").split(":").map(Number);
   return parts.reduce((acc, p) => acc * 60 + p, 0);
 }
-var ENTITIES2 = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", lrm: "", rlm: "" };
 function decode(text) {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole2, name) => {
     if (name[0] === "#") {
@@ -2268,7 +2402,6 @@ function decode(text) {
     return ENTITIES2[name.toLowerCase()] ?? whole2;
   });
 }
-var clean = (line) => decode(line.replace(/<[^>]*>/g, "").replace(/\{\\[^}]*\}/g, "")).replace(/\s+/g, " ").trim();
 function parseVtt(src, opts = {}) {
   const text = src.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
   const srt = !/^WEBVTT/.test(text) && /^\s*\d+[ \t]*\n\d{2}:\d{2}:\d{2}[,.]\d{3}\s+-->/.test(text);
@@ -2304,12 +2437,6 @@ function repeatedLead(lines, previous) {
   }
   return 0;
 }
-var SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s|$)/g;
-var MAX_SEGMENT_S = 30;
-var MAX_SENTENCES = 3;
-var PAUSE_S = 5;
-var WORDS_TO_CLOSE = 25;
-var BREAK_SLACK_S = 0.5;
 function mergeSegments(cues, breaks = []) {
   const out = [];
   let cur;
@@ -2329,16 +2456,26 @@ function mergeSegments(cues, breaks = []) {
   flush();
   return out;
 }
+var TIMING, MIN_CUE_S, ENTITIES2, clean, SENTENCE_END, MAX_SEGMENT_S, MAX_SENTENCES, PAUSE_S, WORDS_TO_CLOSE, BREAK_SLACK_S;
+var init_vtt = __esm({
+  "src/video/vtt.ts"() {
+    "use strict";
+    TIMING = /^((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/;
+    MIN_CUE_S = 0.05;
+    ENTITIES2 = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", lrm: "", rlm: "" };
+    clean = (line) => decode(line.replace(/<[^>]*>/g, "").replace(/\{\\[^}]*\}/g, "")).replace(/\s+/g, " ").trim();
+    SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s|$)/g;
+    MAX_SEGMENT_S = 30;
+    MAX_SENTENCES = 3;
+    PAUSE_S = 5;
+    WORDS_TO_CLOSE = 25;
+    BREAK_SLACK_S = 0.5;
+  }
+});
 
 // src/video/whisper.ts
 import { existsSync as existsSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "fs";
 import { join as join3 } from "path";
-var DEFAULT_MAX = 3;
-var DEFAULT_TIMEOUT_MS2 = 30 * 6e4;
-var DEFAULT_MODEL = "small";
-var PYAV_PIN = "av<18";
-var AUDIO_FORMAT = "bestaudio/best";
-var spent2 = 0;
 function resetWhisperBudget() {
   spent2 = 0;
 }
@@ -2348,9 +2485,9 @@ function whisperBudgetLeft() {
 function whisperModel() {
   return env("WHISPER_MODEL") ?? DEFAULT_MODEL;
 }
-function whisperSegments(json) {
+function whisperSegments(json2) {
   try {
-    const parsed = JSON.parse(json);
+    const parsed = JSON.parse(json2);
     return (parsed.segments ?? []).map((s) => ({
       start: Number(s.start),
       end: Number(s.end),
@@ -2404,17 +2541,28 @@ async function whisperTranscribe(info, language, run, signal, knownOnly = false)
     return { segments: whisperSegments(readFileSync4(out, "utf8")) };
   });
 }
+var DEFAULT_MAX, DEFAULT_TIMEOUT_MS2, DEFAULT_MODEL, PYAV_PIN, AUDIO_FORMAT, spent2;
+var init_whisper = __esm({
+  "src/video/whisper.ts"() {
+    "use strict";
+    init_brand();
+    init_ytdlp();
+    DEFAULT_MAX = 3;
+    DEFAULT_TIMEOUT_MS2 = 30 * 6e4;
+    DEFAULT_MODEL = "small";
+    PYAV_PIN = "av<18";
+    AUDIO_FORMAT = "bestaudio/best";
+    spent2 = 0;
+  }
+});
 
 // src/video/ladder.ts
-var VIDEO_TRANSCRIBERS = ["manual-subs", "auto-subs", "whisper"];
-var processDeps = {};
 function setVideoDeps(deps = {}) {
   processDeps = deps;
 }
 function videoDeps(own) {
   return { run: own?.run ?? processDeps.run ?? defaultVideoRunner, have: own?.have ?? processDeps.have ?? have };
 }
-var dead3 = /* @__PURE__ */ new Map();
 function resetVideoLadderCache() {
   dead3.clear();
   resetWhisperBudget();
@@ -2422,7 +2570,6 @@ function resetVideoLadderCache() {
 function enabledTranscribers(engines) {
   return engines ?? enginesFromEnv("VIDEO_ENGINES", VIDEO_TRANSCRIBERS) ?? VIDEO_TRANSCRIBERS;
 }
-var MIN_WORDS_PER_MINUTE = 5;
 function assessTranscript(segments, duration) {
   const words = segments.reduce((n, s) => n + s.text.split(/\s+/).filter(Boolean).length, 0);
   if (!words) return { ok: false, reason: "empty transcript" };
@@ -2434,7 +2581,6 @@ function assessTranscript(segments, duration) {
   }
   return { ok: true };
 }
-var base = (tag) => tag.toLowerCase().split(/[-_]/)[0];
 function pickManualTrack(meta, lang) {
   const tracks = meta.subtitles;
   if (!tracks.length) return void 0;
@@ -2462,7 +2608,6 @@ function pickAutoTrack(meta) {
   const origs = tracks.filter((t) => t.endsWith("-orig"));
   return origs.length === 1 ? origs[0] : void 0;
 }
-var chapterStarts = (meta) => meta.chapters.map((c) => c.start);
 async function subtitleRung(auto, meta, info, opts, deps) {
   const track = auto ? pickAutoTrack(meta) : pickManualTrack(meta, opts.lang);
   if (!track) return { failure: auto ? "no auto-captions in the video's language" : "no manual subtitles", noTrack: true };
@@ -2479,7 +2624,6 @@ async function whisperRung(meta, info, opts, deps) {
   if ("declined" in r) return { failure: `this run's whisper budget is spent (raise ${envName("WHISPER_MAX")})` };
   return { failure: r.failed, unavailable: r.unavailable };
 }
-var plain = (segments) => segments.map((s) => s.text).join("\n");
 async function transcribeVideo(url, opts = {}) {
   const none = (reason2, meta2) => ({
     text: "",
@@ -2533,6 +2677,26 @@ async function transcribeVideo(url, opts = {}) {
   else reason = [...new Set([gateReason, ...failures].filter(Boolean))].join("; ");
   return none(reason || "no transcript", meta);
 }
+var VIDEO_TRANSCRIBERS, processDeps, dead3, MIN_WORDS_PER_MINUTE, base, chapterStarts, plain;
+var init_ladder3 = __esm({
+  "src/video/ladder.ts"() {
+    "use strict";
+    init_brand();
+    init_exec2();
+    init_ladder();
+    init_url2();
+    init_vtt();
+    init_whisper();
+    init_ytdlp();
+    VIDEO_TRANSCRIBERS = ["manual-subs", "auto-subs", "whisper"];
+    processDeps = {};
+    dead3 = /* @__PURE__ */ new Map();
+    MIN_WORDS_PER_MINUTE = 5;
+    base = (tag) => tag.toLowerCase().split(/[-_]/)[0];
+    chapterStarts = (meta) => meta.chapters.map((c) => c.start);
+    plain = (segments) => segments.map((s) => s.text).join("\n");
+  }
+});
 
 // src/video/markdown.ts
 function formatStamp(seconds3) {
@@ -2543,13 +2707,6 @@ function formatStamp(seconds3) {
   const s = t % 60;
   return h ? `${h}:${pad2(m)}:${pad2(s)}` : `${pad2(m)}:${pad2(s)}`;
 }
-var VIA_LABEL = {
-  "manual-subs": "manual subtitles",
-  "auto-subs": "YouTube auto-captions",
-  whisper: "local whisper transcription"
-};
-var paragraph = (s) => `[${formatStamp(s.start)}] ${s.text}`;
-var baseLang = (tag) => tag.toLowerCase().replace(/-orig$/, "").split(/[-_]/)[0];
 function source(t) {
   if (!t.via) return void 0;
   const site = t.meta?.site ?? "youtube";
@@ -2585,22 +2742,28 @@ function transcriptMarkdown(t) {
   }
   return [...head, ...body].join("\n").trimEnd() + "\n";
 }
-
-// src/video/run.ts
-import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, statSync } from "fs";
-import { tmpdir as tmpdir3 } from "os";
-import { join as join4, resolve } from "path";
+var VIA_LABEL, paragraph, baseLang;
+var init_markdown = __esm({
+  "src/video/markdown.ts"() {
+    "use strict";
+    VIA_LABEL = {
+      "manual-subs": "manual subtitles",
+      "auto-subs": "YouTube auto-captions",
+      whisper: "local whisper transcription"
+    };
+    paragraph = (s) => `[${formatStamp(s.start)}] ${s.text}`;
+    baseLang = (tag) => tag.toLowerCase().replace(/-orig$/, "").split(/[-_]/)[0];
+  }
+});
 
 // src/no-write.ts
 import { mkdirSync, renameSync, unlinkSync, writeFileSync as writeFileSync4 } from "fs";
-var flagged = false;
 function setNoWrite(on) {
   flagged = on;
 }
 function isNoWrite() {
   return flagged || envFlag("NO_WRITE");
 }
-var collected = [];
 function ensureDir(dir) {
   if (isNoWrite()) return;
   mkdirSync(dir, { recursive: true });
@@ -2615,11 +2778,10 @@ function writeArtifact(path, content) {
   writeFileAtomic(path, content);
   return path;
 }
-var tmpCounter = 0;
-function writeFileAtomic(path, content) {
+function writeFileAtomic(path, content, mode2) {
   const tmp = `${path}.${process.pid}.${tmpCounter++}.tmp`;
   try {
-    writeFileSync4(tmp, content);
+    writeFileSync4(tmp, content, mode2 === void 0 ? void 0 : { mode: mode2 });
     renameSync(tmp, path);
   } catch (e) {
     try {
@@ -2636,199 +2798,21 @@ function resetNoWrite() {
   flagged = false;
   collected.length = 0;
 }
+var flagged, collected, tmpCounter;
+var init_no_write = __esm({
+  "src/no-write.ts"() {
+    "use strict";
+    init_brand();
+    flagged = false;
+    collected = [];
+    tmpCounter = 0;
+  }
+});
 
 // src/text.ts
 function escapeRegExp(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-var STOPWORDS = /* @__PURE__ */ new Set([
-  "the",
-  "a",
-  "an",
-  "is",
-  "are",
-  "was",
-  "were",
-  "be",
-  "been",
-  "being",
-  "do",
-  "does",
-  "did",
-  "how",
-  "what",
-  "why",
-  "when",
-  "where",
-  "which",
-  "who",
-  "whom",
-  "this",
-  "that",
-  "these",
-  "those",
-  "of",
-  "in",
-  "on",
-  "to",
-  "for",
-  "with",
-  "and",
-  "or",
-  "but",
-  "if",
-  "then",
-  "else",
-  "than",
-  "as",
-  "at",
-  "by",
-  "from",
-  "into",
-  "about",
-  "it",
-  "its",
-  "i",
-  "you",
-  "we",
-  "they",
-  "he",
-  "she",
-  "there",
-  "here",
-  "can",
-  "could",
-  "should",
-  "would",
-  "will",
-  "shall",
-  "may",
-  "might",
-  "must",
-  "have",
-  "has",
-  "had",
-  "not",
-  "no",
-  "yes",
-  "so",
-  "such",
-  "only",
-  "any",
-  "some",
-  "all",
-  "get",
-  "set",
-  "use",
-  "used",
-  "using",
-  "work",
-  "works",
-  "working",
-  "handle",
-  "handled",
-  "happen",
-  "happens",
-  "default",
-  "value",
-  "values",
-  "please",
-  "explain",
-  "tell",
-  "me",
-  "my",
-  "our",
-  "vs"
-]);
-var LOCALE_STOPWORDS = /* @__PURE__ */ new Set([
-  "le",
-  "la",
-  "les",
-  "de",
-  "des",
-  "du",
-  "un",
-  "une",
-  "est",
-  "sont",
-  "que",
-  "qui",
-  "quoi",
-  "quel",
-  "quelle",
-  "quels",
-  "quelles",
-  "pour",
-  "dans",
-  "avec",
-  "entre",
-  "sur",
-  "par",
-  "pas",
-  "plus",
-  "et",
-  "ou",
-  "o\xF9",
-  "ce",
-  "cette",
-  "ces",
-  "se",
-  "sa",
-  "son",
-  "ses",
-  "leur",
-  "leurs",
-  "comment",
-  "pourquoi",
-  "quand",
-  "fait",
-  "faire",
-  "peut",
-  "doit",
-  "\xEAtre",
-  "avoir",
-  "il",
-  "elle",
-  "nous",
-  "vous",
-  "ils",
-  "elles",
-  "au",
-  "aux",
-  "si",
-  "ne",
-  // German.
-  "der",
-  "die",
-  "das",
-  "und",
-  "ist",
-  "sind",
-  "wie",
-  "ein",
-  "eine",
-  "einen",
-  "einem",
-  "einer",
-  "mit",
-  "f\xFCr",
-  "von",
-  "zu",
-  "den",
-  "dem",
-  "im",
-  "auf",
-  "nicht",
-  "sich",
-  "oder",
-  "warum",
-  "wann",
-  "welche",
-  "welcher",
-  "welches",
-  "kann",
-  "wird"
-]);
 function isStopword(term) {
   const t = term.toLowerCase();
   if (STOPWORDS.has(t)) return true;
@@ -2836,7 +2820,6 @@ function isStopword(term) {
   const extra = brand().extraStopwords;
   return extra ? extraStopwordSet(extra).has(t) : false;
 }
-var extraSets = /* @__PURE__ */ new WeakMap();
 function extraStopwordSet(extra) {
   const hit = extraSets.get(extra);
   if (hit && hit.length === extra.length) return hit.set;
@@ -2844,9 +2827,6 @@ function extraStopwordSet(extra) {
   extraSets.set(extra, { length: extra.length, set });
   return set;
 }
-var TOKEN_RE = new RegExp("(?<![\\p{L}\\p{M}\\p{N}_])\\.net(?![\\p{L}\\p{M}\\p{N}_])|[\\p{L}\\p{M}\\p{N}_]+(?:(?<=\\p{L})[+#]{1,2}\\d*(?![\\p{L}\\p{M}\\p{N}_+#])|\\/\\d(?:\\.\\d)?(?![\\p{L}\\p{M}\\p{N}_./]))?", "giu");
-var CJK_CHAR = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
-var CJK_RUNS = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
 function cjkBigrams(run) {
   const chars = Array.from(run);
   if (chars.length === 1) return [run];
@@ -2857,7 +2837,7 @@ function cjkBigrams(run) {
 function keywords(question) {
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  const add = (raw, minLength) => {
+  const add2 = (raw, minLength) => {
     const lower = raw.toLowerCase();
     if (raw.length < minLength || isStopword(raw) || seen.has(lower)) return;
     seen.add(lower);
@@ -2866,13 +2846,13 @@ function keywords(question) {
   const nonAscii = NON_ASCII.test(question);
   for (const [raw] of (nonAscii ? question.normalize("NFC") : question).matchAll(TOKEN_RE)) {
     if (!nonAscii || !CJK_CHAR.test(raw)) {
-      add(raw, 2);
+      add2(raw, 2);
       continue;
     }
     for (const piece of raw.split(CJK_RUNS)) {
       if (!piece) continue;
-      if (!CJK_CHAR.test(piece)) add(piece, 2);
-      else for (const gram of cjkBigrams(piece)) add(gram, 1);
+      if (!CJK_CHAR.test(piece)) add2(piece, 2);
+      else for (const gram of cjkBigrams(piece)) add2(gram, 1);
     }
   }
   return out;
@@ -2890,34 +2870,12 @@ function rankedKeywords(question) {
   };
   return base2.map((k, i) => ({ k, s: score(k), i })).sort((a, b) => b.s - a.s || a.i - b.i).map((x) => x.k);
 }
-var ACCENT_CLASSES = {
-  a: "a\xE0\xE1\xE2\xE3\xE4\xE5\u0101\u0103\u0105",
-  c: "c\xE7\u0107\u0109\u010B\u010D",
-  d: "d\u010F\u0111",
-  e: "e\xE8\xE9\xEA\xEB\u0113\u0115\u0117\u0119\u011B",
-  g: "g\u011D\u011F\u0121\u0123",
-  i: "i\xEC\xED\xEE\xEF\u0129\u012B\u012D\u012F\u0131",
-  l: "l\u013A\u013C\u013E\u0140\u0142",
-  n: "n\xF1\u0144\u0146\u0148",
-  o: "o\xF2\xF3\xF4\xF5\xF6\xF8\u014D\u014F\u0151",
-  r: "r\u0155\u0157\u0159",
-  s: "s\u015B\u015D\u015F\u0161",
-  t: "t\u0163\u0165\u0167",
-  u: "u\xF9\xFA\xFB\xFC\u0169\u016B\u016D\u016F\u0171\u0173",
-  y: "y\xFD\xFF\u0177",
-  z: "z\u017A\u017C\u017E"
-};
-var BASE_OF = /* @__PURE__ */ new Map();
-for (const [base2, cls] of Object.entries(ACCENT_CLASSES)) {
-  for (const ch of cls) BASE_OF.set(ch, base2);
-}
 function baseChar(ch) {
   const known = BASE_OF.get(ch);
   if (known) return known;
   const stripped = ch.normalize("NFD").replace(new RegExp("\\p{M}+", "gu"), "");
   return stripped.length === 1 ? stripped : ch;
 }
-var NON_ASCII = /[\u0080-\uffff]/;
 function deaccent(s) {
   if (!NON_ASCII.test(s)) return s;
   let out = "";
@@ -2946,8 +2904,6 @@ function subtokens(raw) {
   }
   return out;
 }
-var MAX_PATTERNS = 24;
-var VARIANT_PRIORITY = { original: 0, folded: 1, subtoken: 2 };
 function expandTokens(tokens, max = 8) {
   const byCanonical = /* @__PURE__ */ new Map();
   for (const raw of tokens) {
@@ -2975,8 +2931,6 @@ function expandTokens(tokens, max = 8) {
   for (const ek of byCanonical.values()) ek.variants = ek.variants.filter((v) => kept.has(v));
   return [...byCanonical.values()];
 }
-var LIGATURE_SPELLING = { \u0153: "oe", \u00E6: "ae", \u00DF: "ss" };
-var LIGATURE_OF = { oe: "\u0153", ae: "\xE6", ss: "\xDF" };
 function charPattern(ch) {
   const cls = ACCENT_CLASSES[baseChar(ch)];
   return cls ? `[${cls}]` : escapeRegExp(ch);
@@ -3002,7 +2956,6 @@ function accentPattern(text) {
   }
   return out;
 }
-var SHORT_VARIANT = 3;
 function lineRegex(source2, text) {
   if ([...text].length <= SHORT_VARIANT && !CJK_CHAR.test(text)) {
     try {
@@ -3051,13 +3004,10 @@ function nearestHeading(lines, anchor) {
   }
   return heading;
 }
-var ATX_OPEN = /^#{1,6}\s+/;
-var ATX_CLOSE = /(?:^|\s)#+$/;
-var MD_ESCAPE = /\\([!-/:-@[-`{-~])/g;
 function atxTitle(line) {
-  const open = ATX_OPEN.exec(line);
-  if (!open) return void 0;
-  let title = line.slice(open[0].length).trimEnd();
+  const open2 = ATX_OPEN.exec(line);
+  if (!open2) return void 0;
+  let title = line.slice(open2[0].length).trimEnd();
   const close = ATX_CLOSE.exec(title);
   if (close) title = title.slice(0, close.index).trimEnd();
   return title ? title.replace(MD_ESCAPE, "$1") : void 0;
@@ -3111,6 +3061,236 @@ function slugify(input, opts = {}) {
   const head = readable.slice(0, Math.max(0, max - tag.length - 1)).replace(/-+$/, "");
   return head ? `${head}-${tag}` : tag;
 }
+var STOPWORDS, LOCALE_STOPWORDS, extraSets, TOKEN_RE, CJK_CHAR, CJK_RUNS, ACCENT_CLASSES, BASE_OF, NON_ASCII, MAX_PATTERNS, VARIANT_PRIORITY, LIGATURE_SPELLING, LIGATURE_OF, SHORT_VARIANT, ATX_OPEN, ATX_CLOSE, MD_ESCAPE;
+var init_text = __esm({
+  "src/text.ts"() {
+    "use strict";
+    init_brand();
+    init_url();
+    STOPWORDS = /* @__PURE__ */ new Set([
+      "the",
+      "a",
+      "an",
+      "is",
+      "are",
+      "was",
+      "were",
+      "be",
+      "been",
+      "being",
+      "do",
+      "does",
+      "did",
+      "how",
+      "what",
+      "why",
+      "when",
+      "where",
+      "which",
+      "who",
+      "whom",
+      "this",
+      "that",
+      "these",
+      "those",
+      "of",
+      "in",
+      "on",
+      "to",
+      "for",
+      "with",
+      "and",
+      "or",
+      "but",
+      "if",
+      "then",
+      "else",
+      "than",
+      "as",
+      "at",
+      "by",
+      "from",
+      "into",
+      "about",
+      "it",
+      "its",
+      "i",
+      "you",
+      "we",
+      "they",
+      "he",
+      "she",
+      "there",
+      "here",
+      "can",
+      "could",
+      "should",
+      "would",
+      "will",
+      "shall",
+      "may",
+      "might",
+      "must",
+      "have",
+      "has",
+      "had",
+      "not",
+      "no",
+      "yes",
+      "so",
+      "such",
+      "only",
+      "any",
+      "some",
+      "all",
+      "get",
+      "set",
+      "use",
+      "used",
+      "using",
+      "work",
+      "works",
+      "working",
+      "handle",
+      "handled",
+      "happen",
+      "happens",
+      "default",
+      "value",
+      "values",
+      "please",
+      "explain",
+      "tell",
+      "me",
+      "my",
+      "our",
+      "vs"
+    ]);
+    LOCALE_STOPWORDS = /* @__PURE__ */ new Set([
+      "le",
+      "la",
+      "les",
+      "de",
+      "des",
+      "du",
+      "un",
+      "une",
+      "est",
+      "sont",
+      "que",
+      "qui",
+      "quoi",
+      "quel",
+      "quelle",
+      "quels",
+      "quelles",
+      "pour",
+      "dans",
+      "avec",
+      "entre",
+      "sur",
+      "par",
+      "pas",
+      "plus",
+      "et",
+      "ou",
+      "o\xF9",
+      "ce",
+      "cette",
+      "ces",
+      "se",
+      "sa",
+      "son",
+      "ses",
+      "leur",
+      "leurs",
+      "comment",
+      "pourquoi",
+      "quand",
+      "fait",
+      "faire",
+      "peut",
+      "doit",
+      "\xEAtre",
+      "avoir",
+      "il",
+      "elle",
+      "nous",
+      "vous",
+      "ils",
+      "elles",
+      "au",
+      "aux",
+      "si",
+      "ne",
+      // German.
+      "der",
+      "die",
+      "das",
+      "und",
+      "ist",
+      "sind",
+      "wie",
+      "ein",
+      "eine",
+      "einen",
+      "einem",
+      "einer",
+      "mit",
+      "f\xFCr",
+      "von",
+      "zu",
+      "den",
+      "dem",
+      "im",
+      "auf",
+      "nicht",
+      "sich",
+      "oder",
+      "warum",
+      "wann",
+      "welche",
+      "welcher",
+      "welches",
+      "kann",
+      "wird"
+    ]);
+    extraSets = /* @__PURE__ */ new WeakMap();
+    TOKEN_RE = new RegExp("(?<![\\p{L}\\p{M}\\p{N}_])\\.net(?![\\p{L}\\p{M}\\p{N}_])|[\\p{L}\\p{M}\\p{N}_]+(?:(?<=\\p{L})[+#]{1,2}\\d*(?![\\p{L}\\p{M}\\p{N}_+#])|\\/\\d(?:\\.\\d)?(?![\\p{L}\\p{M}\\p{N}_./]))?", "giu");
+    CJK_CHAR = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
+    CJK_RUNS = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
+    ACCENT_CLASSES = {
+      a: "a\xE0\xE1\xE2\xE3\xE4\xE5\u0101\u0103\u0105",
+      c: "c\xE7\u0107\u0109\u010B\u010D",
+      d: "d\u010F\u0111",
+      e: "e\xE8\xE9\xEA\xEB\u0113\u0115\u0117\u0119\u011B",
+      g: "g\u011D\u011F\u0121\u0123",
+      i: "i\xEC\xED\xEE\xEF\u0129\u012B\u012D\u012F\u0131",
+      l: "l\u013A\u013C\u013E\u0140\u0142",
+      n: "n\xF1\u0144\u0146\u0148",
+      o: "o\xF2\xF3\xF4\xF5\xF6\xF8\u014D\u014F\u0151",
+      r: "r\u0155\u0157\u0159",
+      s: "s\u015B\u015D\u015F\u0161",
+      t: "t\u0163\u0165\u0167",
+      u: "u\xF9\xFA\xFB\xFC\u0169\u016B\u016D\u016F\u0171\u0173",
+      y: "y\xFD\xFF\u0177",
+      z: "z\u017A\u017C\u017E"
+    };
+    BASE_OF = /* @__PURE__ */ new Map();
+    for (const [base2, cls] of Object.entries(ACCENT_CLASSES)) {
+      for (const ch of cls) BASE_OF.set(ch, base2);
+    }
+    NON_ASCII = /[\u0080-\uffff]/;
+    MAX_PATTERNS = 24;
+    VARIANT_PRIORITY = { original: 0, folded: 1, subtoken: 2 };
+    LIGATURE_SPELLING = { \u0153: "oe", \u00E6: "ae", \u00DF: "ss" };
+    LIGATURE_OF = { oe: "\u0153", ae: "\xE6", ss: "\xDF" };
+    SHORT_VARIANT = 3;
+    ATX_OPEN = /^#{1,6}\s+/;
+    ATX_CLOSE = /(?:^|\s)#+$/;
+    MD_ESCAPE = /\\([!-/:-@[-`{-~])/g;
+  }
+});
 
 // src/rank.ts
 function rrf(lists, keyOf, k = 60) {
@@ -3126,7 +3306,6 @@ function rrf(lists, keyOf, k = 60) {
   }
   return score;
 }
-var byCodeUnit = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function trimTrailing(s, ch) {
   let end = s.length;
   while (end > 0 && s[end - 1] === ch) end--;
@@ -3197,16 +3376,9 @@ function dedupeByUrl(items) {
   }
   return { items: order.map((k) => best.get(k)), dropped };
 }
-var indexTokenCache = /* @__PURE__ */ new WeakMap();
 function bm25Tokenize(text, opts = {}) {
   return tokenize(text, opts.subtokens !== false);
 }
-var WORD_SPLIT = /[^\p{L}\p{M}\p{N}_]+/u;
-var NON_ASCII2 = /[^\p{ASCII}]/u;
-var CJK_CHAR2 = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
-var CJK_RUNS2 = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
-var IDENT_BOUNDARY = new RegExp("_|[\\p{Ll}\\p{N}]\\p{Lu}|\\p{Lu}\\p{Lu}\\p{Ll}|\\p{L}\\p{N}|\\p{N}\\p{L}", "u");
-var MAX_IDENT = 64;
 function tokenize(text, expand2) {
   if (!text) return [];
   const out = [];
@@ -3239,8 +3411,6 @@ function pushBigrams(run, out) {
   }
   for (let i = 0; i + 1 < chars.length; i++) out.push(chars[i] + chars[i + 1]);
 }
-var FOLD_CACHE_MAX = 5e4;
-var foldCache = /* @__PURE__ */ new Map();
 function foldCached(raw) {
   const hit = foldCache.get(raw);
   if (hit !== void 0) return hit;
@@ -3249,9 +3419,6 @@ function foldCached(raw) {
   foldCache.set(raw, t);
   return t;
 }
-var NO_SUBTERMS = [];
-var subtermCache = /* @__PURE__ */ new Map();
-var subtermExtras = { list: void 0, length: 0 };
 function subtermsCached(raw, folded) {
   const list = brand().extraStopwords;
   if (list !== subtermExtras.list || (list?.length ?? 0) !== subtermExtras.length) {
@@ -3418,7 +3585,6 @@ function simhashLanes(toks, out) {
   out[0] = hi;
   out[1] = lo;
 }
-var MASK32 = 0xffffffffn;
 function popcount32(n) {
   let x = n - (n >>> 1 & 1431655765);
   x = (x & 858993459) + (x >>> 2 & 858993459);
@@ -3485,7 +3651,6 @@ function diversify(items, tokensOf, lambda = 0.75, opts = {}) {
   if (window >= sorted.length) return mmr(sorted, tokensOf, lambda);
   return [...window > 2 ? mmr(sorted.slice(0, window), tokensOf, lambda) : sorted.slice(0, window), ...sorted.slice(window)];
 }
-var PAIR_CACHE_MAX = 2048;
 function mmr(sorted, tokensOf, lambda) {
   const m = sorted.length;
   let max = 1e-9;
@@ -3566,7 +3731,6 @@ function jaccardSorted(a, b) {
   }
   return inter / (na + nb - inter);
 }
-var URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
 function unglued(match) {
   const hostStart = Math.max(match.indexOf("//") + 2, match.lastIndexOf("@") + 1);
   const dot = match.lastIndexOf(".");
@@ -3584,24 +3748,44 @@ function externalHosts(url, text) {
   }
   return out;
 }
+var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, MASK32, PAIR_CACHE_MAX, URL_IN_TEXT;
+var init_rank = __esm({
+  "src/rank.ts"() {
+    "use strict";
+    init_brand();
+    init_text();
+    init_url();
+    byCodeUnit = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    indexTokenCache = /* @__PURE__ */ new WeakMap();
+    WORD_SPLIT = /[^\p{L}\p{M}\p{N}_]+/u;
+    NON_ASCII2 = /[^\p{ASCII}]/u;
+    CJK_CHAR2 = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
+    CJK_RUNS2 = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
+    IDENT_BOUNDARY = new RegExp("_|[\\p{Ll}\\p{N}]\\p{Lu}|\\p{Lu}\\p{Lu}\\p{Ll}|\\p{L}\\p{N}|\\p{N}\\p{L}", "u");
+    MAX_IDENT = 64;
+    FOLD_CACHE_MAX = 5e4;
+    foldCache = /* @__PURE__ */ new Map();
+    NO_SUBTERMS = [];
+    subtermCache = /* @__PURE__ */ new Map();
+    subtermExtras = { list: void 0, length: 0 };
+    MASK32 = 0xffffffffn;
+    PAIR_CACHE_MAX = 2048;
+    URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
+  }
+});
 
 // src/video/run.ts
+import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, statSync } from "fs";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join4, resolve } from "path";
 function videoRoot(out) {
   return resolve(out ?? env("VIDEO_DIR") ?? join4(tmpdir3(), brand().name, "video"));
 }
-var baseLang2 = (tag) => tag.toLowerCase().replace(/-orig$/, "").split(/[-_]/)[0];
 function servesLang(meta, lang) {
   if (!lang) return true;
   const read2 = meta.track ?? meta.lang ?? meta.language;
   return read2 !== void 0 && baseLang2(read2) === baseLang2(lang);
 }
-var readJson = (path) => {
-  try {
-    return JSON.parse(readFileSync5(path, "utf8"));
-  } catch {
-    return void 0;
-  }
-};
 function readVideoRun(dir) {
   const meta = readJson(join4(dir, "meta.json"));
   const segments = readJson(join4(dir, "segments.json"));
@@ -3656,7 +3840,6 @@ async function fetchVideoRun(url, root, opts = {}) {
   }
   return done;
 }
-var PASSAGE_S = 45;
 function passageGroups(segments, chapterStarts2) {
   const out = [];
   let cur = [];
@@ -3700,7 +3883,6 @@ function corpusLabels(dir) {
   for (const v of c?.videos ?? []) if (typeof v.id === "string" && typeof v.label === "string") out.set(v.id, v.label);
   return out;
 }
-var chapterAt = (chapters, t) => [...chapters].reverse().find((c) => c.start <= t + 0.5)?.title;
 function searchVideoRuns(dir, query, opts = {}) {
   const labels = opts.labels ?? corpusLabels(dir);
   const docs = [];
@@ -3740,18 +3922,34 @@ function searchVideoRuns(dir, query, opts = {}) {
     };
   });
 }
-
-// src/video/frames.ts
-import { copyFileSync, cpSync, existsSync as existsSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync4, readFileSync as readFileSync6, renameSync as renameSync2, rmSync as rmSync3 } from "fs";
-import { join as join5 } from "path";
+var baseLang2, readJson, PASSAGE_S, chapterAt;
+var init_run = __esm({
+  "src/video/run.ts"() {
+    "use strict";
+    init_brand();
+    init_no_write();
+    init_rank();
+    init_ladder3();
+    init_markdown();
+    init_url2();
+    init_ytdlp();
+    baseLang2 = (tag) => tag.toLowerCase().replace(/-orig$/, "").split(/[-_]/)[0];
+    readJson = (path) => {
+      try {
+        return JSON.parse(readFileSync5(path, "utf8"));
+      } catch {
+        return void 0;
+      }
+    };
+    PASSAGE_S = 45;
+    chapterAt = (chapters, t) => [...chapters].reverse().find((c) => c.start <= t + 0.5)?.title;
+  }
+});
 
 // src/video/align.ts
-var BEFORE_S = 5;
-var AFTER_S = 10;
 function transcriptAround(segments, t) {
   return segments.filter((s) => s.end >= t - BEFORE_S && s.start <= t + AFTER_S).map((s) => `[${formatStamp(s.start)}] ${s.text}`).join("\n");
 }
-var chapterAt2 = (chapters, t) => [...chapters].sort((a, b) => b.start - a.start).find((c) => c.start <= t + 0.5)?.title;
 function alignFrames(frames, segments, chapters) {
   return frames.map((f) => {
     const chapter = chapterAt2(chapters, f.time);
@@ -3772,10 +3970,18 @@ function framesMarkdown(meta, frames, note) {
   }
   return out.join("\n").trimEnd() + "\n";
 }
+var BEFORE_S, AFTER_S, chapterAt2;
+var init_align = __esm({
+  "src/video/align.ts"() {
+    "use strict";
+    init_markdown();
+    BEFORE_S = 5;
+    AFTER_S = 10;
+    chapterAt2 = (chapters, t) => [...chapters].sort((a, b) => b.start - a.start).find((c) => c.start <= t + 0.5)?.title;
+  }
+});
 
 // src/video/dhash.ts
-var DHASH_FRAME_BYTES = 72;
-var DHASH_SAME = 6;
 function dhash(gray) {
   if (gray.length < DHASH_FRAME_BYTES) throw new Error(`dhash needs ${DHASH_FRAME_BYTES} bytes, got ${gray.length}`);
   let h = 0n;
@@ -3800,15 +4006,18 @@ function dhashStream(raw) {
   for (let at = 0; at + DHASH_FRAME_BYTES <= raw.length; at += DHASH_FRAME_BYTES) out.push(dhash(raw.subarray(at, at + DHASH_FRAME_BYTES)));
   return out;
 }
+var DHASH_FRAME_BYTES, DHASH_SAME;
+var init_dhash = __esm({
+  "src/video/dhash.ts"() {
+    "use strict";
+    DHASH_FRAME_BYTES = 72;
+    DHASH_SAME = 6;
+  }
+});
 
 // src/video/frames.ts
-var FRAME_EFFORT = { low: 20, med: 50, high: 100 };
-var SCENE_THRESHOLD = 0.3;
-var VIDEO_FORMAT = "bv*[height<=720]/b[height<=720]/bv*/b";
-var FRAMES_TIMEOUT_MS = 30 * 6e4;
-var MIN_FRAMES = 3;
-var INTERVAL_FRAMES = 10;
-var JPEG_FILTER = "scale='min(1280,iw)':-2:out_range=full,format=yuvj420p";
+import { copyFileSync, cpSync, existsSync as existsSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync4, readFileSync as readFileSync6, renameSync as renameSync2, rmSync as rmSync3 } from "fs";
+import { join as join5 } from "path";
 function parseShowinfo(stderr) {
   const out = [];
   for (const m of stderr.matchAll(/\bn:\s*(\d+)\s+pts:\s*-?\d+\s+pts_time:(-?[\d.]+)/g)) out[Number(m[1])] = Number(m[2]);
@@ -3833,8 +4042,6 @@ function capFrames(frames, max) {
   }
   return kept;
 }
-var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-var fileStamp = (t) => formatStamp(t).replace(/:/g, "-");
 async function extractFrames(runDir, opts = {}) {
   if (isNoWrite()) return { ok: false, reason: "frames are image files, and nothing may be written (NO_WRITE)" };
   const run = readVideoRun(runDir);
@@ -3875,31 +4082,31 @@ async function extractFrames(runDir, opts = {}) {
     if (opts.signal?.aborted) return { ok: false, reason: "cancelled" };
     const times = parseShowinfo(scenes.stderr);
     const sceneFiles = readdirSync4(sceneDir).sort();
-    const candidates = sceneFiles.slice(0, times.length).map((f, i) => ({ path: join5(sceneDir, f), time: times[i], kind: "scene" }));
+    const candidates2 = sceneFiles.slice(0, times.length).map((f, i) => ({ path: join5(sceneDir, f), time: times[i], kind: "scene" }));
     const single = async (time, kind) => {
-      const path = join5(tmp, `${kind}-${candidates.length}.jpg`);
+      const path = join5(tmp, `${kind}-${candidates2.length}.jpg`);
       await ffmpeg(["-loglevel", "error", "-ss", time.toFixed(2), "-i", input, "-frames:v", "1", "-vf", JPEG_FILTER, "-q:v", "3", "-y", path]);
-      if (existsSync4(path)) candidates.push({ path, time, kind });
+      if (existsSync4(path)) candidates2.push({ path, time, kind });
     };
     const last = duration > 1 ? duration - 0.5 : Number.POSITIVE_INFINITY;
     for (const c of meta.chapters ?? []) await single(Math.min(c.start + 1, last), "chapter");
-    if (candidates.length < MIN_FRAMES && duration > 0) {
+    if (candidates2.length < MIN_FRAMES && duration > 0) {
       const n = Math.min(FRAME_EFFORT[effort], INTERVAL_FRAMES);
       for (let i = 0; i < n; i++) await single(duration * (i + 0.5) / n, "interval");
     }
     if (opts.signal?.aborted) return { ok: false, reason: "cancelled" };
-    if (!candidates.length)
+    if (!candidates2.length)
       return { ok: false, reason: `ffmpeg took no frame from the video${scenes.ok ? "" : ` (${scenes.stderr.trim().split("\n").pop()})`}` };
-    candidates.sort((a, b) => a.time - b.time);
+    candidates2.sort((a, b) => a.time - b.time);
     const candDir = join5(tmp, "cand");
     mkdirSync2(candDir);
-    candidates.forEach((c, i) => copyFileSync(c.path, join5(candDir, `${String(i + 1).padStart(4, "0")}.jpg`)));
+    candidates2.forEach((c, i) => copyFileSync(c.path, join5(candDir, `${String(i + 1).padStart(4, "0")}.jpg`)));
     const raw = join5(tmp, "hash.raw");
     await ffmpeg(["-loglevel", "error", "-i", join5(candDir, "%04d.jpg"), "-vf", "scale=9:8,format=gray", "-f", "rawvideo", "-y", raw]);
     const hashes = existsSync4(raw) ? dhashStream(readFileSync6(raw)) : [];
     const kept = [];
-    for (const [i, c] of candidates.entries()) {
-      const hash = hashes.length === candidates.length ? hashes[i] : void 0;
+    for (const [i, c] of candidates2.entries()) {
+      const hash = hashes.length === candidates2.length ? hashes[i] : void 0;
       if (hash !== void 0 && kept.some((k) => k.hash !== void 0 && hamming(k.hash, hash) <= DHASH_SAME)) continue;
       kept.push({ ...c, ...hash !== void 0 ? { hash } : {} });
     }
@@ -3912,8 +4119,8 @@ async function extractFrames(runDir, opts = {}) {
       return { file, time: c.time, kind: c.kind };
     });
     const frames = alignFrames(placed, segments, meta.chapters ?? []);
-    const dropped = candidates.length - kept.length;
-    const note = `${plural(frames.length, "frame")} (effort ${effort}: at most ${FRAME_EFFORT[effort]}) from ${plural(candidates.length, "candidate")} \u2014 scene changes above ${SCENE_THRESHOLD}, one per chapter start, ${plural(dropped, "near-duplicate")} dropped`;
+    const dropped = candidates2.length - kept.length;
+    const note = `${plural(frames.length, "frame")} (effort ${effort}: at most ${FRAME_EFFORT[effort]}) from ${plural(candidates2.length, "candidate")} \u2014 scene changes above ${SCENE_THRESHOLD}, one per chapter start, ${plural(dropped, "near-duplicate")} dropped`;
     const framesDir = join5(runDir, "frames");
     try {
       const incoming = `${framesDir}.${process.pid}.${Date.now()}.new`;
@@ -3923,15 +4130,35 @@ async function extractFrames(runDir, opts = {}) {
       writeArtifact(join5(runDir, "frames.json"), `${JSON.stringify(frames, null, 2)}
 `);
       const markdown = writeArtifact(join5(runDir, "FRAMES.md"), framesMarkdown(meta, frames, note));
-      return { ok: true, dir: framesDir, markdown, frames, candidates: candidates.length, duplicates: dropped, effort };
+      return { ok: true, dir: framesDir, markdown, frames, candidates: candidates2.length, duplicates: dropped, effort };
     } catch (e) {
       return { ok: false, reason: `cannot write the frames in ${runDir}: ${e.message}` };
     }
   });
 }
-
-// src/video/list.ts
-import { join as join6 } from "path";
+var FRAME_EFFORT, SCENE_THRESHOLD, VIDEO_FORMAT, FRAMES_TIMEOUT_MS, MIN_FRAMES, INTERVAL_FRAMES, JPEG_FILTER, plural, fileStamp;
+var init_frames = __esm({
+  "src/video/frames.ts"() {
+    "use strict";
+    init_no_write();
+    init_align();
+    init_dhash();
+    init_ladder3();
+    init_markdown();
+    init_run();
+    init_url2();
+    init_ytdlp();
+    FRAME_EFFORT = { low: 20, med: 50, high: 100 };
+    SCENE_THRESHOLD = 0.3;
+    VIDEO_FORMAT = "bv*[height<=720]/b[height<=720]/bv*/b";
+    FRAMES_TIMEOUT_MS = 30 * 6e4;
+    MIN_FRAMES = 3;
+    INTERVAL_FRAMES = 10;
+    JPEG_FILTER = "scale='min(1280,iw)':-2:out_range=full,format=yuvj420p";
+    plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    fileStamp = (t) => formatStamp(t).replace(/:/g, "-");
+  }
+});
 
 // src/pool.ts
 async function mapLimit(items, limit, fn) {
@@ -3958,11 +4185,14 @@ async function mapLimit(items, limit, fn) {
   await Promise.all(workers);
   return results;
 }
+var init_pool = __esm({
+  "src/pool.ts"() {
+    "use strict";
+  }
+});
 
 // src/video/list.ts
-var LIST_TIMEOUT_MS = 12e4;
-var DEFAULT_LIMIT = 10;
-var CORPUS_CONCURRENCY = 2;
+import { join as join6 } from "path";
 function listingUrl(url) {
   const u = new URL(url);
   if (youtubeListKind(url) === "channel" && /^\/(?:@[^/]+|(?:channel|c|user)\/[^/]+)\/?$/.test(u.pathname)) {
@@ -4062,19 +4292,1651 @@ async function fetchVideoCorpus(url, root, opts = {}) {
   }
   return { ok: true, dir: root, corpus: path, videos, ...listed.title ? { title: listed.title } : {} };
 }
+var LIST_TIMEOUT_MS, DEFAULT_LIMIT, CORPUS_CONCURRENCY;
+var init_list = __esm({
+  "src/video/list.ts"() {
+    "use strict";
+    init_no_write();
+    init_pool();
+    init_ladder3();
+    init_markdown();
+    init_run();
+    init_url2();
+    init_ytdlp();
+    LIST_TIMEOUT_MS = 12e4;
+    DEFAULT_LIMIT = 10;
+    CORPUS_CONCURRENCY = 2;
+  }
+});
+
+// src/video.ts
+var init_video = __esm({
+  "src/video.ts"() {
+    "use strict";
+    init_url2();
+    init_ytdlp();
+    init_vtt();
+    init_whisper();
+    init_ladder3();
+    init_markdown();
+    init_run();
+    init_frames();
+    init_list();
+  }
+});
+
+// src/browser/ws.ts
+import { createHash, randomBytes } from "crypto";
+import { EventEmitter } from "events";
+function encodeFrame(opcode, payload, opts = {}) {
+  const mask = opts.mask ?? true;
+  const len = payload.length;
+  const lenBytes = len <= 125 ? 0 : len <= 65535 ? 2 : 8;
+  const head = Buffer.alloc(2 + lenBytes + (mask ? 4 : 0));
+  head[0] = (opts.fin === false ? 0 : 128) | opcode & 15;
+  head[1] = (mask ? 128 : 0) | (lenBytes === 0 ? len : lenBytes === 2 ? 126 : 127);
+  if (lenBytes === 2) head.writeUInt16BE(len, 2);
+  if (lenBytes === 8) head.writeBigUInt64BE(BigInt(len), 2);
+  if (!mask) return Buffer.concat([head, payload]);
+  const key = opts.maskKey ?? randomBytes(4);
+  key.copy(head, 2 + lenBytes);
+  return Buffer.concat([head, unmask(payload, key)]);
+}
+function unmask(payload, key) {
+  const out = Buffer.allocUnsafe(payload.length);
+  for (let i = 0; i < payload.length; i++) out[i] = payload[i] ^ key[i & 3];
+  return out;
+}
+async function connectWebSocket(url, opts = {}) {
+  const { request } = await import("http");
+  return new Promise((resolve8, reject) => {
+    let u;
+    try {
+      u = new URL(url);
+    } catch {
+      return reject(new Error(`bad WebSocket URL: ${url}`));
+    }
+    if (u.protocol !== "ws:") return reject(new Error(`only ws:// URLs are supported, got ${u.protocol}//`));
+    const key = randomBytes(16).toString("base64");
+    const expected = createHash("sha1").update(key + GUID).digest("base64");
+    let settled = false;
+    const settle = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const req = request({
+      host: u.hostname.replace(/^\[|\]$/g, ""),
+      port: u.port || 80,
+      path: u.pathname + u.search,
+      headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Key": key, "Sec-WebSocket-Version": "13" }
+    });
+    const timer = setTimeout(
+      () => settle(() => {
+        req.destroy();
+        reject(new Error(`WebSocket connect timed out after ${opts.connectTimeoutMs ?? 1e4} ms`));
+      }),
+      opts.connectTimeoutMs ?? 1e4
+    );
+    req.on("upgrade", (res, socket, head) => {
+      if (res.headers["sec-websocket-accept"] !== expected) {
+        socket.destroy();
+        return settle(() => reject(new Error("WebSocket handshake failed: bad Accept")));
+      }
+      settle(() => resolve8(new WsClient(socket, opts, head)));
+    });
+    req.on("response", (res) => {
+      res.resume();
+      settle(() => reject(new Error(`WebSocket handshake failed: HTTP ${res.statusCode}`)));
+    });
+    req.on("error", (e) => settle(() => reject(e)));
+    req.end();
+  });
+}
+var GUID, DEFAULT_MAX_MESSAGE, WsProtocolError, FrameParser, WsClient;
+var init_ws = __esm({
+  "src/browser/ws.ts"() {
+    "use strict";
+    GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    DEFAULT_MAX_MESSAGE = 64 * 1024 * 1024;
+    WsProtocolError = class extends Error {
+      constructor(message, code) {
+        super(message);
+        this.code = code;
+        this.name = "WsProtocolError";
+      }
+      code;
+    };
+    FrameParser = class {
+      buf = Buffer.alloc(0);
+      max;
+      constructor(opts = {}) {
+        this.max = opts.maxMessageSize ?? DEFAULT_MAX_MESSAGE;
+      }
+      push(chunk) {
+        this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk]);
+        const frames = [];
+        for (; ; ) {
+          const frame = this.next();
+          if (!frame) return frames;
+          frames.push(frame);
+        }
+      }
+      next() {
+        const b = this.buf;
+        if (b.length < 2) return void 0;
+        const masked = (b[1] & 128) !== 0;
+        let len = b[1] & 127;
+        let off = 2;
+        if (len === 126) {
+          if (b.length < 4) return void 0;
+          len = b.readUInt16BE(2);
+          off = 4;
+        } else if (len === 127) {
+          if (b.length < 10) return void 0;
+          const big = b.readBigUInt64BE(2);
+          if (big > BigInt(this.max)) throw new WsProtocolError("message too large", 1009);
+          len = Number(big);
+          off = 10;
+        }
+        if (len > this.max) throw new WsProtocolError("message too large", 1009);
+        const total = off + (masked ? 4 : 0) + len;
+        if (b.length < total) return void 0;
+        const payload = masked ? unmask(b.subarray(off + 4, total), b.subarray(off, off + 4)) : Buffer.from(b.subarray(off, total));
+        this.buf = b.subarray(total);
+        return { fin: (b[0] & 128) !== 0, opcode: b[0] & 15, payload };
+      }
+    };
+    WsClient = class extends EventEmitter {
+      constructor(socket, opts = {}, head = Buffer.alloc(0)) {
+        super();
+        this.socket = socket;
+        this.max = opts.maxMessageSize ?? DEFAULT_MAX_MESSAGE;
+        this.closeTimeoutMs = opts.closeTimeoutMs ?? 2e3;
+        this.parser = new FrameParser({ maxMessageSize: this.max });
+        socket.on("data", (d) => this.feed(d));
+        socket.on("error", (e) => this.fail(e, 1006));
+        socket.on("close", () => this.finish(1006, ""));
+        socket.pause();
+        setImmediate(() => {
+          if (head.length) this.feed(head);
+          socket.resume();
+        });
+      }
+      socket;
+      parser;
+      max;
+      closeTimeoutMs;
+      fragments = [];
+      fragmentBytes = 0;
+      started = false;
+      closing = false;
+      done = false;
+      send(text) {
+        if (this.done || this.closing) throw new Error("WebSocket is not open");
+        this.socket.write(encodeFrame(1, Buffer.from(text, "utf8")));
+      }
+      /** Send a close frame, then wait (bounded) for the peer to answer or hang up. */
+      async close(code = 1e3, reason = "") {
+        if (this.done) return;
+        if (!this.closing) {
+          this.closing = true;
+          this.writeClose(code, reason);
+        }
+        await new Promise((resolve8) => {
+          const timer = setTimeout(() => {
+            this.socket.destroy();
+            this.finish(code, reason);
+          }, this.closeTimeoutMs);
+          this.once("close", () => {
+            clearTimeout(timer);
+            resolve8();
+          });
+        });
+      }
+      /** Drop the socket without a closing handshake. */
+      terminate() {
+        this.socket.destroy();
+        this.finish(1006, "");
+      }
+      writeClose(code, reason) {
+        const payload = Buffer.alloc(2 + Buffer.byteLength(reason));
+        payload.writeUInt16BE(code, 0);
+        payload.write(reason, 2);
+        if (!this.socket.destroyed) this.socket.write(encodeFrame(8, payload));
+      }
+      feed(chunk) {
+        let frames;
+        try {
+          frames = this.parser.push(chunk);
+        } catch (e) {
+          this.fail(e, e instanceof WsProtocolError ? e.code : 1002);
+          return;
+        }
+        for (const frame of frames) {
+          if (this.done) return;
+          let text;
+          try {
+            text = this.onFrame(frame);
+          } catch (e) {
+            this.fail(e, e instanceof WsProtocolError ? e.code : 1002);
+            return;
+          }
+          if (text !== void 0) this.deliver(text);
+        }
+      }
+      deliver(text) {
+        try {
+          this.emit("message", text);
+        } catch (e) {
+          if (this.listenerCount("error") > 0) this.emit("error", e);
+          else
+            process.nextTick(() => {
+              throw e;
+            });
+        }
+      }
+      /** Handle one frame; returns the text of a message it completed. */
+      onFrame(f) {
+        if (this.done) return;
+        switch (f.opcode) {
+          case 9:
+            if (!this.socket.destroyed) this.socket.write(encodeFrame(10, f.payload));
+            return;
+          case 10:
+            return;
+          case 8: {
+            const code = f.payload.length >= 2 ? f.payload.readUInt16BE(0) : 1005;
+            const reason = f.payload.subarray(2).toString("utf8");
+            if (!this.closing) this.writeClose(f.payload.length >= 2 ? code : 1e3, "");
+            this.socket.end();
+            this.finish(code, reason);
+            return;
+          }
+          case 1:
+          case 2:
+            if (this.started) throw new WsProtocolError("new data frame inside a fragmented message", 1002);
+            this.started = true;
+            break;
+          case 0:
+            if (!this.started) throw new WsProtocolError("unexpected continuation frame", 1002);
+            break;
+          default:
+            throw new WsProtocolError(`unknown opcode ${f.opcode}`, 1002);
+        }
+        this.fragmentBytes += f.payload.length;
+        if (this.fragmentBytes > this.max) throw new WsProtocolError("message too large", 1009);
+        this.fragments.push(f.payload);
+        if (!f.fin) return;
+        const text = Buffer.concat(this.fragments).toString("utf8");
+        this.fragments = [];
+        this.fragmentBytes = 0;
+        this.started = false;
+        return text;
+      }
+      /** Protocol or socket failure: tell the peer why (when we can), surface the error, close. */
+      fail(err, code) {
+        if (this.done) return;
+        if (code !== 1006 && !this.closing) {
+          this.closing = true;
+          this.writeClose(code, "");
+        }
+        if (this.listenerCount("error") > 0) this.emit("error", err);
+        this.socket.end();
+        this.finish(code, err.message);
+      }
+      finish(code, reason) {
+        if (this.done) return;
+        this.done = true;
+        this.emit("close", { code, reason });
+      }
+    };
+  }
+});
+
+// src/browser/cdp.ts
+var DEFAULT_CALL_TIMEOUT_MS, DEFAULT_CONNECT_TIMEOUT_MS, CdpError, defaultConnector, bucket, CdpClient;
+var init_cdp = __esm({
+  "src/browser/cdp.ts"() {
+    "use strict";
+    init_ws();
+    DEFAULT_CALL_TIMEOUT_MS = 3e4;
+    DEFAULT_CONNECT_TIMEOUT_MS = 1e4;
+    CdpError = class extends Error {
+      constructor(method, code, message) {
+        super(`CDP ${method} failed: ${message}${code ? ` (${code})` : ""}`);
+        this.method = method;
+        this.code = code;
+        this.name = "CdpError";
+      }
+      method;
+      code;
+    };
+    defaultConnector = (url, { timeoutMs }) => connectWebSocket(url, { connectTimeoutMs: timeoutMs });
+    bucket = (sessionId, method) => `${sessionId ?? ""}
+${method}`;
+    CdpClient = class _CdpClient {
+      constructor(ws) {
+        this.ws = ws;
+        ws.on("message", (text) => this.onMessage(text));
+        ws.on("close", () => this.onClosed());
+        ws.on("error", () => {
+        });
+      }
+      ws;
+      nextId = 0;
+      pending = /* @__PURE__ */ new Map();
+      handlers = /* @__PURE__ */ new Map();
+      closeHandlers = /* @__PURE__ */ new Set();
+      isClosed = false;
+      static async connect(wsUrl, opts = {}) {
+        const connector = opts.transport ?? defaultConnector;
+        return new _CdpClient(await connector(wsUrl, { timeoutMs: opts.timeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS }));
+      }
+      get closed() {
+        return this.isClosed;
+      }
+      send(method, params, opts = {}) {
+        if (this.isClosed) return Promise.reject(new Error(`CDP connection closed (${method})`));
+        const id = ++this.nextId;
+        const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+        return new Promise((resolve8, reject) => {
+          const timer = setTimeout(() => {
+            this.pending.delete(id);
+            reject(new Error(`CDP command timed out: ${method} (${timeoutMs} ms)`));
+          }, timeoutMs);
+          this.pending.set(id, { method, resolve: resolve8, reject, timer });
+          try {
+            this.ws.send(JSON.stringify({ id, method, params, sessionId: opts.sessionId }));
+          } catch (e) {
+            clearTimeout(timer);
+            this.pending.delete(id);
+            reject(e);
+          }
+        });
+      }
+      on(method, handler, sessionId) {
+        const key = bucket(sessionId, method);
+        let set = this.handlers.get(key);
+        if (!set) this.handlers.set(key, set = /* @__PURE__ */ new Set());
+        set.add(handler);
+      }
+      off(method, handler, sessionId) {
+        const key = bucket(sessionId, method);
+        const set = this.handlers.get(key);
+        if (!set) return;
+        set.delete(handler);
+        if (set.size === 0) this.handlers.delete(key);
+      }
+      /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
+      once(method, opts = {}) {
+        const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+        return new Promise((resolve8, reject) => {
+          const cleanup = () => {
+            clearTimeout(timer);
+            this.off(method, handler, opts.sessionId);
+            this.closeHandlers.delete(onClose);
+          };
+          const handler = (params) => {
+            if (opts.predicate && !opts.predicate(params)) return;
+            cleanup();
+            resolve8(params);
+          };
+          const onClose = () => {
+            cleanup();
+            reject(new Error(`CDP connection closed while waiting for ${method}`));
+          };
+          const timer = setTimeout(() => {
+            cleanup();
+            reject(new Error(`Timed out waiting for CDP event ${method} (${timeoutMs} ms)`));
+          }, timeoutMs);
+          this.on(method, handler, opts.sessionId);
+          this.closeHandlers.add(onClose);
+          if (this.isClosed) onClose();
+        });
+      }
+      /** A view of this client bound to one session (`Target.attachToTarget({ flatten: true })`). */
+      session(sessionId) {
+        return {
+          sessionId,
+          send: (method, params, opts) => this.send(method, params, { ...opts, sessionId }),
+          on: (method, handler) => this.on(method, handler, sessionId),
+          off: (method, handler) => this.off(method, handler, sessionId),
+          once: (method, opts) => this.once(method, { ...opts, sessionId })
+        };
+      }
+      /** Run `handler` once the connection is closed (at once if it already is). Returns its unsubscribe. */
+      onClose(handler) {
+        if (this.isClosed) {
+          handler();
+          return () => {
+          };
+        }
+        this.closeHandlers.add(handler);
+        return () => void this.closeHandlers.delete(handler);
+      }
+      /** Close the connection (the browser keeps running). */
+      async close() {
+        if (this.isClosed) return;
+        await this.ws.close();
+        this.onClosed();
+      }
+      onMessage(text) {
+        let msg;
+        try {
+          msg = JSON.parse(text);
+        } catch {
+          return;
+        }
+        if (msg === null || typeof msg !== "object") return;
+        if (typeof msg.id === "number") {
+          const p = this.pending.get(msg.id);
+          if (!p) return;
+          clearTimeout(p.timer);
+          this.pending.delete(msg.id);
+          if (msg.error) p.reject(new CdpError(p.method, Number(msg.error.code) || 0, String(msg.error.message ?? "unknown error")));
+          else p.resolve(msg.result);
+          return;
+        }
+        if (typeof msg.method !== "string") return;
+        const set = this.handlers.get(bucket(msg.sessionId, msg.method));
+        if (!set) return;
+        for (const h of [...set]) {
+          try {
+            h(msg.params);
+          } catch {
+          }
+        }
+      }
+      onClosed() {
+        if (this.isClosed) return;
+        this.isClosed = true;
+        for (const p of this.pending.values()) {
+          clearTimeout(p.timer);
+          p.reject(new Error(`CDP connection closed (${p.method})`));
+        }
+        this.pending.clear();
+        for (const h of [...this.closeHandlers]) h();
+        this.closeHandlers.clear();
+      }
+    };
+  }
+});
+
+// src/browser/detect.ts
+import { accessSync, constants, statSync as statSync2 } from "fs";
+import { homedir } from "os";
+import { posix, win32 } from "path";
+function isLaunchable(path) {
+  try {
+    if (!statSync2(path).isFile()) return false;
+    if (process.platform !== "win32") accessSync(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function candidates(kind, platform, sys, home) {
+  if (platform === "darwin") {
+    const app = MAC_APPS[kind];
+    return ["/Applications", posix.join(home, "Applications")].map((dir) => posix.join(dir, `${app}.app`, "Contents", "MacOS", app));
+  }
+  if (platform === "win32") {
+    const roots = [sys.ProgramFiles, sys["ProgramFiles(x86)"], sys.LOCALAPPDATA].filter((r) => !!r);
+    return roots.map((root) => win32.join(root, WINDOWS_PATHS[kind]));
+  }
+  const dirs = (sys.PATH ?? "").split(":").filter(Boolean);
+  return LINUX_NAMES[kind].flatMap((name) => dirs.map((dir) => posix.join(dir, name)));
+}
+function kindOf(path) {
+  const name = (path.split(/[\\/]/).pop() ?? "").toLowerCase();
+  if (name.includes("brave")) return "brave";
+  if (name.includes("edge")) return "edge";
+  if (name.includes("chromium")) return "chromium";
+  return "chrome";
+}
+function detectBrowserBinary(opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const sys = opts.processEnv ?? process.env;
+  const exists = opts.exists ?? isLaunchable;
+  const home = opts.home ?? homedir();
+  const explicit = opts.env ? opts.env("BROWSER_BIN") : env("BROWSER_BIN");
+  if (explicit) {
+    const bare = !/[\\/]/.test(explicit);
+    const options = bare ? (sys.PATH ?? "").split(":").filter(Boolean).map((d) => posix.join(d, explicit)) : [explicit];
+    const found = options.find(exists);
+    if (!found) throw new Error(`BROWSER_BIN points at "${explicit}", which is not an executable file`);
+    return { kind: kindOf(found), path: found };
+  }
+  const kinds = opts.prefer ? [opts.prefer, ...ORDER.filter((k) => k !== opts.prefer)] : ORDER;
+  for (const kind of kinds) {
+    const path = candidates(kind, platform, sys, home).find(exists);
+    if (path) return { kind, path };
+  }
+  return null;
+}
+var ORDER, MAC_APPS, LINUX_NAMES, WINDOWS_PATHS;
+var init_detect = __esm({
+  "src/browser/detect.ts"() {
+    "use strict";
+    init_brand();
+    ORDER = ["chrome", "brave", "chromium", "edge"];
+    MAC_APPS = {
+      chrome: "Google Chrome",
+      brave: "Brave Browser",
+      chromium: "Chromium",
+      edge: "Microsoft Edge"
+    };
+    LINUX_NAMES = {
+      chrome: ["google-chrome", "google-chrome-stable"],
+      brave: ["brave-browser"],
+      chromium: ["chromium", "chromium-browser"],
+      edge: ["microsoft-edge"]
+    };
+    WINDOWS_PATHS = {
+      chrome: "Google\\Chrome\\Application\\chrome.exe",
+      brave: "BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      chromium: "Chromium\\Application\\chrome.exe",
+      edge: "Microsoft\\Edge\\Application\\msedge.exe"
+    };
+  }
+});
+
+// src/browser/discovery.ts
+var discovery_exports = {};
+__export(discovery_exports, {
+  activateTarget: () => activateTarget,
+  assertLoopback: () => assertLoopback,
+  closeTarget: () => closeTarget,
+  dialHost: () => dialHost,
+  getVersion: () => getVersion,
+  isPortAlive: () => isPortAlive,
+  listPages: () => listPages,
+  listTargets: () => listTargets,
+  loopbackSocketUrl: () => loopbackSocketUrl,
+  newTarget: () => newTarget,
+  parseCdpEndpoint: () => parseCdpEndpoint
+});
+function assertLoopback(host) {
+  const bare = host.replace(/^\[|\]$/g, "").toLowerCase();
+  if (!LOOPBACK.has(bare)) throw new Error(`refusing non-loopback DevTools host "${host}" (only 127.0.0.1, ::1 and localhost are allowed)`);
+  return bare;
+}
+function loopbackSocketUrl(wsUrl) {
+  let url;
+  try {
+    url = new URL(wsUrl);
+  } catch {
+    throw new Error(`invalid DevTools WebSocket URL "${wsUrl}"`);
+  }
+  if (url.protocol !== "ws:") throw new Error(`refusing DevTools WebSocket URL "${wsUrl}": only ws:// on loopback is dialled`);
+  assertLoopback(url.hostname);
+  return wsUrl;
+}
+function parseCdpEndpoint(input) {
+  const text = input.trim();
+  if (/^\d+$/.test(text)) return { host: "127.0.0.1", port: checkPort(Number(text), input) };
+  let url;
+  try {
+    url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `http://${text}`);
+  } catch {
+    throw new Error(`invalid DevTools endpoint "${input}"`);
+  }
+  if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) throw new Error(`unsupported DevTools endpoint scheme "${url.protocol}" in "${input}"`);
+  const host = assertLoopback(url.hostname);
+  if (!url.port) throw new Error(`DevTools endpoint "${input}" has no port`);
+  const endpoint = { host, port: checkPort(Number(url.port), input) };
+  if (url.protocol === "ws:" || url.protocol === "wss:") endpoint.wsUrl = text;
+  return endpoint;
+}
+function checkPort(port, input) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid port in DevTools endpoint "${input}"`);
+  return port;
+}
+function dialHost(host) {
+  const bare = assertLoopback(host);
+  return bare === "localhost" ? "127.0.0.1" : bare;
+}
+async function http(method, port, host, path, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const { request } = await import("http");
+  return new Promise((resolve8, reject) => {
+    const req = request({ host: dialHost(host), port, path, method, timeout: timeoutMs }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve8({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("error", reject);
+    });
+    req.on("timeout", () => req.destroy(new Error(`DevTools request ${method} ${path} timed out after ${timeoutMs} ms`)));
+    req.on("error", reject);
+    req.end();
+  });
+}
+async function json(method, port, host, path) {
+  const { status, body } = await http(method, port, host, path);
+  if (status < 200 || status >= 300) throw new Error(`DevTools ${method} ${path} answered HTTP ${status}`);
+  try {
+    return JSON.parse(body);
+  } catch {
+    throw new Error(`DevTools ${path} did not return valid JSON`);
+  }
+}
+function getVersion(port, host = "127.0.0.1") {
+  return json("GET", port, host, "/json/version");
+}
+function listTargets(port, host = "127.0.0.1") {
+  return json("GET", port, host, "/json/list");
+}
+async function listPages(port, host = "127.0.0.1") {
+  return (await listTargets(port, host)).filter((t) => t.type === "page");
+}
+async function newTarget(port, url, host = "127.0.0.1") {
+  const path = url === void 0 ? "/json/new" : `/json/new?${encodeURIComponent(url)}`;
+  try {
+    return await json("PUT", port, host, path);
+  } catch (e) {
+    if (!/answered HTTP/.test(e.message)) throw e;
+    return json("GET", port, host, path);
+  }
+}
+async function command(port, host, path) {
+  const { status, body } = await http("GET", port, host, path);
+  if (status < 200 || status >= 300) throw new Error(`DevTools GET ${path} answered HTTP ${status}`);
+  return body;
+}
+async function closeTarget(port, id, host = "127.0.0.1") {
+  await command(port, host, `/json/close/${encodeURIComponent(id)}`);
+}
+async function activateTarget(port, id, host = "127.0.0.1") {
+  await command(port, host, `/json/activate/${encodeURIComponent(id)}`);
+}
+async function isPortAlive(port, host = "127.0.0.1") {
+  try {
+    const { status } = await http("GET", port, host, "/json/version", ALIVE_TIMEOUT_MS);
+    return status === 200;
+  } catch {
+    return false;
+  }
+}
+var REQUEST_TIMEOUT_MS, ALIVE_TIMEOUT_MS, LOOPBACK;
+var init_discovery = __esm({
+  "src/browser/discovery.ts"() {
+    "use strict";
+    REQUEST_TIMEOUT_MS = 3e3;
+    ALIVE_TIMEOUT_MS = 1e3;
+    LOOPBACK = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+  }
+});
+
+// src/browser/deps.ts
+import { spawn as nodeSpawn } from "child_process";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
+function defaultBrowserDeps() {
+  return {
+    spawn: (cmd, args, opts) => nodeSpawn(cmd, args, opts),
+    fs: { readFile, writeFile, rename, mkdir, rm, stat, open },
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
+    discovery: discovery_exports,
+    detectBrowser: () => detectBrowserBinary(),
+    kill: (pid, signal) => void process.kill(pid, signal),
+    env: (name) => env(name),
+    platform: process.platform
+  };
+}
+function browserDeps(own) {
+  return { ...defaultBrowserDeps(), ...own };
+}
+var init_deps = __esm({
+  "src/browser/deps.ts"() {
+    "use strict";
+    init_brand();
+    init_cdp();
+    init_detect();
+    init_discovery();
+  }
+});
+
+// src/cli-kit.ts
+import { basename } from "path";
+function parseArgs(argv, spec) {
+  const commands = new Set(spec.commands);
+  const valueFlags = new Set(spec.valueFlags);
+  const boolFlags = new Set(spec.boolFlags);
+  if (argv.length === 0) return { kind: "help" };
+  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
+  if (isVersionWord(argv[0])) return { kind: "version" };
+  const command2 = argv[0];
+  if (!commands.has(command2)) {
+    throw new UsageError(`unknown command "${command2}" \u2014 run --help for the supported commands`);
+  }
+  const values = {};
+  const bools = /* @__PURE__ */ new Set();
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
+      positional.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf("=");
+    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
+    if (!boolFlags.has(key) && !valueFlags.has(key)) {
+      if (isHelpWord(arg)) return { kind: "help", command: command2 };
+      if (isVersionWord(arg)) return { kind: "version" };
+    }
+    if (boolFlags.has(key)) {
+      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
+      bools.add(key);
+      continue;
+    }
+    if (!valueFlags.has(key)) {
+      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
+    }
+    if (eq !== -1) {
+      values[key] = arg.slice(eq + 1);
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next === void 0 || next.startsWith("--")) {
+      throw new UsageError(`missing value for --${key}`);
+    }
+    values[key] = next;
+    i++;
+  }
+  return { kind: "command", command: command2, positional, values, bools };
+}
+function isHelpWord(a) {
+  return a === "--help" || a === "-h" || a === "help";
+}
+function isVersionWord(a) {
+  return a === "--version" || a === "-v" || a === "version";
+}
+function argValue(p, name) {
+  return p.values[name];
+}
+function argBool(p, name) {
+  return p.bools.has(name);
+}
+function argInt(p, name, range = {}) {
+  const raw = p.values[name];
+  if (raw === void 0) return void 0;
+  const n = raw.trim() ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    throw new UsageError(`--${name} expects a whole number, got "${raw}"`);
+  }
+  const { min, max } = range;
+  if (min !== void 0 && n < min || max !== void 0 && n > max) {
+    const bound = min !== void 0 && max !== void 0 ? `from ${min} to ${max}` : min !== void 0 ? `of at least ${min}` : `of at most ${max}`;
+    throw new UsageError(`--${name} expects a whole number ${bound}, got "${raw}"`);
+  }
+  return n;
+}
+function argList(p, name) {
+  const raw = p.values[name];
+  if (raw === void 0) return [];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+function argOneOf(p, name, allowed) {
+  const raw = p.values[name];
+  if (raw === void 0) return void 0;
+  if (!allowed.includes(raw)) {
+    throw new UsageError(`invalid --${name} "${raw}" \u2014 expected one of: ${allowed.join(", ")}`);
+  }
+  return raw;
+}
+function positionalText(p) {
+  return p.positional.join(" ");
+}
+function jsonLine(value) {
+  return `${JSON.stringify(value, null, 2)}
+`;
+}
+function docFlagRegex() {
+  return /(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g;
+}
+function documentedFlags(text) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(docFlagRegex())) seen.add(m[1]);
+  return [...seen];
+}
+function helpCoversFlag(help, flag) {
+  return new RegExp(`--${escapeRegExp(flag)}(?![a-z0-9-])`).test(help);
+}
+function missingFromHelp(help, flags) {
+  return [...flags].filter((f) => !helpCoversFlag(help, f));
+}
+function pipedEnum(line, flag) {
+  const cleaned = line.replace(/`/g, "").replace(/\\\|/g, "|");
+  const m = cleaned.match(new RegExp(`--${escapeRegExp(flag)}[^a-z|]*((?:[a-z][a-z0-9-]*\\s*\\|\\s*)+[a-z][a-z0-9-]*)`));
+  return m ? m[1].split("|").map((s) => s.trim()) : null;
+}
+function isInvokedDirectly(argv1 = process.argv[1], cli = brand().cli) {
+  if (!argv1) return false;
+  return basename(argv1).replace(/\.(mjs|cjs|js)$/, "") === cli;
+}
+var EXIT_OK, EXIT_FAILURE, EXIT_USAGE, UsageError;
+var init_cli_kit = __esm({
+  "src/cli-kit.ts"() {
+    "use strict";
+    init_brand();
+    init_text();
+    EXIT_OK = 0;
+    EXIT_FAILURE = 1;
+    EXIT_USAGE = 2;
+    UsageError = class extends Error {
+      exitCode = EXIT_USAGE;
+    };
+  }
+});
+
+// src/browser/profile.ts
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, realpathSync, rmSync as rmSync4, statSync as statSync3 } from "fs";
+import { homedir as homedir2 } from "os";
+import { basename as basename2, join as join7, resolve as resolve2, sep } from "path";
+function browserHome() {
+  return env("BROWSER_DIR") ?? brand().browserDir ?? join7(homedir2(), `.${brand().name}`, "browser");
+}
+function checkName(name) {
+  if (!PROFILE_NAME.test(name) || name === "." || name === "..") {
+    throw new UsageError(`invalid profile name ${JSON.stringify(name)} (1-64 of letters, digits, ".", "_", "-")`);
+  }
+}
+function profileDir(name = "default") {
+  checkName(name);
+  return join7(browserHome(), "profiles", name);
+}
+function ensurePrivateDir(path) {
+  try {
+    mkdirSync3(path, { recursive: true, mode: 448 });
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+  const st = lstatSync(path);
+  if (st.isSymbolicLink()) throw new Error(`${path} is a symbolic link`);
+  if (!st.isDirectory()) throw new Error(`${path} is not a directory`);
+  if (typeof process.getuid === "function" && st.uid !== process.getuid()) {
+    throw new Error(`${path} belongs to another user`);
+  }
+  if (process.platform === "win32") return;
+  if (st.mode & 18) throw new Error(`${path} is writable by other users`);
+  if (st.mode & 63) chmodSync(path, 448);
+}
+var PROFILE_NAME;
+var init_profile = __esm({
+  "src/browser/profile.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    PROFILE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
+  }
+});
+
+// src/browser/state.ts
+import { randomUUID } from "crypto";
+import { appendFileSync, closeSync, existsSync as existsSync6, openSync, readFileSync as readFileSync7, rmSync as rmSync5, statSync as statSync4, unlinkSync as unlinkSync2, writeSync } from "fs";
+import { join as join8 } from "path";
+function checkTargetId(id) {
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(id)) throw new Error(`invalid target id: ${JSON.stringify(id)}`);
+  return id;
+}
+function readJson2(path) {
+  try {
+    return JSON.parse(readFileSync7(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function writeJson(dir, name, value) {
+  ensurePrivateDir(dir);
+  writeFileAtomic(join8(dir, name), `${JSON.stringify(value)}
+`, FILE_MODE);
+}
+function readSession(o) {
+  const v = readJson2(join8(homeOf(o), "session.json"));
+  if (!isObj(v) || v.version !== 1 || typeof v.port !== "number" || typeof v.targetId !== "string") return null;
+  return v;
+}
+function writeSession(s, o) {
+  if (isNoWrite()) return;
+  writeJson(homeOf(o), "session.json", s);
+}
+function clearSession(o) {
+  if (isNoWrite()) return;
+  rmSync5(join8(homeOf(o), "session.json"), { force: true });
+}
+function clearRefs(targetId, o) {
+  const id = targetId === void 0 ? void 0 : checkTargetId(targetId);
+  if (isNoWrite()) return;
+  const dir = join8(homeOf(o), "refs");
+  rmSync5(id === void 0 ? dir : join8(dir, `${id}.json`), { recursive: true, force: true });
+}
+function clearNetwork(targetId, o) {
+  const path = targetId === void 0 ? join8(homeOf(o), "network") : networkFile(targetId, o);
+  if (isNoWrite()) return;
+  rmSync5(path, { recursive: true, force: true });
+}
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
+function staleReason(path, staleMs, now) {
+  let at;
+  let pid;
+  try {
+    const held = JSON.parse(readFileSync7(path, "utf8"));
+    pid = held.pid;
+    at = typeof held.at === "number" ? held.at : Number.NaN;
+  } catch {
+    at = Number.NaN;
+  }
+  if (Number.isNaN(at)) {
+    try {
+      at = statSync4(path).mtimeMs;
+    } catch {
+      return "gone";
+    }
+  }
+  if (now - at > staleMs) return "old";
+  if (typeof pid === "number" && !pidAlive(pid)) return "dead";
+  return null;
+}
+function holds(path, token) {
+  try {
+    const held = JSON.parse(readFileSync7(path, "utf8"));
+    return held.pid === process.pid && held.token === token;
+  } catch {
+    return false;
+  }
+}
+async function withBrowserLock(fn, opts = {}) {
+  if (isNoWrite()) return fn();
+  const { staleMs = 3e4, waitMs = 1e4, pollMs = 50 } = opts;
+  const { now, sleep: sleep2 } = opts.deps ?? realDeps;
+  const dir = homeOf(opts);
+  ensurePrivateDir(dir);
+  const path = join8(dir, "lock");
+  const token = randomUUID();
+  const stamp = () => JSON.stringify({ pid: process.pid, at: now(), token });
+  const deadline = now() + waitMs;
+  for (; ; ) {
+    try {
+      const fd = openSync(path, "wx", FILE_MODE);
+      try {
+        writeSync(fd, stamp());
+      } finally {
+        closeSync(fd);
+      }
+      break;
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+    if (staleReason(path, staleMs, now())) {
+      try {
+        unlinkSync2(path);
+      } catch {
+      }
+      continue;
+    }
+    if (now() >= deadline) throw new Error(`browser busy: another webindex command holds ${path} (waited ${waitMs} ms)`);
+    await sleep2(pollMs);
+  }
+  const beat = setInterval(
+    () => {
+      if (!holds(path, token)) return;
+      try {
+        writeFileAtomic(path, stamp(), FILE_MODE);
+      } catch {
+      }
+    },
+    Math.max(1e3, staleMs / 3)
+  );
+  beat.unref?.();
+  try {
+    return await fn();
+  } finally {
+    clearInterval(beat);
+    try {
+      if (holds(path, token)) unlinkSync2(path);
+    } catch {
+    }
+  }
+}
+var FILE_MODE, homeOf, isObj, networkFile, realDeps;
+var init_state = __esm({
+  "src/browser/state.ts"() {
+    "use strict";
+    init_no_write();
+    init_profile();
+    FILE_MODE = 384;
+    homeOf = (o) => o?.home ?? browserHome();
+    isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+    networkFile = (targetId, o) => join8(homeOf(o), "network", `${checkTargetId(targetId)}.jsonl`);
+    realDeps = {
+      now: () => Date.now(),
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+    };
+  }
+});
+
+// src/browser/launch.ts
+import { join as join9 } from "path";
+async function resolveEndpoint(opts = {}) {
+  const deps = browserDeps(opts.deps);
+  const profile = opts.profile ?? "default";
+  const headless = opts.headless ?? false;
+  if (opts.cdp !== void 0) {
+    let host;
+    let port;
+    try {
+      const ep = parseCdpEndpoint(String(opts.cdp));
+      host = dialHost(ep.host);
+      port = ep.port;
+    } catch (e) {
+      throw new UsageError(e.message);
+    }
+    if (!await deps.discovery.isPortAlive(port, host)) throw new Error(`nothing answers DevTools on ${host}:${port}`);
+    return { host, port, launchedByUs: false, profile, headless };
+  }
+  const saved = readSession();
+  const usable = saved && (saved.launchedByUs ? opts.profile === void 0 || saved.profile === opts.profile : opts.profile === void 0 && !opts.ownOnly);
+  if (saved && usable) {
+    const host = saved.host ?? "127.0.0.1";
+    const same = saved.wsBrowserUrl ? await isSameBrowser(deps, saved.port, host, saved.wsBrowserUrl) : !saved.launchedByUs && await deps.discovery.isPortAlive(saved.port, host);
+    if (same) {
+      return {
+        host,
+        port: saved.port,
+        launchedByUs: saved.launchedByUs,
+        ...saved.pid !== void 0 ? { pid: saved.pid } : {},
+        profile: saved.profile,
+        headless: saved.headless
+      };
+    }
+    clearSession();
+  }
+  return launch(deps, opts.binary, profile, headless);
+}
+async function launch(deps, binary, profile, headless) {
+  const bin = binary ?? deps.detectBrowser()?.path;
+  if (!bin) {
+    throw new Error(`no Chrome, Brave, Chromium or Edge found: install one, or set ${envName("BROWSER_BIN")} to the browser's executable`);
+  }
+  const dir = profileDir(profile);
+  ensurePrivateDir(browserHome());
+  ensurePrivateDir(join9(browserHome(), "profiles"));
+  ensurePrivateDir(dir);
+  const portFile = join9(dir, "DevToolsActivePort");
+  const running = await readActivePort(deps, portFile);
+  if (running && await isSameBrowser(deps, running.port, "127.0.0.1", running.path)) {
+    return { host: "127.0.0.1", port: running.port, launchedByUs: true, profile, headless };
+  }
+  await deps.fs.rm(portFile, { force: true });
+  const args = ["--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check"];
+  if (headless) args.push("--headless=new");
+  args.push("about:blank");
+  const child = deps.spawn(bin, args, { detached: true, stdio: "ignore" });
+  let failure2;
+  child.on("exit", (code, signal) => {
+    const how = code !== null ? `code ${code}` : `signal ${signal}`;
+    const hint = code === 0 ? `; is a browser already running on the profile ${dir}?` : "";
+    failure2 = `the browser exited before exposing a DevTools port (${how}${hint})`;
+  });
+  child.on("error", (err) => {
+    failure2 = `could not start ${bin}: ${err.message}`;
+  });
+  child.unref();
+  const deadline = deps.now() + STARTUP_TIMEOUT_MS;
+  for (; ; ) {
+    const active2 = await readActivePort(deps, portFile);
+    if (active2 && await isSameBrowser(deps, active2.port, "127.0.0.1", active2.path)) {
+      const port = active2.port;
+      return { host: "127.0.0.1", port, launchedByUs: true, ...child.pid !== void 0 ? { pid: child.pid } : {}, profile, headless };
+    }
+    if (failure2) throw new Error(failure2);
+    if (deps.now() >= deadline) {
+      child.kill("SIGTERM");
+      throw new Error(`${bin} did not expose a DevTools port within ${STARTUP_TIMEOUT_MS / 1e3} s (no usable ${portFile})`);
+    }
+    await deps.sleep(POLL_MS);
+  }
+}
+async function readActivePort(deps, file) {
+  let text;
+  try {
+    text = await deps.fs.readFile(file, "utf8");
+  } catch {
+    return void 0;
+  }
+  const [first = "", second = ""] = text.split("\n");
+  const port = Number(first.trim());
+  const path = second.trim();
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !path) return void 0;
+  return { port, path };
+}
+function socketPath(urlOrPath) {
+  try {
+    return new URL(urlOrPath).pathname;
+  } catch {
+    return urlOrPath;
+  }
+}
+async function isSameBrowser(deps, port, host, wsBrowserUrl) {
+  try {
+    const { webSocketDebuggerUrl } = await deps.discovery.getVersion(port, host);
+    return socketPath(webSocketDebuggerUrl) === socketPath(wsBrowserUrl);
+  } catch {
+    return false;
+  }
+}
+var STARTUP_TIMEOUT_MS, POLL_MS;
+var init_launch = __esm({
+  "src/browser/launch.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    init_deps();
+    init_discovery();
+    init_profile();
+    init_state();
+    STARTUP_TIMEOUT_MS = 2e4;
+    POLL_MS = 100;
+  }
+});
+
+// src/browser/session.ts
+import { join as join10 } from "path";
+function cleanTabs(v) {
+  const out = {};
+  if (typeof v !== "object" || v === null) return out;
+  for (const [id, targetId] of Object.entries(v)) if (TAB_ID.test(id) && typeof targetId === "string") out[id] = targetId;
+  return out;
+}
+function syncTabs(map, pages) {
+  const live = new Set(pages.map((p) => p.id));
+  let high = 0;
+  const out = {};
+  const kept = /* @__PURE__ */ new Set();
+  for (const [id, targetId] of Object.entries(map)) {
+    high = Math.max(high, tabNumber(id));
+    if (live.has(targetId) && !kept.has(targetId)) {
+      out[id] = targetId;
+      kept.add(targetId);
+    }
+  }
+  const unseen = pages.map((p) => p.id).filter((id) => !kept.has(id));
+  for (const id of unseen.sort()) out[`t${++high}`] = id;
+  return out;
+}
+function pick(tabs, id) {
+  const tab = tabs.find((t) => t.id === id || t.targetId === id);
+  if (!tab) throw new Error(`no tab ${id}: list the tabs to see their ids`);
+  return tab;
+}
+function tabList(map, pages, current2) {
+  const byId = new Map(pages.map((p) => [p.id, p]));
+  return Object.entries(map).sort(([a], [b]) => tabNumber(a) - tabNumber(b)).map(([id, targetId]) => {
+    const p = byId.get(targetId);
+    return { id, targetId, url: p?.url ?? "", title: p?.title ?? "", active: targetId === current2 };
+  });
+}
+async function createTarget(cdp) {
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  return targetId;
+}
+async function attachPage(cdp, targetId) {
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  const page = cdp.session(sessionId);
+  const o = { timeoutMs: ATTACH_TIMEOUT_MS };
+  try {
+    await Promise.all([
+      page.send("Page.enable", void 0, o),
+      page.send("Runtime.enable", void 0, o),
+      page.send("DOM.enable", void 0, o),
+      page.send("Page.setLifecycleEventsEnabled", { enabled: true }, o)
+    ]);
+  } catch (e) {
+    if (e instanceof CdpError || cdp.closed) throw e;
+    throw new Error(
+      `the tab does not answer; most likely a JavaScript dialog the page opened between commands \u2014 answer it in the window, or \`${brand().cli} browser close\``
+    );
+  }
+  return sessionId;
+}
+async function closeLaunched(cdp, pid, deps) {
+  try {
+    await cdp.send("Browser.close", void 0, { timeoutMs: BROWSER_CLOSE_TIMEOUT_MS });
+  } catch {
+    if (cdp.closed || pid === void 0) return;
+    try {
+      deps.kill(pid, "SIGTERM");
+    } catch {
+    }
+  }
+}
+function forget(targetIds, all) {
+  clearSession();
+  if (all) {
+    clearRefs();
+    clearNetwork();
+    return;
+  }
+  for (const id of new Set(targetIds)) {
+    clearRefs(id);
+    clearNetwork(id);
+  }
+}
+async function openBrowserSession(opts = {}) {
+  const deps = browserDeps(opts.deps);
+  const endpoint = await resolveEndpoint({ ...opts, deps });
+  const saved = readSession();
+  const same = saved !== null && saved.port === endpoint.port && (saved.host ?? "127.0.0.1") === endpoint.host ? saved : null;
+  const { webSocketDebuggerUrl } = await deps.discovery.getVersion(endpoint.port, endpoint.host);
+  const cdp = await deps.connectCdp(loopbackSocketUrl(webSocketDebuggerUrl));
+  let created;
+  try {
+    const pages = await deps.discovery.listPages(endpoint.port, endpoint.host);
+    let targetId;
+    if (opts.newTab || opts.scratch) targetId = created = await createTarget(cdp);
+    else if (same && pages.some((p) => p.id === same.targetId)) targetId = same.targetId;
+    else targetId = pages[0]?.id ?? await createTarget(cdp);
+    const sessionId = await attachPage(cdp, targetId);
+    const session = new BrowserSession(cdp, endpoint, webSocketDebuggerUrl, deps, targetId, sessionId, cleanTabs(same?.tabs), opts.scratch);
+    if (!opts.scratch) await session.listTabs();
+    if (opts.url !== void 0) await session.navigate(opts.url);
+    return session;
+  } catch (e) {
+    if (created !== void 0) await deps.discovery.closeTarget(endpoint.port, created, endpoint.host).catch(() => {
+    });
+    await cdp.close();
+    throw e;
+  }
+}
+var NAVIGATION_TIMEOUT_MS, BROWSER_CLOSE_TIMEOUT_MS, STATUS_TIMEOUT_MS, ATTACH_TIMEOUT_MS, TAB_ID, LIFECYCLE, tabNumber, BrowserSession;
+var init_session = __esm({
+  "src/browser/session.ts"() {
+    "use strict";
+    init_brand();
+    init_cdp();
+    init_deps();
+    init_discovery();
+    init_launch();
+    init_profile();
+    init_state();
+    NAVIGATION_TIMEOUT_MS = 3e4;
+    BROWSER_CLOSE_TIMEOUT_MS = 5e3;
+    STATUS_TIMEOUT_MS = 2e3;
+    ATTACH_TIMEOUT_MS = 5e3;
+    TAB_ID = /^t([1-9]\d*)$/;
+    LIFECYCLE = { load: "load", domcontentloaded: "DOMContentLoaded" };
+    tabNumber = (id) => Number(TAB_ID.exec(id)?.[1] ?? 0);
+    BrowserSession = class {
+      /** @internal use openBrowserSession */
+      constructor(cdp, endpoint, wsBrowserUrl, deps, targetId, sessionId, tabs, scratch = false) {
+        this.cdp = cdp;
+        this.endpoint = endpoint;
+        this.wsBrowserUrl = wsBrowserUrl;
+        this.deps = deps;
+        this.scratch = scratch;
+        this.current = { targetId, sessionId, page: cdp.session(sessionId) };
+        this.tabs = tabs;
+      }
+      cdp;
+      endpoint;
+      wsBrowserUrl;
+      deps;
+      scratch;
+      tabs;
+      current;
+      /** Targets closed by this session that /json/list may still report for a moment. */
+      closed = /* @__PURE__ */ new Set();
+      /** Dialog listeners, each bound to the current tab's session and moved with it. */
+      dialogListeners = /* @__PURE__ */ new Map();
+      ended = false;
+      get port() {
+        return this.endpoint.port;
+      }
+      get host() {
+        return this.endpoint.host;
+      }
+      get launchedByUs() {
+        return this.endpoint.launchedByUs;
+      }
+      get pid() {
+        return this.endpoint.pid;
+      }
+      get profile() {
+        return this.endpoint.profile;
+      }
+      get headless() {
+        return this.endpoint.headless;
+      }
+      get targetId() {
+        return this.current.targetId;
+      }
+      get sessionId() {
+        return this.current.sessionId;
+      }
+      /** The current tab's flat session. It changes with selectTab/newTab/closeTab: read it, do not keep it. */
+      get page() {
+        return this.current.page;
+      }
+      /** Write session.json (port, ownership, current tab, tab ids). A no-op once shut down, and for a scratch tab. */
+      save() {
+        if (this.ended || this.scratch) return;
+        const { host, port, pid, launchedByUs, profile, headless } = this.endpoint;
+        writeSession({
+          version: 1,
+          ...host !== "127.0.0.1" ? { host } : {},
+          port,
+          wsBrowserUrl: this.wsBrowserUrl,
+          ...pid !== void 0 ? { pid } : {},
+          launchedByUs,
+          profile,
+          headless,
+          targetId: this.targetId,
+          tabs: this.tabs,
+          updatedAt: this.deps.now()
+        });
+      }
+      // --- page --------------------------------------------------------------------
+      async frame() {
+        const { frameTree } = await this.page.send("Page.getFrameTree");
+        return frameTree.frame;
+      }
+      async currentUrl() {
+        const f = await this.frame();
+        return f.url + (f.urlFragment ?? "");
+      }
+      async loaderId() {
+        return (await this.frame()).loaderId;
+      }
+      async title() {
+        const { targetInfo } = await this.cdp.send("Target.getTargetInfo", { targetId: this.targetId });
+        return targetInfo.title ?? "";
+      }
+      /** The document's HTTP status from the Navigation Timing entry; undefined when the page does not say. */
+      async responseStatus() {
+        try {
+          const r = await this.page.send(
+            "Runtime.evaluate",
+            { expression: "performance.getEntriesByType('navigation')[0]?.responseStatus", returnByValue: true },
+            { timeoutMs: STATUS_TIMEOUT_MS }
+          );
+          const v = r.result?.value;
+          return typeof v === "number" && v > 0 ? v : void 0;
+        } catch {
+          return void 0;
+        }
+      }
+      async loaded() {
+        const f = await this.frame();
+        const status = await this.responseStatus();
+        return { url: f.url + (f.urlFragment ?? ""), loaderId: f.loaderId, ...status !== void 0 ? { status } : {} };
+      }
+      /**
+       * Start recording navigation events BEFORE the command that causes them: the
+       * browser may report the new document's lifecycle before it answers the
+       * command itself, and an event listened for too late never comes again.
+       */
+      watch() {
+        const page = this.page;
+        const seen = [];
+        let wake;
+        let closed = false;
+        let leaving = false;
+        let cancelled = false;
+        const push = (e) => {
+          seen.push(e);
+          wake?.();
+        };
+        const handlers = [
+          ["Page.lifecycleEvent", (p) => push({ kind: "lifecycle", frameId: p.frameId, loaderId: p.loaderId, name: p.name })],
+          ["Page.navigatedWithinDocument", (p) => push({ kind: "same-document", frameId: p.frameId })],
+          // A page restored from the back/forward cache fires no lifecycle event.
+          ["Page.frameNavigated", (p) => p.type === "BackForwardCacheRestore" && push({ kind: "bfcache", frameId: p.frame?.id, loaderId: p.frame?.loaderId })],
+          ["Page.javascriptDialogOpening", (p) => leaving = p?.type === "beforeunload"],
+          [
+            "Page.javascriptDialogClosed",
+            (p) => {
+              if (leaving && p?.result === false) {
+                cancelled = true;
+                wake?.();
+              }
+              leaving = false;
+            }
+          ]
+        ];
+        for (const [method, h] of handlers) page.on(method, h);
+        const offClose = this.cdp.onClose(() => {
+          closed = true;
+          wake?.();
+        });
+        return {
+          stop: () => {
+            for (const [method, h] of handlers) page.off(method, h);
+            offClose();
+          },
+          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve8, reject) => {
+            const timer = setTimeout(() => {
+              wake = void 0;
+              reject(new Error(`${what} within ${timeoutMs} ms`));
+            }, timeoutMs);
+            wake = () => {
+              const hit = seen.find(match);
+              if (hit) resolve8(hit);
+              else if (cancelled) reject(new Error(`${cancelledWhat} was cancelled: the page asked to confirm leaving it (beforeunload), and that was declined`));
+              else if (closed) reject(new Error("the browser connection closed while waiting for the page to load"));
+              else return;
+              clearTimeout(timer);
+              wake = void 0;
+            };
+            wake();
+          })
+        };
+      }
+      /**
+       * Load `url` in the current tab and wait for the new document's `load` (or
+       * `DOMContentLoaded`, or nothing). The tab's refs are cleared: they named
+       * nodes of the document that is going away. A navigation the browser refuses
+       * (`errorText`: DNS failure, refused connection…) rejects.
+       */
+      async navigate(url, opts = {}) {
+        const waitUntil = opts.waitUntil ?? "load";
+        const timeoutMs = opts.timeoutMs ?? NAVIGATION_TIMEOUT_MS;
+        const nav = this.watch();
+        try {
+          const r = await this.page.send("Page.navigate", { url });
+          if (r.errorText) throw new Error(`navigation to ${url} failed: ${r.errorText}`);
+          if (!r.loaderId) {
+            const f = await this.frame();
+            return { url: f.url + (f.urlFragment ?? ""), loaderId: f.loaderId };
+          }
+          clearRefs(this.targetId);
+          if (waitUntil === "none") return { url, loaderId: r.loaderId };
+          const name = LIFECYCLE[waitUntil];
+          await nav.until(
+            (e) => e.kind === "lifecycle" && e.name === name && e.loaderId === r.loaderId,
+            timeoutMs,
+            `navigation to ${url} did not reach ${name}`,
+            `navigation to ${url}`
+          );
+          return await this.loaded();
+        } finally {
+          nav.stop();
+        }
+      }
+      /** Run a history move or a reload and wait until the main frame shows another document (or the same one, scrolled). */
+      async settle(what, trigger, timeoutMs = NAVIGATION_TIMEOUT_MS) {
+        const before = await this.frame();
+        const nav = this.watch();
+        try {
+          await trigger();
+          const hit = await nav.until(
+            (e) => e.frameId === before.id && (e.kind !== "lifecycle" || e.name === "load" && e.loaderId !== before.loaderId),
+            timeoutMs,
+            `${what} did not reach load`,
+            what
+          );
+          if (hit.kind !== "same-document") clearRefs(this.targetId);
+          return await this.loaded();
+        } finally {
+          nav.stop();
+        }
+      }
+      async history(step, timeoutMs) {
+        const h = await this.page.send("Page.getNavigationHistory");
+        const entry = h.entries[h.currentIndex + step];
+        if (!entry) throw new Error(step < 0 ? "no previous page in this tab's history" : "no next page in this tab's history");
+        return this.settle(step < 0 ? "going back" : "going forward", () => this.page.send("Page.navigateToHistoryEntry", { entryId: entry.id }), timeoutMs);
+      }
+      back(opts = {}) {
+        return this.history(-1, opts.timeoutMs);
+      }
+      forward(opts = {}) {
+        return this.history(1, opts.timeoutMs);
+      }
+      reload(opts = {}) {
+        return this.settle("reloading", () => this.page.send("Page.reload"), opts.timeoutMs);
+      }
+      // --- tabs --------------------------------------------------------------------
+      /** The browser's tabs with their stable short ids; the map is refreshed and saved. */
+      async listTabs() {
+        const pages = (await this.deps.discovery.listPages(this.port, this.host)).filter((p) => !this.closed.has(p.id));
+        this.tabs = syncTabs(this.tabs, pages);
+        this.save();
+        return tabList(this.tabs, pages, this.targetId);
+      }
+      /**
+       * Hear the JavaScript dialogs of whichever tab is current, across tab
+       * switches, each with the page session that can answer it. Returns its unsubscribe.
+       */
+      onDialog(listener) {
+        this.hookDialogs(listener, this.page);
+        return () => {
+          const h = this.dialogListeners.get(listener);
+          if (h) this.page.off("Page.javascriptDialogOpening", h);
+          this.dialogListeners.delete(listener);
+        };
+      }
+      hookDialogs(listener, page) {
+        const h = (p) => listener({ type: String(p?.type ?? "alert"), message: String(p?.message ?? ""), ...typeof p?.url === "string" ? { url: p.url } : {} }, page);
+        page.on("Page.javascriptDialogOpening", h);
+        this.dialogListeners.set(listener, h);
+      }
+      /** Move this session onto another tab: attach to it, let go of the old one, bring it to the front. */
+      async switchTo(targetId) {
+        const old = this.current.sessionId;
+        const sessionId = await attachPage(this.cdp, targetId);
+        const oldPage = this.current.page;
+        this.current = { targetId, sessionId, page: this.cdp.session(sessionId) };
+        for (const [listener, h] of [...this.dialogListeners]) {
+          oldPage.off("Page.javascriptDialogOpening", h);
+          this.hookDialogs(listener, this.current.page);
+        }
+        await this.cdp.send("Target.detachFromTarget", { sessionId: old }).catch(() => {
+        });
+        await this.deps.discovery.activateTarget(this.port, targetId, this.host);
+        this.save();
+      }
+      async selectTab(id) {
+        const tab = pick(await this.listTabs(), id);
+        await this.switchTo(tab.targetId);
+        return { ...tab, active: true };
+      }
+      /** Open a tab, make it current and, given a url, load it. */
+      async newTab(url, opts = {}) {
+        const targetId = await createTarget(this.cdp);
+        try {
+          await this.switchTo(targetId);
+        } catch (e) {
+          await this.deps.discovery.closeTarget(this.port, targetId, this.host).catch(() => {
+          });
+          throw e;
+        }
+        if (url !== void 0) await this.navigate(url, opts);
+        return pick(await this.listTabs(), targetId);
+      }
+      /**
+       * Close a tab and forget its refs and network log. Closing the current tab
+       * moves to another one first; closing the last opens a blank one, since a
+       * browser left with no tab may quit.
+       */
+      async closeTab(id) {
+        const tabs = await this.listTabs();
+        const tab = pick(tabs, id);
+        if (tab.targetId === this.targetId) {
+          const next = tabs.find((t) => t.targetId !== tab.targetId);
+          await this.switchTo(next ? next.targetId : await createTarget(this.cdp));
+        }
+        await this.deps.discovery.closeTarget(this.port, tab.targetId, this.host);
+        this.closed.add(tab.targetId);
+        clearRefs(tab.targetId);
+        clearNetwork(tab.targetId);
+        await this.listTabs();
+      }
+      // --- lifetime ------------------------------------------------------------------
+      /** Close the socket only. The browser and its tabs keep running; the next call reconnects. */
+      async detach() {
+        await this.cdp.close();
+      }
+      /**
+       * End the session. A browser we launched is closed (`Browser.close`, then
+       * SIGTERM to its pid if it refuses); one we attached to is left running. Either
+       * way session.json and our tabs' refs and network logs go (every tab's with `all`).
+       */
+      async shutdown(opts = {}) {
+        this.ended = true;
+        if (this.launchedByUs) await closeLaunched(this.cdp, this.pid, this.deps);
+        await this.cdp.close();
+        forget([this.targetId, ...Object.values(this.tabs)], opts.all);
+      }
+      async status() {
+        const tabs = await this.listTabs();
+        const cur = tabs.find((t) => t.active);
+        return {
+          alive: true,
+          port: this.port,
+          launchedByUs: this.launchedByUs,
+          profile: this.profile,
+          headless: this.headless,
+          targetId: this.targetId,
+          url: cur?.url ?? "",
+          title: cur?.title ?? "",
+          tabs
+        };
+      }
+    };
+  }
+});
 
 // src/mime.ts
-var AMBIGUOUS_TYPES = /* @__PURE__ */ new Set([
-  "",
-  "application/octet-stream",
-  "binary/octet-stream",
-  "application/x-download",
-  "application/force-download",
-  "application/download",
-  "application/unknown",
-  "application/zip",
-  "application/x-zip-compressed"
-]);
+var AMBIGUOUS_TYPES;
+var init_mime = __esm({
+  "src/mime.ts"() {
+    "use strict";
+    AMBIGUOUS_TYPES = /* @__PURE__ */ new Set([
+      "",
+      "application/octet-stream",
+      "binary/octet-stream",
+      "application/x-download",
+      "application/force-download",
+      "application/download",
+      "application/unknown",
+      "application/zip",
+      "application/x-zip-compressed"
+    ]);
+  }
+});
 
 // src/charset.ts
 function bomEncoding(bytes) {
@@ -4083,18 +5945,14 @@ function bomEncoding(bytes) {
   if (bytes.length >= 2 && bytes[0] === 254 && bytes[1] === 255) return { encoding: "utf-16be", skip: 2 };
   return void 0;
 }
-var CHARSET_IN_CONTENT_TYPE = /charset\s*=\s*["']?([a-z0-9_:.+-]+)/i;
 function charsetFromContentType(contentType) {
   return CHARSET_IN_CONTENT_TYPE.exec(contentType ?? "")?.[1]?.toLowerCase();
 }
-var UTF16_LABELS = /* @__PURE__ */ new Set(["utf-16", "utf-16le", "utf-16be", "unicode", "unicodefeff", "unicodefffe", "ucs-2", "csunicode", "iso-10646-ucs-2"]);
 function prescanLabel(label) {
   const lower = label.toLowerCase();
   if (UTF16_LABELS.has(lower)) return "utf-8";
   return lower === "x-user-defined" ? "windows-1252" : lower;
 }
-var META_TAG = /<meta\b(?:[^>"']|"[^"]*(?:"|$)|'[^']*(?:'|$))*(?:>|$)/gi;
-var TAG_ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)(?:"|$)|'([^']*)(?:'|$)|([^\s"'=<>`]+)))?/g;
 function metaAttributes(tag) {
   const attrs = /* @__PURE__ */ new Map();
   for (const m of tag.slice(5).matchAll(TAG_ATTRIBUTE)) {
@@ -4115,13 +5973,10 @@ function charsetFromHtml(head) {
   }
   return void 0;
 }
-var XML_DECLARATION = /^\s*<\?xml\b[^>]*?\bencoding\s*=\s*["']([A-Za-z0-9._:-]+)["']/;
 function charsetFromXmlDeclaration(bytes) {
   const label = XML_DECLARATION.exec(bytes.subarray(0, 256).toString("latin1"))?.[1];
   return label ? prescanLabel(label) : void 0;
 }
-var isUtf8Label = (label) => label === "utf-8" || label === "utf8";
-var SNIFFABLE_MIME = /* @__PURE__ */ new Set(["text/html", "application/xhtml+xml", ...AMBIGUOUS_TYPES]);
 function readsAsUtf8(text) {
   let valid = 0;
   let replaced = 0;
@@ -4166,55 +6021,6 @@ function decodeLocal(bytes, opts = {}) {
   if (own && !isUtf8Label(own)) return decodeWith(bytes, own);
   return decodeUtf8OrCp1252(bytes);
 }
-var CP1252_C1 = [
-  8364,
-  129,
-  8218,
-  402,
-  8222,
-  8230,
-  8224,
-  8225,
-  710,
-  8240,
-  352,
-  8249,
-  338,
-  141,
-  381,
-  143,
-  144,
-  8216,
-  8217,
-  8220,
-  8221,
-  8226,
-  8211,
-  8212,
-  732,
-  8482,
-  353,
-  8250,
-  339,
-  157,
-  382,
-  376
-];
-var CP1252_LABELS = /* @__PURE__ */ new Set([
-  "windows-1252",
-  "cp1252",
-  "cp-1252",
-  "x-cp1252",
-  "ansi_x3.4-1968",
-  "iso-8859-1",
-  "iso8859-1",
-  "latin1",
-  "l1",
-  "us-ascii",
-  "ascii"
-]);
-var CP1252_C1_RANGE = /[\x80-\x9f]/g;
-var cp1252C1 = (c) => String.fromCharCode(CP1252_C1[c.charCodeAt(0) - 128]);
 function decodeCp1252(bytes) {
   return bytes.toString("latin1").replace(CP1252_C1_RANGE, cp1252C1);
 }
@@ -4226,9 +6032,88 @@ function decodeWith(bytes, encoding) {
     return bytes.toString("utf8");
   }
 }
+var CHARSET_IN_CONTENT_TYPE, UTF16_LABELS, META_TAG, TAG_ATTRIBUTE, XML_DECLARATION, isUtf8Label, SNIFFABLE_MIME, CP1252_C1, CP1252_LABELS, CP1252_C1_RANGE, cp1252C1;
+var init_charset = __esm({
+  "src/charset.ts"() {
+    "use strict";
+    init_mime();
+    CHARSET_IN_CONTENT_TYPE = /charset\s*=\s*["']?([a-z0-9_:.+-]+)/i;
+    UTF16_LABELS = /* @__PURE__ */ new Set(["utf-16", "utf-16le", "utf-16be", "unicode", "unicodefeff", "unicodefffe", "ucs-2", "csunicode", "iso-10646-ucs-2"]);
+    META_TAG = /<meta\b(?:[^>"']|"[^"]*(?:"|$)|'[^']*(?:'|$))*(?:>|$)/gi;
+    TAG_ATTRIBUTE = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)(?:"|$)|'([^']*)(?:'|$)|([^\s"'=<>`]+)))?/g;
+    XML_DECLARATION = /^\s*<\?xml\b[^>]*?\bencoding\s*=\s*["']([A-Za-z0-9._:-]+)["']/;
+    isUtf8Label = (label) => label === "utf-8" || label === "utf8";
+    SNIFFABLE_MIME = /* @__PURE__ */ new Set(["text/html", "application/xhtml+xml", ...AMBIGUOUS_TYPES]);
+    CP1252_C1 = [
+      8364,
+      129,
+      8218,
+      402,
+      8222,
+      8230,
+      8224,
+      8225,
+      710,
+      8240,
+      352,
+      8249,
+      338,
+      141,
+      381,
+      143,
+      144,
+      8216,
+      8217,
+      8220,
+      8221,
+      8226,
+      8211,
+      8212,
+      732,
+      8482,
+      353,
+      8250,
+      339,
+      157,
+      382,
+      376
+    ];
+    CP1252_LABELS = /* @__PURE__ */ new Set([
+      "windows-1252",
+      "cp1252",
+      "cp-1252",
+      "x-cp1252",
+      "ansi_x3.4-1968",
+      "iso-8859-1",
+      "iso8859-1",
+      "latin1",
+      "l1",
+      "us-ascii",
+      "ascii"
+    ]);
+    CP1252_C1_RANGE = /[\x80-\x9f]/g;
+    cp1252C1 = (c) => String.fromCharCode(CP1252_C1[c.charCodeAt(0) - 128]);
+  }
+});
 
 // src/entities.ts
-var NAMED = `
+function numericChar(n) {
+  if (n >= 128 && n <= 159) return String.fromCodePoint(CP1252_C1[n - 128]);
+  if (n === 0 || !(n <= 1114111) || n >= 55296 && n <= 57343) return "\uFFFD";
+  return charFor(n);
+}
+function decodeEntities(s) {
+  return s.replace(ENTITY_RE, (m, ref) => {
+    if (ref[0] !== "#") return ENTITY_BY_NAME.get(ref) ?? m;
+    return numericChar(ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number(ref.slice(1)));
+  });
+}
+var NAMED, INVISIBLE, charFor, ENTITY_BY_NAME, ENTITY_RE;
+var init_entities = __esm({
+  "src/entities.ts"() {
+    "use strict";
+    init_charset();
+    NAMED = `
   quot 22 amp 26 apos 27 lt 3c gt 3e QUOT 22 AMP 26 LT 3c GT 3e COPY a9 REG ae
   nbsp a0 iexcl a1 cent a2 pound a3 curren a4 yen a5 brvbar a6 sect a7 uml a8 copy a9 ordf aa laquo ab not ac shy ad reg ae macr af
   deg b0 plusmn b1 sup2 b2 sup3 b3 acute b4 micro b5 para b6 middot b7 cedil b8 sup1 b9 ordm ba raquo bb frac14 bc frac12 bd frac34 be iquest bf
@@ -4250,105 +6135,19 @@ var NAMED = `
   le 2264 ge 2265 sub 2282 sup 2283 nsub 2284 sube 2286 supe 2287 oplus 2295 otimes 2297 perp 22a5 sdot 22c5
   lceil 2308 rceil 2309 lfloor 230a rfloor 230b lang 27e8 rang 27e9 loz 25ca spades 2660 clubs 2663 hearts 2665 diams 2666
 `;
-var INVISIBLE = /* @__PURE__ */ new Set([173, 8203, 8204, 8205, 8206, 8207, 8288, 65279]);
-var charFor = (cp) => INVISIBLE.has(cp) ? "" : String.fromCodePoint(cp);
-var ENTITY_BY_NAME = /* @__PURE__ */ new Map();
-{
-  const parts = NAMED.trim().split(/\s+/);
-  for (let i = 0; i < parts.length; i += 2) ENTITY_BY_NAME.set(parts[i], charFor(Number.parseInt(parts[i + 1], 16)));
-  ENTITY_BY_NAME.set("nbsp", " ");
-}
-var ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g;
-function numericChar(n) {
-  if (n >= 128 && n <= 159) return String.fromCodePoint(CP1252_C1[n - 128]);
-  if (n === 0 || !(n <= 1114111) || n >= 55296 && n <= 57343) return "\uFFFD";
-  return charFor(n);
-}
-function decodeEntities(s) {
-  return s.replace(ENTITY_RE, (m, ref) => {
-    if (ref[0] !== "#") return ENTITY_BY_NAME.get(ref) ?? m;
-    return numericChar(ref[1] === "x" || ref[1] === "X" ? Number.parseInt(ref.slice(2), 16) : Number(ref.slice(1)));
-  });
-}
+    INVISIBLE = /* @__PURE__ */ new Set([173, 8203, 8204, 8205, 8206, 8207, 8288, 65279]);
+    charFor = (cp) => INVISIBLE.has(cp) ? "" : String.fromCodePoint(cp);
+    ENTITY_BY_NAME = /* @__PURE__ */ new Map();
+    {
+      const parts = NAMED.trim().split(/\s+/);
+      for (let i = 0; i < parts.length; i += 2) ENTITY_BY_NAME.set(parts[i], charFor(Number.parseInt(parts[i + 1], 16)));
+      ENTITY_BY_NAME.set("nbsp", " ");
+    }
+    ENTITY_RE = /&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);/g;
+  }
+});
 
 // src/html.ts
-var BLOCK_TAGS = /* @__PURE__ */ new Set([
-  "p",
-  "div",
-  "section",
-  "article",
-  "li",
-  "tr",
-  "td",
-  "th",
-  "ul",
-  "ol",
-  "pre",
-  "blockquote",
-  "table",
-  "caption",
-  "dl",
-  "dt",
-  "dd",
-  "header",
-  "footer",
-  "nav",
-  "aside",
-  "main",
-  "search",
-  "figure",
-  "figcaption",
-  "details",
-  "summary",
-  "address",
-  "form",
-  "fieldset",
-  "legend",
-  "hgroup",
-  "center",
-  "dialog",
-  "menu"
-]);
-var INLINE_TAGS = /* @__PURE__ */ new Set([
-  "a",
-  "abbr",
-  "acronym",
-  "b",
-  "bdi",
-  "bdo",
-  "big",
-  "cite",
-  "code",
-  "data",
-  "del",
-  "dfn",
-  "em",
-  "font",
-  "i",
-  "ins",
-  "kbd",
-  "label",
-  "mark",
-  "nobr",
-  "q",
-  "s",
-  "samp",
-  "small",
-  "span",
-  "strike",
-  "strong",
-  "sub",
-  "sup",
-  "time",
-  "tt",
-  "u",
-  "var",
-  "wbr"
-]);
-var TAG_RE = /<[a-zA-Z!/?][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>/g;
-var LOOSE_TAG_RE = /<[a-zA-Z!/?][^<>]*>/g;
-var tagName = (tag) => /^<\/?([a-zA-Z][^\s/>]*)/.exec(tag)?.[1]?.toLowerCase() ?? "";
-var CLOSE_TAG_RE = /* @__PURE__ */ new Map();
 function closeTagRe(name) {
   let re = CLOSE_TAG_RE.get(name);
   if (!re) CLOSE_TAG_RE.set(name, re = new RegExp(`</${name}\\s*>`, "gi"));
@@ -4362,15 +6161,14 @@ function htmlAttributes(tag) {
   }
   return attrs;
 }
-var RCDATA_ELEMENTS = /* @__PURE__ */ new Set(["title"]);
 function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
   const drop = new Set(names);
-  const open = new RegExp(`<!--|${TAG_RE.source}|<(${names.join("|")})(?=[\\s/>])`, "gi");
+  const open2 = new RegExp(`<!--|${TAG_RE.source}|<(${names.join("|")})(?=[\\s/>])`, "gi");
   const unclosed = /* @__PURE__ */ new Set();
   let out = "";
   let last = 0;
   let m;
-  while (m = open.exec(html)) {
+  while (m = open2.exec(html)) {
     const tag = m[0];
     const name = m[1]?.toLowerCase() ?? (tag === "<!--" ? "!--" : tag[1] === "/" ? "" : tagName(tag));
     const opaque = !drop.has(name) && RCDATA_ELEMENTS.has(name);
@@ -4381,7 +6179,7 @@ function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
       end = close < 0 ? -1 : close + 3;
     } else {
       const close = closeTagRe(name);
-      close.lastIndex = open.lastIndex;
+      close.lastIndex = open2.lastIndex;
       const c = close.exec(html);
       end = c ? c.index + c[0].length : toEof.has(name) ? html.length : -1;
     }
@@ -4393,7 +6191,7 @@ function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
       out += html.slice(last, m.index) + " ";
       last = end;
     }
-    open.lastIndex = end;
+    open2.lastIndex = end;
   }
   return last === 0 ? html : out + html.slice(last);
 }
@@ -4418,7 +6216,7 @@ function dropLandmarks(html, roles) {
   const names = /* @__PURE__ */ new Set();
   for (const m of html.matchAll(new RegExp(`<([a-zA-Z][a-zA-Z0-9-]*)(?=[\\s/>])[^<>]*${role}`, "gi"))) names.add(m[1].toLowerCase());
   if (!names.size) return html;
-  const regions = [...names].flatMap((name) => balancedRegions(html, name, (open) => hasRole.test(open))).sort((a, b) => a.from - b.from);
+  const regions = [...names].flatMap((name) => balancedRegions(html, name, (open2) => hasRole.test(open2))).sort((a, b) => a.from - b.from);
   let out = "";
   let last = 0;
   for (const r of regions) {
@@ -4428,47 +6226,136 @@ function dropLandmarks(html, roles) {
   }
   return last === 0 ? html : out + html.slice(last);
 }
-var CHROME_ROLES = ["navigation", "banner", "contentinfo"];
-var HIDDEN_ELEMENTS = ["script", "style", "noscript", "head", "svg", "template", "select", "datalist"];
-var CHROME_ELEMENTS = ["nav", "footer"];
-var RAW_TEXT_ELEMENTS = /* @__PURE__ */ new Set(["script", "style"]);
+var BLOCK_TAGS, INLINE_TAGS, TAG_RE, LOOSE_TAG_RE, tagName, CLOSE_TAG_RE, RCDATA_ELEMENTS, CHROME_ROLES, HIDDEN_ELEMENTS, CHROME_ELEMENTS, RAW_TEXT_ELEMENTS;
+var init_html = __esm({
+  "src/html.ts"() {
+    "use strict";
+    BLOCK_TAGS = /* @__PURE__ */ new Set([
+      "p",
+      "div",
+      "section",
+      "article",
+      "li",
+      "tr",
+      "td",
+      "th",
+      "ul",
+      "ol",
+      "pre",
+      "blockquote",
+      "table",
+      "caption",
+      "dl",
+      "dt",
+      "dd",
+      "header",
+      "footer",
+      "nav",
+      "aside",
+      "main",
+      "search",
+      "figure",
+      "figcaption",
+      "details",
+      "summary",
+      "address",
+      "form",
+      "fieldset",
+      "legend",
+      "hgroup",
+      "center",
+      "dialog",
+      "menu"
+    ]);
+    INLINE_TAGS = /* @__PURE__ */ new Set([
+      "a",
+      "abbr",
+      "acronym",
+      "b",
+      "bdi",
+      "bdo",
+      "big",
+      "cite",
+      "code",
+      "data",
+      "del",
+      "dfn",
+      "em",
+      "font",
+      "i",
+      "ins",
+      "kbd",
+      "label",
+      "mark",
+      "nobr",
+      "q",
+      "s",
+      "samp",
+      "small",
+      "span",
+      "strike",
+      "strong",
+      "sub",
+      "sup",
+      "time",
+      "tt",
+      "u",
+      "var",
+      "wbr"
+    ]);
+    TAG_RE = /<[a-zA-Z!/?][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>/g;
+    LOOSE_TAG_RE = /<[a-zA-Z!/?][^<>]*>/g;
+    tagName = (tag) => /^<\/?([a-zA-Z][^\s/>]*)/.exec(tag)?.[1]?.toLowerCase() ?? "";
+    CLOSE_TAG_RE = /* @__PURE__ */ new Map();
+    RCDATA_ELEMENTS = /* @__PURE__ */ new Set(["title"]);
+    CHROME_ROLES = ["navigation", "banner", "contentinfo"];
+    HIDDEN_ELEMENTS = ["script", "style", "noscript", "head", "svg", "template", "select", "datalist"];
+    CHROME_ELEMENTS = ["nav", "footer"];
+    RAW_TEXT_ELEMENTS = /* @__PURE__ */ new Set(["script", "style"]);
+  }
+});
 
 // src/retry.ts
-var maxAttempts = () => envInt("MAX_ATTEMPTS", 2, 1, 5);
-var defaultRetryMs = () => envInt("RETRY_MS", 600, 0, 5e3);
-var RETRY_AFTER_CAP_MS = 5e3;
 function retryDelayMs(retryAfterMs) {
   if (retryAfterMs === void 0) return defaultRetryMs();
   return retryAfterMs <= RETRY_AFTER_CAP_MS ? retryAfterMs : void 0;
 }
-var PERMANENT_CODES = /* @__PURE__ */ new Set([
-  "ENOTFOUND",
-  "ERR_INVALID_URL",
-  "ERR_TLS_CERT_ALTNAME_INVALID",
-  "CERT_HAS_EXPIRED",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"
-]);
-var PERMANENT_MESSAGE = /redirect count exceeded|scheme must be|unknown scheme|bad port|invalid url|failed to parse url/i;
 function isPermanentFailure(e) {
   const err = e;
   const code = err?.cause?.code ?? err?.code;
   if (typeof code === "string" && PERMANENT_CODES.has(code)) return true;
   return [err?.message, err?.cause?.message].some((m) => typeof m === "string" && PERMANENT_MESSAGE.test(m));
 }
+var maxAttempts, defaultRetryMs, RETRY_AFTER_CAP_MS, PERMANENT_CODES, PERMANENT_MESSAGE;
+var init_retry = __esm({
+  "src/retry.ts"() {
+    "use strict";
+    init_brand();
+    maxAttempts = () => envInt("MAX_ATTEMPTS", 2, 1, 5);
+    defaultRetryMs = () => envInt("RETRY_MS", 600, 0, 5e3);
+    RETRY_AFTER_CAP_MS = 5e3;
+    PERMANENT_CODES = /* @__PURE__ */ new Set([
+      "ENOTFOUND",
+      "ERR_INVALID_URL",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+      "CERT_HAS_EXPIRED",
+      "DEPTH_ZERO_SELF_SIGNED_CERT",
+      "SELF_SIGNED_CERT_IN_CHAIN",
+      "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+      "UNABLE_TO_GET_ISSUER_CERT_LOCALLY"
+    ]);
+    PERMANENT_MESSAGE = /redirect count exceeded|scheme must be|unknown scheme|bad port|invalid url|failed to parse url/i;
+  }
+});
 
 // src/tables.ts
 function fragmentText(html) {
   return decodeEntities(html.replace(TAG_RE, (tag) => INLINE_TAGS.has(tagName(tag)) ? "" : " ").replace(LOOSE_TAG_RE, " "));
 }
-var collapse = (s) => s.replace(/\s+/g, " ").trim();
 function spanAttr(attrs, name) {
   const n = Number.parseInt(attrs.get(name) ?? "", 10);
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 100) : 1;
 }
-var MAX_SLOTS = 1e6;
 function expand(rows) {
   const grid = rows.map(() => []);
   let slots = 0;
@@ -4531,57 +6418,14 @@ function extractTables(html) {
   while (stack.length) closeTable(stack, done);
   return done.sort((a, b) => a.order - b.order).map((d) => d.table);
 }
-var NOT_RENDERED = ["script", "style", "template", "svg", "select", "datalist"];
-var MAX_DEPTH = 8;
-var OpenTable = class {
-  constructor(order) {
-    this.order = order;
-  }
-  order;
-  rows = [];
-  caption = [];
-  inCaption = false;
-  inHead = false;
-  row;
-  cell;
-  /** Text between two table tags: it belongs to the open cell, else the caption. */
-  text(fragment) {
-    if (this.cell) this.cell.parts.push(fragmentText(fragment));
-    else if (this.inCaption) this.caption.push(fragmentText(fragment));
-  }
-  /** A nested table's text, already clean, joins the cell that holds it. */
-  nested(text) {
-    this.cell?.parts.push(` ${text} `);
-  }
-  startRow() {
-    this.inCaption = false;
-    this.row = { cells: [], head: this.inHead };
-  }
-  startCell(header2, attrs) {
-    this.endCell();
-    if (!this.row) this.startRow();
-    this.cell = { parts: [], header: header2, colspan: spanAttr(attrs, "colspan"), rowspan: spanAttr(attrs, "rowspan") };
-  }
-  endCell() {
-    if (!this.cell || !this.row) return;
-    const { parts, header: header2, colspan, rowspan } = this.cell;
-    this.row.cells.push({ text: collapse(parts.join("")), header: header2, colspan, rowspan });
-    this.cell = void 0;
-  }
-  endRow() {
-    this.endCell();
-    if (this.row?.cells.length) this.rows.push(this.row);
-    this.row = void 0;
-  }
-};
 function closeTable(stack, done) {
   const t = stack.pop();
   t.endRow();
   const caption = collapse(t.caption.join(""));
   const table = buildTable(t.rows, caption);
   if (table) done.push({ order: t.order, table });
-  const flat = [caption, ...t.rows.flatMap((r) => r.cells.map((c) => c.text))].filter(Boolean).join(" ");
-  stack[stack.length - 1]?.nested(flat);
+  const flat2 = [caption, ...t.rows.flatMap((r) => r.cells.map((c) => c.text))].filter(Boolean).join(" ");
+  stack[stack.length - 1]?.nested(flat2);
 }
 function buildTable(rows, caption) {
   if (!rows.length) return void 0;
@@ -4614,6 +6458,59 @@ function tableToMarkdown(table) {
   for (const row of table.rows) out.push(line(row));
   return out.join("\n");
 }
+var collapse, MAX_SLOTS, NOT_RENDERED, MAX_DEPTH, OpenTable;
+var init_tables = __esm({
+  "src/tables.ts"() {
+    "use strict";
+    init_entities();
+    init_html();
+    collapse = (s) => s.replace(/\s+/g, " ").trim();
+    MAX_SLOTS = 1e6;
+    NOT_RENDERED = ["script", "style", "template", "svg", "select", "datalist"];
+    MAX_DEPTH = 8;
+    OpenTable = class {
+      constructor(order) {
+        this.order = order;
+      }
+      order;
+      rows = [];
+      caption = [];
+      inCaption = false;
+      inHead = false;
+      row;
+      cell;
+      /** Text between two table tags: it belongs to the open cell, else the caption. */
+      text(fragment) {
+        if (this.cell) this.cell.parts.push(fragmentText(fragment));
+        else if (this.inCaption) this.caption.push(fragmentText(fragment));
+      }
+      /** A nested table's text, already clean, joins the cell that holds it. */
+      nested(text) {
+        this.cell?.parts.push(` ${text} `);
+      }
+      startRow() {
+        this.inCaption = false;
+        this.row = { cells: [], head: this.inHead };
+      }
+      startCell(header2, attrs) {
+        this.endCell();
+        if (!this.row) this.startRow();
+        this.cell = { parts: [], header: header2, colspan: spanAttr(attrs, "colspan"), rowspan: spanAttr(attrs, "rowspan") };
+      }
+      endCell() {
+        if (!this.cell || !this.row) return;
+        const { parts, header: header2, colspan, rowspan } = this.cell;
+        this.row.cells.push({ text: collapse(parts.join("")), header: header2, colspan, rowspan });
+        this.cell = void 0;
+      }
+      endRow() {
+        this.endCell();
+        if (this.row?.cells.length) this.rows.push(this.row);
+        this.row = void 0;
+      }
+    };
+  }
+});
 
 // src/markdown.ts
 function htmlToMarkdown(html, opts = {}) {
@@ -4757,288 +6654,9 @@ function markdownAgainst(html, base2, fullPage) {
   if (last < s.length) w.text(s.slice(last));
   return w.finish();
 }
-var NUL = "\0";
 function withoutNul(html) {
   return html.includes(NUL) ? html.split(NUL).join("\uFFFD") : html;
 }
-var TABLE_OPEN = /<table[\s/>]/i;
-var HEADING_EDGE = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/;
-var MAX_BLOCK_DEPTH = 24;
-var MAX_INLINE_DEPTH = 16;
-var INLINE_KIND = {
-  a: "a",
-  em: "em",
-  i: "em",
-  strong: "strong",
-  b: "strong",
-  code: "code",
-  kbd: "code",
-  samp: "code",
-  tt: "code"
-};
-var Writer = class {
-  heading = 0;
-  lines = [];
-  blocks = [];
-  blockOverflow = 0;
-  parts = [];
-  frames = [];
-  pendingSpace = false;
-  needBlank = false;
-  /** The list closed last: its container's depth, its kind, and how many lines were written by then. */
-  closedList;
-  /** An emphasis just written that ends in punctuation, whose closing marker a letter pushed next would spoil. */
-  flanked;
-  text(raw) {
-    const decoded = decodeEntities(raw.includes("<") ? raw.replace(LOOSE_TAG_RE, " ") : raw).replace(HTML_SPACE, " ");
-    if (!decoded) return;
-    const core = decoded.trim();
-    if (decoded[0] === " ") this.space();
-    if (core) this.push(this.inCode() ? core : escapeText(core, { before: this.joinsBefore(decoded[0] !== " "), after: decoded[decoded.length - 1] !== " " }));
-    if (core && decoded[decoded.length - 1] === " ") this.space();
-  }
-  space() {
-    if (this.parts.length) this.pendingSpace = true;
-  }
-  hardBreak() {
-    if (this.heading || this.inCode()) this.space();
-    else if (this.parts.length) {
-      this.parts.push("\n");
-      this.pendingSpace = false;
-    }
-  }
-  open(kind, href, self) {
-    if (this.frames.length >= MAX_INLINE_DEPTH) return;
-    const inert = kind === "a" && href === void 0 || this.inCode() || kind !== "a" && this.frames.some((f) => f.kind === kind);
-    this.frames.push({ kind, start: this.parts.length, ...href !== void 0 ? { href } : {}, ...self ? { self } : {}, ...inert ? { inert } : {} });
-  }
-  /** Close the innermost open `kind`, and whatever opened inside it and never closed. */
-  close(kind) {
-    let i = this.frames.length - 1;
-    while (i >= 0 && this.frames[i].kind !== kind) i--;
-    if (i < 0) return;
-    while (this.frames.length > i) this.wrap(this.frames.pop());
-  }
-  image(attrs, base2) {
-    const candidates = [attrs.get("src"), attrs.get("data-src"), attrs.get("data-original"), attrs.get("srcset")?.trim().split(/\s+/)[0]];
-    const src = candidates.map((c) => linkTarget(c, base2)).find((u) => u !== void 0);
-    const pixel = ["width", "height"].some((d) => /^[01]$/.test(attrs.get(d)?.trim() ?? ""));
-    if (!src || pixel || this.inCode()) {
-      this.space();
-      return;
-    }
-    const alt = decodeEntities(attrs.get("alt") ?? "").replace(HTML_SPACE, " ").trim();
-    this.push(`![${escapeText(alt)}](${destination(src)})`);
-  }
-  codeBlock(inner, lang) {
-    const body = decodeEntities(inner.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
-    if (!body.trim()) return;
-    const fence = "`".repeat(Math.max(3, longestRun(body, "`") + 1));
-    this.block([fence + lang, ...body.split("\n"), fence]);
-  }
-  rule() {
-    this.block(["***"]);
-  }
-  openList(ordered, start) {
-    const top = this.blocks[this.blocks.length - 1];
-    if (top?.kind === "list" && top.items && this.blocks.length + 1 < MAX_BLOCK_DEPTH) this.blocks.push({ kind: "item", marker: top.last, first: false });
-    if (!this.room()) return;
-    const item = this.blocks[this.blocks.length - 1];
-    if (item?.kind === "item" && !item.first && (!ordered || start === 1)) this.needBlank = false;
-    const prev = this.closedList;
-    const alt = prev !== void 0 && prev.depth === this.blocks.length && prev.ordered === ordered && prev.lines === this.lines.length && !prev.alt;
-    this.blocks.push({ kind: "list", ordered, alt, next: start, items: 0, last: "" });
-  }
-  closeList() {
-    if (this.blockOverflow) {
-      this.blockOverflow--;
-      return;
-    }
-    const i = this.nearest("list");
-    if (i < 0) return;
-    const { ordered, alt } = this.blocks[i];
-    this.closedList = { depth: i, ordered, alt, lines: this.lines.length };
-    this.blocks.length = i;
-    this.needBlank = true;
-  }
-  openItem() {
-    if (this.blockOverflow) {
-      this.blockOverflow++;
-      return;
-    }
-    let list = this.nearest("list");
-    if (list >= 0) this.blocks.length = list + 1;
-    else {
-      if (!this.room()) return;
-      this.blocks.push({ kind: "list", ordered: false, alt: false, next: 1, items: 0, last: "" });
-      list = this.blocks.length - 1;
-    }
-    if (!this.room()) return;
-    const owner = this.blocks[list];
-    const marker = owner.ordered ? `${owner.next++}${owner.alt ? ")" : "."} ` : owner.alt ? "+ " : "- ";
-    owner.last = marker;
-    this.blocks.push({ kind: "item", marker, first: true });
-    if (owner.items++) this.needBlank = false;
-  }
-  closeItem() {
-    if (this.blockOverflow) {
-      this.blockOverflow--;
-      return;
-    }
-    for (let i = this.blocks.length - 1; i >= 0; i--) {
-      const kind = this.blocks[i].kind;
-      if (kind === "list") return;
-      if (kind === "item") {
-        this.blocks.length = i;
-        return;
-      }
-    }
-  }
-  openQuote() {
-    if (this.room()) this.blocks.push({ kind: "quote", first: true });
-  }
-  closeQuote() {
-    if (this.blockOverflow) {
-      this.blockOverflow--;
-      return;
-    }
-    const i = this.nearest("quote");
-    if (i < 0) return;
-    this.blocks.length = i;
-    this.needBlank = true;
-  }
-  /**
-   * End the paragraph or heading in progress and write it out. The inline
-   * elements still open close over the text so far and reopen for what
-   * follows, so a link wrapped round a heading and a paragraph — a card —
-   * links both.
-   */
-  flush() {
-    const open = this.frames.map((f) => ({ ...f }));
-    while (this.frames.length) this.wrap(this.frames.pop());
-    const text = this.parts.join("");
-    this.parts = [];
-    this.flanked = void 0;
-    this.pendingSpace = false;
-    this.frames = open.map((f) => ({ ...f, start: 0 }));
-    const level = this.heading;
-    this.heading = 0;
-    if (level) {
-      const title = text.replace(/\s+/g, " ").trim();
-      if (title) this.block([`${"#".repeat(level)} ${title.replace(/(^|\s)(#+)$/, "$1\\$2")}`]);
-      return;
-    }
-    let para = [];
-    for (const raw of `${text}
-
-`.split("\n")) {
-      const line = raw.trim();
-      if (line) {
-        para.push(escapeLineStart(line));
-        continue;
-      }
-      if (!para.length) continue;
-      this.block(para.map((l, i) => i < para.length - 1 ? `${l}  ` : l));
-      para = [];
-    }
-  }
-  /** Write finished lines under the open blocks' prefixes, a blank line before them where one is due. */
-  block(content) {
-    if (!content.length) return;
-    if (this.needBlank && this.lines.length) this.lines.push(this.prefix(false).trimEnd());
-    for (const line of content) {
-      const prefix = this.prefix(true);
-      this.lines.push(line ? prefix + line : prefix.trimEnd());
-    }
-    this.needBlank = true;
-  }
-  finish() {
-    this.flush();
-    return this.lines.join("\n").trimEnd();
-  }
-  push(markdown) {
-    const f = this.flanked;
-    this.flanked = void 0;
-    if (f && !this.pendingSpace && f.at === this.parts.length - 1 && FLANK_WORD.test(markdown[0] ?? "")) {
-      this.parts[f.at] = flank(f.marker, f.core, f.start, true);
-    }
-    if (this.pendingSpace) this.parts.push(" ");
-    this.pendingSpace = false;
-    this.parts.push(markdown);
-  }
-  inCode() {
-    return this.frames.some((f) => f.kind === "code");
-  }
-  /**
-   * Whether text pushed next will stand straight after something other than
-   * a space or a line start: the text before it, when `touching` it, or the
-   * marker of an emphasis or link that opens where it starts (the marker goes
-   * in when the element closes, and moves the element's leading space outside).
-   */
-  joinsBefore(touching) {
-    const last = this.parts[this.parts.length - 1];
-    if (touching && !this.pendingSpace && last !== void 0 && last !== "\n") return true;
-    return this.frames.some((f) => !f.inert && f.start === this.parts.length);
-  }
-  /** Replace an element's text with its Markdown, its outer whitespace kept outside it. */
-  wrap(f) {
-    if (f.inert) return;
-    const trailing = this.pendingSpace;
-    this.pendingSpace = false;
-    if (this.flanked && this.flanked.at >= f.start) this.flanked = void 0;
-    const content = this.parts.splice(f.start).join("");
-    const core = content.trim();
-    const lead = content.slice(0, content.length - content.trimStart().length);
-    const trail = content.slice(content.trimEnd().length);
-    this.whitespace(lead);
-    if (core) {
-      let markdown = wrapInline(f, core, this.heading > 0);
-      const last = this.parts.length - 1;
-      if (f.kind === "a" && markdown && !this.pendingSpace && this.parts[last]?.endsWith("!")) this.parts[last] = `${this.parts[last].slice(0, -1)}\\!`;
-      const marker = f.kind === "em" ? "*" : f.kind === "strong" ? "**" : "";
-      if (marker) {
-        const start = !this.pendingSpace && FLANK_WORD.test(this.parts[last]?.slice(-1) ?? "") && FLANK_PUNCT.test(core[0]);
-        if (start) markdown = flank(marker, core, true, false);
-        this.push(markdown);
-        if (FLANK_PUNCT.test(core[core.length - 1])) this.flanked = { at: this.parts.length - 1, marker, core, start };
-      } else this.push(markdown);
-    }
-    this.whitespace(trail);
-    if (trailing) this.space();
-  }
-  whitespace(ws) {
-    if (ws.includes("\n")) {
-      if (this.parts.length) this.parts.push("\n");
-      this.pendingSpace = false;
-    } else if (ws) this.space();
-  }
-  prefix(consume) {
-    let p = "";
-    for (const b of this.blocks) {
-      if (b.kind === "quote") {
-        if (consume || !b.first) p += "> ";
-        if (consume) b.first = false;
-      } else if (b.kind === "item") {
-        p += b.first && consume ? b.marker : " ".repeat(b.marker.length);
-        if (consume) b.first = false;
-      }
-    }
-    return p;
-  }
-  nearest(kind) {
-    for (let i = this.blocks.length - 1; i >= 0; i--) if (this.blocks[i].kind === kind) return i;
-    return -1;
-  }
-  /** Whether one more block may nest; past the bound it is counted instead, and its close uncounted. */
-  room() {
-    if (this.blocks.length < MAX_BLOCK_DEPTH) return true;
-    this.blockOverflow++;
-    return false;
-  }
-};
-var FLANK_PUNCT = /[\p{P}\p{S}]/u;
-var FLANK_WORD = /[^\s\p{P}\p{S}]/u;
-var MARKUP_CHARS = "\\*`[]";
 function flank(marker, core, start, end) {
   const link = core.includes("](");
   const movable = (i) => {
@@ -5053,7 +6671,6 @@ function flank(marker, core, start, end) {
   if (from === to) return core;
   return `${core.slice(0, from)}${marker}${core.slice(from, to)}${marker}${core.slice(to)}`;
 }
-var PERMALINK_TEXT = /^(?:¶|#|§|🔗)$/u;
 function wrapInline(f, core, inHeading) {
   switch (f.kind) {
     case "em":
@@ -5072,13 +6689,6 @@ function wrapInline(f, core, inHeading) {
       return `[${core.replace(/\n{2,}/g, "\n")}](${destination(f.href)})`;
   }
 }
-var HTML_SPACE = /[ \t\n\r\f]+/g;
-var ALWAYS_SYNTAX = /[\\`*[\]]/g;
-var EDGE_UNDERSCORE = /(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])/gu;
-var HTML_LIKE = /<(?=[a-zA-Z/!?])/g;
-var ENTITY_LIKE = /&(?=#?[a-zA-Z0-9]+;)/g;
-var STRIKE = /~(?=~)|(?<=[^\t\n\f\r\p{Zs}])~/gu;
-var OPEN_END = /(?:<|&#?[a-zA-Z0-9]*)$/;
 function escapeText(s, edges) {
   let out = s.replace(ALWAYS_SYNTAX, "\\$&").replace(EDGE_UNDERSCORE, "\\_").replace(HTML_LIKE, "\\<").replace(ENTITY_LIKE, "\\&").replace(STRIKE, "\\~");
   if (edges?.after) out = out.replace(OPEN_END, "\\$&");
@@ -5112,7 +6722,6 @@ function linkTarget(raw, base2) {
     return base2 === void 0 ? href : void 0;
   }
 }
-var UNFOLLOWABLE = /^(?:javascript|vbscript|data):/i;
 function afterControls(s) {
   let i = 0;
   while (i < s.length && s.charCodeAt(i) <= 32) i++;
@@ -5127,7 +6736,6 @@ function destination(url) {
   }
   return depth === 0 ? d : d.replace(/[()]/g, "\\$&");
 }
-var BASE_TAG = /<base(?=[\s/>])[^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>/gi;
 function documentBaseUrl(html, pageUrl) {
   if (!/<base[\s/>]/i.test(html)) return pageUrl;
   for (const m of dropElements(html, ["script", "style", "template"], RAW_TEXT_ELEMENTS).matchAll(BASE_TAG)) {
@@ -5142,8 +6750,6 @@ function documentBaseUrl(html, pageUrl) {
   }
   return pageUrl;
 }
-var LANGUAGE_CLASS = /(?:^|\s)(?:(?:language|lang|highlight(?:-source)?)-|brush:\s*)([\w+#.-]+)/i;
-var NO_LANGUAGE = /* @__PURE__ */ new Set(["none", "nohighlight", "plaintext"]);
 function codeLanguage(pre, inner, divs) {
   const code = /^\s*(<code(?=[\s/>])[^<>]*>)/i.exec(inner)?.[1];
   for (const t of [pre, code, divs[divs.length - 1], divs[divs.length - 2]]) {
@@ -5153,98 +6759,320 @@ function codeLanguage(pre, inner, divs) {
   }
   return "";
 }
-function isLayoutTable(open, html, region) {
-  if (/^(?:presentation|none)$/i.test(htmlAttributes(open).get("role")?.trim() ?? "")) return true;
+function isLayoutTable(open2, html, region) {
+  if (/^(?:presentation|none)$/i.test(htmlAttributes(open2).get("role")?.trim() ?? "")) return true;
   const inner = new RegExp(LAYOUT_INSIDE.source, "gi");
   inner.lastIndex = region.start;
   const next = inner.exec(html);
   return next !== null && next.index < region.end;
 }
-var LAYOUT_INSIDE = /<(?:table|pre)[\s/>]/;
-function listStart(open) {
-  const n = Number.parseInt(htmlAttributes(open).get("start") ?? "", 10);
+function listStart(open2) {
+  const n = Number.parseInt(htmlAttributes(open2).get("start") ?? "", 10);
   return Number.isFinite(n) && n >= 0 && n < 1e9 ? n : 1;
 }
+var NUL, TABLE_OPEN, HEADING_EDGE, MAX_BLOCK_DEPTH, MAX_INLINE_DEPTH, INLINE_KIND, Writer, FLANK_PUNCT, FLANK_WORD, MARKUP_CHARS, PERMALINK_TEXT, HTML_SPACE, ALWAYS_SYNTAX, EDGE_UNDERSCORE, HTML_LIKE, ENTITY_LIKE, STRIKE, OPEN_END, UNFOLLOWABLE, BASE_TAG, LANGUAGE_CLASS, NO_LANGUAGE, LAYOUT_INSIDE;
+var init_markdown2 = __esm({
+  "src/markdown.ts"() {
+    "use strict";
+    init_entities();
+    init_html();
+    init_tables();
+    NUL = "\0";
+    TABLE_OPEN = /<table[\s/>]/i;
+    HEADING_EDGE = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/;
+    MAX_BLOCK_DEPTH = 24;
+    MAX_INLINE_DEPTH = 16;
+    INLINE_KIND = {
+      a: "a",
+      em: "em",
+      i: "em",
+      strong: "strong",
+      b: "strong",
+      code: "code",
+      kbd: "code",
+      samp: "code",
+      tt: "code"
+    };
+    Writer = class {
+      heading = 0;
+      lines = [];
+      blocks = [];
+      blockOverflow = 0;
+      parts = [];
+      frames = [];
+      pendingSpace = false;
+      needBlank = false;
+      /** The list closed last: its container's depth, its kind, and how many lines were written by then. */
+      closedList;
+      /** An emphasis just written that ends in punctuation, whose closing marker a letter pushed next would spoil. */
+      flanked;
+      text(raw) {
+        const decoded = decodeEntities(raw.includes("<") ? raw.replace(LOOSE_TAG_RE, " ") : raw).replace(HTML_SPACE, " ");
+        if (!decoded) return;
+        const core = decoded.trim();
+        if (decoded[0] === " ") this.space();
+        if (core) this.push(this.inCode() ? core : escapeText(core, { before: this.joinsBefore(decoded[0] !== " "), after: decoded[decoded.length - 1] !== " " }));
+        if (core && decoded[decoded.length - 1] === " ") this.space();
+      }
+      space() {
+        if (this.parts.length) this.pendingSpace = true;
+      }
+      hardBreak() {
+        if (this.heading || this.inCode()) this.space();
+        else if (this.parts.length) {
+          this.parts.push("\n");
+          this.pendingSpace = false;
+        }
+      }
+      open(kind, href, self) {
+        if (this.frames.length >= MAX_INLINE_DEPTH) return;
+        const inert = kind === "a" && href === void 0 || this.inCode() || kind !== "a" && this.frames.some((f) => f.kind === kind);
+        this.frames.push({ kind, start: this.parts.length, ...href !== void 0 ? { href } : {}, ...self ? { self } : {}, ...inert ? { inert } : {} });
+      }
+      /** Close the innermost open `kind`, and whatever opened inside it and never closed. */
+      close(kind) {
+        let i = this.frames.length - 1;
+        while (i >= 0 && this.frames[i].kind !== kind) i--;
+        if (i < 0) return;
+        while (this.frames.length > i) this.wrap(this.frames.pop());
+      }
+      image(attrs, base2) {
+        const candidates2 = [attrs.get("src"), attrs.get("data-src"), attrs.get("data-original"), attrs.get("srcset")?.trim().split(/\s+/)[0]];
+        const src = candidates2.map((c) => linkTarget(c, base2)).find((u) => u !== void 0);
+        const pixel = ["width", "height"].some((d) => /^[01]$/.test(attrs.get(d)?.trim() ?? ""));
+        if (!src || pixel || this.inCode()) {
+          this.space();
+          return;
+        }
+        const alt = decodeEntities(attrs.get("alt") ?? "").replace(HTML_SPACE, " ").trim();
+        this.push(`![${escapeText(alt)}](${destination(src)})`);
+      }
+      codeBlock(inner, lang) {
+        const body = decodeEntities(inner.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
+        if (!body.trim()) return;
+        const fence = "`".repeat(Math.max(3, longestRun(body, "`") + 1));
+        this.block([fence + lang, ...body.split("\n"), fence]);
+      }
+      rule() {
+        this.block(["***"]);
+      }
+      openList(ordered, start) {
+        const top = this.blocks[this.blocks.length - 1];
+        if (top?.kind === "list" && top.items && this.blocks.length + 1 < MAX_BLOCK_DEPTH) this.blocks.push({ kind: "item", marker: top.last, first: false });
+        if (!this.room()) return;
+        const item = this.blocks[this.blocks.length - 1];
+        if (item?.kind === "item" && !item.first && (!ordered || start === 1)) this.needBlank = false;
+        const prev = this.closedList;
+        const alt = prev !== void 0 && prev.depth === this.blocks.length && prev.ordered === ordered && prev.lines === this.lines.length && !prev.alt;
+        this.blocks.push({ kind: "list", ordered, alt, next: start, items: 0, last: "" });
+      }
+      closeList() {
+        if (this.blockOverflow) {
+          this.blockOverflow--;
+          return;
+        }
+        const i = this.nearest("list");
+        if (i < 0) return;
+        const { ordered, alt } = this.blocks[i];
+        this.closedList = { depth: i, ordered, alt, lines: this.lines.length };
+        this.blocks.length = i;
+        this.needBlank = true;
+      }
+      openItem() {
+        if (this.blockOverflow) {
+          this.blockOverflow++;
+          return;
+        }
+        let list = this.nearest("list");
+        if (list >= 0) this.blocks.length = list + 1;
+        else {
+          if (!this.room()) return;
+          this.blocks.push({ kind: "list", ordered: false, alt: false, next: 1, items: 0, last: "" });
+          list = this.blocks.length - 1;
+        }
+        if (!this.room()) return;
+        const owner = this.blocks[list];
+        const marker = owner.ordered ? `${owner.next++}${owner.alt ? ")" : "."} ` : owner.alt ? "+ " : "- ";
+        owner.last = marker;
+        this.blocks.push({ kind: "item", marker, first: true });
+        if (owner.items++) this.needBlank = false;
+      }
+      closeItem() {
+        if (this.blockOverflow) {
+          this.blockOverflow--;
+          return;
+        }
+        for (let i = this.blocks.length - 1; i >= 0; i--) {
+          const kind = this.blocks[i].kind;
+          if (kind === "list") return;
+          if (kind === "item") {
+            this.blocks.length = i;
+            return;
+          }
+        }
+      }
+      openQuote() {
+        if (this.room()) this.blocks.push({ kind: "quote", first: true });
+      }
+      closeQuote() {
+        if (this.blockOverflow) {
+          this.blockOverflow--;
+          return;
+        }
+        const i = this.nearest("quote");
+        if (i < 0) return;
+        this.blocks.length = i;
+        this.needBlank = true;
+      }
+      /**
+       * End the paragraph or heading in progress and write it out. The inline
+       * elements still open close over the text so far and reopen for what
+       * follows, so a link wrapped round a heading and a paragraph — a card —
+       * links both.
+       */
+      flush() {
+        const open2 = this.frames.map((f) => ({ ...f }));
+        while (this.frames.length) this.wrap(this.frames.pop());
+        const text = this.parts.join("");
+        this.parts = [];
+        this.flanked = void 0;
+        this.pendingSpace = false;
+        this.frames = open2.map((f) => ({ ...f, start: 0 }));
+        const level = this.heading;
+        this.heading = 0;
+        if (level) {
+          const title = text.replace(/\s+/g, " ").trim();
+          if (title) this.block([`${"#".repeat(level)} ${title.replace(/(^|\s)(#+)$/, "$1\\$2")}`]);
+          return;
+        }
+        let para = [];
+        for (const raw of `${text}
+
+`.split("\n")) {
+          const line = raw.trim();
+          if (line) {
+            para.push(escapeLineStart(line));
+            continue;
+          }
+          if (!para.length) continue;
+          this.block(para.map((l, i) => i < para.length - 1 ? `${l}  ` : l));
+          para = [];
+        }
+      }
+      /** Write finished lines under the open blocks' prefixes, a blank line before them where one is due. */
+      block(content) {
+        if (!content.length) return;
+        if (this.needBlank && this.lines.length) this.lines.push(this.prefix(false).trimEnd());
+        for (const line of content) {
+          const prefix = this.prefix(true);
+          this.lines.push(line ? prefix + line : prefix.trimEnd());
+        }
+        this.needBlank = true;
+      }
+      finish() {
+        this.flush();
+        return this.lines.join("\n").trimEnd();
+      }
+      push(markdown) {
+        const f = this.flanked;
+        this.flanked = void 0;
+        if (f && !this.pendingSpace && f.at === this.parts.length - 1 && FLANK_WORD.test(markdown[0] ?? "")) {
+          this.parts[f.at] = flank(f.marker, f.core, f.start, true);
+        }
+        if (this.pendingSpace) this.parts.push(" ");
+        this.pendingSpace = false;
+        this.parts.push(markdown);
+      }
+      inCode() {
+        return this.frames.some((f) => f.kind === "code");
+      }
+      /**
+       * Whether text pushed next will stand straight after something other than
+       * a space or a line start: the text before it, when `touching` it, or the
+       * marker of an emphasis or link that opens where it starts (the marker goes
+       * in when the element closes, and moves the element's leading space outside).
+       */
+      joinsBefore(touching) {
+        const last = this.parts[this.parts.length - 1];
+        if (touching && !this.pendingSpace && last !== void 0 && last !== "\n") return true;
+        return this.frames.some((f) => !f.inert && f.start === this.parts.length);
+      }
+      /** Replace an element's text with its Markdown, its outer whitespace kept outside it. */
+      wrap(f) {
+        if (f.inert) return;
+        const trailing = this.pendingSpace;
+        this.pendingSpace = false;
+        if (this.flanked && this.flanked.at >= f.start) this.flanked = void 0;
+        const content = this.parts.splice(f.start).join("");
+        const core = content.trim();
+        const lead = content.slice(0, content.length - content.trimStart().length);
+        const trail = content.slice(content.trimEnd().length);
+        this.whitespace(lead);
+        if (core) {
+          let markdown = wrapInline(f, core, this.heading > 0);
+          const last = this.parts.length - 1;
+          if (f.kind === "a" && markdown && !this.pendingSpace && this.parts[last]?.endsWith("!")) this.parts[last] = `${this.parts[last].slice(0, -1)}\\!`;
+          const marker = f.kind === "em" ? "*" : f.kind === "strong" ? "**" : "";
+          if (marker) {
+            const start = !this.pendingSpace && FLANK_WORD.test(this.parts[last]?.slice(-1) ?? "") && FLANK_PUNCT.test(core[0]);
+            if (start) markdown = flank(marker, core, true, false);
+            this.push(markdown);
+            if (FLANK_PUNCT.test(core[core.length - 1])) this.flanked = { at: this.parts.length - 1, marker, core, start };
+          } else this.push(markdown);
+        }
+        this.whitespace(trail);
+        if (trailing) this.space();
+      }
+      whitespace(ws) {
+        if (ws.includes("\n")) {
+          if (this.parts.length) this.parts.push("\n");
+          this.pendingSpace = false;
+        } else if (ws) this.space();
+      }
+      prefix(consume) {
+        let p = "";
+        for (const b of this.blocks) {
+          if (b.kind === "quote") {
+            if (consume || !b.first) p += "> ";
+            if (consume) b.first = false;
+          } else if (b.kind === "item") {
+            p += b.first && consume ? b.marker : " ".repeat(b.marker.length);
+            if (consume) b.first = false;
+          }
+        }
+        return p;
+      }
+      nearest(kind) {
+        for (let i = this.blocks.length - 1; i >= 0; i--) if (this.blocks[i].kind === kind) return i;
+        return -1;
+      }
+      /** Whether one more block may nest; past the bound it is counted instead, and its close uncounted. */
+      room() {
+        if (this.blocks.length < MAX_BLOCK_DEPTH) return true;
+        this.blockOverflow++;
+        return false;
+      }
+    };
+    FLANK_PUNCT = /[\p{P}\p{S}]/u;
+    FLANK_WORD = /[^\s\p{P}\p{S}]/u;
+    MARKUP_CHARS = "\\*`[]";
+    PERMALINK_TEXT = /^(?:¶|#|§|🔗)$/u;
+    HTML_SPACE = /[ \t\n\r\f]+/g;
+    ALWAYS_SYNTAX = /[\\`*[\]]/g;
+    EDGE_UNDERSCORE = /(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])/gu;
+    HTML_LIKE = /<(?=[a-zA-Z/!?])/g;
+    ENTITY_LIKE = /&(?=#?[a-zA-Z0-9]+;)/g;
+    STRIKE = /~(?=~)|(?<=[^\t\n\f\r\p{Zs}])~/gu;
+    OPEN_END = /(?:<|&#?[a-zA-Z0-9]*)$/;
+    UNFOLLOWABLE = /^(?:javascript|vbscript|data):/i;
+    BASE_TAG = /<base(?=[\s/>])[^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>/gi;
+    LANGUAGE_CLASS = /(?:^|\s)(?:(?:language|lang|highlight(?:-source)?)-|brush:\s*)([\w+#.-]+)/i;
+    NO_LANGUAGE = /* @__PURE__ */ new Set(["none", "nohighlight", "plaintext"]);
+    LAYOUT_INSIDE = /<(?:table|pre)[\s/>]/;
+  }
+});
 
 // src/locale.ts
-var LANG_COUNTRY = {
-  en: "us",
-  pt: "br",
-  ja: "jp",
-  zh: "cn",
-  ko: "kr",
-  sv: "se",
-  da: "dk",
-  cs: "cz",
-  el: "gr",
-  nb: "no",
-  // Bokmål → Norway
-  nn: "no",
-  // Nynorsk → Norway
-  uk: "ua",
-  // Ukrainian language → Ukraine
-  ar: "sa",
-  he: "il",
-  hi: "in",
-  et: "ee",
-  vi: "vn",
-  ms: "my",
-  fa: "ir",
-  ca: "es",
-  sl: "si",
-  sr: "rs",
-  tl: "ph",
-  fil: "ph",
-  ga: "ie",
-  cy: "gb",
-  eu: "es",
-  gl: "es",
-  sq: "al",
-  bs: "ba",
-  be: "by",
-  ka: "ge",
-  hy: "am",
-  kk: "kz",
-  af: "za",
-  sw: "ke",
-  ur: "pk",
-  bn: "bd",
-  ta: "in",
-  te: "in",
-  mr: "in",
-  ne: "np",
-  si: "lk",
-  km: "kh",
-  lo: "la",
-  lb: "lu"
-};
-var SCRIPT_COUNTRY = {
-  "zh-hant": "tw",
-  "zh-hans": "cn"
-};
-var REGION_ALIASES = {
-  gb: "uk",
-  en: "us",
-  "419": "xl",
-  si: "sl"
-};
-var DDG_LANG_ALIASES = {
-  nb: "no",
-  // Bokmål
-  nn: "no",
-  // Nynorsk
-  ja: "jp",
-  ko: "kr",
-  fil: "tl"
-};
-var DDG_KL = {
-  ar: "xa-ar",
-  ca: "ct-ca",
-  "zh-tw": "tw-tzh",
-  "zh-hk": "hk-tzh",
-  "es-us": "ue-es"
-};
-var NO_REGION = "wt";
 function parseTag(tag) {
   const parts = (tag || "en").trim().replace(/[.@].*$/, "").split(/[-_]/);
   const lang = (parts[0] || "en").toLowerCase();
@@ -5284,14 +7112,92 @@ function acceptLanguageHeader(lang, region) {
   if (l === "en") return `${l}-${R},${l};q=0.9`;
   return `${l}-${R},${l};q=0.9,en;q=0.5`;
 }
+var LANG_COUNTRY, SCRIPT_COUNTRY, REGION_ALIASES, DDG_LANG_ALIASES, DDG_KL, NO_REGION;
+var init_locale = __esm({
+  "src/locale.ts"() {
+    "use strict";
+    LANG_COUNTRY = {
+      en: "us",
+      pt: "br",
+      ja: "jp",
+      zh: "cn",
+      ko: "kr",
+      sv: "se",
+      da: "dk",
+      cs: "cz",
+      el: "gr",
+      nb: "no",
+      // Bokmål → Norway
+      nn: "no",
+      // Nynorsk → Norway
+      uk: "ua",
+      // Ukrainian language → Ukraine
+      ar: "sa",
+      he: "il",
+      hi: "in",
+      et: "ee",
+      vi: "vn",
+      ms: "my",
+      fa: "ir",
+      ca: "es",
+      sl: "si",
+      sr: "rs",
+      tl: "ph",
+      fil: "ph",
+      ga: "ie",
+      cy: "gb",
+      eu: "es",
+      gl: "es",
+      sq: "al",
+      bs: "ba",
+      be: "by",
+      ka: "ge",
+      hy: "am",
+      kk: "kz",
+      af: "za",
+      sw: "ke",
+      ur: "pk",
+      bn: "bd",
+      ta: "in",
+      te: "in",
+      mr: "in",
+      ne: "np",
+      si: "lk",
+      km: "kh",
+      lo: "la",
+      lb: "lu"
+    };
+    SCRIPT_COUNTRY = {
+      "zh-hant": "tw",
+      "zh-hans": "cn"
+    };
+    REGION_ALIASES = {
+      gb: "uk",
+      en: "us",
+      "419": "xl",
+      si: "sl"
+    };
+    DDG_LANG_ALIASES = {
+      nb: "no",
+      // Bokmål
+      nn: "no",
+      // Nynorsk
+      ja: "jp",
+      ko: "kr",
+      fil: "tl"
+    };
+    DDG_KL = {
+      ar: "xa-ar",
+      ca: "ct-ca",
+      "zh-tw": "tw-tzh",
+      "zh-hk": "hk-tzh",
+      "es-us": "ue-es"
+    };
+    NO_REGION = "wt";
+  }
+});
 
 // src/firecrawl.ts
-var FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
-var PROBE_TIMEOUT_MS2 = 2e3;
-var SCRAPE_TIMEOUT_MS = 45e3;
-var SEARCH_TIMEOUT_MS = 3e4;
-var SERVER_MARGIN_MS = { scrape: 5e3, search: 2e3 };
-var SCRAPE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
 function firecrawlBase(opts = {}) {
   const raw = (opts.firecrawl ?? env("FIRECRAWL") ?? FIRECRAWL_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
@@ -5304,28 +7210,6 @@ function authHeaders() {
   const key = env("FIRECRAWL_KEY");
   return key ? { authorization: `Bearer ${key}` } : void 0;
 }
-var PROBE_DOWN_TTL_MS = 3e4;
-var ProbeMemo = class {
-  entries = /* @__PURE__ */ new Map();
-  /** The verdict for `key`, probing when there is none or a "down" one expired. */
-  get(key, probe) {
-    const hit = this.entries.get(key);
-    if (hit && (hit.downAt === void 0 || Date.now() - hit.downAt < PROBE_DOWN_TTL_MS)) return hit.verdict;
-    const entry = { verdict: probe() };
-    void entry.verdict.then((up) => {
-      if (!up) entry.downAt = Date.now();
-    });
-    this.entries.set(key, entry);
-    return entry.verdict;
-  }
-  markDown(key) {
-    this.entries.set(key, { verdict: Promise.resolve(false), downAt: Date.now() });
-  }
-  clear() {
-    this.entries.clear();
-  }
-};
-var probeCache = new ProbeMemo();
 function resetFirecrawlProbeCache() {
   probeCache.clear();
 }
@@ -5351,7 +7235,6 @@ function probeFirecrawl(base2, explicit = false) {
     }
   });
 }
-var prefixCache = /* @__PURE__ */ new Map();
 function apiPrefix(base2) {
   return prefixCache.get(base2) ?? "/v2";
 }
@@ -5368,10 +7251,10 @@ function serverReason(data) {
   const line = cleanInline(raw).slice(0, 200);
   return line || void 0;
 }
-function mapScrapeResponse(json) {
-  if (!json || typeof json !== "object" || Array.isArray(json)) return null;
-  if (json.success === false) return null;
-  const data = json.data;
+function mapScrapeResponse(json2) {
+  if (!json2 || typeof json2 !== "object" || Array.isArray(json2)) return null;
+  if (json2.success === false) return null;
+  const data = json2.data;
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const markdown = typeof data.markdown === "string" ? data.markdown.trim() : "";
   if (!markdown) return null;
@@ -5390,10 +7273,10 @@ function mapScrapeResponse(json) {
     ...status !== void 0 ? { statusCode: status } : {}
   };
 }
-function mapSearchResponse(json) {
-  if (!json || typeof json !== "object") return [];
-  if (json.success === false) return [];
-  const data = json.data;
+function mapSearchResponse(json2) {
+  if (!json2 || typeof json2 !== "object") return [];
+  if (json2.success === false) return [];
+  const data = json2.data;
   const web = Array.isArray(data) ? data : Array.isArray(data?.web) ? data.web : Array.isArray(data?.results) ? data.results : [];
   const out = [];
   for (const x of web) {
@@ -5486,9 +7369,58 @@ async function searchViaFirecrawl(query, limit, opts = {}) {
   }
   return { hits: mapSearchResponse(r.data) };
 }
+var FIRECRAWL_DEFAULT_BASE, PROBE_TIMEOUT_MS2, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, SERVER_MARGIN_MS, SCRAPE_MAX_AGE_MS, PROBE_DOWN_TTL_MS, ProbeMemo, probeCache, prefixCache;
+var init_firecrawl = __esm({
+  "src/firecrawl.ts"() {
+    "use strict";
+    init_brand();
+    init_fetch();
+    init_locale();
+    FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
+    PROBE_TIMEOUT_MS2 = 2e3;
+    SCRAPE_TIMEOUT_MS = 45e3;
+    SEARCH_TIMEOUT_MS = 3e4;
+    SERVER_MARGIN_MS = { scrape: 5e3, search: 2e3 };
+    SCRAPE_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+    PROBE_DOWN_TTL_MS = 3e4;
+    ProbeMemo = class {
+      entries = /* @__PURE__ */ new Map();
+      /** The verdict for `key`, probing when there is none or a "down" one expired. */
+      get(key, probe) {
+        const hit = this.entries.get(key);
+        if (hit && (hit.downAt === void 0 || Date.now() - hit.downAt < PROBE_DOWN_TTL_MS)) return hit.verdict;
+        const entry = { verdict: probe() };
+        void entry.verdict.then((up) => {
+          if (!up) entry.downAt = Date.now();
+        });
+        this.entries.set(key, entry);
+        return entry.verdict;
+      }
+      markDown(key) {
+        this.entries.set(key, { verdict: Promise.resolve(false), downAt: Date.now() });
+      }
+      clear() {
+        this.entries.clear();
+      }
+    };
+    probeCache = new ProbeMemo();
+    prefixCache = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/browser/mode.ts
+function browserFetchMode(explicit) {
+  const m = (explicit ?? env("BROWSER_FETCH"))?.toLowerCase();
+  return m === "always" || m === "fallback" ? m : "off";
+}
+var init_mode = __esm({
+  "src/browser/mode.ts"() {
+    "use strict";
+    init_brand();
+  }
+});
 
 // src/fetch.ts
-var DEFAULT_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 function browserUa() {
   return env("UA") || DEFAULT_BROWSER_UA;
 }
@@ -5499,8 +7431,6 @@ function contactUa() {
 function defaultUa() {
   return brand().defaultUa === "contact" ? contactUa() : browserUa();
 }
-var RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
-var defaultTimeoutMs2 = () => envInt("TIMEOUT_MS", 2e4, 1e3, 3e5);
 function pageDelayMs() {
   return envInt("PAGE_DELAY_MS", 350, 0, 5e3);
 }
@@ -5511,12 +7441,12 @@ function sleep(ms, signal) {
   return signal ? sleepUnlessAborted(ms, signal) : new Promise((r) => setTimeout(r, ms));
 }
 function sleepUnlessAborted(ms, signal) {
-  return new Promise((resolve7) => {
-    if (signal?.aborted) return resolve7();
+  return new Promise((resolve8) => {
+    if (signal?.aborted) return resolve8();
     const done = () => {
       clearTimeout(t);
       signal?.removeEventListener("abort", done);
-      resolve7();
+      resolve8();
     };
     const t = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
@@ -5575,11 +7505,9 @@ async function readMeasuredBody(res, max) {
   const bytes = read2.subarray(0, max);
   return { bytes, bytesRead: bytes.length, truncated: read2.length > max };
 }
-var DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 function isBinaryDocument(contentType) {
   return /application\/pdf/i.test(contentType) || docFormatForContentType(contentType) !== void 0;
 }
-var mimeOf = (contentType) => contentType.split(";")[0].trim().toLowerCase();
 function dispositionFilename(header2) {
   if (!header2) return void 0;
   let name;
@@ -5597,8 +7525,6 @@ function dispositionFilename(header2) {
   }
   return name?.split(/[\\/]/).pop() || void 0;
 }
-var namesDocument = (filename) => filename !== void 0 && (PDF_URL_RE.test(filename) || docFormatForUrl(filename) !== void 0);
-var REDIRECT_STATUS = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
 async function authorizedGet(url, init, authorize) {
   let target = url;
   const fail = (error, redirectFailed) => ({
@@ -5808,8 +7734,6 @@ async function httpJson(method, url, body, opts = {}) {
   }
   return last;
 }
-var INLINE_FORMAT = /* @__PURE__ */ new Set([...INLINE_TAGS, "br", "scp"]);
-var INLINE_FORMAT_TAG = /<(\/?)([a-zA-Z][\w.-]*(?::[\w.-]+)?)(?=[\s/>])([^<>]*)>/g;
 function cleanInline(s) {
   const text = decodeEntities(String(s));
   const opened = /* @__PURE__ */ new Set();
@@ -5824,10 +7748,6 @@ function cleanInline(s) {
     return markup ? "" : tag;
   }).replace(/\s+/g, " ").trim();
 }
-var NUL2 = "\0";
-var PRE_SLOT = (i) => `
-${NUL2}${i}${NUL2}
-`;
 function preSlotIndex(line) {
   if (line.length < 3 || line[0] !== NUL2 || line[line.length - 1] !== NUL2) return void 0;
   const i = Number(line.slice(1, -1));
@@ -5843,26 +7763,23 @@ function restoreInlinePre(line, blocks) {
   return out.replace(/ {2,}/g, " ").trim();
 }
 function setAsidePre(html, blocks) {
-  const open = /<pre(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
+  const open2 = /<pre(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
   const close = closeTagRe("pre");
   let out = "";
   let last = 0;
   let m;
-  while (m = open.exec(html)) {
-    close.lastIndex = open.lastIndex;
+  while (m = open2.exec(html)) {
+    close.lastIndex = open2.lastIndex;
     const c = close.exec(html);
     if (!c) break;
-    const inner = html.slice(open.lastIndex, c.index);
+    const inner = html.slice(open2.lastIndex, c.index);
     const text = decodeEntities(inner.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
     blocks.push(text);
     out += html.slice(last, m.index) + PRE_SLOT(blocks.length - 1);
-    last = open.lastIndex = c.index + c[0].length;
+    last = open2.lastIndex = c.index + c[0].length;
   }
   return last === 0 ? html : out + html.slice(last);
 }
-var HEADING_OPEN = /<h([1-6])(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
-var HEADING_BOUNDARY = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/gi;
-var PERMALINK = /<a\b[^<>]*>\s*(?:(?:¶|#|§|🔗|&para;|&#182;|&#x[bB]6;|&sect;)\s*)?<\/a\s*>/gi;
 function flattenHeadings(html) {
   let out = "";
   let last = 0;
@@ -5912,15 +7829,14 @@ function htmlToText(html, opts = {}) {
     return t.includes(NUL2) ? restoreInlinePre(t, pre) : t;
   }).filter((l) => l.length > 0).join("\n");
 }
-var NOT_TITLE = ["script", "style", "template", "svg"];
 function firstElementText(html, name) {
-  const open = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
-  if (!open) return void 0;
+  const open2 = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
+  if (!open2) return void 0;
   const close = closeTagRe(name);
-  close.lastIndex = open.index + open[0].length;
+  close.lastIndex = open2.index + open2[0].length;
   const c = close.exec(html);
   if (!c) return void 0;
-  const inner = html.slice(open.index + open[0].length, c.index).replace(TAG_RE, (tag) => INLINE_TAGS.has(tagName(tag)) ? "" : " ");
+  const inner = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag) => INLINE_TAGS.has(tagName(tag)) ? "" : " ");
   return decodeEntities(inner).replace(/\s+/g, " ").trim() || void 0;
 }
 function htmlTitle(html) {
@@ -5965,37 +7881,8 @@ function absoluteCanonical(href, base2) {
     return void 0;
   }
 }
-var visibleLength = (h) => h.replace(/<[^<>]*>/g, " ").replace(/\s+/g, " ").trim().length;
-var ROLE_MAIN = /\srole\s*=\s*["']?main(?=["'\s/>])/i;
-var ROLE_MAIN_TAG = /<([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>])[^<>]*\srole\s*=\s*["']?main(?=["'\s/>])/gi;
-var CONTENT_WORDS = /* @__PURE__ */ new Set(["content", "article", "post", "entry", "story", "main", "prose"]);
-var CHROME_WORDS = /* @__PURE__ */ new Set([
-  "nav",
-  "navbar",
-  "navigation",
-  "menu",
-  "header",
-  "footer",
-  "sidebar",
-  "breadcrumb",
-  "breadcrumbs",
-  "banner",
-  "cookie",
-  "consent",
-  "comment",
-  "comments",
-  "related",
-  "share",
-  "social",
-  "toolbar",
-  "widget",
-  "meta",
-  "ad",
-  "ads",
-  "promo"
-]);
-function isContentContainer(open) {
-  const attrs = htmlAttributes(open);
+function isContentContainer(open2) {
+  const attrs = htmlAttributes(open2);
   for (const token of `${attrs.get("id") ?? ""} ${attrs.get("class") ?? ""}`.toLowerCase().split(/\s+/)) {
     if (token === "markdown-body") return true;
     const words = token.split(/\W+/);
@@ -6003,9 +7890,9 @@ function isContentContainer(open) {
   }
   return false;
 }
-function blockKind(open) {
-  const tag = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(open)?.[1]?.toLowerCase() ?? "";
-  const firstClass = (htmlAttributes(open).get("class") ?? "").trim().split(/\s+/)[0];
+function blockKind(open2) {
+  const tag = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(open2)?.[1]?.toLowerCase() ?? "";
+  const firstClass = (htmlAttributes(open2).get("class") ?? "").trim().split(/\s+/)[0];
   return `${tag} ${firstClass.replace(/\d+/g, "0")}`;
 }
 function extractMainHtml(html) {
@@ -6013,7 +7900,7 @@ function extractMainHtml(html) {
   const roleMainTags = /* @__PURE__ */ new Set(["main"]);
   for (const m of clean3.matchAll(ROLE_MAIN_TAG)) roleMainTags.add(m[1].toLowerCase());
   const tiers = [
-    { tags: [...roleMainTags], isCandidate: (open) => /^<main[\s/>]/i.test(open) || ROLE_MAIN.test(open) },
+    { tags: [...roleMainTags], isCandidate: (open2) => /^<main[\s/>]/i.test(open2) || ROLE_MAIN.test(open2) },
     { tags: ["article"], isCandidate: () => true },
     { tags: ["div", "section"], isCandidate: isContentContainer }
   ];
@@ -6038,16 +7925,10 @@ function extractMainHtml(html) {
   }
   return html;
 }
-var PDF_URL_RE = /\.pdf($|[?#])/i;
-var PDF_ROUTE_RE = /\/pdf\/[^/?#]+($|[?#])/i;
-var NON_PDF_TAIL_RE = /\.(html?|php|aspx?|jsp|json|xml|txt|md|csv)($|[?#])/i;
 function looksLikePdfUrl(url) {
   if (PDF_URL_RE.test(url)) return true;
   return PDF_ROUTE_RE.test(url) && !NON_PDF_TAIL_RE.test(url);
 }
-var PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
-var DOC_FETCH_OPTS = { accept: "*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
-var PURE_VIDEO_HOSTS = /* @__PURE__ */ new Set(["youtube", "vimeo", "dailymotion"]);
 async function fetchAndExtract(url, opts = {}) {
   const cancelled = () => ({ text: "", finalUrl: url, status: 0, note: `Fetching ${url} was cancelled.` });
   if (opts.signal?.aborted) return cancelled();
@@ -6077,10 +7958,47 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
+  const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchMode(opts.browser);
+  if (browser === "always") {
+    const got2 = await renderInBrowser(url, opts);
+    if (got2.result) return got2.result;
+    const res2 = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, { page: false });
+    return { ...res2, note: [`${got2.note}; read without it.`, got2.detail, res2.note].filter(Boolean).join(" ") };
+  }
+  const seen = { page: false };
+  const res = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen);
+  const why = browser === "fallback" && seen.page && !opts.signal?.aborted ? worthRendering(res) : void 0;
+  if (!why) return res;
+  const got = await renderInBrowser(url, opts);
+  if (got.result?.text.trim())
+    return { ...got.result, note: [`Read ${url} in the browser: the built-in fetch ${why}.`, got.result.note].filter(Boolean).join(" ") };
+  return { ...res, note: [res.note, got.result ? got.result.note : `${got.note}.`, got.detail].filter(Boolean).join(" ") || void 0 };
+}
+function worthRendering(res) {
+  if (RENDER_STATUS.has(res.status)) return res.status ? `got HTTP ${res.status}` : "got no answer";
+  if (res.status < 200 || res.status >= 300) return void 0;
+  const junk = looksLikeJunkExtraction(res.text);
+  if (junk) return `read a ${junk}`;
+  return res.text.trim().length < 200 ? "found almost no text" : void 0;
+}
+async function renderInBrowser(url, opts) {
+  try {
+    const { readRenderedPage: readRenderedPage2 } = await Promise.resolve().then(() => (init_read(), read_exports));
+    const { format, fullPage, stripConsent, keepHtml, signal, timeoutMs } = opts;
+    const result = await readRenderedPage2(url, { format, fullPage, stripConsent, keepHtml, signal, timeoutMs });
+    if (result.status >= 400) return { note: `The browser got HTTP ${result.status} for ${url}`, detail: result.note };
+    return { result };
+  } catch (e) {
+    return { note: `The browser could not read ${url} (${e instanceof Error ? e.message : String(e)})` };
+  }
+}
+async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
+  const cancelled = () => ({ text: "", finalUrl: url, status: 0, note: `Fetching ${url} was cancelled.` });
   let firecrawlNote;
   if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
+      seen.page = true;
       return {
         text: fc.data.markdown,
         title: fc.data.title,
@@ -6112,6 +8030,7 @@ async function fetchAndExtract(url, opts = {}) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
   }
   if (!res.ok) {
+    seen.page = true;
     const wait = res.retryAfterMs !== void 0 ? `, retry after ${Math.ceil(res.retryAfterMs / 1e3)} s` : "";
     const why = res.status === 429 ? `rate-limited (HTTP 429${wait})` : `status ${res.status}${res.error ? ", " + res.error : ""}${wait}`;
     return {
@@ -6192,22 +8111,12 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const body = !res.body && res.bytes ? decodeBody(res.bytes, res.contentType) : res.body;
   const isHtml = HTML_TYPE_RE.test(mime) || ambiguousType && /^\s*<(?:!doctype\s+html\b|html\b|head\b|body\b|article\b|main\b|p\b|h[1-6]\b)/i.test(body);
-  const markdown = opts.format === "markdown";
-  const main = isHtml ? opts.fullPage ? body : extractMainHtml(body) : body;
-  const stripped = !isHtml ? body : markdown ? markdownAgainst(main, documentBaseUrl(body, res.url), opts.fullPage) : htmlToText(main, opts);
-  const consent = isHtml && opts.stripConsent && !opts.fullPage ? stripConsentBoilerplate(stripped, { markdown }) : { text: stripped, dropped: 0 };
-  const title = isHtml ? pageTitle(body) : void 0;
-  const canonical = isHtml ? absoluteCanonical(htmlCanonicalUrl(body), res.url) : void 0;
-  const metaDescription = isHtml ? metaDescriptionOf(body) : void 0;
+  seen.page = isHtml;
+  const extracted = isHtml ? extractFromHtml(body, res.url, opts) : { text: body, consentDropped: 0, title: void 0, canonical: void 0, metaDescription: void 0 };
   const notDocument = answeredHtml ? `${url} looked like ${claimsPdf ? "a PDF" : "an office document"} but the server returned HTML (a login wall or landing page?), so it was read as a web page.` : void 0;
   const cut = res.truncated ? `Read only the first ${res.bytesRead} bytes of ${url} (the response size cap), so this text is a prefix.` : void 0;
   return {
-    text: consent.text,
-    consentDropped: consent.dropped,
-    title,
-    canonical,
-    metaDescription,
-    ...opts.keepHtml && isHtml ? { html: body } : {},
+    ...extracted,
     finalUrl: res.url,
     status: res.status,
     note: [firecrawlNote, notDocument, cut].filter(Boolean).join(" ") || void 0,
@@ -6215,9 +8124,20 @@ async function fetchAndExtract(url, opts = {}) {
     ...validators
   };
 }
-var HTML_TYPE_RE = /^(?:text\/html|application\/xhtml\+xml)$/;
-var NON_TEXT_TYPE_RE = /^(?:image\/(?!svg\+xml$)|audio\/|video\/|font\/|model\/|application\/(?:gzip|x-gzip|x-tar|x-bzip2|x-xz|x-7z-compressed|x-rar-compressed|vnd\.rar|java-archive|wasm|x-msdownload|vnd\.android\.package-archive|x-shockwave-flash|ogg)$)/;
-var DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
+function extractFromHtml(html, finalUrl, opts = {}) {
+  const markdown = opts.format === "markdown";
+  const main = opts.fullPage ? html : extractMainHtml(html);
+  const stripped = markdown ? markdownAgainst(main, documentBaseUrl(html, finalUrl), opts.fullPage) : htmlToText(main, opts);
+  const consent = opts.stripConsent && !opts.fullPage ? stripConsentBoilerplate(stripped, { markdown }) : { text: stripped, dropped: 0 };
+  return {
+    text: consent.text,
+    consentDropped: consent.dropped,
+    title: pageTitle(html),
+    canonical: absoluteCanonical(htmlCanonicalUrl(html), finalUrl),
+    metaDescription: metaDescriptionOf(html),
+    ...opts.keepHtml ? { html } : {}
+  };
+}
 async function rescueViaWayback(url, opts = {}) {
   if (opts.authorizeUrl || envFlag("NO_WAYBACK")) return void 0;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
@@ -6228,30 +8148,6 @@ async function rescueViaWayback(url, opts = {}) {
   if (!got.text?.trim() || looksLikeJunkExtraction(got.text)) return void 0;
   return { text: got.text, title: got.title, snapshotUrl: snap.url, timestamp: String(snap.timestamp ?? "") };
 }
-var JUNK_PATTERNS = [
-  [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall", "strong"],
-  [/\bwe use cookies\b/i, "cookie/consent wall", "strong"],
-  [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall", "weak"],
-  [/\b(accept|reject|allow|decline) all\b/i, "cookie/consent wall", "weak"],
-  [/\b(please )?enable javascript\b/i, "JavaScript-required shell", "strong"],
-  [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell", "strong"],
-  [
-    /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
-    "anti-bot interstitial",
-    "strong"
-  ],
-  [/\battention required\b.*cloudflare|\bunusual traffic from your (computer )?network\b|\bchecking your browser\b/i, "anti-bot interstitial", "strong"],
-  // Akamai's and Cloudflare's denials carry an incident reference; without one
-  // the phrase is as likely a permission-error article.
-  [/\baccess denied\b[\s\S]{0,300}?(\breference #|\bray id\b|\bpermission to access\b)/i, "anti-bot interstitial", "strong"],
-  // Cloudflare's WAF block page. Its "Attention Required!" is the <title>,
-  // which extraction drops, so the body's own wording has to carry it.
-  [/\bsorry, you have been blocked\b|\byou are unable to access\b[\s\S]{0,300}?\bray id\b/i, "anti-bot interstitial", "strong"],
-  [/\baccess denied\b|\benable cookies\b/i, "anti-bot interstitial", "weak"],
-  // FR / DE (the locale layer targets non-EN markets)
-  [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)", "strong"],
-  [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)", "strong"]
-];
 function looksLikeJunkExtraction(text) {
   const t = text.trim();
   if (t.length >= 2e3) return void 0;
@@ -6263,34 +8159,6 @@ function looksLikeJunkExtraction(text) {
   const prose = t.split("\n").filter((l) => l.trim().length >= 60 && !JUNK_PATTERNS.some(([re]) => re.test(l))).length;
   return prose < 3 ? strong[1] : void 0;
 }
-var CONSENT_PATTERNS = [
-  /\bcookies?\b/i,
-  /\bconsent\b/i,
-  /\bgdpr\b/i,
-  /\bccpa\b/i,
-  /accept all\b/i,
-  /reject all\b/i,
-  /manage (?:preferences|choices|cookies|settings)/i,
-  /privacy (?:policy|preferences|choices)/i,
-  /tracking technolog/i,
-  /advertising partners/i,
-  /legitimate interest/i,
-  // FR / DE: the locale layer targets those markets, and their consent
-  // managers (Didomi, Usercentrics, OneTrust) speak the local language.
-  /\bconsentement\b/i,
-  /\brgpd\b/i,
-  /\beinwilligung\b/i,
-  /\bdsgvo\b/i
-];
-var CONSENT_ACTIONS = [
-  /\b(?:accept|reject|decline|agree|allow|manage|preferences|settings|choices)\b/i,
-  /\b(?:opt[ -]out|we use cookies|this (?:site|website) uses cookies|by continuing)\b/i,
-  /\b(?:learn more|privacy policy|cookie policy)\b/i
-];
-var BANNER_VOICE = /\b(?:we|us|our)\b[^.]{0,60}?\b(?:cookies?|partners|consent|tracking)\b|\bby (?:clicking|continuing|using|browsing)\b|\bthis (?:site|website) uses cookies\b|\bnous (?:utilisons|et nos partenaires)\b|\ben cliquant sur\b|\bwir (?:verwenden|nutzen|setzen|und unsere partner)\b|\bmit (?:dem )?klick auf\b/i;
-var BUTTON_LABEL = /^(?:tout (?:accepter|refuser)|(?:accepter|refuser) tout|accepter et (?:fermer|continuer)|continuer sans accepter|(?:param[ée]trer|g[ée]rer|personnaliser|accepter|refuser) (?:les|mes) cookies|alle (?:cookies )?(?:akzeptieren|ablehnen)|nur (?:notwendige|essenzielle)(?: cookies)?|cookie-einstellungen|einstellungen verwalten|akzeptieren und schlie(?:ß|ss)en)$/i;
-var BUTTON_LENGTH = 40;
-var NOTICE_LENGTH = 400;
 function stripConsentBoilerplate(text, opts = {}) {
   if (opts.markdown) return stripConsentMarkdown(text);
   let dropped = 0;
@@ -6305,10 +8173,6 @@ function isConsentLine(t) {
   const hits = CONSENT_PATTERNS.reduce((n, re) => n + (re.test(t) ? 1 : 0), 0);
   return BUTTON_LABEL.test(t) || hits >= 1 && t.length <= BUTTON_LENGTH && (hits >= 2 || CONSENT_ACTIONS.some((re) => re.test(t))) || hits >= 1 && t.length < NOTICE_LENGTH && BANNER_VOICE.test(t);
 }
-var MD_FENCE = /^[\s>]*(`{3,}|~{3,})(.*)$/;
-var MD_LINE_START = /^[\s>]*(?:(?:[-+*]|\d{1,9}[.)])\s+)?(?:#{1,6}\s+)?/;
-var MD_DESTINATION = /\]\((?:[^()\s\\]|\\.|\([^()\s]*\))*\)/g;
-var MD_MARKUP = /\\(?=[!-/:-@[-`{-~])|!?\[|\]|\*+|`+/g;
 function visibleText(line) {
   return line.replace(MD_LINE_START, "").replace(MD_DESTINATION, "]").replace(MD_MARKUP, "").trim();
 }
@@ -6380,6 +8244,903 @@ function capExtract(text, depth) {
   const lastNl = slice.lastIndexOf("\n");
   return (lastNl > cap * 0.6 ? slice.slice(0, lastNl) : slice) + "\n\n\u2026 [truncated]";
 }
+var DEFAULT_BROWSER_UA, RETRY_STATUS, defaultTimeoutMs2, DEFAULT_MAX_RESPONSE_BYTES, mimeOf, namesDocument, REDIRECT_STATUS, INLINE_FORMAT, INLINE_FORMAT_TAG, NUL2, PRE_SLOT, HEADING_OPEN, HEADING_BOUNDARY, PERMALINK, NOT_TITLE, visibleLength, ROLE_MAIN, ROLE_MAIN_TAG, CONTENT_WORDS, CHROME_WORDS, PDF_URL_RE, PDF_ROUTE_RE, NON_PDF_TAIL_RE, PDF_FETCH_OPTS, DOC_FETCH_OPTS, PURE_VIDEO_HOSTS, RENDER_STATUS, HTML_TYPE_RE, NON_TEXT_TYPE_RE, DEAD_LINK_STATUS, JUNK_PATTERNS, CONSENT_PATTERNS, CONSENT_ACTIONS, BANNER_VOICE, BUTTON_LABEL, BUTTON_LENGTH, NOTICE_LENGTH, MD_FENCE, MD_LINE_START, MD_DESTINATION, MD_MARKUP;
+var init_fetch = __esm({
+  "src/fetch.ts"() {
+    "use strict";
+    init_brand();
+    init_charset();
+    init_entities();
+    init_html();
+    init_mime();
+    init_retry();
+    init_text();
+    init_markdown2();
+    init_pdf();
+    init_doc();
+    init_firecrawl();
+    init_video();
+    init_mode();
+    DEFAULT_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+    RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
+    defaultTimeoutMs2 = () => envInt("TIMEOUT_MS", 2e4, 1e3, 3e5);
+    DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+    mimeOf = (contentType) => contentType.split(";")[0].trim().toLowerCase();
+    namesDocument = (filename) => filename !== void 0 && (PDF_URL_RE.test(filename) || docFormatForUrl(filename) !== void 0);
+    REDIRECT_STATUS = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+    INLINE_FORMAT = /* @__PURE__ */ new Set([...INLINE_TAGS, "br", "scp"]);
+    INLINE_FORMAT_TAG = /<(\/?)([a-zA-Z][\w.-]*(?::[\w.-]+)?)(?=[\s/>])([^<>]*)>/g;
+    NUL2 = "\0";
+    PRE_SLOT = (i) => `
+${NUL2}${i}${NUL2}
+`;
+    HEADING_OPEN = /<h([1-6])(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
+    HEADING_BOUNDARY = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/gi;
+    PERMALINK = /<a\b[^<>]*>\s*(?:(?:¶|#|§|🔗|&para;|&#182;|&#x[bB]6;|&sect;)\s*)?<\/a\s*>/gi;
+    NOT_TITLE = ["script", "style", "template", "svg"];
+    visibleLength = (h) => h.replace(/<[^<>]*>/g, " ").replace(/\s+/g, " ").trim().length;
+    ROLE_MAIN = /\srole\s*=\s*["']?main(?=["'\s/>])/i;
+    ROLE_MAIN_TAG = /<([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>])[^<>]*\srole\s*=\s*["']?main(?=["'\s/>])/gi;
+    CONTENT_WORDS = /* @__PURE__ */ new Set(["content", "article", "post", "entry", "story", "main", "prose"]);
+    CHROME_WORDS = /* @__PURE__ */ new Set([
+      "nav",
+      "navbar",
+      "navigation",
+      "menu",
+      "header",
+      "footer",
+      "sidebar",
+      "breadcrumb",
+      "breadcrumbs",
+      "banner",
+      "cookie",
+      "consent",
+      "comment",
+      "comments",
+      "related",
+      "share",
+      "social",
+      "toolbar",
+      "widget",
+      "meta",
+      "ad",
+      "ads",
+      "promo"
+    ]);
+    PDF_URL_RE = /\.pdf($|[?#])/i;
+    PDF_ROUTE_RE = /\/pdf\/[^/?#]+($|[?#])/i;
+    NON_PDF_TAIL_RE = /\.(html?|php|aspx?|jsp|json|xml|txt|md|csv)($|[?#])/i;
+    PDF_FETCH_OPTS = { accept: "application/pdf,*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
+    DOC_FETCH_OPTS = { accept: "*/*", binary: true, maxBytes: 16 * 1024 * 1024 };
+    PURE_VIDEO_HOSTS = /* @__PURE__ */ new Set(["youtube", "vimeo", "dailymotion"]);
+    RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
+    HTML_TYPE_RE = /^(?:text\/html|application\/xhtml\+xml)$/;
+    NON_TEXT_TYPE_RE = /^(?:image\/(?!svg\+xml$)|audio\/|video\/|font\/|model\/|application\/(?:gzip|x-gzip|x-tar|x-bzip2|x-xz|x-7z-compressed|x-rar-compressed|vnd\.rar|java-archive|wasm|x-msdownload|vnd\.android\.package-archive|x-shockwave-flash|ogg)$)/;
+    DEAD_LINK_STATUS = /* @__PURE__ */ new Set([404, 410, 451, 403]);
+    JUNK_PATTERNS = [
+      [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall", "strong"],
+      [/\bwe use cookies\b/i, "cookie/consent wall", "strong"],
+      [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall", "weak"],
+      [/\b(accept|reject|allow|decline) all\b/i, "cookie/consent wall", "weak"],
+      [/\b(please )?enable javascript\b/i, "JavaScript-required shell", "strong"],
+      [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell", "strong"],
+      [
+        /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
+        "anti-bot interstitial",
+        "strong"
+      ],
+      [/\battention required\b.*cloudflare|\bunusual traffic from your (computer )?network\b|\bchecking your browser\b/i, "anti-bot interstitial", "strong"],
+      // Akamai's and Cloudflare's denials carry an incident reference; without one
+      // the phrase is as likely a permission-error article.
+      [/\baccess denied\b[\s\S]{0,300}?(\breference #|\bray id\b|\bpermission to access\b)/i, "anti-bot interstitial", "strong"],
+      // Cloudflare's WAF block page. Its "Attention Required!" is the <title>,
+      // which extraction drops, so the body's own wording has to carry it.
+      [/\bsorry, you have been blocked\b|\byou are unable to access\b[\s\S]{0,300}?\bray id\b/i, "anti-bot interstitial", "strong"],
+      [/\baccess denied\b|\benable cookies\b/i, "anti-bot interstitial", "weak"],
+      // FR / DE (the locale layer targets non-EN markets)
+      [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)", "strong"],
+      [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)", "strong"]
+    ];
+    CONSENT_PATTERNS = [
+      /\bcookies?\b/i,
+      /\bconsent\b/i,
+      /\bgdpr\b/i,
+      /\bccpa\b/i,
+      /accept all\b/i,
+      /reject all\b/i,
+      /manage (?:preferences|choices|cookies|settings)/i,
+      /privacy (?:policy|preferences|choices)/i,
+      /tracking technolog/i,
+      /advertising partners/i,
+      /legitimate interest/i,
+      // FR / DE: the locale layer targets those markets, and their consent
+      // managers (Didomi, Usercentrics, OneTrust) speak the local language.
+      /\bconsentement\b/i,
+      /\brgpd\b/i,
+      /\beinwilligung\b/i,
+      /\bdsgvo\b/i
+    ];
+    CONSENT_ACTIONS = [
+      /\b(?:accept|reject|decline|agree|allow|manage|preferences|settings|choices)\b/i,
+      /\b(?:opt[ -]out|we use cookies|this (?:site|website) uses cookies|by continuing)\b/i,
+      /\b(?:learn more|privacy policy|cookie policy)\b/i
+    ];
+    BANNER_VOICE = /\b(?:we|us|our)\b[^.]{0,60}?\b(?:cookies?|partners|consent|tracking)\b|\bby (?:clicking|continuing|using|browsing)\b|\bthis (?:site|website) uses cookies\b|\bnous (?:utilisons|et nos partenaires)\b|\ben cliquant sur\b|\bwir (?:verwenden|nutzen|setzen|und unsere partner)\b|\bmit (?:dem )?klick auf\b/i;
+    BUTTON_LABEL = /^(?:tout (?:accepter|refuser)|(?:accepter|refuser) tout|accepter et (?:fermer|continuer)|continuer sans accepter|(?:param[ée]trer|g[ée]rer|personnaliser|accepter|refuser) (?:les|mes) cookies|alle (?:cookies )?(?:akzeptieren|ablehnen)|nur (?:notwendige|essenzielle)(?: cookies)?|cookie-einstellungen|einstellungen verwalten|akzeptieren und schlie(?:ß|ss)en)$/i;
+    BUTTON_LENGTH = 40;
+    NOTICE_LENGTH = 400;
+    MD_FENCE = /^[\s>]*(`{3,}|~{3,})(.*)$/;
+    MD_LINE_START = /^[\s>]*(?:(?:[-+*]|\d{1,9}[.)])\s+)?(?:#{1,6}\s+)?/;
+    MD_DESTINATION = /\]\((?:[^()\s\\]|\\.|\([^()\s]*\))*\)/g;
+    MD_MARKUP = /\\(?=[!-/:-@[-`{-~])|!?\[|\]|\*+|`+/g;
+  }
+});
+
+// src/browser/challenge.ts
+function add(out, cond, e) {
+  if (cond) out.push(e);
+}
+function genericEvidence(h, sig) {
+  const out = [];
+  const inTitle = GENERIC_PHRASES.find((p) => h.title.includes(p));
+  add(out, inTitle, { signal: `title mentions "${inTitle}"` });
+  if (h.text.length < PHRASE_TEXT_MAX) {
+    const inText = GENERIC_PHRASES.find((p) => h.text.includes(p));
+    add(out, inText, { signal: `text mentions "${inText}"` });
+  }
+  add(out, frameHas(h, "captcha"), { signal: "captcha frame", widget: true });
+  add(out, sig.status !== void 0 && BLOCKED_STATUS.has(sig.status) && sig.status !== 503 && h.text.trim().length < LITTLE_TEXT, {
+    signal: `status ${sig.status} with almost no text`,
+    interstitial: true
+  });
+  return out;
+}
+function classifyChallenge(sig) {
+  const text = norm((sig.text ?? "").slice(0, 4096));
+  const h = {
+    title: norm(sig.title),
+    text,
+    urls: [...sig.frameUrls ?? [], ...sig.scriptUrls ?? []].map(norm),
+    frames: (sig.frameUrls ?? []).map(norm),
+    scripts: (sig.scriptUrls ?? []).map(norm),
+    cookies: (sig.cookieNames ?? []).map(norm),
+    selectors: (sig.selectors ?? []).map(norm)
+  };
+  const statusBlocked = sig.status !== void 0 && BLOCKED_STATUS.has(sig.status);
+  const littleText = sig.text !== void 0 && sig.text.trim().length < LITTLE_TEXT;
+  const finish = (kind, ev2) => ({
+    kind,
+    // An empty page makes a block of what is not a widget or a tag; a widget or a tag needs a blocked status.
+    blocking: statusBlocked || ev2.some((e) => e.interstitial || littleText && !e.weak && !e.widget),
+    signals: ev2.map((e) => e.signal)
+  });
+  for (const [kind, rule] of VENDORS) {
+    const ev2 = rule(h);
+    if (ev2.some((e) => !e.weak) || ev2.length > 0 && statusBlocked) return finish(kind, ev2);
+  }
+  const ev = genericEvidence(h, sig);
+  return ev.length > 0 ? finish("generic", ev) : null;
+}
+function frameUrls(node, out = []) {
+  if (!node) return out;
+  if (node.frame?.url) out.push(node.frame.url);
+  for (const c of node.childFrames ?? []) frameUrls(c, out);
+  return out;
+}
+async function probeChallenge(session) {
+  try {
+    const r = await session.page.send(
+      "Runtime.evaluate",
+      { expression: PROBE, returnByValue: true },
+      { timeoutMs: PROBE_TIMEOUT_MS3 }
+    );
+    const v = r.result?.value;
+    if (typeof v !== "object" || v === null) return { ok: false };
+    const p = v;
+    let tree = [];
+    try {
+      tree = frameUrls((await session.page.send("Page.getFrameTree")).frameTree);
+    } catch {
+    }
+    const challenge = classifyChallenge({
+      url: typeof p.url === "string" ? p.url : "",
+      title: typeof p.title === "string" ? p.title : "",
+      text: typeof p.text === "string" ? p.text : void 0,
+      frameUrls: [...strings(p.iframeSrcs), ...tree],
+      scriptUrls: strings(p.scriptUrls),
+      cookieNames: strings(p.cookieNames),
+      selectors: strings(p.selectors),
+      status: typeof p.status === "number" ? p.status : void 0
+    });
+    return { ok: true, challenge };
+  } catch {
+    return { ok: false };
+  }
+}
+async function detectChallenge(session) {
+  const probe = await probeChallenge(session);
+  return probe.ok ? probe.challenge : null;
+}
+var CHALLENGE_SELECTORS, LITTLE_TEXT, PHRASE_TEXT_MAX, BLOCKED_STATUS, norm, urlHas, frameHas, scriptHas, selHas, datadome, CF_ORCHESTRATE, cloudflare, perimeterx, akamai, imperva, arkose, hcaptcha, recaptcha, VENDORS, GENERIC_PHRASES, PROBE_TIMEOUT_MS3, PROBE, strings;
+var init_challenge = __esm({
+  "src/browser/challenge.ts"() {
+    "use strict";
+    CHALLENGE_SELECTORS = [
+      "#challenge-form",
+      ".cf-turnstile",
+      ".g-recaptcha",
+      ".h-captcha",
+      "#px-captcha",
+      'iframe[src*="datadome"]',
+      "#sec-if-cpt-container"
+    ];
+    LITTLE_TEXT = 200;
+    PHRASE_TEXT_MAX = 1500;
+    BLOCKED_STATUS = /* @__PURE__ */ new Set([403, 429, 503]);
+    norm = (s) => s.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").replace(/[‘’]/g, "'").toLowerCase();
+    urlHas = (h, needle) => h.urls.find((u) => u.includes(needle));
+    frameHas = (h, needle) => h.frames.find((u) => u.includes(needle));
+    scriptHas = (h, needle) => h.scripts.find((u) => u.includes(needle));
+    selHas = (h, needle) => h.selectors.some((s) => s.includes(needle));
+    datadome = (h) => {
+      const out = [];
+      const frame = frameHas(h, "captcha-delivery.com");
+      add(out, frame, { signal: "captcha-delivery.com", interstitial: true });
+      add(out, scriptHas(h, "captcha-delivery.com"), { signal: "captcha-delivery.com script", weak: true });
+      add(out, selHas(h, "datadome"), { signal: "datadome frame" });
+      add(out, h.cookies.includes("datadome"), { signal: "datadome cookie", weak: true });
+      add(out, urlHas(h, "datadome.co"), { signal: "datadome.co script", weak: true });
+      return out;
+    };
+    CF_ORCHESTRATE = /\/cdn-cgi\/challenge-platform\/(?:h\/[a-z]\/)?orchestrate\//;
+    cloudflare = (h) => {
+      const out = [];
+      const t = h.title.trim();
+      add(out, t.includes("just a moment") || t.startsWith("un instant") || t.includes("attention required! | cloudflare"), {
+        signal: `title "${h.title.trim()}"`,
+        interstitial: true
+      });
+      add(out, selHas(h, "#challenge-form"), { signal: "#challenge-form", interstitial: true });
+      add(out, urlHas(h, "cf-chl") || urlHas(h, "__cf_chl"), { signal: "cf-chl", interstitial: true });
+      const platform = h.urls.filter((u) => u.includes("/cdn-cgi/challenge-platform/") && !u.includes("turnstile"));
+      add(
+        out,
+        platform.some((u) => CF_ORCHESTRATE.test(u)),
+        { signal: "/cdn-cgi/challenge-platform/ orchestrate", interstitial: true }
+      );
+      add(
+        out,
+        platform.some((u) => !CF_ORCHESTRATE.test(u)),
+        { signal: "/cdn-cgi/challenge-platform/", weak: true }
+      );
+      add(
+        out,
+        h.cookies.some((c) => c.startsWith("cf-chl") || c.startsWith("__cf_chl")),
+        { signal: "cf-chl cookie", weak: true }
+      );
+      add(out, selHas(h, ".cf-turnstile"), { signal: ".cf-turnstile", widget: true });
+      add(out, frameHas(h, "challenges.cloudflare.com"), { signal: "challenges.cloudflare.com frame", widget: true });
+      add(out, scriptHas(h, "challenges.cloudflare.com"), { signal: "challenges.cloudflare.com script", weak: true });
+      return out;
+    };
+    perimeterx = (h) => {
+      const out = [];
+      add(out, selHas(h, "px-captcha"), { signal: "#px-captcha", interstitial: true });
+      add(out, h.text.includes("press & hold") || h.text.includes("appuyez et maintenez"), { signal: "Press & Hold", interstitial: true });
+      add(out, urlHas(h, "captcha.px-cdn.net"), { signal: "captcha.px-cdn.net", widget: true });
+      const tag = urlHas(h, "px-cdn.net") ?? urlHas(h, "px-cloud.net");
+      add(out, tag, { signal: "px script", weak: true });
+      add(
+        out,
+        h.cookies.some((c) => c === "_px3" || c === "_pxvid" || c === "_pxhd"),
+        { signal: "_px cookie", weak: true }
+      );
+      return out;
+    };
+    akamai = (h) => {
+      const out = [];
+      add(out, h.title.includes("access denied") && h.text.includes("reference #"), { signal: "Access Denied + Reference #", interstitial: true });
+      add(out, urlHas(h, "sec-if-cpt") || selHas(h, "sec-if-cpt") || selHas(h, "sec-cpt"), { signal: "sec-if-cpt", interstitial: true });
+      add(out, urlHas(h, "edgesuite.net") || h.text.includes("edgesuite.net"), { signal: "edgesuite.net" });
+      add(out, h.cookies.includes("sec_cpt"), { signal: "sec_cpt cookie", weak: true });
+      return out;
+    };
+    imperva = (h) => {
+      const out = [];
+      add(out, h.text.includes("incapsula incident id"), { signal: "Incapsula incident ID", interstitial: true });
+      add(out, urlHas(h, "_incapsula_resource") || h.text.includes("_incapsula_resource"), { signal: "_Incapsula_Resource", weak: true });
+      add(
+        out,
+        h.cookies.some((c) => c.startsWith("incap_ses")),
+        { signal: "incap_ses cookie", weak: true }
+      );
+      return out;
+    };
+    arkose = (h) => {
+      const out = [];
+      const f = frameHas(h, "arkoselabs.com") ?? frameHas(h, "funcaptcha");
+      add(out, f, { signal: f?.includes("funcaptcha") ? "funcaptcha" : "arkoselabs.com", widget: true });
+      add(out, scriptHas(h, "arkoselabs.com") ?? scriptHas(h, "funcaptcha"), { signal: "arkose script", weak: true });
+      return out;
+    };
+    hcaptcha = (h) => {
+      const out = [];
+      add(out, frameHas(h, "hcaptcha.com"), { signal: "hcaptcha.com frame", widget: true });
+      add(out, scriptHas(h, "hcaptcha.com"), { signal: "hcaptcha.com script", weak: true });
+      add(out, selHas(h, ".h-captcha"), { signal: ".h-captcha", widget: true });
+      return out;
+    };
+    recaptcha = (h) => {
+      const out = [];
+      add(out, frameHas(h, "google.com/recaptcha") || frameHas(h, "recaptcha.net"), { signal: "recaptcha frame", widget: true });
+      add(out, scriptHas(h, "google.com/recaptcha") || scriptHas(h, "recaptcha.net"), { signal: "recaptcha script", weak: true });
+      add(out, selHas(h, ".g-recaptcha"), { signal: ".g-recaptcha", widget: true });
+      return out;
+    };
+    VENDORS = [
+      ["datadome", datadome],
+      ["cloudflare", cloudflare],
+      ["perimeterx", perimeterx],
+      ["akamai", akamai],
+      ["imperva", imperva],
+      ["arkose", arkose],
+      ["hcaptcha", hcaptcha],
+      ["recaptcha", recaptcha]
+    ];
+    GENERIC_PHRASES = [
+      "captcha",
+      "are you a robot",
+      "are you human",
+      "verify you are human",
+      "verify you're human",
+      "unusual traffic",
+      "checking your browser",
+      "verifiez que vous etes humain",
+      "je ne suis pas un robot"
+    ];
+    PROBE_TIMEOUT_MS3 = 3e3;
+    PROBE = `(() => {
+  const sel = ${JSON.stringify(CHALLENGE_SELECTORS)}.filter((s) => { try { return !!document.querySelector(s); } catch { return false; } });
+  const nav = performance.getEntriesByType("navigation")[0];
+  return {
+    url: location.href,
+    title: document.title || "",
+    text: (document.body ? document.body.innerText : "").slice(0, 4096),
+    scriptUrls: Array.from(document.scripts, (s) => s.src).filter(Boolean),
+    iframeSrcs: Array.from(document.querySelectorAll("iframe"), (f) => f.src).filter(Boolean),
+    cookieNames: (() => { try { return document.cookie.split(";").map((c) => c.split("=")[0].trim()).filter(Boolean); } catch (e) { return []; } })(),
+    selectors: sel,
+    status: nav && nav.responseStatus > 0 ? nav.responseStatus : undefined,
+  };
+})()`;
+    strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  }
+});
+
+// src/browser/wait.ts
+async function watchNetwork(page) {
+  const inflight2 = /* @__PURE__ */ new Set();
+  const handlers = [
+    ["Network.requestWillBeSent", (p) => inflight2.add(String(p.requestId))],
+    ["Network.loadingFinished", (p) => inflight2.delete(String(p.requestId))],
+    ["Network.loadingFailed", (p) => inflight2.delete(String(p.requestId))]
+  ];
+  for (const [m, h] of handlers) page.on(m, h);
+  await page.send("Network.enable").catch(() => {
+  });
+  return {
+    count: () => inflight2.size,
+    stop: () => {
+      for (const [m, h] of handlers) page.off(m, h);
+    }
+  };
+}
+async function evaluate(page, expression) {
+  try {
+    const r = await page.send("Runtime.evaluate", { expression, returnByValue: true }, { timeoutMs: EVAL_TIMEOUT_MS });
+    return r.result?.value;
+  } catch {
+    return void 0;
+  }
+}
+function urlMatcher(pattern) {
+  const re = /^\/(.+)\/([a-z]*)$/.exec(pattern);
+  if (re) {
+    try {
+      const rx = new RegExp(re[1], re[2]);
+      return (u) => rx.test(u);
+    } catch {
+    }
+  }
+  if (pattern.includes("*")) {
+    const rx = new RegExp(
+      `^${pattern.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`
+    );
+    return (u) => rx.test(u);
+  }
+  return (u) => u.includes(pattern);
+}
+function checker(page, cond, now, net) {
+  const hasText = (t) => evaluate(page, `(document.body ? document.body.innerText : "").includes(${JSON.stringify(t)})`);
+  if ("text" in cond) return async () => await hasText(cond.text) === true;
+  if ("gone" in cond) return async () => await hasText(cond.gone) === false;
+  if ("selector" in cond) {
+    const sel = JSON.stringify(cond.selector);
+    return async () => await evaluate(
+      page,
+      `(() => { try { const el = document.querySelector(${sel}); return !!el && el.getClientRects().length > 0; } catch { return false; } })()`
+    ) === true;
+  }
+  if ("url" in cond) {
+    const match = urlMatcher(cond.url);
+    return async () => {
+      const href = await evaluate(page, "location.href");
+      return typeof href === "string" && match(href);
+    };
+  }
+  if ("load" in cond) return async () => await evaluate(page, 'document.readyState === "complete"') === true;
+  if ("idle" in cond) {
+    let quietSince;
+    return async () => {
+      if ((net?.count() ?? 0) > 0) {
+        quietSince = void 0;
+        return false;
+      }
+      quietSince ??= now();
+      return now() - quietSince >= IDLE_MS;
+    };
+  }
+  let streak = 0;
+  return async () => {
+    const probe = await probeChallenge({ page });
+    streak = probe.ok && !probe.challenge?.blocking ? streak + 1 : 0;
+    return streak >= 2;
+  };
+}
+async function waitFor(session, cond, opts = {}) {
+  const present = KEYS.filter((k) => k in cond);
+  if (present.length !== 1) throw new TypeError(`invalid wait condition ${JSON.stringify(cond)}: give exactly one of ${KEYS.join(", ")}`);
+  const { now, sleep: sleep2 } = browserDeps(opts.deps);
+  const start = now();
+  const live = () => {
+    if (opts.signal?.aborted) throw new WaitCancelledError();
+  };
+  if ("ms" in cond) {
+    for (let left = cond.ms; ; left = cond.ms - (now() - start)) {
+      live();
+      if (left <= 0) break;
+      await sleep2(Math.min(POLL_MS2, left));
+    }
+    return { waitedMs: now() - start, matched: "ms" };
+  }
+  const timeoutMs = opts.timeoutMs ?? ("clear" in cond ? CLEAR_TIMEOUT_MS : DEFAULT_TIMEOUT_MS3);
+  const net = "idle" in cond ? await watchNetwork(session.page) : void 0;
+  try {
+    const check = checker(session.page, cond, now, net);
+    for (; ; ) {
+      live();
+      if (await check()) return { waitedMs: now() - start, matched: present[0] };
+      const elapsed = now() - start;
+      if (elapsed >= timeoutMs) throw new WaitTimeoutError(cond, elapsed);
+      await sleep2(Math.min(POLL_MS2, timeoutMs - elapsed));
+    }
+  } finally {
+    net?.stop();
+  }
+}
+var WaitTimeoutError, WaitCancelledError, POLL_MS2, DEFAULT_TIMEOUT_MS3, CLEAR_TIMEOUT_MS, EVAL_TIMEOUT_MS, IDLE_MS, KEYS;
+var init_wait = __esm({
+  "src/browser/wait.ts"() {
+    "use strict";
+    init_challenge();
+    init_deps();
+    WaitTimeoutError = class extends Error {
+      constructor(condition, elapsedMs) {
+        super(`timed out waiting for ${JSON.stringify(condition)} after ${elapsedMs} ms`);
+        this.condition = condition;
+        this.elapsedMs = elapsedMs;
+        this.name = "WaitTimeoutError";
+      }
+      condition;
+      elapsedMs;
+    };
+    WaitCancelledError = class extends Error {
+      constructor() {
+        super("the wait was cancelled");
+        this.name = "WaitCancelledError";
+      }
+    };
+    POLL_MS2 = 250;
+    DEFAULT_TIMEOUT_MS3 = 3e4;
+    CLEAR_TIMEOUT_MS = 3e5;
+    EVAL_TIMEOUT_MS = 2e3;
+    IDLE_MS = 500;
+    KEYS = ["text", "gone", "selector", "url", "load", "idle", "ms", "clear"];
+  }
+});
+
+// src/browser/read.ts
+var read_exports = {};
+__export(read_exports, {
+  readRenderedPage: () => readRenderedPage
+});
+function pump() {
+  for (let next = queue[0]; next && active < next.limit; next = queue[0]) {
+    queue.shift();
+    active++;
+    next.go();
+  }
+}
+async function acquire(limit, signal, cancelled) {
+  if (queue.length === 0 && active < limit) active++;
+  else {
+    await new Promise((resolve8, reject) => {
+      const onAbort = () => {
+        queue.splice(queue.indexOf(waiter), 1);
+        reject(cancelled());
+      };
+      const waiter = {
+        limit,
+        go: () => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve8();
+        }
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      queue.push(waiter);
+    });
+  }
+  return () => {
+    active--;
+    pump();
+  };
+}
+async function render(url, opts, deps, timeoutMs, run) {
+  const { cdp, profile, headless, binary } = opts;
+  const session = await withBrowserLock(
+    async () => {
+      if (run.stopped) throw new Error("stopped");
+      return openBrowserSession({ cdp, profile, headless, binary, deps, scratch: true, ownOnly: true });
+    },
+    { deps }
+  );
+  run.session = session;
+  const page = session.page;
+  let status;
+  let mime;
+  let mainFrame;
+  const onResponse = (p) => {
+    if (p.type !== "Document" || p.frameId !== mainFrame || typeof p.response?.status !== "number") return;
+    status = p.response.status;
+    mime = typeof p.response.mimeType === "string" ? p.response.mimeType : void 0;
+  };
+  try {
+    if (run.stopped) throw new Error("stopped");
+    mainFrame = (await page.send("Page.getFrameTree")).frameTree.frame.id;
+    page.on("Network.responseReceived", onResponse);
+    await page.send("Network.enable");
+    await page.send("Page.setDownloadBehavior", { behavior: "deny" }).catch((e) => {
+      throw new Error(`could not refuse downloads in the reading tab (${e.message}), so ${url} was not loaded`);
+    });
+    const nav = await session.navigate(url, { waitUntil: "load", timeoutMs });
+    if (mime && !WEB_PAGE.test(mime)) throw new Error(`${url} is not a web page but ${mime}`);
+    if (opts.waitUntil !== "load") {
+      const idleMs = opts.waitUntil === "idle" ? timeoutMs / 2 : Math.min(IDLE_CAP_MS, timeoutMs);
+      await waitFor(session, { idle: true }, { timeoutMs: idleMs, deps }).catch(() => {
+      });
+    }
+    const challenge = await detectChallenge(session);
+    const got = await page.send(
+      "Runtime.evaluate",
+      { expression: DOCUMENT, returnByValue: true },
+      { timeoutMs }
+    );
+    const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
+    const code = status ?? nav.status ?? 200;
+    if (challenge?.blocking) {
+      return {
+        text: "",
+        finalUrl,
+        status: code >= 400 ? code : 403,
+        extractor: "browser",
+        note: `${challenge.kind} challenge \u2014 open it with \`${brand().cli} browser open ${url}\` and let the human solve it`
+      };
+    }
+    const html = typeof got.result?.value?.html === "string" ? got.result.value.html : "";
+    return { ...extractFromHtml(html, finalUrl, opts), finalUrl, status: code, extractor: "browser" };
+  } finally {
+    page.off("Network.responseReceived", onResponse);
+    await deps.discovery.closeTarget(session.port, session.targetId, session.host).catch(() => {
+    });
+    await session.detach();
+  }
+}
+async function readRenderedPage(url, opts = {}) {
+  const cancelled = () => new Error(`reading ${url} in the browser was cancelled`);
+  const { signal } = opts;
+  if (signal?.aborted) throw cancelled();
+  const deps = browserDeps(opts.deps);
+  const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
+  const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
+  if (signal?.aborted) {
+    release();
+    throw cancelled();
+  }
+  const run = { stopped: false };
+  const work = render(url, opts, deps, timeoutMs, run);
+  work.then(release, release);
+  let stop;
+  const cut = new Promise((_, reject) => {
+    stop = reject;
+  });
+  const timer = setTimeout(() => stop(new Error(`reading ${url} in the browser did not finish within ${timeoutMs} ms`)), timeoutMs);
+  const onAbort = () => stop(cancelled());
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    return await Promise.race([work, cut]);
+  } catch (e) {
+    run.stopped = true;
+    work.catch(() => {
+    });
+    await run.session?.detach();
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+var IDLE_CAP_MS, WEB_PAGE, active, queue, DOCUMENT;
+var init_read = __esm({
+  "src/browser/read.ts"() {
+    "use strict";
+    init_brand();
+    init_fetch();
+    init_challenge();
+    init_deps();
+    init_session();
+    init_state();
+    init_wait();
+    IDLE_CAP_MS = 3e3;
+    WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
+    active = 0;
+    queue = [];
+    DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
+  }
+});
+
+// src/version.ts
+var ENGINE_VERSION = "1.27.0";
+
+// src/index.ts
+init_brand();
+init_pdf();
+init_doc();
+init_video();
+
+// src/browser.ts
+init_session();
+init_read();
+
+// src/browser/snapshot.ts
+init_state();
+var NAME_MAX = 120;
+var COLLAPSIBLE = /* @__PURE__ */ new Set(["generic", "none", "presentation", "GenericContainer"]);
+var HOISTED = /* @__PURE__ */ new Set(["RootWebArea", "WebArea"]);
+var TEXT_ROLES = /* @__PURE__ */ new Set(["StaticText", "text"]);
+var REF_ROLES = /* @__PURE__ */ new Set([
+  "button",
+  "link",
+  "textbox",
+  "searchbox",
+  "combobox",
+  "listbox",
+  "option",
+  "checkbox",
+  "radio",
+  "switch",
+  "slider",
+  "spinbutton",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "tab",
+  "treeitem",
+  "iframe",
+  "heading"
+]);
+var VALUE_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider"]);
+var str2 = (v) => typeof v?.value === "string" ? v.value : typeof v?.value === "number" ? String(v.value) : "";
+var squash = (s) => s.replace(/\s+/g, " ").trim();
+function buildTree(nodes) {
+  const byId = /* @__PURE__ */ new Map();
+  for (const n of nodes) byId.set(n.nodeId, n);
+  return { byId, root: nodes.find((n) => n.parentId === void 0 || !byId.has(n.parentId)) };
+}
+function prop(n, name) {
+  return n.properties?.find((p) => p.name === name)?.value?.value;
+}
+var truthy = (v) => v === true || v === "true" || typeof v === "string" && v !== "" && v !== "false";
+function merge(items) {
+  const out = [];
+  let run = "";
+  const flush = () => {
+    const text = squash(run);
+    if (text) out.push({ t: "text", text });
+    run = "";
+  };
+  for (const it of items) {
+    if (it.t === "text") run += it.text;
+    else {
+      flush();
+      if (it.t === "node") out.push(it);
+    }
+  }
+  flush();
+  return out;
+}
+function states(n) {
+  const out = [];
+  const checked = prop(n, "checked");
+  if (checked === "mixed") out.push("[checked=mixed]");
+  else if (truthy(checked)) out.push("[checked]");
+  if (truthy(prop(n, "disabled"))) out.push("[disabled]");
+  const expanded = prop(n, "expanded");
+  if (expanded !== void 0) out.push(`[expanded=${truthy(expanded)}]`);
+  if (truthy(prop(n, "selected"))) out.push("[selected]");
+  const pressed = prop(n, "pressed");
+  if (pressed === "mixed") out.push("[pressed=mixed]");
+  else if (truthy(pressed)) out.push("[pressed]");
+  if (truthy(prop(n, "required"))) out.push("[required]");
+  if (truthy(prop(n, "focused"))) out.push("[focused]");
+  return out;
+}
+var Renderer = class {
+  constructor(table, frames) {
+    this.frames = frames;
+    this.refs = { ...table.refs };
+    this.next = table.next;
+  }
+  frames;
+  refs;
+  next;
+  seen = /* @__PURE__ */ new Set();
+  trees = /* @__PURE__ */ new Map();
+  refFor(backendId) {
+    for (const [k2, v] of Object.entries(this.refs)) if (v === backendId) return k2;
+    const k = `e${this.next++}`;
+    this.refs[k] = backendId;
+    return k;
+  }
+  frameTree(backendId) {
+    const key = String(backendId);
+    const nodes = this.frames[key];
+    if (!nodes) return void 0;
+    let t = this.trees.get(key);
+    if (!t) this.trees.set(key, t = buildTree(nodes));
+    return t;
+  }
+  /** Find a node by backendDOMNodeId in the main tree, then in the frame trees. */
+  find(main, backendId) {
+    for (const t of [main, ...Object.keys(this.frames).map((k) => this.frameTree(Number(k)))]) {
+      for (const n of t.byId.values()) if (n.backendDOMNodeId === backendId) return { tree: t, node: n };
+    }
+    return void 0;
+  }
+  children(tree, n) {
+    const out = [];
+    for (const id of n.childIds ?? []) {
+      const c = tree.byId.get(id);
+      if (c) out.push(...this.collect(tree, c));
+    }
+    return out;
+  }
+  collect(tree, n) {
+    if (this.seen.has(n)) return [];
+    this.seen.add(n);
+    const role = str2(n.role);
+    if (n.ignored) return this.children(tree, n);
+    if (role === "InlineTextBox") return [];
+    if (role === "LineBreak") return [{ t: "break" }];
+    if (TEXT_ROLES.has(role)) {
+      const boxes = (n.childIds ?? []).map((id) => str2(tree.byId.get(id)?.name)).join("");
+      return [{ t: "text", text: str2(n.name) || boxes }];
+    }
+    if (HOISTED.has(role)) return this.children(tree, n);
+    const name = squash(str2(n.name));
+    const wantsRef = n.backendDOMNodeId !== void 0 && (REF_ROLES.has(role.toLowerCase()) || truthy(prop(n, "focusable")) || truthy(prop(n, "editable")));
+    if (COLLAPSIBLE.has(role) && !name && !wantsRef) return [{ t: "break" }, ...this.children(tree, n), { t: "break" }];
+    const isFrame = role.toLowerCase() === "iframe";
+    const shown = isFrame ? "iframe" : role;
+    let head = `- ${shown}`;
+    if (name) head += ` "${(name.length > NAME_MAX ? `${name.slice(0, NAME_MAX)}\u2026` : name).replace(/"/g, '\\"')}"`;
+    const level = prop(n, "level");
+    if (level !== void 0 && role === "heading") head += ` [level=${String(level)}]`;
+    if (wantsRef) head += ` [ref=${this.refFor(n.backendDOMNodeId)}]`;
+    for (const s of states(n)) head += ` ${s}`;
+    let kids;
+    let note = "";
+    const inner = isFrame && n.backendDOMNodeId !== void 0 ? this.frameTree(n.backendDOMNodeId) : void 0;
+    if (isFrame) {
+      if (inner?.root) kids = merge(this.collect(inner, inner.root));
+      else {
+        kids = [];
+        note = " (cross-origin, not expanded)";
+      }
+    } else kids = merge(this.children(tree, n));
+    if (name) kids = kids.filter((k) => !(k.t === "text" && k.text === name));
+    const value = VALUE_ROLES.has(role) ? squash(str2(n.value)) : "";
+    const rawUrl = role === "link" ? prop(n, "url") : void 0;
+    const url = typeof rawUrl === "string" ? rawUrl : "";
+    return [{ t: "node", head: value ? `${head}${note}: ${value}` : `${head}${note}`, ref: wantsRef, ...url ? { url } : {}, note, children: kids }];
+  }
+};
+function nested(items, depth, out) {
+  const pad2 = "  ".repeat(depth);
+  for (const it of items) {
+    if (it.t === "text") out.push({ text: `${pad2}- text: ${it.text}`, ref: false });
+    else if (it.t === "node") {
+      out.push({ text: pad2 + it.head, ref: it.ref });
+      if (it.url) out.push({ text: `${pad2}  - /url: ${it.url}`, ref: false });
+      nested(it.children, depth + 1, out);
+    }
+  }
+}
+function flat(items, out) {
+  for (const it of items) {
+    if (it.t !== "node") continue;
+    if (it.ref) out.push({ text: it.head, ref: true });
+    flat(it.children, out);
+  }
+}
+function renderSnapshot(nodes, opts) {
+  const r = new Renderer(opts.refs, opts.frames ?? {});
+  const main = buildTree(nodes);
+  let items = [];
+  if (opts.rootBackendId !== void 0) {
+    const hit = r.find(main, opts.rootBackendId);
+    if (hit) items = merge(r.collect(hit.tree, hit.node));
+  } else if (main.root) items = merge(r.collect(main, main.root));
+  const all = [];
+  if (opts.interactive) flat(items, all);
+  else nested(items, 0, all);
+  let kept = all;
+  let tail = "";
+  if (opts.maxChars !== void 0) {
+    let used = 0;
+    let n = 0;
+    for (const l of all) {
+      const cost = l.text.length + (n > 0 ? 1 : 0);
+      if (used + cost > opts.maxChars) break;
+      used += cost;
+      n++;
+    }
+    if (n < all.length) {
+      kept = all.slice(0, n);
+      tail = `\u2026 [truncated: ${all.length - n} more lines \u2014 use \`snapshot <ref>\` or --interactive]`;
+    }
+  }
+  const text = [...kept.map((l) => l.text), ...tail ? [tail] : []].join("\n");
+  return {
+    text,
+    refs: { loaderId: opts.refs.loaderId, url: opts.refs.url, next: r.next, refs: r.refs },
+    truncated: tail !== "",
+    refCount: kept.filter((l) => l.ref).length
+  };
+}
+
+// src/browser.ts
+init_challenge();
+init_detect();
+init_profile();
+
+// src/index.ts
+init_exec();
+init_fetch();
+init_markdown2();
+init_firecrawl();
+init_text();
+init_url();
+init_rank();
 
 // src/citable.ts
 var API_HOSTS = /* @__PURE__ */ new Set([
@@ -6508,13 +9269,20 @@ function resolveEutils(raw, op) {
   return { citeUrl: raw };
 }
 
+// src/index.ts
+init_locale();
+init_exec2();
+
 // src/repo.ts
-import { createHash, randomBytes } from "crypto";
-import { existsSync as existsSync5, mkdirSync as mkdirSync3, readdirSync as readdirSync5, renameSync as renameSync3, rmSync as rmSync4, statSync as statSync2 } from "fs";
+init_brand();
+init_exec2();
+import { createHash as createHash2, randomBytes as randomBytes2 } from "crypto";
+import { existsSync as existsSync7, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync3, rmSync as rmSync6, statSync as statSync5 } from "fs";
 import { tmpdir as tmpdir4 } from "os";
-import { basename, join as join7, resolve as resolve2 } from "path";
+import { basename as basename3, join as join11, resolve as resolve3 } from "path";
 
 // src/forge-host.ts
+init_brand();
 var KINDS = /* @__PURE__ */ new Set(["github", "gitlab", "gitea"]);
 var WWW_ALIASED = /* @__PURE__ */ new Set(["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"]);
 function normalizeForgeHost(host) {
@@ -6543,8 +9311,9 @@ function hostForgeKind(host) {
 }
 
 // src/repo.ts
+init_text();
 function repoCacheRoot() {
-  return env("REPO_DIR") ?? brand().repoDir ?? join7(tmpdir4(), brand().name, "repos");
+  return env("REPO_DIR") ?? brand().repoDir ?? join11(tmpdir4(), brand().name, "repos");
 }
 var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3);
 var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3);
@@ -6552,9 +9321,9 @@ var historyTimeoutMs = () => envInt("GIT_HISTORY_TIMEOUT_MS", 3e5, 1e3);
 function resolveRepo(raw, opts = {}) {
   const trimmed = raw.trim();
   if (trimmed && opts.local !== false) {
-    const asPath = resolve2(trimmed);
-    if (existsSync5(asPath) && statSync2(asPath).isDirectory()) {
-      return { raw: trimmed, host: "local", isLocal: true, slug: `local-${slugify(`${basename(asPath)}-${asPath}`)}` };
+    const asPath = resolve3(trimmed);
+    if (existsSync7(asPath) && statSync5(asPath).isDirectory()) {
+      return { raw: trimmed, host: "local", isLocal: true, slug: `local-${slugify(`${basename3(asPath)}-${asPath}`)}` };
     }
   }
   const p = filePath(trimmed);
@@ -6562,7 +9331,7 @@ function resolveRepo(raw, opts = {}) {
     return {
       raw: trimmed,
       host: "file",
-      ...basename(p) ? { repo: basename(p) } : {},
+      ...basename3(p) ? { repo: basename3(p) } : {},
       cloneUrl: trimmed,
       isLocal: false,
       slug: `file-${repoSlug(p)}`
@@ -6628,7 +9397,7 @@ function trimRuns(s, ch, start = true) {
   return s.slice(a, b);
 }
 var fold = (k) => trimRuns(k.replace(/[^a-z0-9._-]+/g, "-"), "-");
-var sha256Hex = (k) => createHash("sha256").update(k).digest("hex");
+var sha256Hex = (k) => createHash2("sha256").update(k).digest("hex");
 function repoSlug(key) {
   const k = key.toLowerCase();
   const folded = fold(k);
@@ -6658,12 +9427,12 @@ function repoSegments(host, rest, kind) {
   return segments.filter(Boolean).length ? segments.filter(Boolean) : void 0;
 }
 async function ensureClone(ref, opts = {}) {
-  if (ref.isLocal) return resolve2(ref.raw);
+  if (ref.isLocal) return resolve3(ref.raw);
   if (!ref.cloneUrl) throw new Error(`"${ref.raw}" does not name a repository that can be cloned`);
   if (!have("git")) throw new Error(`git is not installed or not on PATH \u2014 cannot clone ${ref.cloneUrl}`);
   const branch = opts.branch?.trim() || void 0;
   if (branch?.startsWith("-")) throw new Error(`"${branch}" is not a branch name`);
-  const dir = join7(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
+  const dir = join11(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
   const pending = inflight.get(dir);
   if (pending && !opts.refresh) {
     return pending.catch((e) => {
@@ -6680,21 +9449,21 @@ async function ensureClone(ref, opts = {}) {
 }
 var inflight = /* @__PURE__ */ new Map();
 function branchSlug(branch) {
-  return `${slugify(branch, { max: 40, fallback: "branch" })}-${createHash("sha256").update(branch).digest("hex").slice(0, 8)}`;
+  return `${slugify(branch, { max: 40, fallback: "branch" })}-${createHash2("sha256").update(branch).digest("hex").slice(0, 8)}`;
 }
 async function obtainClone(ref, dir, opts) {
   let target = dir;
-  if (!existsSync5(join7(dir, ".git")) && !opts.branch) {
+  if (!existsSync7(join11(dir, ".git")) && !opts.branch) {
     for (const old of legacySlugs(ref)) {
-      const legacy = join7(repoCacheRoot(), old);
-      const origin = existsSync5(join7(legacy, ".git")) ? originUrl(legacy) : void 0;
+      const legacy = join11(repoCacheRoot(), old);
+      const origin = existsSync7(join11(legacy, ".git")) ? originUrl(legacy) : void 0;
       if (origin && resolveRepo(origin).slug === ref.slug) {
         target = legacy;
         break;
       }
     }
   }
-  if (existsSync5(join7(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
+  if (existsSync7(join11(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
   return freshClone(ref, dir, opts.branch);
 }
 async function refreshClone(ref, dir, branch) {
@@ -6717,25 +9486,25 @@ async function refreshClone(ref, dir, branch) {
 var STALE_STAGING_MS = 24 * 60 * 60 * 1e3;
 function discard(path) {
   try {
-    rmSync4(path, { recursive: true, force: true });
+    rmSync6(path, { recursive: true, force: true });
   } catch {
   }
 }
 function sweepStaging(staging) {
   try {
-    for (const name of readdirSync5(staging)) {
-      const at = join7(staging, name);
-      if (Date.now() - statSync2(at).mtimeMs > STALE_STAGING_MS) rmSync4(at, { recursive: true, force: true });
+    for (const name of readdirSync6(staging)) {
+      const at = join11(staging, name);
+      if (Date.now() - statSync5(at).mtimeMs > STALE_STAGING_MS) rmSync6(at, { recursive: true, force: true });
     }
   } catch {
   }
 }
 async function freshClone(ref, dir, branch) {
-  const staging = join7(repoCacheRoot(), ".partial");
-  mkdirSync3(staging, { recursive: true });
+  const staging = join11(repoCacheRoot(), ".partial");
+  mkdirSync4(staging, { recursive: true });
   sweepStaging(staging);
   const attempt = async (filter) => {
-    const tmp = join7(staging, `${basename(dir)}-${process.pid}-${randomBytes(4).toString("hex")}`);
+    const tmp = join11(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
     const args = ["clone", "--depth", "1", ...filter ? ["--filter=blob:none"] : [], ...branch ? ["--branch", branch] : [], "--", ref.cloneUrl, tmp];
     const r = await shAsync("git", args, { timeoutMs: cloneTimeoutMs() });
     if (!r.ok) discard(tmp);
@@ -6755,13 +9524,13 @@ async function freshClone(ref, dir, branch) {
       );
     }
   }
-  if (!existsSync5(done.tmp) || readdirSync5(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
-  if (existsSync5(dir) && !existsSync5(join7(dir, ".git"))) rmSync4(dir, { recursive: true, force: true });
+  if (!existsSync7(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
+  if (existsSync7(dir) && !existsSync7(join11(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
   try {
     renameSync3(done.tmp, dir);
   } catch (e) {
     discard(done.tmp);
-    if (!existsSync5(join7(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
+    if (!existsSync7(join11(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
   }
   return dir;
 }
@@ -6812,13 +9581,18 @@ function sameCommit(a, b) {
 }
 
 // src/forge.ts
-import { resolve as resolve3 } from "path";
+init_brand();
+init_exec2();
+init_fetch();
+import { resolve as resolve4 } from "path";
+init_retry();
+init_text();
 function forgeKind(host, opts = {}) {
   return opts.kind ?? hostForgeKind(host);
 }
 function forgeRef(ref, opts = {}) {
   if (!ref.isLocal) return ref;
-  const origin = originUrl(resolve3(ref.raw));
+  const origin = originUrl(resolve4(ref.raw));
   if (!origin) return ref;
   const remote = resolveRepo(origin.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1"), opts);
   return remote.host === "generic" || remote.isLocal ? ref : remote;
@@ -7212,53 +9986,54 @@ async function repoFactsResult(ref, opts = {}) {
   if (!r.data || typeof r.data !== "object") return { status: r.status, note: `${ref.host} answered with something other than a repository record.` };
   return { status: r.status, facts: mapRepoFacts(forge, r.data) };
 }
-var str2 = (v) => typeof v === "string" && v.trim() ? v : void 0;
+var str3 = (v) => typeof v === "string" && v.trim() ? v : void 0;
 var num2 = (v) => typeof v === "number" ? v : void 0;
 function mapRepoFacts(forge, d) {
   const topics = (v) => Array.isArray(v) ? v.filter((t) => typeof t === "string") : [];
   const shared = {
-    description: str2(d.description),
+    description: str3(d.description),
     forks: num2(d.forks_count),
     openIssues: num2(d.open_issues_count),
-    defaultBranch: str2(d.default_branch),
+    defaultBranch: str3(d.default_branch),
     archived: typeof d.archived === "boolean" ? d.archived : void 0
   };
   if (forge === "gitlab") {
     return {
       ...shared,
-      fullName: str2(d.path_with_namespace),
+      fullName: str3(d.path_with_namespace),
       // A project has no homepage field; its page is the closest thing it states.
-      homepage: str2(d.web_url),
-      license: str2(d.license?.name) ?? str2(d.license?.key),
+      homepage: str3(d.web_url),
+      license: str3(d.license?.name) ?? str3(d.license?.key),
       stars: num2(d.star_count),
-      pushedAt: str2(d.last_activity_at),
+      pushedAt: str3(d.last_activity_at),
       topics: topics(d.topics).length ? topics(d.topics) : topics(d.tag_list)
     };
   }
   if (forge === "gitea") {
     return {
       ...shared,
-      fullName: str2(d.full_name),
-      homepage: str2(d.website),
-      license: Array.isArray(d.licenses) ? str2(d.licenses[0]) : void 0,
+      fullName: str3(d.full_name),
+      homepage: str3(d.website),
+      license: Array.isArray(d.licenses) ? str3(d.licenses[0]) : void 0,
       stars: num2(d.stars_count),
-      pushedAt: str2(d.updated_at),
+      pushedAt: str3(d.updated_at),
       topics: topics(d.topics)
     };
   }
-  const spdx = str2(d.license?.spdx_id);
+  const spdx = str3(d.license?.spdx_id);
   return {
     ...shared,
-    fullName: str2(d.full_name),
-    homepage: str2(d.homepage),
-    license: spdx && spdx !== "NOASSERTION" ? spdx : str2(d.license?.name),
+    fullName: str3(d.full_name),
+    homepage: str3(d.homepage),
+    license: spdx && spdx !== "NOASSERTION" ? spdx : str3(d.license?.name),
     stars: num2(d.stargazers_count),
-    pushedAt: str2(d.pushed_at),
+    pushedAt: str3(d.pushed_at),
     topics: topics(d.topics)
   };
 }
 
 // src/registry.ts
+init_fetch();
 var REGISTRIES = ["npm", "pypi", "crates"];
 var NPM = (n) => `https://registry.npmjs.org/${encodeURIComponent(n).replace(/^%40/, "@")}`;
 var PYPI = (n, version) => `https://pypi.org/pypi/${encodeURIComponent(n)}/${version ? `${encodeURIComponent(version)}/` : ""}json`;
@@ -7294,7 +10069,7 @@ function scanTimeMap(text, version, phase) {
   let depth = 0;
   let quoted = phase !== "outside";
   let escaped = phase === "escape";
-  const open = [];
+  const open2 = [];
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (quoted) {
@@ -7305,13 +10080,13 @@ function scanTimeMap(text, version, phase) {
     }
     if (c === '"') quoted = true;
     else if (c === "{") {
-      if (open.length < MAX_OPEN_TIME_MAPS && opensTimeMap(text, i)) open.push({ at: i, depth });
+      if (open2.length < MAX_OPEN_TIME_MAPS && opensTimeMap(text, i)) open2.push({ at: i, depth });
       depth++;
     } else if (c === "}") {
       depth--;
-      const top = open[open.length - 1];
+      const top = open2[open2.length - 1];
       if (top?.depth === depth) {
-        open.pop();
+        open2.pop();
         try {
           const time = JSON.parse(text.slice(top.at, i + 1));
           if (time && typeof time === "object" && !Array.isArray(time)) {
@@ -7322,7 +10097,7 @@ function scanTimeMap(text, version, phase) {
           if (!(err instanceof SyntaxError)) throw err;
         }
       }
-      while (open.length && open[open.length - 1].depth > depth) open.pop();
+      while (open2.length && open2[open2.length - 1].depth > depth) open2.pop();
     }
   }
   return { publishedAt, closed };
@@ -7358,10 +10133,10 @@ function record(r) {
   return r.ok && r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : void 0;
 }
 var ABSENT = /* @__PURE__ */ new Set([400, 404, 410]);
-var str3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
 function miss(r) {
   if (ABSENT.has(r.status)) return { status: r.status };
-  const said = r.data && typeof r.data === "object" ? str3(r.data.errors?.[0]?.detail) ?? str3(r.data.message) ?? str3(r.data.error) : void 0;
+  const said = r.data && typeof r.data === "object" ? str4(r.data.errors?.[0]?.detail) ?? str4(r.data.message) ?? str4(r.data.error) : void 0;
   return { status: r.status, error: r.error ?? said ?? (r.ok ? "the registry answered with something other than a package record" : `status ${r.status}`) };
 }
 async function lookupPackage(registry, name, version) {
@@ -7382,13 +10157,13 @@ async function npmLookup(n, version) {
   if (!d) return miss(r);
   const asked = version ?? "latest";
   const tags = d["dist-tags"] ?? {};
-  const resolved = str3(d.version) ?? (typeof tags[asked] === "string" ? tags[asked] : void 0) ?? (d.versions?.[asked] ? asked : void 0);
+  const resolved = str4(d.version) ?? (typeof tags[asked] === "string" ? tags[asked] : void 0) ?? (d.versions?.[asked] ? asked : void 0);
   const v = resolved && d.versions?.[resolved] || d;
   const stated = resolved ? d.time?.[resolved] : void 0;
   const publishedAt = typeof stated === "string" ? stated : await npmPublishedAt(NPM(n), resolved);
   const deprecated = typeof v.deprecated === "string" ? v.deprecated : v.deprecated === true ? "deprecated" : void 0;
   const repository = v.repository ?? d.repository;
-  const directory = str3(repository?.directory);
+  const directory = str4(repository?.directory);
   return {
     status: r.status,
     facts: {
@@ -7418,9 +10193,9 @@ function projectUrls(raw) {
   return out;
 }
 function pypiLicense(info, classifiers) {
-  const expression = str3(info.license_expression);
+  const expression = str4(info.license_expression);
   if (expression) return expression;
-  const license = str3(info.license);
+  const license = str4(info.license);
   if (license && license.length <= 100 && !license.includes("\n")) return license;
   const named = classifiers.filter((c) => c.startsWith("License ::")).map((c) => c.split("::").pop().trim());
   return named.filter(Boolean).join(", ") || void 0;
@@ -7432,11 +10207,11 @@ async function pypiLookup(n, version) {
   const info = d.info ?? {};
   const urls = projectUrls(info.project_urls);
   const classifiers = Array.isArray(info.classifiers) ? info.classifiers.filter((c) => typeof c === "string") : [];
-  const homepage = str3(info.home_page) ?? urls.get("homepage");
+  const homepage = str4(info.home_page) ?? urls.get("homepage");
   const labelled = PYPI_REPO_LABELS.map((k) => urls.get(k)).find(Boolean);
   const repository = labelled ?? [info.home_page, urls.get("homepage")].find((u) => typeof u === "string" && FORGE_URL.test(u));
   const filesYanked = Array.isArray(d.urls) && d.urls.length ? d.urls.every((u) => u.yanked) : false;
-  const yanked = info.yanked === true ? `this release is yanked${str3(info.yanked_reason) ? `: ${str3(info.yanked_reason)}` : ""}` : filesYanked ? "every file for this release is yanked" : void 0;
+  const yanked = info.yanked === true ? `this release is yanked${str4(info.yanked_reason) ? `: ${str4(info.yanked_reason)}` : ""}` : filesYanked ? "every file for this release is yanked" : void 0;
   const inactive = classifiers.find((c) => /^Development Status :: 7 - Inactive/.test(c));
   const deprecated = yanked ?? (inactive ? `the project declares itself inactive (${inactive})` : void 0);
   return {
@@ -7448,7 +10223,7 @@ async function pypiLookup(n, version) {
       description: info.summary,
       homepage,
       repository: normalizeRepoUrl(repository),
-      documentation: str3(info.docs_url) ?? urls.get("documentation") ?? urls.get("docs"),
+      documentation: str4(info.docs_url) ?? urls.get("documentation") ?? urls.get("docs"),
       license: pypiLicense(info, classifiers),
       ...deprecated ? { deprecated } : {}
     }
@@ -7468,24 +10243,24 @@ async function cratesLookup(n, version) {
     v = pinned.version ?? {};
   }
   const c = d.crate ?? {};
-  const listed = Array.isArray(d.versions) ? str3(d.versions[0]?.num) : void 0;
-  const newest = str3(c.newest_version) === "0.0.0" ? void 0 : str3(c.newest_version);
-  const num3 = version ? str3(v?.num) ?? version : str3(c.default_version) ?? listed ?? str3(c.max_stable_version) ?? newest;
+  const listed = Array.isArray(d.versions) ? str4(d.versions[0]?.num) : void 0;
+  const newest = str4(c.newest_version) === "0.0.0" ? void 0 : str4(c.newest_version);
+  const num3 = version ? str4(v?.num) ?? version : str4(c.default_version) ?? listed ?? str4(c.max_stable_version) ?? newest;
   v ??= Array.isArray(d.versions) ? d.versions.find((x) => x?.num === num3) : void 0;
-  const yanked = v?.yanked === true ? `this version is yanked${str3(v.yank_message) ? `: ${str3(v.yank_message)}` : ""}` : void 0;
+  const yanked = v?.yanked === true ? `this version is yanked${str4(v.yank_message) ? `: ${str4(v.yank_message)}` : ""}` : void 0;
   return {
     status: crateAnswer.status,
     facts: {
       registry: "crates",
       name: c.name ?? n,
       version: num3,
-      description: str3(c.description) ?? str3(v?.description),
-      homepage: str3(c.homepage) ?? str3(v?.homepage),
+      description: str4(c.description) ?? str4(v?.description),
+      homepage: str4(c.homepage) ?? str4(v?.homepage),
       repository: normalizeRepoUrl(c.repository ?? v?.repository),
-      documentation: str3(c.documentation) ?? str3(v?.documentation),
-      license: str3(v?.license),
+      documentation: str4(c.documentation) ?? str4(v?.documentation),
+      license: str4(v?.license),
       downloads: typeof c.downloads === "number" ? c.downloads : void 0,
-      publishedAt: str3(v?.created_at) ?? (version ? void 0 : str3(c.updated_at)),
+      publishedAt: str4(v?.created_at) ?? (version ? void 0 : str4(c.updated_at)),
       ...yanked ? { deprecated: yanked } : {}
     }
   };
@@ -7512,7 +10287,12 @@ async function resolvePackageResult(name, opts = {}) {
   return { tried, note: `no registry knows a package called "${name.trim()}"${at}${range}` };
 }
 
+// src/index.ts
+init_charset();
+
 // src/robots.ts
+init_brand();
+init_fetch();
 var EMPTY = { rules: [], sitemaps: [], absent: true };
 function productToken(s) {
   return /^[A-Za-z_-]+/.exec(s.trim())?.[0]?.toLowerCase();
@@ -7527,10 +10307,10 @@ function parseRobots(body, userAgent) {
   for (const raw of body.split(/\r\n|\r|\n/)) {
     const line = raw.replace(/#.*$/, "").trim();
     if (!line) continue;
-    const sep2 = line.indexOf(":");
-    if (sep2 === -1) continue;
-    const field = line.slice(0, sep2).trim().toLowerCase();
-    const value = line.slice(sep2 + 1).trim();
+    const sep3 = line.indexOf(":");
+    if (sep3 === -1) continue;
+    const field = line.slice(0, sep3).trim().toLowerCase();
+    const value = line.slice(sep3 + 1).trim();
     if (field === "sitemap") {
       if (value) sitemaps.push(value);
       continue;
@@ -7677,6 +10457,9 @@ async function fetchRobots(url, opts = {}) {
 }
 
 // src/structured.ts
+init_entities();
+init_fetch();
+init_html();
 var openTag = (name) => new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "gi");
 function parseJsonLd(raw) {
   try {
@@ -7709,27 +10492,27 @@ function flattenJsonLd(v, out) {
 }
 function extractJsonLd(html) {
   const out = [];
-  const open = new RegExp(`<!--|${openTag("script").source}`, "gi");
+  const open2 = new RegExp(`<!--|${openTag("script").source}`, "gi");
   const close = closeTagRe("script");
   let commentsClose = true;
   let m;
-  while (m = open.exec(html)) {
+  while (m = open2.exec(html)) {
     if (m[0] === "<!--") {
       const end = commentsClose ? html.indexOf("-->", m.index + 2) : -1;
       if (end < 0) commentsClose = false;
-      else open.lastIndex = end + 3;
+      else open2.lastIndex = end + 3;
       continue;
     }
-    close.lastIndex = open.lastIndex;
+    close.lastIndex = open2.lastIndex;
     const c = close.exec(html);
     if (!c) break;
     const type = (htmlAttributes(m[0]).get("type") ?? "").split(";")[0].trim().toLowerCase();
     if (type === "application/ld+json") {
-      const raw = html.slice(open.lastIndex, c.index).replace(/^\s*<!--/, "").replace(/-->\s*$/, "").trim();
+      const raw = html.slice(open2.lastIndex, c.index).replace(/^\s*<!--/, "").replace(/-->\s*$/, "").trim();
       const parsed = raw ? parseJsonLd(raw) : void 0;
       if (parsed !== void 0 && !nestsDeeper(parsed, MAX_JSONLD_DEPTH)) flattenJsonLd(parsed, out);
     }
-    open.lastIndex = c.index + c[0].length;
+    open2.lastIndex = c.index + c[0].length;
   }
   return out;
 }
@@ -7924,6 +10707,9 @@ function resolveUrl(url, base2) {
 }
 
 // src/feed.ts
+init_charset();
+init_fetch();
+init_html();
 import { promisify } from "util";
 import { gunzip } from "zlib";
 var OPENERS = /* @__PURE__ */ new Map();
@@ -7949,25 +10735,25 @@ function markupOnly(xml) {
 }
 function elements(xml, name, limit = Number.POSITIVE_INFINITY) {
   const scan = markupOnly(xml);
-  const open = openerRe(name);
+  const open2 = openerRe(name);
   const close = closeTagRe(name);
   const out = [];
-  open.lastIndex = 0;
+  open2.lastIndex = 0;
   let m;
-  while (out.length < limit && (m = open.exec(scan))) {
-    const tagEnd = scan.indexOf(">", open.lastIndex);
+  while (out.length < limit && (m = open2.exec(scan))) {
+    const tagEnd = scan.indexOf(">", open2.lastIndex);
     if (tagEnd < 0) break;
-    const attrs = xml.slice(open.lastIndex, tagEnd);
+    const attrs = xml.slice(open2.lastIndex, tagEnd);
     if (attrs.endsWith("/")) {
       out.push({ attrs: attrs.slice(0, -1), inner: "", from: m.index, to: tagEnd + 1 });
-      open.lastIndex = tagEnd + 1;
+      open2.lastIndex = tagEnd + 1;
       continue;
     }
     close.lastIndex = tagEnd + 1;
     const c = close.exec(scan);
     if (!c) break;
     out.push({ attrs, inner: xml.slice(tagEnd + 1, c.index), from: m.index, to: c.index + c[0].length });
-    open.lastIndex = c.index + c[0].length;
+    open2.lastIndex = c.index + c[0].length;
   }
   return out;
 }
@@ -8069,8 +10855,8 @@ function itemUrl(block, base2) {
     return href2 ? decodeEntities(href2).trim() : void 0;
   };
   const rels = (attrs) => attrs.get("rel")?.toLowerCase().split(/\s+/) ?? [];
-  const pick = links.find((a) => hrefOf(a) && (rels(a).length === 0 || rels(a).includes("alternate"))) ?? links.find((a) => hrefOf(a) && !rels(a).some((r) => NOT_THE_PAGE.has(r))) ?? links.find((a) => hrefOf(a));
-  const href = pick && hrefOf(pick);
+  const pick2 = links.find((a) => hrefOf(a) && (rels(a).length === 0 || rels(a).includes("alternate"))) ?? links.find((a) => hrefOf(a) && !rels(a).some((r) => NOT_THE_PAGE.has(r))) ?? links.find((a) => hrefOf(a));
+  const href = pick2 && hrefOf(pick2);
   if (href) return resolveUrl2(href, base2);
   const text = tagText(block, "link");
   if (text) return resolveUrl2(text, base2);
@@ -8129,26 +10915,26 @@ function parseJsonFeed(text, baseUrl) {
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return void 0;
   const feed = doc;
   if (typeof feed.version !== "string" || !feed.version.startsWith("https://jsonfeed.org/version/")) return void 0;
-  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const str5 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
   const items = [];
   for (const raw of Array.isArray(feed.items) ? feed.items : []) {
     if (!raw || typeof raw !== "object") continue;
     const entry = raw;
     const it = {};
-    const id = typeof entry.id === "number" ? String(entry.id) : str4(entry.id);
+    const id = typeof entry.id === "number" ? String(entry.id) : str5(entry.id);
     if (id) it.id = id;
-    const url = str4(entry.url) ?? str4(entry.external_url);
+    const url = str5(entry.url) ?? str5(entry.external_url);
     if (url) it.url = resolveUrl2(url, baseUrl);
-    const title2 = str4(entry.title);
+    const title2 = str5(entry.title);
     if (title2) it.title = title2;
-    const published = str4(entry.date_published) ?? str4(entry.date_modified);
+    const published = str5(entry.date_published) ?? str5(entry.date_modified);
     if (published) it.published = published;
-    const html = str4(entry.content_html);
-    const summary = str4(entry.summary) ?? clip2(str4(entry.content_text) ?? (html ? fragmentText2(html) : void 0));
+    const html = str5(entry.content_html);
+    const summary = str5(entry.summary) ?? clip2(str5(entry.content_text) ?? (html ? fragmentText2(html) : void 0));
     if (summary) it.summary = summary;
     if (it.title || it.url) items.push(it);
   }
-  const title = str4(feed.title);
+  const title = str5(feed.title);
   return { kind: "json", items, ...title ? { title } : {} };
 }
 var FEED_TYPES = /* @__PURE__ */ new Set(["application/rss+xml", "application/atom+xml", "application/feed+json"]);
@@ -8243,7 +11029,7 @@ async function fetchSitemap(url, opts = {}) {
   }
   const fallback = `${origin}/sitemap.xml`;
   const named = opts.sitemaps ?? [];
-  const queue = named.length ? [...named] : [fallback];
+  const queue2 = named.length ? [...named] : [fallback];
   let guessed = !named.length;
   const seen = /* @__PURE__ */ new Set();
   const children = /* @__PURE__ */ new Set();
@@ -8251,22 +11037,22 @@ async function fetchSitemap(url, opts = {}) {
   let fetched = 0;
   const max = opts.max !== void 0 && Number.isFinite(opts.max) ? Math.max(1, Math.floor(opts.max)) : 3;
   for (; ; ) {
-    if (!queue.length && !guessed && !out.urls.length && !out.sitemaps.length) {
+    if (!queue2.length && !guessed && !out.urls.length && !out.sitemaps.length) {
       guessed = true;
-      queue.push(fallback);
+      queue2.push(fallback);
     }
-    if (!queue.length || fetched >= max) break;
+    if (!queue2.length || fetched >= max) break;
     if (opts.signal?.aborted) {
       notes.push(`cancelled after ${fetched} sitemap document(s).`);
       break;
     }
-    const next = queue.shift();
+    const next = queue2.shift();
     if (seen.has(next)) continue;
     seen.add(next);
     fetched++;
     const doc = await readSitemapDocument(next, opts.authorizeUrl, opts.signal);
     if (opts.signal?.aborted) {
-      queue.unshift(next);
+      queue2.unshift(next);
       seen.delete(next);
       notes.push(`cancelled after ${fetched - 1} sitemap document(s).`);
       break;
@@ -8280,10 +11066,10 @@ async function fetchSitemap(url, opts = {}) {
       if (children.has(s)) continue;
       children.add(s);
       out.sitemaps.push(s);
-      queue.push(s);
+      queue2.push(s);
     }
   }
-  out.unfetched = [...new Set(queue.filter((s) => !seen.has(s) && s !== fallback))];
+  out.unfetched = [...new Set(queue2.filter((s) => !seen.has(s) && s !== fallback))];
   if (notes.length) out.notes = notes;
   return out;
 }
@@ -8299,6 +11085,10 @@ async function fetchFeed(url, opts = {}) {
 }
 
 // src/engines.ts
+init_brand();
+init_fetch();
+init_locale();
+init_url();
 var KEYLESS_ENGINES = ["ddg", "ddglite", "mojeek"];
 function isKeylessEngine(v) {
   return KEYLESS_ENGINES.includes(v);
@@ -8542,8 +11332,13 @@ async function searchViaKeyless(engine, query, opts = {}) {
 }
 
 // src/search.ts
+init_brand();
+init_fetch();
+init_firecrawl();
+init_locale();
+init_url();
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
-var PROBE_TIMEOUT_MS3 = 2e3;
+var PROBE_TIMEOUT_MS4 = 2e3;
 var QUERY_TIMEOUT_MS = 8e3;
 function searxngBase(opts = {}) {
   const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
@@ -8560,7 +11355,7 @@ function resetSearxngProbeCache() {
 function probeSearxng(base2, explicit = false) {
   return probeCache2.get(`${base2}|${explicit}`, async () => {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS3);
+    const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS4);
     try {
       const res = await fetch(`${base2}/healthz`, { signal: ctrl.signal });
       const body = await res.text().catch(() => "");
@@ -8786,17 +11581,26 @@ function closingNote(rungs, cancelled) {
 }
 
 // src/stack.ts
+init_brand();
 import { spawnSync as spawnSync3 } from "child_process";
-import { existsSync as existsSync7, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync8, statSync as statSync4, writeFileSync as writeFileSync5 } from "fs";
-import { dirname as dirname2, join as join9, resolve as resolve4 } from "path";
+import { existsSync as existsSync9, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync9, statSync as statSync7, writeFileSync as writeFileSync5 } from "fs";
+import { dirname as dirname2, join as join13, resolve as resolve5 } from "path";
 
 // src/cache.ts
-import { chmodSync, existsSync as existsSync6, lstatSync, mkdirSync as mkdirSync4, readFileSync as readFileSync7, readdirSync as readdirSync6, rmSync as rmSync5, statSync as statSync3 } from "fs";
-import { dirname, join as join8 } from "path";
+init_fetch();
+init_doc();
+init_video();
+init_firecrawl();
+init_url();
+init_no_write();
+init_brand();
+init_mode();
+import { chmodSync as chmodSync2, existsSync as existsSync8, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync6 } from "fs";
+import { dirname, join as join12 } from "path";
 import { tmpdir as tmpdir5 } from "os";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return namedCacheDir() ?? join8(tmpdir5(), userScoped(brand().name), "cache");
+  return namedCacheDir() ?? join12(tmpdir5(), userScoped(brand().name), "cache");
 }
 var namedCacheDir = () => env("CACHE_DIR") ?? brand().cacheDir;
 function userScoped(name) {
@@ -8807,7 +11611,7 @@ function cachePath(url, acceptLanguage = "", extractor = "native", variant = "")
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
   const key = `${canon}\0${acceptLanguage}\0${extractor}${variant ? `\0${variant}` : ""}`;
-  return join8(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
+  return join12(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
 }
 var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
@@ -8825,12 +11629,14 @@ async function currentExtractor(opts, url) {
   if (looksLikePdfUrl(url)) return PDF_CACHE_NS;
   if (knownVideo(url)) return VIDEO_CACHE_NS;
   if (docFormatForUrl(url)) return DOC_CACHE_NS;
+  if (browserFetchMode(opts.browser) === "always") return "browser";
   if (opts.fullPage) return "native";
   const base2 = firecrawlBase(opts);
   return base2 && await probeFirecrawl(base2, firecrawlIsExplicit(opts)) ? "firecrawl" : "native";
 }
 var DOCUMENT_NAMESPACES = [PDF_CACHE_NS, DOC_CACHE_NS, VIDEO_CACHE_NS, "pdf-inspector", "pdftotext", "anydoc", "ocr"];
-var WRITTEN_NAMESPACES = ["native", "firecrawl", ...DOCUMENT_NAMESPACES];
+var WRITTEN_NAMESPACES = ["native", "firecrawl", "browser", ...DOCUMENT_NAMESPACES];
+var splitByVariant = (ns) => ns === "native" || ns === "browser";
 function namespaceFor(result, predicted) {
   if (predicted === VIDEO_CACHE_NS && result.documentType !== "video") return result.extractor ?? "native";
   return result.documentType ?? (predicted === PDF_CACHE_NS || predicted === DOC_CACHE_NS || predicted === VIDEO_CACHE_NS ? predicted : result.extractor ?? "native");
@@ -8838,7 +11644,7 @@ function namespaceFor(result, predicted) {
 function readAnyNamespace(url, acceptLanguage, namespaces = WRITTEN_NAMESPACES, variants = PLAIN) {
   let best;
   for (const ns of namespaces) {
-    for (const variant of ns === "native" ? variants : PLAIN) {
+    for (const variant of splitByVariant(ns) ? variants : PLAIN) {
       const hit = readCache(url, acceptLanguage, ns, variant);
       if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
     }
@@ -8877,17 +11683,17 @@ function revalidationHeaders(entry) {
   return h;
 }
 function entryPaths(url, acceptLanguage, extractor, variant) {
-  const meta = cachePath(url, acceptLanguage, extractor, extractor === "native" ? variant : "");
+  const meta = cachePath(url, acceptLanguage, extractor, splitByVariant(extractor) ? variant : "");
   return { meta, body: meta.replace(/\.json$/, ".body") };
 }
 function readCache(url, acceptLanguage = "", extractor = "native", variant = "") {
   if (!entryDir(false)) return void 0;
   const { meta, body } = entryPaths(url, acceptLanguage, extractor, variant);
-  if (!existsSync6(meta)) return void 0;
+  if (!existsSync8(meta)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync7(meta, "utf8"));
+    const entry = JSON.parse(readFileSync8(meta, "utf8"));
     if (typeof entry.cachedAt !== "number") return void 0;
-    const text = existsSync6(body) ? readFileSync7(body, "utf8") : entry.text;
+    const text = existsSync8(body) ? readFileSync8(body, "utf8") : entry.text;
     if (!text?.trim()) return void 0;
     return { ...entry, text };
   } catch {
@@ -8916,7 +11722,7 @@ function writeCache(url, res, now, acceptLanguage = "", extractor = "native", va
 var ensured = /* @__PURE__ */ new Set();
 function ensureDir2(dir) {
   if (ensured.has(dir)) return;
-  mkdirSync4(dir, { recursive: true });
+  mkdirSync5(dir, { recursive: true });
   ensured.add(dir);
 }
 function openCacheDir(create) {
@@ -8926,12 +11732,12 @@ function openCacheDir(create) {
     if (create) ensureDir2(dir);
     return { dir };
   }
-  if (create) mkdirSync4(dirname(dirname(dir)), { recursive: true });
+  if (create) mkdirSync5(dirname(dirname(dir)), { recursive: true });
   for (const p of [dirname(dir), dir]) {
     if (create) mkdirPrivate(p);
     let st;
     try {
-      st = lstatSync(p);
+      st = lstatSync2(p);
     } catch (e) {
       if (e.code === "ENOENT") return {};
       return { refused: `${p} cannot be inspected (${e.message})` };
@@ -8942,7 +11748,7 @@ function openCacheDir(create) {
     if (st.mode & 18) return { refused: `${p} is writable by other users` };
     if (st.mode & 63 && !isNoWrite()) {
       try {
-        chmodSync(p, 448);
+        chmodSync2(p, 448);
       } catch {
       }
     }
@@ -8951,7 +11757,7 @@ function openCacheDir(create) {
 }
 function mkdirPrivate(p) {
   try {
-    mkdirSync4(p, { mode: 448 });
+    mkdirSync5(p, { mode: 448 });
   } catch (e) {
     if (e.code !== "EEXIST") throw e;
   }
@@ -8992,7 +11798,7 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     const entry = ns === "firecrawl" && target === "native" ? { ...result, fallbackFrom: "firecrawl" } : result;
     writeCache(url, entry, now, lang, target, variant);
   };
-  const hit = refresh ? void 0 : lookup(url, lang, ns, variant);
+  const hit = refresh ? void 0 : lookup(url, lang, ns, variant, browserFetchMode(opts.browser) === "fallback");
   if (hit && isCacheFresh(hit, now)) return served(hit);
   let res;
   const revalidate = hit ? revalidationHeaders(hit) : {};
@@ -9018,7 +11824,12 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   if (stale) return served(stale, `${url} returned ${res.status || "no response"}; served the cached copy from ${new Date(stale.cachedAt).toISOString()}.`);
   return res;
 }
-function lookup(url, acceptLanguage, ns, variant) {
+function lookup(url, acceptLanguage, ns, variant, browserFallback = false) {
+  const best = lookupOwn(url, acceptLanguage, ns, variant);
+  const rendered = browserFallback ? readCache(url, acceptLanguage, "browser", variant) : void 0;
+  return rendered && (!best || rendered.cachedAt > best.cachedAt) ? rendered : best;
+}
+function lookupOwn(url, acceptLanguage, ns, variant) {
   const best = readAnyNamespace(url, acceptLanguage, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
   if (ns === VIDEO_CACHE_NS && !best) return readCache(url, acceptLanguage, "native", variant);
   if (ns !== "firecrawl") return best;
@@ -9038,7 +11849,7 @@ function ownFile(name) {
 }
 function readEntryMeta(abs) {
   try {
-    const entry = JSON.parse(readFileSync7(abs, "utf8"));
+    const entry = JSON.parse(readFileSync8(abs, "utf8"));
     return entry && typeof entry.cachedAt === "number" && typeof entry.finalUrl === "string" ? entry : void 0;
   } catch {
     return void 0;
@@ -9047,7 +11858,7 @@ function readEntryMeta(abs) {
 var ORPHAN_GRACE_MS = 10 * 60 * 1e3;
 function sizeOf(abs) {
   try {
-    return statSync3(abs).size;
+    return statSync6(abs).size;
   } catch {
     return 0;
   }
@@ -9057,13 +11868,13 @@ function cacheStats(now = Date.now()) {
   const out = { dir, entries: 0, bytes: 0, fresh: 0, stale: 0, ttlMs: ttlMs() };
   const { refused } = openCacheDir(false);
   if (refused) return { ...out, refused };
-  if (!existsSync6(dir)) return out;
+  if (!existsSync8(dir)) return out;
   let oldest = Number.POSITIVE_INFINITY;
   let newest = 0;
-  for (const name of readdirSync6(dir)) {
+  for (const name of readdirSync7(dir)) {
     const own = ownFile(name);
     if (!own) continue;
-    const abs = join8(dir, name);
+    const abs = join12(dir, name);
     if (own.kind !== "json") {
       out.bytes += sizeOf(abs);
       continue;
@@ -9085,12 +11896,12 @@ function cacheStats(now = Date.now()) {
 }
 function cacheClean(all = false, now = Date.now()) {
   const dir = cacheDir();
-  if (isNoWrite() || !openCacheDir(false).dir || !existsSync6(dir)) return 0;
-  const names = readdirSync6(dir);
+  if (isNoWrite() || !openCacheDir(false).dir || !existsSync8(dir)) return 0;
+  const names = readdirSync7(dir);
   const present = new Set(names);
   const remove = (name) => {
     try {
-      rmSync5(join8(dir, name), { force: true });
+      rmSync7(join12(dir, name), { force: true });
       return true;
     } catch {
       return false;
@@ -9098,7 +11909,7 @@ function cacheClean(all = false, now = Date.now()) {
   };
   const abandoned = (name) => {
     try {
-      return all || now - statSync3(join8(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
+      return all || now - statSync6(join12(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
     } catch {
       return false;
     }
@@ -9108,7 +11919,7 @@ function cacheClean(all = false, now = Date.now()) {
     const own = ownFile(name);
     if (!own) continue;
     if (own.kind === "json") {
-      const entry = readEntryMeta(join8(dir, name));
+      const entry = readEntryMeta(join12(dir, name));
       if (!entry || !all && isCacheFresh(entry, now) || !remove(name)) continue;
       remove(`${own.stem}.body`);
       removed++;
@@ -9380,11 +12191,11 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function composeAssets() {
-  const base2 = join9(cacheDir(), "compose");
+  const base2 = join13(cacheDir(), "compose");
   return [
-    { path: join9(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
-    { path: join9(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
-    { path: join9(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
+    { path: join13(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
+    { path: join13(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
+    { path: join13(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
   ];
 }
 function ensureComposeMaterialized() {
@@ -9397,23 +12208,23 @@ function untrustedStack() {
   for (const a of assets) {
     let body;
     try {
-      body = readFileSync8(a.path, "utf8");
+      body = readFileSync9(a.path, "utf8");
     } catch {
     }
     if (body !== a.content) return `${a.path} does not hold the stack this binary ships, and could not be rewritten`;
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   if (uid === void 0) return void 0;
-  const root = resolve4(cacheDir());
+  const root = resolve5(cacheDir());
   const chosen = !!(env("CACHE_DIR") ?? brand().cacheDir);
   const top = chosen ? root : dirname2(root);
   const paths = /* @__PURE__ */ new Set();
   for (const a of assets) {
-    for (let p = resolve4(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
+    for (let p = resolve5(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
   }
   for (const p of [top, ...paths]) {
     try {
-      const st = p === top && chosen ? statSync4(p) : lstatSync2(p);
+      const st = p === top && chosen ? statSync7(p) : lstatSync3(p);
       if (st.isSymbolicLink()) return `${p} is a symbolic link`;
       if (st.uid !== uid) return `${p} belongs to another user`;
       if (st.mode & 2 && !(st.isDirectory() && st.mode & 512)) return `${p} is writable by anyone`;
@@ -9425,8 +12236,8 @@ function untrustedStack() {
 }
 function writeIfChanged(path, content) {
   try {
-    if (existsSync7(path) && readFileSync8(path, "utf8") === content) return;
-    mkdirSync5(dirname2(path), { recursive: true, mode: 448 });
+    if (existsSync9(path) && readFileSync9(path, "utf8") === content) return;
+    mkdirSync6(dirname2(path), { recursive: true, mode: 448 });
     writeFileSync5(path, content);
   } catch {
   }
@@ -9563,6 +12374,9 @@ ${up.stderr}` : ""}`, code: 1 };
   return { message: [`${tag}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
 }
 
+// src/index.ts
+init_pool();
+
 // src/run-lock.ts
 var chains = /* @__PURE__ */ new Map();
 function withRunLock(slug, fn) {
@@ -9581,9 +12395,13 @@ function resetRunLocks() {
   chains.clear();
 }
 
+// src/index.ts
+init_no_write();
+
 // src/run.ts
-import { join as join10 } from "path";
-import { readFileSync as readFileSync9 } from "fs";
+init_no_write();
+import { join as join14 } from "path";
+import { readFileSync as readFileSync10 } from "fs";
 function pad(n) {
   return String(n).padStart(2, "0");
 }
@@ -9595,23 +12413,24 @@ function shq(s) {
 }
 function readJsonSafe(path) {
   try {
-    return JSON.parse(readFileSync9(path, "utf8"));
+    return JSON.parse(readFileSync10(path, "utf8"));
   } catch {
     return void 0;
   }
 }
 function readManifest(dir, file = "manifest.json") {
-  return readJsonSafe(join10(dir, file));
+  return readJsonSafe(join14(dir, file));
 }
 function writeManifest(dir, value, file = "manifest.json") {
-  return writeArtifact(join10(dir, file), `${JSON.stringify(value, null, 2)}
+  return writeArtifact(join14(dir, file), `${JSON.stringify(value, null, 2)}
 `);
 }
 
 // src/changed.ts
-import { createHash as createHash2 } from "crypto";
+init_fetch();
+import { createHash as createHash3 } from "crypto";
 function contentHash(body) {
-  return createHash2("sha256").update(body).digest("hex");
+  return createHash3("sha256").update(body).digest("hex");
 }
 var FINGERPRINT_MAX_BYTES = 64 * 1024 * 1024;
 function read(url, opts, headers) {
@@ -9672,7 +12491,16 @@ async function hasChanged(url, previous, opts = {}) {
   return { via: "unknown", fingerprint: observed, note: "nothing comparable between the two observations \u2014 store contentHash to make this answerable." };
 }
 
+// src/index.ts
+init_tables();
+
 // src/crawl.ts
+init_brand();
+init_fetch();
+init_pool();
+init_html();
+init_markdown2();
+init_url();
 var nextFree = /* @__PURE__ */ new Map();
 var holdUntil = /* @__PURE__ */ new Map();
 function resetHostSchedule() {
@@ -9877,8 +12705,8 @@ async function crawlSite(seed, opts = {}) {
   const authorizeUrl = (url) => authorizeHop(url, false);
   const authorizeSeed = (url) => authorizeHop(url, true);
   let settleSeed;
-  const seedSettled = new Promise((resolve7) => {
-    settleSeed = resolve7;
+  const seedSettled = new Promise((resolve8) => {
+    settleSeed = resolve8;
   });
   const authorizeSitemap = async (url) => {
     if (!sameOrigin(url, seedOrigin)) await seedSettled;
@@ -10057,6 +12885,11 @@ async function crawlSite(seed, opts = {}) {
   return { pages, pending, disallowed, notes: [...policy, ...notes] };
 }
 
+// src/embed.ts
+init_brand();
+init_fetch();
+init_pool();
+
 // src/probe.ts
 var PROBE_RETRY_MS = 3e4;
 function cachedProbe(cache2, key, ask) {
@@ -10173,6 +13006,9 @@ function normalize(v) {
 }
 
 // src/vector.ts
+init_brand();
+init_fetch();
+init_rank();
 function qdrantBase() {
   return env("QDRANT") ?? "http://localhost:6333";
 }
@@ -10304,18 +13140,18 @@ function stripInlineCode(line) {
 }
 function codeMask(lines) {
   const mask = new Array(lines.length).fill(false);
-  let open;
+  let open2;
   for (let i = 0; i < lines.length; i++) {
     const m = /^\s*(`{3,}|~{3,})(.*)$/.exec(lines[i]);
-    if (!open) {
+    if (!open2) {
       if (m && !(m[1][0] === "`" && m[2].includes("`"))) {
-        open = { ch: m[1][0], len: m[1].length };
+        open2 = { ch: m[1][0], len: m[1].length };
         mask[i] = true;
       }
       continue;
     }
     mask[i] = true;
-    if (m && m[1][0] === open.ch && m[1].length >= open.len && m[2].trim() === "") open = void 0;
+    if (m && m[1][0] === open2.ch && m[1].length >= open2.len && m[2].trim() === "") open2 = void 0;
   }
   return mask;
 }
@@ -10545,11 +13381,14 @@ function extractNumerals(text, max = 8) {
 }
 
 // src/orchestrate.ts
-import { existsSync as existsSync8 } from "fs";
-import { join as join12, resolve as resolve5 } from "path";
+init_brand();
+init_no_write();
+import { existsSync as existsSync10 } from "fs";
+import { join as join16, resolve as resolve6 } from "path";
 
 // src/orchestrate/templates.ts
-import { join as join11 } from "path";
+init_brand();
+import { join as join15 } from "path";
 var WORKFLOW_FORBIDDEN = ["Date.now(", "Math.random(", "new Date("];
 function oneWriterFooter(runAbs, opts = {}) {
   const forbidden = opts.writingCommands?.length ? ` Do not run any engine command that writes (${opts.writingCommands.map((c) => `\`${c}\``).join(", ")}).` : "";
@@ -10560,7 +13399,7 @@ Return ONLY the structured output specified above. Do NOT write, edit, or delete
 
 One sanctioned exception: ${opts.sanctioned}` : ""}
 
-Exception for oversized prose: if a note is too large to return, write ONLY to \`${join11(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
+Exception for oversized prose: if a note is too large to return, write ONLY to \`${join15(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
 `;
 }
 var SMALL_WORKLIST = 3;
@@ -10583,9 +13422,9 @@ function assertWorkflowSafe(script, phaseName) {
     }
   }
 }
-function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants = {}) {
+function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
-  const scriptPath = join11(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
+  const scriptPath = join15(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
@@ -10611,7 +13450,7 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, c
     // read from disk by the subagent. A judge panel is the case that needs it:
     // each judge is handed the decision and its cited evidence verbatim,
     // precisely so it never has to open the run folder it is judging.
-    ...Object.entries(constants).map(([name, value]) => `const ${name} = ${JSON.stringify(value)}`),
+    ...Object.entries(constants2).map(([name, value]) => `const ${name} = ${JSON.stringify(value)}`),
     ``,
     `function contract(role, extra) {`,
     `  return 'Read and follow the dispatch contract at ' + AGENTS + '/' + role + '.md VERBATIM.\\n'`,
@@ -10665,7 +13504,7 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
       const batches = phaseBatches(ph, emission, smallWorklist);
       const widest = batches.reduce((w, b) => Math.max(w, b.length), 0);
       lines.push(
-        `Fan out: \`Workflow({ scriptPath: "${join11(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
+        `Fan out: \`Workflow({ scriptPath: "${join15(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
         `(${batches.length} agent(s) of at most ${widest} item(s), contract \`agents/${emission.role}.md\`).`,
         ``,
         `Sequentially instead: play \`agents/${emission.role}.md\` yourself over ${shq(ph.ids.join(","))}.`,
@@ -10684,9 +13523,9 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
 // src/orchestrate.ts
 var BATCH_SIZE = 8;
 function listPhases(runDir, engineAbs, defs) {
-  const run = resolve5(runDir);
+  const run = resolve6(runDir);
   return defs.map((def) => {
-    const worklist = join12(run, def.worklist);
+    const worklist = join16(run, def.worklist);
     const parsed = readJsonSafe(worklist);
     const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
@@ -10702,8 +13541,8 @@ function listPhases(runDir, engineAbs, defs) {
   });
 }
 function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
-  const run = resolve5(runDir);
-  if (!existsSync8(run)) {
+  const run = resolve6(runDir);
+  if (!existsSync10(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
   const phases = listPhases(run, engineAbs, defs);
@@ -10732,14 +13571,14 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join12(run, "orchestration");
-  const agentsDir = join12(orchDir, "agents");
-  ensureDir(join12(orchDir, "out"));
+  const orchDir = join16(run, "orchestration");
+  const agentsDir = join16(orchDir, "agents");
+  ensureDir(join16(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(contracts(run, engineAbs, phases))) {
-    written.push(writeArtifact(join12(agentsDir, `${name}.md`), content));
+    written.push(writeArtifact(join16(agentsDir, `${name}.md`), content));
   }
   if (!opts.eco) {
     for (const ph of selected) {
@@ -10753,141 +13592,15 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join12(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
+      written.push(writeArtifact(join16(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
-  written.push(writeArtifact(join12(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
+  written.push(writeArtifact(join16(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 
-// src/cli-kit.ts
-import { basename as basename2 } from "path";
-var EXIT_OK = 0;
-var EXIT_FAILURE = 1;
-var EXIT_USAGE = 2;
-var UsageError = class extends Error {
-  exitCode = EXIT_USAGE;
-};
-function parseArgs(argv, spec) {
-  const commands = new Set(spec.commands);
-  const valueFlags = new Set(spec.valueFlags);
-  const boolFlags = new Set(spec.boolFlags);
-  if (argv.length === 0) return { kind: "help" };
-  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
-  if (isVersionWord(argv[0])) return { kind: "version" };
-  const command = argv[0];
-  if (!commands.has(command)) {
-    throw new UsageError(`unknown command "${command}" \u2014 run --help for the supported commands`);
-  }
-  const values = {};
-  const bools = /* @__PURE__ */ new Set();
-  const positional = [];
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--") {
-      positional.push(...argv.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
-      positional.push(arg);
-      continue;
-    }
-    const eq = arg.indexOf("=");
-    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-    if (!boolFlags.has(key) && !valueFlags.has(key)) {
-      if (isHelpWord(arg)) return { kind: "help", command };
-      if (isVersionWord(arg)) return { kind: "version" };
-    }
-    if (boolFlags.has(key)) {
-      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
-      bools.add(key);
-      continue;
-    }
-    if (!valueFlags.has(key)) {
-      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
-    }
-    if (eq !== -1) {
-      values[key] = arg.slice(eq + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next === void 0 || next.startsWith("--")) {
-      throw new UsageError(`missing value for --${key}`);
-    }
-    values[key] = next;
-    i++;
-  }
-  return { kind: "command", command, positional, values, bools };
-}
-function isHelpWord(a) {
-  return a === "--help" || a === "-h" || a === "help";
-}
-function isVersionWord(a) {
-  return a === "--version" || a === "-v" || a === "version";
-}
-function argValue(p, name) {
-  return p.values[name];
-}
-function argBool(p, name) {
-  return p.bools.has(name);
-}
-function argInt(p, name, range = {}) {
-  const raw = p.values[name];
-  if (raw === void 0) return void 0;
-  const n = raw.trim() ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(n) || !Number.isInteger(n)) {
-    throw new UsageError(`--${name} expects a whole number, got "${raw}"`);
-  }
-  const { min, max } = range;
-  if (min !== void 0 && n < min || max !== void 0 && n > max) {
-    const bound = min !== void 0 && max !== void 0 ? `from ${min} to ${max}` : min !== void 0 ? `of at least ${min}` : `of at most ${max}`;
-    throw new UsageError(`--${name} expects a whole number ${bound}, got "${raw}"`);
-  }
-  return n;
-}
-function argList(p, name) {
-  const raw = p.values[name];
-  if (raw === void 0) return [];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-}
-function argOneOf(p, name, allowed) {
-  const raw = p.values[name];
-  if (raw === void 0) return void 0;
-  if (!allowed.includes(raw)) {
-    throw new UsageError(`invalid --${name} "${raw}" \u2014 expected one of: ${allowed.join(", ")}`);
-  }
-  return raw;
-}
-function positionalText(p) {
-  return p.positional.join(" ");
-}
-function jsonLine(value) {
-  return `${JSON.stringify(value, null, 2)}
-`;
-}
-function docFlagRegex() {
-  return /(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g;
-}
-function documentedFlags(text) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const m of text.matchAll(docFlagRegex())) seen.add(m[1]);
-  return [...seen];
-}
-function helpCoversFlag(help, flag) {
-  return new RegExp(`--${escapeRegExp(flag)}(?![a-z0-9-])`).test(help);
-}
-function missingFromHelp(help, flags) {
-  return [...flags].filter((f) => !helpCoversFlag(help, f));
-}
-function pipedEnum(line, flag) {
-  const cleaned = line.replace(/`/g, "").replace(/\\\|/g, "|");
-  const m = cleaned.match(new RegExp(`--${escapeRegExp(flag)}[^a-z|]*((?:[a-z][a-z0-9-]*\\s*\\|\\s*)+[a-z][a-z0-9-]*)`));
-  return m ? m[1].split("|").map((s) => s.trim()) : null;
-}
-function isInvokedDirectly(argv1 = process.argv[1], cli = brand().cli) {
-  if (!argv1) return false;
-  return basename2(argv1).replace(/\.(mjs|cjs|js)$/, "") === cli;
-}
+// src/index.ts
+init_cli_kit();
 
 // src/mcp/protocol.ts
 var PROTOCOL_VERSIONS = ["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
@@ -10982,27 +13695,31 @@ function isOriginAllowed(origin, allowed = []) {
   return allowed.some((a) => a === "*" || a.toLowerCase() === o.toLowerCase());
 }
 
+// src/mcp/server.ts
+init_brand();
+
 // src/mcp/resources.ts
-import { existsSync as existsSync9, readdirSync as readdirSync7, readFileSync as readFileSync10, realpathSync, statSync as statSync5 } from "fs";
-import { basename as basename3, dirname as dirname3, join as join13, relative, resolve as resolve6, sep } from "path";
+init_brand();
+import { existsSync as existsSync11, readdirSync as readdirSync8, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync8 } from "fs";
+import { basename as basename4, dirname as dirname3, join as join17, relative, resolve as resolve7, sep as sep2 } from "path";
 import { fileURLToPath } from "url";
 var skillName = () => brand().name;
 var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname3(fileURLToPath(import.meta.url));
   const name = brand().name;
-  const candidates = [resolve6(here, ".."), resolve6(here, "..", "skills", name), resolve6(here, "..", "..", "skills", name)];
-  return candidates.find((dir) => existsSync9(join13(dir, "SKILL.md")));
+  const candidates2 = [resolve7(here, ".."), resolve7(here, "..", "skills", name), resolve7(here, "..", "..", "skills", name)];
+  return candidates2.find((dir) => existsSync11(join17(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join13(root, "references");
-  if (!existsSync9(refDir)) return out;
-  for (const file of readdirSync7(refDir).sort()) {
+  const refDir = join17(root, "references");
+  if (!existsSync11(refDir)) return out;
+  for (const file of readdirSync8(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join13("references", file), `${skillName()} reference: ${basename3(file, ".md")}`));
+    out.push(describe(root, join17("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
   }
   return out;
 }
@@ -11014,41 +13731,41 @@ function readResource(uri, moduleDir) {
   if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
   const rel = uri.slice(URI_SCHEME.length);
   if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve6(root, rel);
-  const served = relative(root, target).split(sep).join("/");
+  const target = resolve7(root, rel);
+  const served = relative(root, target).split(sep2).join("/");
   if (served !== "SKILL.md" && !/^references\/[^/]+\.md$/.test(served)) {
     throw new ResourceError(`not a resource this server serves: ${uri} (resources/list names them)`);
   }
-  const rootReal = realpathSync(root);
+  const rootReal = realpathSync2(root);
   let targetReal;
   try {
-    targetReal = realpathSync(target);
+    targetReal = realpathSync2(target);
   } catch {
     throw new ResourceError(`no such resource: ${uri}`);
   }
-  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep)) {
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
-  if (!statSync5(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync10(targetReal, "utf8") };
+  if (!statSync8(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync11(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
 };
 function describe(root, rel, fallbackTitle) {
   const decl = {
-    uri: `${URI_SCHEME}${rel.split(sep).join("/")}`,
-    name: rel.split(sep).join("/"),
+    uri: `${URI_SCHEME}${rel.split(sep2).join("/")}`,
+    name: rel.split(sep2).join("/"),
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join13(root, rel));
+  const summary = firstProse(join17(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
 function firstProse(file) {
   let text;
   try {
-    text = readFileSync10(file, "utf8");
+    text = readFileSync11(file, "utf8");
   } catch {
     return void 0;
   }
@@ -11056,8 +13773,8 @@ function firstProse(file) {
   for (const block of body.split(/\n\s*\n/)) {
     const line = block.trim();
     if (!line || line.startsWith("#") || line.startsWith(">") || line.startsWith("|") || line.startsWith("```")) continue;
-    const flat = line.replace(/\s+/g, " ").replace(/[*`]/g, "");
-    return flat.length > 300 ? `${flat.slice(0, 297)}\u2026` : flat;
+    const flat2 = line.replace(/\s+/g, " ").replace(/[*`]/g, "");
+    return flat2.length > 300 ? `${flat2.slice(0, 297)}\u2026` : flat2;
   }
   return void 0;
 }
@@ -11077,7 +13794,7 @@ function createServer(adapter, opts = {}) {
   const serverInfo = { name: opts.serverName ?? brand().name, version: adapter.version };
   const maxBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES2;
   let protocol = LATEST_PROTOCOL;
-  const active = /* @__PURE__ */ new Map();
+  const active2 = /* @__PURE__ */ new Map();
   const listTools = () => adapter.listTools(protocol).map((decl) => forRevision(decl, protocol));
   const prompts = () => adapter.prompts ?? [];
   async function handle(msg, send, handleOpts = {}) {
@@ -11093,7 +13810,7 @@ function createServer(adapter, opts = {}) {
     if (msg.id === void 0 || msg.id === null) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
-        if (typeof target === "string" || typeof target === "number") active.get(target)?.cancel();
+        if (typeof target === "string" || typeof target === "number") active2.get(target)?.cancel();
       }
       return;
     }
@@ -11107,7 +13824,7 @@ function createServer(adapter, opts = {}) {
         controller.abort();
       }
     };
-    active.set(id, request);
+    active2.set(id, request);
     const lost = handleOpts.signal;
     const onLost = () => request.cancel();
     if (lost?.aborted) request.cancel();
@@ -11208,7 +13925,7 @@ function createServer(adapter, opts = {}) {
     } catch (e) {
       reply({ error: { code: ERR_INTERNAL, message: errMessage(e) } });
     } finally {
-      if (active.get(id) === request) active.delete(id);
+      if (active2.get(id) === request) active2.delete(id);
       lost?.removeEventListener("abort", onLost);
     }
   }
@@ -11238,11 +13955,12 @@ function createServer(adapter, opts = {}) {
           decl.inputSchema.properties[key]?.type === "number" && typeof value === "string" ? Number(value) : value
         ])
       );
-      const { text: raw, artifact } = await adapter.callTool(name, normalized, context);
+      const { text: raw, artifact, images } = await adapter.callTool(name, normalized, context);
       const text = capResponse(raw, name, maxBytes, artifact, adapter.capAdvice);
       const capped = text !== raw;
       const structured = protocol >= RICH_TOOLS_SINCE ? structuredContentFor(text, capped, decl.outputSchema !== void 0) : void 0;
-      reply({ result: { content: [{ type: "text", text }], ...structured ? { structuredContent: structured } : {} } });
+      const pictures = (images ?? []).map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
+      reply({ result: { content: [{ type: "text", text }, ...pictures], ...structured ? { structuredContent: structured } : {} } });
     } catch (e) {
       if (e instanceof InvalidParamsError) {
         reply({ error: { code: ERR_INVALID_PARAMS, message: e.message } });
@@ -11305,7 +14023,7 @@ async function runStdioServer(adapter, opts = {}) {
     void p.finally(() => inFlight.delete(p));
     return p;
   };
-  let active = 0;
+  let active2 = 0;
   const waiting = [];
   const queued = /* @__PURE__ */ new Map();
   let negotiated;
@@ -11314,7 +14032,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active >= MAX_IN_FLIGHT) await new Promise((resolve7) => waiting.push(resolve7));
+      while (active2 >= MAX_IN_FLIGHT) await new Promise((resolve8) => waiting.push(resolve8));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -11322,11 +14040,11 @@ async function runStdioServer(adapter, opts = {}) {
       waiting.shift()?.();
       return;
     }
-    active++;
+    active2++;
     try {
       await server.handle(msg, reply, handleOpts);
     } finally {
-      active--;
+      active2--;
       waiting.shift()?.();
     }
   };
@@ -11392,10 +14110,11 @@ function reportInternal(send) {
 }
 
 // src/mcp/http.ts
-import { createHash as createHash3, timingSafeEqual } from "crypto";
+init_brand();
+import { createHash as createHash4, timingSafeEqual } from "crypto";
 var MCP_PATH = "/mcp";
 var MAX_BODY_BYTES2 = 4 * 1024 * 1024;
-var REQUEST_TIMEOUT_MS = 6e4;
+var REQUEST_TIMEOUT_MS2 = 6e4;
 var CORS_HEADERS = "content-type, accept, mcp-protocol-version, mcp-session-id, authorization, last-event-id";
 var LOOPBACK_BIND = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
 async function startHttpServer(adapter, opts = {}) {
@@ -11415,17 +14134,17 @@ async function startHttpServer(adapter, opts = {}) {
       sendJson(res, 500, { jsonrpc: "2.0", id: null, error: { code: -32603, message: e instanceof Error ? e.message : String(e) } });
     });
   });
-  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.requestTimeout = REQUEST_TIMEOUT_MS2;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve7({
+      resolve8({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -11548,7 +14267,7 @@ data: ${JSON.stringify(m)}
 function bearerMatches(sent, token) {
   const m = /^Bearer[ \t]+(\S+)[ \t]*$/i.exec(sent ?? "");
   if (!m) return false;
-  const digest = (s) => createHash3("sha256").update(s).digest();
+  const digest = (s) => createHash4("sha256").update(s).digest();
   return timingSafeEqual(digest(m[1]), digest(token));
 }
 function header(req, name) {
@@ -11570,7 +14289,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -11594,7 +14313,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve7(Buffer.concat(chunks).toString("utf8"));
+      else resolve8(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -11674,6 +14393,7 @@ export {
   bm25Tokenize,
   bracketedTokensIn,
   brand,
+  browserHome,
   browserUa,
   buildBm25Index,
   buildMatcher,
@@ -11691,6 +14411,7 @@ export {
   charsetFromContentType,
   charsetFromHtml,
   citationTokensIn,
+  classifyChallenge as classifyBrowserChallenge,
   classifyYtdlpError,
   cleanInline,
   codeMask,
@@ -11717,6 +14438,7 @@ export {
   defaultUa,
   deleteCollection,
   deriveCitableUrl,
+  detectBrowserBinary,
   detectRateLimited,
   discoverFeeds,
   diversify,
@@ -11752,6 +14474,7 @@ export {
   extractClaimUnits,
   extractDocument,
   extractFrames,
+  extractFromHtml,
   extractJsonLd,
   extractMainHtml,
   extractMetaTags,
@@ -11838,6 +14561,7 @@ export {
   officeToText,
   ollamaBase,
   oneWriterFooter,
+  openBrowserSession,
   orMasks,
   orchestrateRun,
   originUrl,
@@ -11869,10 +14593,12 @@ export {
   readCappedBytes,
   readJsonSafe,
   readManifest,
+  readRenderedPage,
   readResource,
   readVideoRun,
   recencyScore,
   renderAsset,
+  renderSnapshot as renderBrowserSnapshot,
   repoCacheRoot,
   repoFacts,
   repoFactsResult,
