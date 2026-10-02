@@ -15,8 +15,8 @@ importers:
         specifier: ^2.5.15
         version: 2.5.15
       '@maxgfr/webindex':
-        specifier: https://codeload.github.com/maxgfr/webindex/tar.gz/66c557c5cf420de9bdc3a570bcfb4b702b7fe658
-        version: webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/66c557c5cf420de9bdc3a570bcfb4b702b7fe658
+        specifier: https://codeload.github.com/maxgfr/webindex/tar.gz/1123a3c666407f1bdfcc0134446b1278008bab55
+        version: webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/1123a3c666407f1bdfcc0134446b1278008bab55
       '@semantic-release/changelog':
         specifier: ^7.0.0
         version: 7.0.0(semantic-release@25.0.9(typescript@7.0.2))
@@ -2314,9 +2314,9 @@ packages:
   web-worker@1.5.0:
     resolution: {integrity: sha512-RiMReJrTAiA+mBjGONMnjVDP2u3p9R1vkcGz6gDIrOMT3oGuYwX2WRMYI9ipkphSuE5XKEhydbhNEJh4NY9mlw==}
 
-  webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/66c557c5cf420de9bdc3a570bcfb4b702b7fe658:
-    resolution: {tarball: https://codeload.github.com/maxgfr/webindex/tar.gz/66c557c5cf420de9bdc3a570bcfb4b702b7fe658}
-    version: 1.28.0
+  webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/1123a3c666407f1bdfcc0134446b1278008bab55:
+    resolution: {tarball: https://codeload.github.com/maxgfr/webindex/tar.gz/1123a3c666407f1bdfcc0134446b1278008bab55}
+    version: 1.29.0
     engines: {node: '>=18'}
     hasBin: true
 
@@ -4330,7 +4330,7 @@ snapshots:
 
   web-worker@1.5.0: {}
 
-  webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/66c557c5cf420de9bdc3a570bcfb4b702b7fe658: {}
+  webindex@https://codeload.github.com/maxgfr/webindex/tar.gz/1123a3c666407f1bdfcc0134446b1278008bab55: {}
 
   which-command@0.1.0: {}
 

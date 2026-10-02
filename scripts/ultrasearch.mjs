@@ -2998,11 +2998,11 @@ function pickAutoTrack(meta) {
   return origs.length === 1 ? origs[0] : void 0;
 }
 async function subtitleRung(auto, meta, info, opts, deps) {
-  const track = auto ? pickAutoTrack(meta) : pickManualTrack(meta, opts.lang);
-  if (!track) return { failure: auto ? "no auto-captions in the video's language" : "no manual subtitles", noTrack: true };
-  const got = await downloadSubtitle(info, track, auto, deps.run, opts.signal, opts.knownHostsOnly);
-  if ("error" in got) return { failure: `${auto ? "auto-captions" : "subtitles"} (${track}): ${got.error}` };
-  return { segments: mergeSegments(parseVtt(got.vtt, { rolling: auto }), chapterStarts(meta)), track };
+  const track2 = auto ? pickAutoTrack(meta) : pickManualTrack(meta, opts.lang);
+  if (!track2) return { failure: auto ? "no auto-captions in the video's language" : "no manual subtitles", noTrack: true };
+  const got = await downloadSubtitle(info, track2, auto, deps.run, opts.signal, opts.knownHostsOnly);
+  if ("error" in got) return { failure: `${auto ? "auto-captions" : "subtitles"} (${track2}): ${got.error}` };
+  return { segments: mergeSegments(parseVtt(got.vtt, { rolling: auto }), chapterStarts(meta)), track: track2 };
 }
 async function whisperRung(meta, info, opts, deps) {
   const missing = ["uvx", "ffmpeg"].filter((c) => !deps.have(c));
@@ -5353,6 +5353,7 @@ async function launch(deps, binary, profile, headless, kind) {
         host: "127.0.0.1",
         port,
         launchedByUs: true,
+        spawned: true,
         ...child.pid !== void 0 ? { pid: child.pid } : {},
         profile,
         headless,
@@ -5581,6 +5582,14 @@ var init_session = __esm({
       }
       get launchedByUs() {
         return this.endpoint.launchedByUs;
+      }
+      /** Whether opening this session started the browser (not a reuse of one already running). */
+      get spawned() {
+        return this.endpoint.spawned === true;
+      }
+      /** The browser-level socket URL: its path names this run of the browser and no other. */
+      get browserSocket() {
+        return this.wsBrowserUrl;
       }
       get pid() {
         return this.endpoint.pid;
@@ -7585,9 +7594,9 @@ async function readCappedBytes(res, max) {
   return Buffer.concat(chunks);
 }
 async function readMeasuredBody(res, max) {
-  const read2 = await readCappedBytes(res, max + 1);
-  const bytes = read2.subarray(0, max);
-  return { bytes, bytesRead: bytes.length, truncated: read2.length > max };
+  const read3 = await readCappedBytes(res, max + 1);
+  const bytes = read3.subarray(0, max);
+  return { bytes, bytesRead: bytes.length, truncated: read3.length > max };
 }
 function isBinaryDocument(contentType) {
   return /application\/pdf/i.test(contentType) || docFormatForContentType(contentType) !== void 0;
@@ -8932,17 +8941,17 @@ var init_overlay = __esm({
   }
 });
 async function watchNetwork(page) {
-  const inflight2 = /* @__PURE__ */ new Set();
+  const inflight3 = /* @__PURE__ */ new Set();
   const handlers = [
-    ["Network.requestWillBeSent", (p) => inflight2.add(String(p.requestId))],
-    ["Network.loadingFinished", (p) => inflight2.delete(String(p.requestId))],
-    ["Network.loadingFailed", (p) => inflight2.delete(String(p.requestId))]
+    ["Network.requestWillBeSent", (p) => inflight3.add(String(p.requestId))],
+    ["Network.loadingFinished", (p) => inflight3.delete(String(p.requestId))],
+    ["Network.loadingFailed", (p) => inflight3.delete(String(p.requestId))]
   ];
   for (const [m, h] of handlers) page.on(m, h);
   await page.send("Network.enable").catch(() => {
   });
   return {
-    count: () => inflight2.size,
+    count: () => inflight3.size,
     stop: () => {
       for (const [m, h] of handlers) page.off(m, h);
     }
@@ -9080,6 +9089,7 @@ var init_wait = __esm({
 });
 var read_exports = {};
 __export(read_exports, {
+  closeBrowserReads: () => closeBrowserReads,
   readRenderedPage: () => readRenderedPage
 });
 function pump() {
@@ -9113,6 +9123,48 @@ async function acquire(limit, signal, cancelled) {
     pump();
   };
 }
+function track(p) {
+  inflight.add(p);
+  const done = () => inflight.delete(p);
+  p.then(done, done);
+  return p;
+}
+async function closeBrowserReads(opts = {}) {
+  try {
+    if (inflight.size > 0) {
+      let timer;
+      const bound = new Promise((r) => {
+        timer = setTimeout(r, opts.waitMs ?? DRAIN_MS);
+        timer.unref?.();
+      });
+      await Promise.race([Promise.allSettled([...inflight]), bound]);
+      clearTimeout(timer);
+    }
+    const ours = launched;
+    launched = void 0;
+    if (!ours) return { closed: false };
+    const deps = opts.deps ? browserDeps({ ...ours.deps, ...opts.deps }) : ours.deps;
+    if (!await isSameBrowser(deps, ours.port, ours.host, ours.wsBrowserUrl)) return { closed: false };
+    const saved = readSession();
+    if (saved?.wsBrowserUrl && socketPath(saved.wsBrowserUrl) === socketPath(ours.wsBrowserUrl)) return { closed: false };
+    let cdp;
+    try {
+      cdp = await deps.connectCdp(loopbackSocketUrl(ours.wsBrowserUrl));
+    } catch {
+      if (ours.pid === void 0) return { closed: false };
+      deps.kill(ours.pid, "SIGTERM");
+      return { closed: true };
+    }
+    try {
+      await closeLaunched(cdp, ours.pid, deps);
+    } finally {
+      await cdp.close();
+    }
+    return { closed: true };
+  } catch {
+    return { closed: false };
+  }
+}
 async function render(url, opts, deps, timeoutMs, run) {
   const { cdp, profile, headless, binary } = opts;
   const session = await withBrowserLock(
@@ -9123,6 +9175,10 @@ async function render(url, opts, deps, timeoutMs, run) {
     { deps }
   );
   run.session = session;
+  if (session.spawned) {
+    const { host, port, pid, browserSocket } = session;
+    launched = { host, port, wsBrowserUrl: browserSocket, ...pid !== void 0 ? { pid } : {}, deps };
+  }
   const page = session.page;
   let status;
   let mime;
@@ -9173,7 +9229,10 @@ async function render(url, opts, deps, timeoutMs, run) {
     await session.detach();
   }
 }
-async function readRenderedPage(url, opts = {}) {
+function readRenderedPage(url, opts = {}) {
+  return track(read(url, opts));
+}
+async function read(url, opts) {
   const cancelled = () => new Error(`reading ${url} in the browser was cancelled`);
   const { signal } = opts;
   if (signal?.aborted) throw cancelled();
@@ -9185,7 +9244,7 @@ async function readRenderedPage(url, opts = {}) {
     throw cancelled();
   }
   const run = { stopped: false };
-  const work = render(url, opts, deps, timeoutMs, run);
+  const work = track(render(url, opts, deps, timeoutMs, run));
   work.then(release, release);
   let stop;
   const cut = new Promise((_, reject) => {
@@ -9211,6 +9270,9 @@ var IDLE_CAP_MS;
 var WEB_PAGE;
 var active;
 var queue;
+var DRAIN_MS;
+var launched;
+var inflight;
 var WHOLE_DOCUMENT;
 var init_read = __esm({
   "src/browser/read.ts"() {
@@ -9219,6 +9281,8 @@ var init_read = __esm({
     init_fetch();
     init_challenge();
     init_deps();
+    init_launch();
+    init_discovery();
     init_overlay();
     init_session();
     init_state();
@@ -9227,6 +9291,8 @@ var init_read = __esm({
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     active = 0;
     queue = [];
+    DRAIN_MS = 5e3;
+    inflight = /* @__PURE__ */ new Set();
     WHOLE_DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
   }
 });
@@ -9846,9 +9912,9 @@ var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
 var PLAIN = [""];
 function variantOf(opts) {
-  const read2 = opts.fullPage ? "full" : opts.stripConsent ? "consent" : "";
-  if (opts.format !== "markdown") return read2;
-  return read2 ? `${read2}-md` : "md";
+  const read3 = opts.fullPage ? "full" : opts.stripConsent ? "consent" : "";
+  if (opts.format !== "markdown") return read3;
+  return read3 ? `${read3}-md` : "md";
 }
 var sameFormat = (variant) => MARKDOWN_VARIANTS.includes(variant) ? MARKDOWN_VARIANTS : TEXT_VARIANTS;
 var PDF_CACHE_NS = "pdf";
@@ -11287,7 +11353,7 @@ async function runStdioServer(adapter, opts = {}) {
     emit(JSON.stringify(msg) + "\n");
   };
   const inFlight = /* @__PURE__ */ new Set();
-  const track = (p) => {
+  const track2 = (p) => {
     inFlight.add(p);
     void p.finally(() => inFlight.delete(p));
     return p;
@@ -11351,7 +11417,7 @@ async function runStdioServer(adapter, opts = {}) {
           continue;
         }
         const batch = parsed;
-        track(
+        track2(
           (async () => {
             const out = [];
             await Promise.all(batch.map((m) => dispatch2(m, (r) => void out.push(r))));
@@ -11364,7 +11430,7 @@ async function runStdioServer(adapter, opts = {}) {
         send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
         continue;
       }
-      track(dispatch2(parsed, send).catch(reportInternal(send)));
+      track2(dispatch2(parsed, send).catch(reportInternal(send)));
     }
     await Promise.all(inFlight);
   } finally {
@@ -12687,19 +12753,19 @@ ${body}` : title,
   return { backend: "reddit", items, notes };
 };
 async function readComments(threads) {
-  let read = 0;
+  let read2 = 0;
   for (const [i, t] of threads.entries()) {
     if (i > 0 && politeDelayMs()) await sleep(politeDelayMs());
     const { feed, why } = await readFeed(`${t.url.replace(/\/?$/, "/")}.rss`);
-    if (!feed) return `Reddit comments: read ${read} of ${threads.length} thread(s), then the feed ${why} \u2014 stopped there. ${fallback(t.title)}`;
+    if (!feed) return `Reddit comments: read ${read2} of ${threads.length} thread(s), then the feed ${why} \u2014 stopped there. ${fallback(t.title)}`;
     const comments = feed.items.filter((c) => c.url && c.url.replace(/\/$/, "") !== t.url.replace(/\/$/, "") && c.summary).slice(0, COMMENTS_PER_THREAD).map((c) => `- ${postText(c.summary).replace(/\s+/g, " ").slice(0, 400)}`);
     if (comments.length) t.text = `${t.text}
 
 Top comments:
 ${comments.join("\n")}`;
-    read++;
+    read2++;
   }
-  return `Reddit comments: read the top comments of ${read} thread(s).`;
+  return `Reddit comments: read the top comments of ${read2} thread(s).`;
 }
 
 // src/codes.ts

@@ -2609,11 +2609,11 @@ function pickAutoTrack(meta) {
   return origs.length === 1 ? origs[0] : void 0;
 }
 async function subtitleRung(auto, meta, info, opts, deps) {
-  const track = auto ? pickAutoTrack(meta) : pickManualTrack(meta, opts.lang);
-  if (!track) return { failure: auto ? "no auto-captions in the video's language" : "no manual subtitles", noTrack: true };
-  const got = await downloadSubtitle(info, track, auto, deps.run, opts.signal, opts.knownHostsOnly);
-  if ("error" in got) return { failure: `${auto ? "auto-captions" : "subtitles"} (${track}): ${got.error}` };
-  return { segments: mergeSegments(parseVtt(got.vtt, { rolling: auto }), chapterStarts(meta)), track };
+  const track2 = auto ? pickAutoTrack(meta) : pickManualTrack(meta, opts.lang);
+  if (!track2) return { failure: auto ? "no auto-captions in the video's language" : "no manual subtitles", noTrack: true };
+  const got = await downloadSubtitle(info, track2, auto, deps.run, opts.signal, opts.knownHostsOnly);
+  if ("error" in got) return { failure: `${auto ? "auto-captions" : "subtitles"} (${track2}): ${got.error}` };
+  return { segments: mergeSegments(parseVtt(got.vtt, { rolling: auto }), chapterStarts(meta)), track: track2 };
 }
 async function whisperRung(meta, info, opts, deps) {
   const missing = ["uvx", "ffmpeg"].filter((c) => !deps.have(c));
@@ -3783,8 +3783,8 @@ function videoRoot(out) {
 }
 function servesLang(meta, lang) {
   if (!lang) return true;
-  const read2 = meta.track ?? meta.lang ?? meta.language;
-  return read2 !== void 0 && baseLang2(read2) === baseLang2(lang);
+  const read3 = meta.track ?? meta.lang ?? meta.language;
+  return read3 !== void 0 && baseLang2(read3) === baseLang2(lang);
 }
 function readVideoRun(dir) {
   const meta = readJson(join4(dir, "meta.json"));
@@ -4249,13 +4249,13 @@ function corpusMarkdown(c, root) {
       v.dir ? `${v.id}/TRANSCRIPT.md` : cell2(`not read: ${v.reason ?? "no transcript"}`)
     ].join(" | ")
   );
-  const read2 = c.videos.filter((v) => v.dir).length;
+  const read3 = c.videos.filter((v) => v.dir).length;
   return [
     `# ${c.title ?? "Video corpus"}`,
     "",
     `- Source: ${c.source}`,
     `- Directory: ${root}`,
-    `- ${read2} of ${c.videos.length} videos read, ${c.createdAt}`,
+    `- ${read3} of ${c.videos.length} videos read, ${c.createdAt}`,
     "",
     "| V# | id | title | duration | via | transcript |",
     "|---|---|---|---|---|---|",
@@ -5501,6 +5501,7 @@ async function launch(deps, binary, profile, headless, kind) {
         host: "127.0.0.1",
         port,
         launchedByUs: true,
+        spawned: true,
         ...child.pid !== void 0 ? { pid: child.pid } : {},
         profile,
         headless,
@@ -5721,6 +5722,14 @@ var init_session = __esm({
       }
       get launchedByUs() {
         return this.endpoint.launchedByUs;
+      }
+      /** Whether opening this session started the browser (not a reuse of one already running). */
+      get spawned() {
+        return this.endpoint.spawned === true;
+      }
+      /** The browser-level socket URL: its path names this run of the browser and no other. */
+      get browserSocket() {
+        return this.wsBrowserUrl;
       }
       get pid() {
         return this.endpoint.pid;
@@ -7704,9 +7713,9 @@ async function readCappedBytes(res, max) {
   return Buffer.concat(chunks);
 }
 async function readMeasuredBody(res, max) {
-  const read2 = await readCappedBytes(res, max + 1);
-  const bytes = read2.subarray(0, max);
-  return { bytes, bytesRead: bytes.length, truncated: read2.length > max };
+  const read3 = await readCappedBytes(res, max + 1);
+  const bytes = read3.subarray(0, max);
+  return { bytes, bytesRead: bytes.length, truncated: read3.length > max };
 }
 function isBinaryDocument(contentType) {
   return /application\/pdf/i.test(contentType) || docFormatForContentType(contentType) !== void 0;
@@ -8994,17 +9003,17 @@ var init_overlay = __esm({
 
 // src/browser/wait.ts
 async function watchNetwork(page) {
-  const inflight2 = /* @__PURE__ */ new Set();
+  const inflight3 = /* @__PURE__ */ new Set();
   const handlers = [
-    ["Network.requestWillBeSent", (p) => inflight2.add(String(p.requestId))],
-    ["Network.loadingFinished", (p) => inflight2.delete(String(p.requestId))],
-    ["Network.loadingFailed", (p) => inflight2.delete(String(p.requestId))]
+    ["Network.requestWillBeSent", (p) => inflight3.add(String(p.requestId))],
+    ["Network.loadingFinished", (p) => inflight3.delete(String(p.requestId))],
+    ["Network.loadingFailed", (p) => inflight3.delete(String(p.requestId))]
   ];
   for (const [m, h] of handlers) page.on(m, h);
   await page.send("Network.enable").catch(() => {
   });
   return {
-    count: () => inflight2.size,
+    count: () => inflight3.size,
     stop: () => {
       for (const [m, h] of handlers) page.off(m, h);
     }
@@ -9137,6 +9146,7 @@ var init_wait = __esm({
 // src/browser/read.ts
 var read_exports = {};
 __export(read_exports, {
+  closeBrowserReads: () => closeBrowserReads,
   readRenderedPage: () => readRenderedPage
 });
 function pump() {
@@ -9170,6 +9180,48 @@ async function acquire(limit, signal, cancelled) {
     pump();
   };
 }
+function track(p) {
+  inflight.add(p);
+  const done = () => inflight.delete(p);
+  p.then(done, done);
+  return p;
+}
+async function closeBrowserReads(opts = {}) {
+  try {
+    if (inflight.size > 0) {
+      let timer;
+      const bound = new Promise((r) => {
+        timer = setTimeout(r, opts.waitMs ?? DRAIN_MS);
+        timer.unref?.();
+      });
+      await Promise.race([Promise.allSettled([...inflight]), bound]);
+      clearTimeout(timer);
+    }
+    const ours = launched;
+    launched = void 0;
+    if (!ours) return { closed: false };
+    const deps = opts.deps ? browserDeps({ ...ours.deps, ...opts.deps }) : ours.deps;
+    if (!await isSameBrowser(deps, ours.port, ours.host, ours.wsBrowserUrl)) return { closed: false };
+    const saved = readSession();
+    if (saved?.wsBrowserUrl && socketPath(saved.wsBrowserUrl) === socketPath(ours.wsBrowserUrl)) return { closed: false };
+    let cdp;
+    try {
+      cdp = await deps.connectCdp(loopbackSocketUrl(ours.wsBrowserUrl));
+    } catch {
+      if (ours.pid === void 0) return { closed: false };
+      deps.kill(ours.pid, "SIGTERM");
+      return { closed: true };
+    }
+    try {
+      await closeLaunched(cdp, ours.pid, deps);
+    } finally {
+      await cdp.close();
+    }
+    return { closed: true };
+  } catch {
+    return { closed: false };
+  }
+}
 async function render(url, opts, deps, timeoutMs, run) {
   const { cdp, profile, headless, binary } = opts;
   const session = await withBrowserLock(
@@ -9180,6 +9232,10 @@ async function render(url, opts, deps, timeoutMs, run) {
     { deps }
   );
   run.session = session;
+  if (session.spawned) {
+    const { host, port, pid, browserSocket } = session;
+    launched = { host, port, wsBrowserUrl: browserSocket, ...pid !== void 0 ? { pid } : {}, deps };
+  }
   const page = session.page;
   let status;
   let mime;
@@ -9230,7 +9286,10 @@ async function render(url, opts, deps, timeoutMs, run) {
     await session.detach();
   }
 }
-async function readRenderedPage(url, opts = {}) {
+function readRenderedPage(url, opts = {}) {
+  return track(read(url, opts));
+}
+async function read(url, opts) {
   const cancelled = () => new Error(`reading ${url} in the browser was cancelled`);
   const { signal } = opts;
   if (signal?.aborted) throw cancelled();
@@ -9242,7 +9301,7 @@ async function readRenderedPage(url, opts = {}) {
     throw cancelled();
   }
   const run = { stopped: false };
-  const work = render(url, opts, deps, timeoutMs, run);
+  const work = track(render(url, opts, deps, timeoutMs, run));
   work.then(release, release);
   let stop;
   const cut = new Promise((_, reject) => {
@@ -9264,7 +9323,7 @@ async function readRenderedPage(url, opts = {}) {
     signal?.removeEventListener("abort", onAbort);
   }
 }
-var IDLE_CAP_MS, WEB_PAGE, active, queue, WHOLE_DOCUMENT;
+var IDLE_CAP_MS, WEB_PAGE, active, queue, DRAIN_MS, launched, inflight, WHOLE_DOCUMENT;
 var init_read = __esm({
   "src/browser/read.ts"() {
     "use strict";
@@ -9272,6 +9331,8 @@ var init_read = __esm({
     init_fetch();
     init_challenge();
     init_deps();
+    init_launch();
+    init_discovery();
     init_overlay();
     init_session();
     init_state();
@@ -9280,12 +9341,14 @@ var init_read = __esm({
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     active = 0;
     queue = [];
+    DRAIN_MS = 5e3;
+    inflight = /* @__PURE__ */ new Set();
     WHOLE_DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
   }
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.28.0";
+var ENGINE_VERSION = "1.29.0";
 
 // src/index.ts
 init_brand();
@@ -9834,7 +9897,7 @@ async function ensureClone(ref, opts = {}) {
   const branch = opts.branch?.trim() || void 0;
   if (branch?.startsWith("-")) throw new Error(`"${branch}" is not a branch name`);
   const dir = join12(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
-  const pending = inflight.get(dir);
+  const pending = inflight2.get(dir);
   if (pending && !opts.refresh) {
     return pending.catch((e) => {
       const tree = e?.cachedTree;
@@ -9843,12 +9906,12 @@ async function ensureClone(ref, opts = {}) {
   }
   const run = () => obtainClone(ref, dir, { refresh: opts.refresh, branch });
   const work = (pending ? pending.then(run, run) : run()).finally(() => {
-    if (inflight.get(dir) === work) inflight.delete(dir);
+    if (inflight2.get(dir) === work) inflight2.delete(dir);
   });
-  inflight.set(dir, work);
+  inflight2.set(dir, work);
   return work;
 }
-var inflight = /* @__PURE__ */ new Map();
+var inflight2 = /* @__PURE__ */ new Map();
 function branchSlug(branch) {
   return `${slugify(branch, { max: 40, fallback: "branch" })}-${createHash2("sha256").update(branch).digest("hex").slice(0, 8)}`;
 }
@@ -11078,8 +11141,8 @@ function pageMetadata(html, opts = {}) {
   const authorKeys = /* @__PURE__ */ new Set(["article:author", "author", "citation_author", "dc.creator"]);
   for (const [key, v] of entries) if (authorKeys.has(key)) addAuthor(v);
   if (!primary || rank(primary) < 4) {
-    const read2 = new Set(sources);
-    const rest = nodes.filter((n) => !read2.has(n) && rank(n) > 0);
+    const read3 = new Set(sources);
+    const rest = nodes.filter((n) => !read3.has(n) && rank(n) > 0);
     for (const n of rest) {
       if (out.authors.length) break;
       for (const a of names(n.author)) addAuthor(a);
@@ -12019,9 +12082,9 @@ var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
 var PLAIN = [""];
 function variantOf(opts) {
-  const read2 = opts.fullPage ? "full" : opts.stripConsent ? "consent" : "";
-  if (opts.format !== "markdown") return read2;
-  return read2 ? `${read2}-md` : "md";
+  const read3 = opts.fullPage ? "full" : opts.stripConsent ? "consent" : "";
+  if (opts.format !== "markdown") return read3;
+  return read3 ? `${read3}-md` : "md";
 }
 var sameFormat = (variant) => MARKDOWN_VARIANTS.includes(variant) ? MARKDOWN_VARIANTS : TEXT_VARIANTS;
 var PDF_CACHE_NS = "pdf";
@@ -12840,7 +12903,7 @@ function contentHash(body) {
   return createHash3("sha256").update(body).digest("hex");
 }
 var FINGERPRINT_MAX_BYTES = 64 * 1024 * 1024;
-function read(url, opts, headers) {
+function read2(url, opts, headers) {
   return httpGet(url, { timeoutMs: opts.timeoutMs, maxBytes: opts.maxBytes ?? FINGERPRINT_MAX_BYTES, binary: true, ...headers ? { headers } : {} });
 }
 function observation(url, res) {
@@ -12858,13 +12921,13 @@ function observation(url, res) {
   };
 }
 async function fingerprint(url, opts = {}) {
-  return observation(url, await read(url, opts));
+  return observation(url, await read2(url, opts));
 }
 async function hasChanged(url, previous, opts = {}) {
   const headers = {};
   if (previous?.etag) headers["if-none-match"] = previous.etag;
   if (previous?.lastModified) headers["if-modified-since"] = previous.lastModified;
-  const res = await read(url, opts, Object.keys(headers).length ? headers : void 0);
+  const res = await read2(url, opts, Object.keys(headers).length ? headers : void 0);
   const observed = observation(url, res);
   if (res.status === 304) {
     const etag = observed.etag ?? previous?.etag;
@@ -13133,7 +13196,7 @@ async function crawlSite(seed, opts = {}) {
     settleSeed();
   };
   const seen = /* @__PURE__ */ new Set([canonicalizeUrl(seed)]);
-  const read2 = /* @__PURE__ */ new Set();
+  const read3 = /* @__PURE__ */ new Set();
   let skippedFiles = 0;
   const admit = (url, depth, into) => {
     const canon = canonicalizeUrl(url);
@@ -13235,11 +13298,11 @@ async function crawlSite(seed, opts = {}) {
         const done = settled[i];
         if (!("page" in done)) continue;
         const canon = canonicalizeUrl(done.page.url);
-        if (read2.has(canon)) {
+        if (read3.has(canon)) {
           settled[i] = { note: `${batch[i].url} redirected to ${done.page.url}, already read.`, duplicate: true };
           continue;
         }
-        read2.add(canon);
+        read3.add(canon);
         seen.add(canon);
         opts.onPage?.(done.page);
       }
@@ -14425,7 +14488,7 @@ async function runStdioServer(adapter, opts = {}) {
     emit(JSON.stringify(msg) + "\n");
   };
   const inFlight = /* @__PURE__ */ new Set();
-  const track = (p) => {
+  const track2 = (p) => {
     inFlight.add(p);
     void p.finally(() => inFlight.delete(p));
     return p;
@@ -14489,7 +14552,7 @@ async function runStdioServer(adapter, opts = {}) {
           continue;
         }
         const batch = parsed;
-        track(
+        track2(
           (async () => {
             const out = [];
             await Promise.all(batch.map((m) => dispatch(m, (r) => void out.push(r))));
@@ -14502,7 +14565,7 @@ async function runStdioServer(adapter, opts = {}) {
         send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: expected a JSON-RPC object" } });
         continue;
       }
-      track(dispatch(parsed, send).catch(reportInternal(send)));
+      track2(dispatch(parsed, send).catch(reportInternal(send)));
     }
     await Promise.all(inFlight);
   } finally {
@@ -14821,6 +14884,7 @@ export {
   classifyChallenge as classifyBrowserChallenge,
   classifyYtdlpError,
   cleanInline,
+  closeBrowserReads,
   codeMask,
   collectCitations,
   configure,
