@@ -4325,6 +4325,144 @@ var init_video = __esm({
   }
 });
 
+// src/cli-kit.ts
+import { basename } from "path";
+function parseArgs(argv, spec) {
+  const commands = new Set(spec.commands);
+  const valueFlags = new Set(spec.valueFlags);
+  const boolFlags = new Set(spec.boolFlags);
+  if (argv.length === 0) return { kind: "help" };
+  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
+  if (isVersionWord(argv[0])) return { kind: "version" };
+  const command2 = argv[0];
+  if (!commands.has(command2)) {
+    throw new UsageError(`unknown command "${command2}" \u2014 run --help for the supported commands`);
+  }
+  const values = {};
+  const bools = /* @__PURE__ */ new Set();
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
+      positional.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf("=");
+    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
+    if (!boolFlags.has(key) && !valueFlags.has(key)) {
+      if (isHelpWord(arg)) return { kind: "help", command: command2 };
+      if (isVersionWord(arg)) return { kind: "version" };
+    }
+    if (boolFlags.has(key)) {
+      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
+      bools.add(key);
+      continue;
+    }
+    if (!valueFlags.has(key)) {
+      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
+    }
+    if (eq !== -1) {
+      values[key] = arg.slice(eq + 1);
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next === void 0 || next.startsWith("--")) {
+      throw new UsageError(`missing value for --${key}`);
+    }
+    values[key] = next;
+    i++;
+  }
+  return { kind: "command", command: command2, positional, values, bools };
+}
+function isHelpWord(a) {
+  return a === "--help" || a === "-h" || a === "help";
+}
+function isVersionWord(a) {
+  return a === "--version" || a === "-v" || a === "version";
+}
+function argValue(p, name) {
+  return p.values[name];
+}
+function argBool(p, name) {
+  return p.bools.has(name);
+}
+function argInt(p, name, range = {}) {
+  const raw = p.values[name];
+  if (raw === void 0) return void 0;
+  const n = raw.trim() ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    throw new UsageError(`--${name} expects a whole number, got "${raw}"`);
+  }
+  const { min, max } = range;
+  if (min !== void 0 && n < min || max !== void 0 && n > max) {
+    const bound = min !== void 0 && max !== void 0 ? `from ${min} to ${max}` : min !== void 0 ? `of at least ${min}` : `of at most ${max}`;
+    throw new UsageError(`--${name} expects a whole number ${bound}, got "${raw}"`);
+  }
+  return n;
+}
+function argList(p, name) {
+  const raw = p.values[name];
+  if (raw === void 0) return [];
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
+function argOneOf(p, name, allowed) {
+  const raw = p.values[name];
+  if (raw === void 0) return void 0;
+  if (!allowed.includes(raw)) {
+    throw new UsageError(`invalid --${name} "${raw}" \u2014 expected one of: ${allowed.join(", ")}`);
+  }
+  return raw;
+}
+function positionalText(p) {
+  return p.positional.join(" ");
+}
+function jsonLine(value) {
+  return `${JSON.stringify(value, null, 2)}
+`;
+}
+function docFlagRegex() {
+  return /(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g;
+}
+function documentedFlags(text) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const m of text.matchAll(docFlagRegex())) seen.add(m[1]);
+  return [...seen];
+}
+function helpCoversFlag(help, flag) {
+  return new RegExp(`--${escapeRegExp(flag)}(?![a-z0-9-])`).test(help);
+}
+function missingFromHelp(help, flags) {
+  return [...flags].filter((f) => !helpCoversFlag(help, f));
+}
+function pipedEnum(line, flag) {
+  const cleaned = line.replace(/`/g, "").replace(/\\\|/g, "|");
+  const m = cleaned.match(new RegExp(`--${escapeRegExp(flag)}[^a-z|]*((?:[a-z][a-z0-9-]*\\s*\\|\\s*)+[a-z][a-z0-9-]*)`));
+  return m ? m[1].split("|").map((s) => s.trim()) : null;
+}
+function isInvokedDirectly(argv1 = process.argv[1], cli = brand().cli) {
+  if (!argv1) return false;
+  return basename(argv1).replace(/\.(mjs|cjs|js)$/, "") === cli;
+}
+var EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_HUMAN, UsageError;
+var init_cli_kit = __esm({
+  "src/cli-kit.ts"() {
+    "use strict";
+    init_brand();
+    init_text();
+    EXIT_OK = 0;
+    EXIT_FAILURE = 1;
+    EXIT_USAGE = 2;
+    EXIT_HUMAN = 3;
+    UsageError = class extends Error {
+      exitCode = EXIT_USAGE;
+    };
+  }
+});
+
 // src/browser/ws.ts
 import { createHash, randomBytes } from "crypto";
 import { EventEmitter } from "events";
@@ -5012,144 +5150,6 @@ var init_deps = __esm({
   }
 });
 
-// src/cli-kit.ts
-import { basename } from "path";
-function parseArgs(argv, spec) {
-  const commands = new Set(spec.commands);
-  const valueFlags = new Set(spec.valueFlags);
-  const boolFlags = new Set(spec.boolFlags);
-  if (argv.length === 0) return { kind: "help" };
-  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
-  if (isVersionWord(argv[0])) return { kind: "version" };
-  const command2 = argv[0];
-  if (!commands.has(command2)) {
-    throw new UsageError(`unknown command "${command2}" \u2014 run --help for the supported commands`);
-  }
-  const values = {};
-  const bools = /* @__PURE__ */ new Set();
-  const positional = [];
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--") {
-      positional.push(...argv.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
-      positional.push(arg);
-      continue;
-    }
-    const eq = arg.indexOf("=");
-    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-    if (!boolFlags.has(key) && !valueFlags.has(key)) {
-      if (isHelpWord(arg)) return { kind: "help", command: command2 };
-      if (isVersionWord(arg)) return { kind: "version" };
-    }
-    if (boolFlags.has(key)) {
-      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
-      bools.add(key);
-      continue;
-    }
-    if (!valueFlags.has(key)) {
-      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
-    }
-    if (eq !== -1) {
-      values[key] = arg.slice(eq + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next === void 0 || next.startsWith("--")) {
-      throw new UsageError(`missing value for --${key}`);
-    }
-    values[key] = next;
-    i++;
-  }
-  return { kind: "command", command: command2, positional, values, bools };
-}
-function isHelpWord(a) {
-  return a === "--help" || a === "-h" || a === "help";
-}
-function isVersionWord(a) {
-  return a === "--version" || a === "-v" || a === "version";
-}
-function argValue(p, name) {
-  return p.values[name];
-}
-function argBool(p, name) {
-  return p.bools.has(name);
-}
-function argInt(p, name, range = {}) {
-  const raw = p.values[name];
-  if (raw === void 0) return void 0;
-  const n = raw.trim() ? Number(raw) : Number.NaN;
-  if (!Number.isFinite(n) || !Number.isInteger(n)) {
-    throw new UsageError(`--${name} expects a whole number, got "${raw}"`);
-  }
-  const { min, max } = range;
-  if (min !== void 0 && n < min || max !== void 0 && n > max) {
-    const bound = min !== void 0 && max !== void 0 ? `from ${min} to ${max}` : min !== void 0 ? `of at least ${min}` : `of at most ${max}`;
-    throw new UsageError(`--${name} expects a whole number ${bound}, got "${raw}"`);
-  }
-  return n;
-}
-function argList(p, name) {
-  const raw = p.values[name];
-  if (raw === void 0) return [];
-  return raw.split(",").map((s) => s.trim()).filter(Boolean);
-}
-function argOneOf(p, name, allowed) {
-  const raw = p.values[name];
-  if (raw === void 0) return void 0;
-  if (!allowed.includes(raw)) {
-    throw new UsageError(`invalid --${name} "${raw}" \u2014 expected one of: ${allowed.join(", ")}`);
-  }
-  return raw;
-}
-function positionalText(p) {
-  return p.positional.join(" ");
-}
-function jsonLine(value) {
-  return `${JSON.stringify(value, null, 2)}
-`;
-}
-function docFlagRegex() {
-  return /(?<![a-z0-9-])--([a-z][a-z0-9-]*)/g;
-}
-function documentedFlags(text) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const m of text.matchAll(docFlagRegex())) seen.add(m[1]);
-  return [...seen];
-}
-function helpCoversFlag(help, flag) {
-  return new RegExp(`--${escapeRegExp(flag)}(?![a-z0-9-])`).test(help);
-}
-function missingFromHelp(help, flags) {
-  return [...flags].filter((f) => !helpCoversFlag(help, f));
-}
-function pipedEnum(line, flag) {
-  const cleaned = line.replace(/`/g, "").replace(/\\\|/g, "|");
-  const m = cleaned.match(new RegExp(`--${escapeRegExp(flag)}[^a-z|]*((?:[a-z][a-z0-9-]*\\s*\\|\\s*)+[a-z][a-z0-9-]*)`));
-  return m ? m[1].split("|").map((s) => s.trim()) : null;
-}
-function isInvokedDirectly(argv1 = process.argv[1], cli = brand().cli) {
-  if (!argv1) return false;
-  return basename(argv1).replace(/\.(mjs|cjs|js)$/, "") === cli;
-}
-var EXIT_OK, EXIT_FAILURE, EXIT_USAGE, EXIT_HUMAN, UsageError;
-var init_cli_kit = __esm({
-  "src/cli-kit.ts"() {
-    "use strict";
-    init_brand();
-    init_text();
-    EXIT_OK = 0;
-    EXIT_FAILURE = 1;
-    EXIT_USAGE = 2;
-    EXIT_HUMAN = 3;
-    UsageError = class extends Error {
-      exitCode = EXIT_USAGE;
-    };
-  }
-});
-
 // src/browser/extensions.ts
 import { existsSync as existsSync5, statSync as statSync3 } from "fs";
 import { isAbsolute as isAbsolute2, join as join7 } from "path";
@@ -5598,6 +5598,17 @@ function tabList(map, pages, current2) {
     return { id, targetId, url: p?.url ?? "", title: p?.title ?? "", active: targetId === current2 };
   });
 }
+function assertOpenableUrl(url) {
+  const u = url.trim();
+  let ok = /^about:blank$/i.test(u) || u.startsWith("#");
+  if (!ok) {
+    try {
+      ok = /^https?:$/.test(new URL(u).protocol);
+    } catch {
+    }
+  }
+  if (!ok) throw new UsageError(`only http(s) URLs (and about:blank) can be opened \u2014 use \`${brand().cli} extract <path>\` for local files`);
+}
 async function createTarget(cdp) {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   return targetId;
@@ -5675,6 +5686,7 @@ var init_session = __esm({
   "src/browser/session.ts"() {
     "use strict";
     init_brand();
+    init_cli_kit();
     init_cdp();
     init_deps();
     init_discovery();
@@ -5890,6 +5902,7 @@ var init_session = __esm({
        * is the page now, still loading: it resolves, with a `note`.
        */
       async navigate(url, opts = {}) {
+        assertOpenableUrl(url);
         const waitUntil = opts.waitUntil ?? "load";
         const timeoutMs = opts.timeoutMs ?? NAVIGATION_TIMEOUT_MS;
         const nav = this.watch();
@@ -6015,6 +6028,7 @@ var init_session = __esm({
       }
       /** Open a tab, make it current and, given a url, load it. */
       async newTab(url, opts = {}) {
+        if (url !== void 0) assertOpenableUrl(url);
         const targetId = await createTarget(this.cdp);
         try {
           await this.switchTo(targetId);
@@ -9185,6 +9199,17 @@ var init_overlay = __esm({
 });
 
 // src/browser/wait.ts
+function timeoutText(c, elapsedMs) {
+  if ("text" in c) return `text ${JSON.stringify(c.text)} did not appear after ${elapsedMs} ms`;
+  if ("gone" in c) return `text ${JSON.stringify(c.gone)} is still on the page after ${elapsedMs} ms`;
+  if ("selector" in c) return `no element matches ${JSON.stringify(c.selector)} after ${elapsedMs} ms`;
+  if ("url" in c) return `the url did not match ${JSON.stringify(c.url)} after ${elapsedMs} ms`;
+  if ("load" in c) return `the page did not finish loading after ${elapsedMs} ms`;
+  if ("idle" in c) return `the network did not go idle after ${elapsedMs} ms`;
+  if ("clear" in c)
+    return `the challenge is still there after ${elapsedMs} ms \u2014 a human must solve it in the browser window (\`${brand().cli} browser open <url>\` shows it), then run wait --clear again`;
+  return `timed out after ${elapsedMs} ms`;
+}
 async function watchNetwork(page) {
   const inflight3 = /* @__PURE__ */ new Set();
   const handlers = [
@@ -9299,11 +9324,12 @@ var WaitTimeoutError, WaitCancelledError, POLL_MS2, DEFAULT_TIMEOUT_MS3, CLEAR_T
 var init_wait = __esm({
   "src/browser/wait.ts"() {
     "use strict";
+    init_brand();
     init_challenge();
     init_deps();
     WaitTimeoutError = class extends Error {
       constructor(condition, elapsedMs) {
-        super(`timed out waiting for ${JSON.stringify(condition)} after ${elapsedMs} ms`);
+        super(timeoutText(condition, elapsedMs));
         this.condition = condition;
         this.elapsedMs = elapsedMs;
         this.name = "WaitTimeoutError";
@@ -9531,7 +9557,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.31.0";
+var ENGINE_VERSION = "1.32.0";
 
 // src/index.ts
 init_brand();
@@ -9737,11 +9763,22 @@ function nested(items, depth, out) {
     }
   }
 }
-function flat(items, out) {
+var LINK_URL_MAX = 80;
+function compactUrl(url, base2) {
+  let shown = url;
+  try {
+    const u = new URL(url, base2);
+    if (u.origin !== "null" && u.origin === new URL(base2).origin) shown = `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+  }
+  const chars = Array.from(shown);
+  return chars.length > LINK_URL_MAX ? `${chars.slice(0, LINK_URL_MAX).join("")}\u2026` : shown;
+}
+function flat(items, out, base2) {
   for (const it of items) {
     if (it.t !== "node") continue;
-    if (it.act) out.push({ text: it.head, ref: true });
-    flat(it.children, out);
+    if (it.act) out.push({ text: it.url ? `${it.head} \u2192 ${compactUrl(it.url, base2)}` : it.head, ref: true });
+    flat(it.children, out, base2);
   }
 }
 function renderSnapshot(nodes, opts) {
@@ -9758,14 +9795,14 @@ function renderSnapshot(nodes, opts) {
       if (!hit) continue;
       const lines = [];
       const over = merge(r.collect(hit.tree, hit.node));
-      if (opts.interactive) flat(over, lines);
+      if (opts.interactive) flat(over, lines, opts.refs.url);
       else nested(over, 1, lines);
       if (lines.length === 0) continue;
       all.push({ text: OVERLAY_HEADER, ref: false }, ...opts.interactive ? lines.map((l) => ({ ...l, text: `  ${l.text}` })) : lines);
     }
     if (main.root) items = merge(r.collect(main, main.root));
   }
-  if (opts.interactive) flat(items, all);
+  if (opts.interactive) flat(items, all, opts.refs.url);
   else nested(items, 0, all);
   let kept = all;
   let tail = "";

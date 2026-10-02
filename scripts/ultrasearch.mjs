@@ -4255,6 +4255,82 @@ var init_video = __esm({
     init_list();
   }
 });
+function parseArgs(argv, spec) {
+  const commands = new Set(spec.commands);
+  const valueFlags = new Set(spec.valueFlags);
+  const boolFlags = new Set(spec.boolFlags);
+  if (argv.length === 0) return { kind: "help" };
+  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
+  if (isVersionWord(argv[0])) return { kind: "version" };
+  const command2 = argv[0];
+  if (!commands.has(command2)) {
+    throw new UsageError(`unknown command "${command2}" \u2014 run --help for the supported commands`);
+  }
+  const values = {};
+  const bools = /* @__PURE__ */ new Set();
+  const positional = [];
+  for (let i = 1; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--") {
+      positional.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
+      positional.push(arg);
+      continue;
+    }
+    const eq = arg.indexOf("=");
+    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
+    if (!boolFlags.has(key) && !valueFlags.has(key)) {
+      if (isHelpWord(arg)) return { kind: "help", command: command2 };
+      if (isVersionWord(arg)) return { kind: "version" };
+    }
+    if (boolFlags.has(key)) {
+      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
+      bools.add(key);
+      continue;
+    }
+    if (!valueFlags.has(key)) {
+      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
+    }
+    if (eq !== -1) {
+      values[key] = arg.slice(eq + 1);
+      continue;
+    }
+    const next = argv[i + 1];
+    if (next === void 0 || next.startsWith("--")) {
+      throw new UsageError(`missing value for --${key}`);
+    }
+    values[key] = next;
+    i++;
+  }
+  return { kind: "command", command: command2, positional, values, bools };
+}
+function isHelpWord(a) {
+  return a === "--help" || a === "-h" || a === "help";
+}
+function isVersionWord(a) {
+  return a === "--version" || a === "-v" || a === "version";
+}
+var EXIT_OK;
+var EXIT_FAILURE;
+var EXIT_USAGE;
+var EXIT_HUMAN;
+var UsageError;
+var init_cli_kit = __esm({
+  "src/cli-kit.ts"() {
+    "use strict";
+    init_brand();
+    init_text();
+    EXIT_OK = 0;
+    EXIT_FAILURE = 1;
+    EXIT_USAGE = 2;
+    EXIT_HUMAN = 3;
+    UsageError = class extends Error {
+      exitCode = EXIT_USAGE;
+    };
+  }
+});
 function encodeFrame(opcode, payload, opts = {}) {
   const mask = opts.mask ?? true;
   const len = payload.length;
@@ -4940,82 +5016,6 @@ var init_deps = __esm({
     init_discovery();
   }
 });
-function parseArgs(argv, spec) {
-  const commands = new Set(spec.commands);
-  const valueFlags = new Set(spec.valueFlags);
-  const boolFlags = new Set(spec.boolFlags);
-  if (argv.length === 0) return { kind: "help" };
-  if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
-  if (isVersionWord(argv[0])) return { kind: "version" };
-  const command2 = argv[0];
-  if (!commands.has(command2)) {
-    throw new UsageError(`unknown command "${command2}" \u2014 run --help for the supported commands`);
-  }
-  const values = {};
-  const bools = /* @__PURE__ */ new Set();
-  const positional = [];
-  for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--") {
-      positional.push(...argv.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
-      positional.push(arg);
-      continue;
-    }
-    const eq = arg.indexOf("=");
-    const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-    if (!boolFlags.has(key) && !valueFlags.has(key)) {
-      if (isHelpWord(arg)) return { kind: "help", command: command2 };
-      if (isVersionWord(arg)) return { kind: "version" };
-    }
-    if (boolFlags.has(key)) {
-      if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
-      bools.add(key);
-      continue;
-    }
-    if (!valueFlags.has(key)) {
-      throw new UsageError(`unknown flag "--${key}" \u2014 run --help for the supported options`);
-    }
-    if (eq !== -1) {
-      values[key] = arg.slice(eq + 1);
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next === void 0 || next.startsWith("--")) {
-      throw new UsageError(`missing value for --${key}`);
-    }
-    values[key] = next;
-    i++;
-  }
-  return { kind: "command", command: command2, positional, values, bools };
-}
-function isHelpWord(a) {
-  return a === "--help" || a === "-h" || a === "help";
-}
-function isVersionWord(a) {
-  return a === "--version" || a === "-v" || a === "version";
-}
-var EXIT_OK;
-var EXIT_FAILURE;
-var EXIT_USAGE;
-var EXIT_HUMAN;
-var UsageError;
-var init_cli_kit = __esm({
-  "src/cli-kit.ts"() {
-    "use strict";
-    init_brand();
-    init_text();
-    EXIT_OK = 0;
-    EXIT_FAILURE = 1;
-    EXIT_USAGE = 2;
-    EXIT_HUMAN = 3;
-    UsageError = class extends Error {
-      exitCode = EXIT_USAGE;
-    };
-  }
-});
 function extensionDirs(raw) {
   const name = envName("BROWSER_EXTENSIONS");
   return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
@@ -5450,6 +5450,17 @@ function tabList(map, pages, current2) {
     return { id, targetId, url: p?.url ?? "", title: p?.title ?? "", active: targetId === current2 };
   });
 }
+function assertOpenableUrl(url) {
+  const u = url.trim();
+  let ok = /^about:blank$/i.test(u) || u.startsWith("#");
+  if (!ok) {
+    try {
+      ok = /^https?:$/.test(new URL(u).protocol);
+    } catch {
+    }
+  }
+  if (!ok) throw new UsageError(`only http(s) URLs (and about:blank) can be opened \u2014 use \`${brand().cli} extract <path>\` for local files`);
+}
 async function createTarget(cdp) {
   const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
   return targetId;
@@ -5537,6 +5548,7 @@ var init_session = __esm({
   "src/browser/session.ts"() {
     "use strict";
     init_brand();
+    init_cli_kit();
     init_cdp();
     init_deps();
     init_discovery();
@@ -5752,6 +5764,7 @@ var init_session = __esm({
        * is the page now, still loading: it resolves, with a `note`.
        */
       async navigate(url, opts = {}) {
+        assertOpenableUrl(url);
         const waitUntil = opts.waitUntil ?? "load";
         const timeoutMs = opts.timeoutMs ?? NAVIGATION_TIMEOUT_MS;
         const nav = this.watch();
@@ -5877,6 +5890,7 @@ var init_session = __esm({
       }
       /** Open a tab, make it current and, given a url, load it. */
       async newTab(url, opts = {}) {
+        if (url !== void 0) assertOpenableUrl(url);
         const targetId = await createTarget(this.cdp);
         try {
           await this.switchTo(targetId);
@@ -9131,6 +9145,17 @@ var init_overlay = __esm({
 })()`;
   }
 });
+function timeoutText(c, elapsedMs) {
+  if ("text" in c) return `text ${JSON.stringify(c.text)} did not appear after ${elapsedMs} ms`;
+  if ("gone" in c) return `text ${JSON.stringify(c.gone)} is still on the page after ${elapsedMs} ms`;
+  if ("selector" in c) return `no element matches ${JSON.stringify(c.selector)} after ${elapsedMs} ms`;
+  if ("url" in c) return `the url did not match ${JSON.stringify(c.url)} after ${elapsedMs} ms`;
+  if ("load" in c) return `the page did not finish loading after ${elapsedMs} ms`;
+  if ("idle" in c) return `the network did not go idle after ${elapsedMs} ms`;
+  if ("clear" in c)
+    return `the challenge is still there after ${elapsedMs} ms \u2014 a human must solve it in the browser window (\`${brand().cli} browser open <url>\` shows it), then run wait --clear again`;
+  return `timed out after ${elapsedMs} ms`;
+}
 async function watchNetwork(page) {
   const inflight3 = /* @__PURE__ */ new Set();
   const handlers = [
@@ -9252,11 +9277,12 @@ var KEYS;
 var init_wait = __esm({
   "src/browser/wait.ts"() {
     "use strict";
+    init_brand();
     init_challenge();
     init_deps();
     WaitTimeoutError = class extends Error {
       constructor(condition, elapsedMs) {
-        super(`timed out waiting for ${JSON.stringify(condition)} after ${elapsedMs} ms`);
+        super(timeoutText(condition, elapsedMs));
         this.condition = condition;
         this.elapsedMs = elapsedMs;
         this.name = "WaitTimeoutError";
