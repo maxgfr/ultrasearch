@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename3, join as join25, relative as relative3, resolve as resolve4 } from "path";
+import { basename as basename3, join as join26, relative as relative3, resolve as resolve4 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync4, existsSync as existsSync16, statSync as statSync10, readdirSync as readdirSync6, readFileSync as readFileSync17 } from "fs";
+import { realpathSync as realpathSync4, existsSync as existsSync17, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync18 } from "fs";
 
 // src/types.ts
 var VERSION = "1.36.3";
@@ -170,7 +170,7 @@ var websearchBackend = async (ctx) => {
 };
 
 // src/gather.ts
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 import { tmpdir as tmpdir3 } from "os";
 
 // src/modes/topic.ts
@@ -402,27 +402,29 @@ import { homedir } from "os";
 import { posix, win32 } from "path";
 import { spawn as nodeSpawn } from "child_process";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
-import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, realpathSync, rmSync as rmSync4, statSync as statSync3 } from "fs";
+import { existsSync as existsSync5, statSync as statSync3 } from "fs";
+import { isAbsolute as isAbsolute2, join as join7 } from "path";
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync6, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync4, writeFileSync as writeFileSync5 } from "fs";
 import { homedir as homedir2 } from "os";
-import { basename as basename2, join as join7, resolve as resolve2, sep } from "path";
+import { basename as basename2, join as join8, resolve as resolve2, sep } from "path";
 import { randomUUID } from "crypto";
-import { appendFileSync, closeSync, existsSync as existsSync6, openSync, readFileSync as readFileSync7, rmSync as rmSync5, statSync as statSync4, unlinkSync as unlinkSync2, writeSync } from "fs";
-import { join as join8 } from "path";
+import { appendFileSync, closeSync, existsSync as existsSync7, openSync, readFileSync as readFileSync8, rmSync as rmSync5, statSync as statSync5, unlinkSync as unlinkSync2, writeSync } from "fs";
 import { join as join9 } from "path";
+import { join as join10 } from "path";
 import { promisify } from "util";
 import { gunzip } from "zlib";
 import { spawnSync as spawnSync3 } from "child_process";
-import { existsSync as existsSync9, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync9, statSync as statSync7, writeFileSync as writeFileSync5 } from "fs";
-import { dirname as dirname2, join as join13, resolve as resolve5 } from "path";
-import { chmodSync as chmodSync2, existsSync as existsSync8, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync6 } from "fs";
-import { dirname, join as join12 } from "path";
+import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
+import { dirname as dirname2, join as join14, resolve as resolve5 } from "path";
+import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
+import { dirname, join as join13 } from "path";
 import { tmpdir as tmpdir5 } from "os";
-import { readFileSync as readFileSync10 } from "fs";
-import { existsSync as existsSync10 } from "fs";
-import { join as join16, resolve as resolve6 } from "path";
-import { join as join15 } from "path";
-import { existsSync as existsSync11, readdirSync as readdirSync8, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync8 } from "fs";
-import { basename as basename4, dirname as dirname3, join as join17, relative, resolve as resolve7, sep as sep2 } from "path";
+import { readFileSync as readFileSync11 } from "fs";
+import { existsSync as existsSync11 } from "fs";
+import { join as join17, resolve as resolve6 } from "path";
+import { join as join16 } from "path";
+import { existsSync as existsSync12, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync2, statSync as statSync9 } from "fs";
+import { basename as basename4, dirname as dirname3, join as join18, relative, resolve as resolve7, sep as sep2 } from "path";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { createHash as createHash4, timingSafeEqual } from "crypto";
@@ -4735,14 +4737,28 @@ function detectBrowserBinary(opts = {}) {
     if (!found) throw new Error(`BROWSER_BIN points at "${explicit}", which is not an executable file`);
     return { kind: kindOf(found), path: found };
   }
-  const kinds = opts.prefer ? [opts.prefer, ...ORDER.filter((k) => k !== opts.prefer)] : ORDER;
+  let only = opts.kind;
+  if (!only && !opts.prefer) {
+    const asked = (opts.env ? opts.env("BROWSER_KIND") : env("BROWSER_KIND"))?.trim().toLowerCase();
+    if (asked && !isBrowserKind(asked)) throw new Error(`${envName("BROWSER_KIND")} is "${asked}", not one of ${ORDER.join(", ")}`);
+    if (asked && isBrowserKind(asked)) only = asked;
+  }
+  const prefer = opts.prefer;
+  const kinds = only ? [only] : prefer ? [prefer, ...ORDER.filter((k) => k !== prefer)] : ORDER;
   for (const kind of kinds) {
     const path = candidates(kind, platform, sys, home).find(exists);
     if (path) return { kind, path };
   }
   return null;
 }
+function ignoresUnpackedExtensions(bin, browserVersion) {
+  if (bin.kind !== "chrome" || /for[ _-]?testing|[\\/]chrome-(?:linux|mac|win)[^\\/]*[\\/]/i.test(bin.path)) return false;
+  if (browserVersion === void 0) return true;
+  const major = /^(?:Headless)?Chrome\/(\d+)\./.exec(browserVersion)?.[1];
+  return major !== void 0 && Number(major) >= 137;
+}
 var ORDER;
+var isBrowserKind;
 var MAC_APPS;
 var LINUX_NAMES;
 var WINDOWS_PATHS;
@@ -4751,6 +4767,7 @@ var init_detect = __esm({
     "use strict";
     init_brand();
     ORDER = ["chrome", "brave", "chromium", "edge"];
+    isBrowserKind = (v) => ORDER.includes(v);
     MAC_APPS = {
       chrome: "Google Chrome",
       brave: "Brave Browser",
@@ -4904,7 +4921,7 @@ function defaultBrowserDeps() {
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
     discovery: discovery_exports,
-    detectBrowser: () => detectBrowserBinary(),
+    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
     kill: (pid, signal) => void process.kill(pid, signal),
     env: (name) => env(name),
     platform: process.platform
@@ -4996,8 +5013,38 @@ var init_cli_kit = __esm({
     };
   }
 });
+function extensionDirs(raw) {
+  const name = envName("BROWSER_EXTENSIONS");
+  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
+    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
+    let isDir = false;
+    try {
+      isDir = statSync3(dir).isDirectory();
+    } catch {
+    }
+    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
+    if (!existsSync5(join7(dir, "manifest.json"))) {
+      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
+    }
+    return dir;
+  });
+}
+function extensionArgs(dirs) {
+  if (dirs.length === 0) return [];
+  const list = dirs.join(",");
+  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
+}
+var unpackedIgnoredNote;
+var init_extensions = __esm({
+  "src/browser/extensions.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
+  }
+});
 function browserHome() {
-  return env("BROWSER_DIR") ?? brand().browserDir ?? join7(homedir2(), `.${brand().name}`, "browser");
+  return env("BROWSER_DIR") ?? brand().browserDir ?? join8(homedir2(), `.${brand().name}`, "browser");
 }
 function checkName(name) {
   if (!PROFILE_NAME.test(name) || name === "." || name === "..") {
@@ -5006,7 +5053,23 @@ function checkName(name) {
 }
 function profileDir(name = "default") {
   checkName(name);
-  return join7(browserHome(), "profiles", name);
+  return join8(browserHome(), "profiles", name);
+}
+function profileKindFile(name = "default") {
+  return join8(profileDir(name), `.${brand().name}-kind`);
+}
+function readProfileKind(name = "default") {
+  try {
+    const kind = readFileSync7(profileKindFile(name), "utf8").trim();
+    return isBrowserKind(kind) ? kind : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function writeProfileKind(name, kind) {
+  ensurePrivateDir(profileDir(name));
+  writeFileSync5(profileKindFile(name), `${kind}
+`, { mode: 384 });
 }
 function ensurePrivateDir(path) {
   try {
@@ -5030,6 +5093,7 @@ var init_profile = __esm({
     "use strict";
     init_brand();
     init_cli_kit();
+    init_detect();
     PROFILE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
   }
 });
@@ -5039,18 +5103,18 @@ function checkTargetId(id) {
 }
 function readJson2(path) {
   try {
-    return JSON.parse(readFileSync7(path, "utf8"));
+    return JSON.parse(readFileSync8(path, "utf8"));
   } catch {
     return null;
   }
 }
 function writeJson(dir, name, value) {
   ensurePrivateDir(dir);
-  writeFileAtomic(join8(dir, name), `${JSON.stringify(value)}
+  writeFileAtomic(join9(dir, name), `${JSON.stringify(value)}
 `, FILE_MODE);
 }
 function readSession(o) {
-  const v = readJson2(join8(homeOf(o), "session.json"));
+  const v = readJson2(join9(homeOf(o), "session.json"));
   if (!isObj(v) || v.version !== 1 || typeof v.port !== "number" || typeof v.targetId !== "string") return null;
   return v;
 }
@@ -5060,16 +5124,16 @@ function writeSession(s, o) {
 }
 function clearSession(o) {
   if (isNoWrite()) return;
-  rmSync5(join8(homeOf(o), "session.json"), { force: true });
+  rmSync5(join9(homeOf(o), "session.json"), { force: true });
 }
 function clearRefs(targetId, o) {
   const id = targetId === void 0 ? void 0 : checkTargetId(targetId);
   if (isNoWrite()) return;
-  const dir = join8(homeOf(o), "refs");
-  rmSync5(id === void 0 ? dir : join8(dir, `${id}.json`), { recursive: true, force: true });
+  const dir = join9(homeOf(o), "refs");
+  rmSync5(id === void 0 ? dir : join9(dir, `${id}.json`), { recursive: true, force: true });
 }
 function clearNetwork(targetId, o) {
-  const path = targetId === void 0 ? join8(homeOf(o), "network") : networkFile(targetId, o);
+  const path = targetId === void 0 ? join9(homeOf(o), "network") : networkFile(targetId, o);
   if (isNoWrite()) return;
   rmSync5(path, { recursive: true, force: true });
 }
@@ -5085,7 +5149,7 @@ function staleReason(path, staleMs, now) {
   let at;
   let pid;
   try {
-    const held = JSON.parse(readFileSync7(path, "utf8"));
+    const held = JSON.parse(readFileSync8(path, "utf8"));
     pid = held.pid;
     at = typeof held.at === "number" ? held.at : Number.NaN;
   } catch {
@@ -5093,7 +5157,7 @@ function staleReason(path, staleMs, now) {
   }
   if (Number.isNaN(at)) {
     try {
-      at = statSync4(path).mtimeMs;
+      at = statSync5(path).mtimeMs;
     } catch {
       return "gone";
     }
@@ -5104,7 +5168,7 @@ function staleReason(path, staleMs, now) {
 }
 function holds(path, token) {
   try {
-    const held = JSON.parse(readFileSync7(path, "utf8"));
+    const held = JSON.parse(readFileSync8(path, "utf8"));
     return held.pid === process.pid && held.token === token;
   } catch {
     return false;
@@ -5116,7 +5180,7 @@ async function withBrowserLock(fn, opts = {}) {
   const { now, sleep: sleep2 } = opts.deps ?? realDeps;
   const dir = homeOf(opts);
   ensurePrivateDir(dir);
-  const path = join8(dir, "lock");
+  const path = join9(dir, "lock");
   const token = randomUUID();
   const stamp = () => JSON.stringify({ pid: process.pid, at: now(), token });
   const deadline = now() + waitMs;
@@ -5176,7 +5240,7 @@ var init_state = __esm({
     FILE_MODE = 384;
     homeOf = (o) => o?.home ?? browserHome();
     isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-    networkFile = (targetId, o) => join8(homeOf(o), "network", `${checkTargetId(targetId)}.jsonl`);
+    networkFile = (targetId, o) => join9(homeOf(o), "network", `${checkTargetId(targetId)}.jsonl`);
     realDeps = {
       now: () => Date.now(),
       sleep: (ms) => new Promise((r) => setTimeout(r, ms))
@@ -5217,24 +5281,49 @@ async function resolveEndpoint(opts = {}) {
     }
     clearSession();
   }
-  return launch(deps, opts.binary, profile, headless);
+  return launch(deps, opts.binary, profile, headless, opts.kind);
 }
-async function launch(deps, binary, profile, headless) {
-  const bin = binary ?? deps.detectBrowser()?.path;
-  if (!bin) {
+function wantedKind(deps, kind, profile) {
+  if (kind) return kind;
+  const asked = deps.env("BROWSER_KIND")?.trim().toLowerCase();
+  if (asked && !isBrowserKind(asked)) throw new UsageError(`${envName("BROWSER_KIND")} is "${asked}", not one of chrome, brave, chromium, edge`);
+  return asked && isBrowserKind(asked) ? asked : readProfileKind(profile);
+}
+async function launch(deps, binary, profile, headless, kind) {
+  const wanted = binary ? void 0 : wantedKind(deps, kind, profile);
+  const found = binary ? { kind: kindOf(binary), path: binary } : deps.detectBrowser(wanted);
+  if (!found && wanted) throw new UsageError(`no ${wanted} found: install it, or name its executable with ${envName("BROWSER_BIN")}`);
+  if (!found) {
     throw new Error(`no Chrome, Brave, Chromium or Edge found: install one, or set ${envName("BROWSER_BIN")} to the browser's executable`);
   }
+  const bin = found.path;
   const dir = profileDir(profile);
   ensurePrivateDir(browserHome());
-  ensurePrivateDir(join9(browserHome(), "profiles"));
+  ensurePrivateDir(join10(browserHome(), "profiles"));
   ensurePrivateDir(dir);
-  const portFile = join9(dir, "DevToolsActivePort");
+  const portFile = join10(dir, "DevToolsActivePort");
   const running = await readActivePort(deps, portFile);
   if (running && await isSameBrowser(deps, running.port, "127.0.0.1", running.path)) {
     return { host: "127.0.0.1", port: running.port, launchedByUs: true, profile, headless };
   }
+  const owner = readProfileKind(profile);
+  if (owner && owner !== found.kind) {
+    const named = binary !== void 0 || !!deps.env("BROWSER_BIN");
+    const hint = named ? `; ${envName("BROWSER_BIN")} names a ${found.kind} binary` : `, or ${owner} (\`--browser-kind ${owner}\`)`;
+    throw new UsageError(
+      `the profile "${profile}" belongs to ${owner} (its logins are encrypted for that browser), not ${found.kind}: use a profile of its own (\`--profile ${found.kind}\`)${hint}`
+    );
+  }
+  const extensions = extensionDirs(deps.env("BROWSER_EXTENSIONS"));
+  const dropped = extensions.length > 0 && ignoresUnpackedExtensions(found);
   await deps.fs.rm(portFile, { force: true });
-  const args = ["--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check"];
+  const args = [
+    "--remote-debugging-port=0",
+    `--user-data-dir=${dir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...dropped ? [] : extensionArgs(extensions)
+  ];
   if (headless) args.push("--headless=new");
   args.push("about:blank");
   const child = deps.spawn(bin, args, { detached: true, stdio: "ignore" });
@@ -5253,7 +5342,22 @@ async function launch(deps, binary, profile, headless) {
     const active22 = await readActivePort(deps, portFile);
     if (active22 && await isSameBrowser(deps, active22.port, "127.0.0.1", active22.path)) {
       const port = active22.port;
-      return { host: "127.0.0.1", port, launchedByUs: true, ...child.pid !== void 0 ? { pid: child.pid } : {}, profile, headless };
+      if (!owner) {
+        try {
+          writeProfileKind(profile, found.kind);
+        } catch {
+        }
+      }
+      const notes = dropped ? [unpackedIgnoredNote()] : [];
+      return {
+        host: "127.0.0.1",
+        port,
+        launchedByUs: true,
+        ...child.pid !== void 0 ? { pid: child.pid } : {},
+        profile,
+        headless,
+        ...notes.length ? { notes } : {}
+      };
     }
     if (failure2) throw new Error(failure2);
     if (deps.now() >= deadline) {
@@ -5299,7 +5403,9 @@ var init_launch = __esm({
     init_brand();
     init_cli_kit();
     init_deps();
+    init_detect();
     init_discovery();
+    init_extensions();
     init_profile();
     init_state();
     STARTUP_TIMEOUT_MS = 2e4;
@@ -5484,6 +5590,12 @@ var init_session = __esm({
       }
       get headless() {
         return this.endpoint.headless;
+      }
+      /** What the launch had to say (extensions the browser will not load), once: the next call gets nothing. */
+      takeNotes() {
+        const notes = this.endpoint.notes ?? [];
+        this.endpoint.notes = void 0;
+        return notes;
       }
       get targetId() {
         return this.current.targetId;
@@ -8601,6 +8713,224 @@ var init_challenge = __esm({
     strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
   }
 });
+var CONSENT_SELECTORS;
+var HELPERS;
+var OVERLAYS_SOURCE;
+var OVERLAY_ROOT_SOURCE;
+var DESCRIBE_SOURCE;
+var OVERLAY_INFO_SOURCE;
+var READ_DOCUMENT;
+var init_overlay = __esm({
+  "src/browser/overlay.ts"() {
+    "use strict";
+    CONSENT_SELECTORS = [
+      // OneTrust
+      "#onetrust-consent-sdk",
+      "#onetrust-banner-sdk",
+      "#onetrust-pc-sdk",
+      // Didomi
+      "#didomi-host",
+      "#didomi-notice",
+      'div[class^="didomi-"]',
+      // Sourcepoint
+      '[id^="sp_message_container"]',
+      // Quantcast Choice
+      ".qc-cmp2-container",
+      "#qc-cmp2-container",
+      // Cookiebot
+      "#CybotCookiebotDialog",
+      "#CybotCookiebotDialogBodyUnderlay",
+      // Usercentrics
+      "#usercentrics-root",
+      "#usercentrics-cmp-ui",
+      // TrustArc
+      "#truste-consent-track",
+      "#consent_blackbar",
+      'div[class^="truste_"]',
+      // consentmanager.net, Commanders Act, Axeptio, Iubenda, Complianz, CookieYes, Osano, Borlabs, Google Funding Choices
+      "#cmpbox",
+      "#cmpbox2",
+      "#tc-privacy-wrapper",
+      "#axeptio_overlay",
+      "#iubenda-cs-banner",
+      "#cmplz-cookiebanner-container",
+      ".cky-consent-container",
+      ".osano-cm-window",
+      "#BorlabsCookieBox",
+      ".fc-consent-root",
+      // The IAB TCF / GPP locator frames
+      'iframe[name="__tcfapiLocator"]',
+      'iframe[name="__cmpLocator"]',
+      'iframe[name="__gppLocator"]'
+    ];
+    HELPERS = `const up = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || n.host || null;
+  const body = document.body;
+  const roleOf = (el) => String((el.getAttribute && el.getAttribute("role")) || "").toLowerCase();
+  const isDialog = (el) =>
+    roleOf(el) === "dialog" ||
+    roleOf(el) === "alertdialog" ||
+    (!!el.getAttribute && el.getAttribute("aria-modal") === "true") ||
+    (String(el.tagName || "").toUpperCase() === "DIALOG" && el.open === true);
+  const CONSENT = ${JSON.stringify(CONSENT_SELECTORS.join(", "))};
+  const isConsent = (el) => {
+    try {
+      return !!el.matches && el.matches(CONSENT);
+    } catch (e) {
+      return false;
+    }
+  };
+  /** Fixed or sticky, itself or an ancestor up to the body: what a click's covering node belongs to. */
+  const pinned = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) {
+      const p = getComputedStyle(n).position;
+      if (p === "fixed" || p === "sticky") return true;
+    }
+    return false;
+  };`;
+    OVERLAYS_SOURCE = `function findOverlays() {
+  ${HELPERS}
+  const found = [];
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (!body || !(vw > 0) || !(vh > 0)) return found;
+  const isMain = (el) => String(el.tagName || "").toUpperCase() === "MAIN" || roleOf(el) === "main";
+  const holdsMain = (el) => isMain(el) || Array.prototype.some.call(el.querySelectorAll("*"), isMain);
+  const textOf = (el) => String(el.textContent || "").length;
+  const pageText = textOf(body);
+  const fixed = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) if (getComputedStyle(n).position === "fixed") return true;
+    return false;
+  };
+  /** Out of the flow of the page, itself or an ancestor: what can be over something. */
+  const floating = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) {
+      const p = getComputedStyle(n).position;
+      if (p === "fixed" || p === "absolute") return true;
+    }
+    return false;
+  };
+  const hiddenUp = (el) => {
+    for (let n = el; n && n.nodeType === 1; n = up(n)) {
+      if (n.getAttribute && (n.getAttribute("aria-hidden") === "true" || n.getAttribute("inert") !== null)) return true;
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || Number(cs.opacity) === 0) return true;
+    }
+    return false;
+  };
+  const shown = (el) => {
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === "hidden" || cs.visibility === "collapse") return false;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0) || r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) return false;
+    return !hiddenUp(el);
+  };
+  /** The part of the viewport the element covers, or null when it is under 30%. */
+  const area = (el) => {
+    const r = el.getBoundingClientRect();
+    const left = Math.max(r.left, 0);
+    const top = Math.max(r.top, 0);
+    const w = Math.min(r.right, vw) - left;
+    const h = Math.min(r.bottom, vh) - top;
+    return w > 0 && h > 0 && w * h >= 0.3 * vw * vh ? { left, top, w, h } : null;
+  };
+  const covers = (el, a) => {
+    // A side column is no overlay: one is wide, or strictly across the middle of the screen.
+    const middle = a.left < vw / 2 && a.left + a.w > vw / 2 && a.top < vh / 2 && a.top + a.h > vh / 2;
+    if (a.w < 0.6 * vw && !middle) return false;
+    const root = el.getRootNode ? el.getRootNode() : document;
+    const at = (root && root.elementFromPoint ? root : document).elementFromPoint(a.left + a.w / 2, a.top + a.h / 2);
+    for (let n = at; n; n = up(n)) if (n === el) return true;
+    return false;
+  };
+  const kids = (n) => Array.from((n && n.children) || []);
+  const visit = (el, inShell) => {
+    let shell = inShell;
+    let take = false;
+    const role = roleOf(el);
+    if (isConsent(el)) take = shown(el) && !holdsMain(el);
+    else if (isDialog(el)) take = floating(el) && shown(el) && !holdsMain(el);
+    else if (!inShell && role !== "presentation" && role !== "none") {
+      const a = area(el);
+      if (a && fixed(el) && shown(el) && covers(el, a)) {
+        if (holdsMain(el) || (pageText > 0 && textOf(el) > 0.6 * pageText)) shell = true;
+        else take = true;
+      }
+    }
+    // An overlay is taken whole: what is inside it is its own.
+    if (take) {
+      found.push(el);
+      return;
+    }
+    for (const k of kids(el)) visit(k, shell);
+    if (el.shadowRoot) for (const k of kids(el.shadowRoot)) visit(k, shell);
+  };
+  for (const k of kids(body)) visit(k, false);
+  return found.slice(0, 5);
+}`;
+    OVERLAY_ROOT_SOURCE = `function overlayRoot() {
+  ${HELPERS}
+  const overlays = (${OVERLAYS_SOURCE})();
+  for (let n = this; n; n = up(n)) if (overlays.indexOf(n) >= 0) return n;
+  let outer = null;
+  for (let n = this; n && n !== body && n !== document.documentElement; n = up(n)) {
+    if (n.nodeType !== 1) continue;
+    if (isDialog(n)) return n;
+    if (pinned(n) && !pinned(up(n) || body)) outer = n;
+  }
+  return outer;
+}`;
+    DESCRIBE_SOURCE = `const describe = (el) => {
+    const tag = String(el.tagName || "").toLowerCase();
+    const attr = (n) => (el.getAttribute ? el.getAttribute(n) : null);
+    const role = attr("role");
+    const type = tag === "input" ? attr("type") : null;
+    const text = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+    const shown = text.length > 60 ? text.slice(0, 57) + "..." : text;
+    return "<" + tag + (el.id ? "#" + el.id : "") + (role ? ' role="' + role + '"' : "") + (type ? ' type="' + type + '"' : "") + ">" + (shown ? ' "' + shown + '"' : "");
+  };`;
+    OVERLAY_INFO_SOURCE = `function overlayInfo() {
+  ${HELPERS}
+  ${DESCRIBE_SOURCE}
+  const overlays = (${OVERLAYS_SOURCE})();
+  return { what: describe(this), overlay: overlays.indexOf(this) >= 0 || isDialog(this) || isConsent(this) };
+}`;
+    READ_DOCUMENT = `(() => {
+  const findOverlays = ${OVERLAYS_SOURCE};
+  const root = document.documentElement;
+  if (!root) return { html: "", url: location.href };
+  const mark = "data-overlay-" + Math.random().toString(36).slice(2, 10);
+  let overlays = [];
+  let html = "";
+  try {
+    try {
+      overlays = findOverlays();
+    } catch (e) {}
+    for (const el of overlays) if (el.getRootNode && el.getRootNode() === document) el.setAttribute(mark, "");
+    html = root.outerHTML;
+  } finally {
+    for (const el of overlays) if (el.removeAttribute) el.removeAttribute(mark);
+  }
+  let parsed;
+  try {
+    parsed = new DOMParser().parseFromString(html, "text/html");
+  } catch (e) {
+    return { html, url: location.href };
+  }
+  const drop = ["[" + mark + "]", '[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]', "dialog", ${CONSENT_SELECTORS.map((s) => JSON.stringify(s)).join(", ")}];
+  const keep = (el) =>
+    el === parsed.body || el === parsed.documentElement || el.tagName === "MAIN" || el.getAttribute("role") === "main" || !!el.querySelector("main, [role=main]");
+  for (const sel of drop) {
+    let els = [];
+    try {
+      els = Array.from(parsed.querySelectorAll(sel));
+    } catch (e) {}
+    for (const el of els) if (!keep(el)) el.remove();
+  }
+  return { html: parsed.documentElement.outerHTML, url: location.href };
+})()`;
+  }
+});
 async function watchNetwork(page) {
   const inflight2 = /* @__PURE__ */ new Set();
   const handlers = [
@@ -8820,7 +9150,7 @@ async function render(url, opts, deps, timeoutMs, run) {
     const challenge = await detectChallenge(session);
     const got = await page.send(
       "Runtime.evaluate",
-      { expression: DOCUMENT, returnByValue: true },
+      { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
       { timeoutMs }
     );
     const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
@@ -8881,7 +9211,7 @@ var IDLE_CAP_MS;
 var WEB_PAGE;
 var active;
 var queue;
-var DOCUMENT;
+var WHOLE_DOCUMENT;
 var init_read = __esm({
   "src/browser/read.ts"() {
     "use strict";
@@ -8889,6 +9219,7 @@ var init_read = __esm({
     init_fetch();
     init_challenge();
     init_deps();
+    init_overlay();
     init_session();
     init_state();
     init_wait();
@@ -8896,7 +9227,7 @@ var init_read = __esm({
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     active = 0;
     queue = [];
-    DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
+    WHOLE_DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
   }
 });
 init_brand();
@@ -8905,6 +9236,7 @@ init_doc();
 init_video();
 init_session();
 init_read();
+init_overlay();
 init_state();
 init_challenge();
 init_detect();
@@ -9496,7 +9828,7 @@ init_brand();
 init_mode();
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return namedCacheDir() ?? join12(tmpdir5(), userScoped(brand().name), "cache");
+  return namedCacheDir() ?? join13(tmpdir5(), userScoped(brand().name), "cache");
 }
 var namedCacheDir = () => env("CACHE_DIR") ?? brand().cacheDir;
 function userScoped(name) {
@@ -9506,8 +9838,9 @@ function userScoped(name) {
 function cachePath(url, acceptLanguage = "", extractor = "native", variant = "") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  const key = `${canon}\0${acceptLanguage}\0${extractor}${variant ? `\0${variant}` : ""}`;
-  return join12(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
+  const ns = extractor === "browser" ? "browser\0no-overlays" : extractor;
+  const key = `${canon}\0${acceptLanguage}\0${ns}${variant ? `\0${variant}` : ""}`;
+  return join13(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
 }
 var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
@@ -9576,11 +9909,11 @@ function entryPaths(url, acceptLanguage, extractor, variant) {
 function readCache(url, acceptLanguage = "", extractor = "native", variant = "") {
   if (!entryDir(false)) return void 0;
   const { meta, body } = entryPaths(url, acceptLanguage, extractor, variant);
-  if (!existsSync8(meta)) return void 0;
+  if (!existsSync9(meta)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync8(meta, "utf8"));
+    const entry = JSON.parse(readFileSync9(meta, "utf8"));
     if (typeof entry.cachedAt !== "number") return void 0;
-    const text = existsSync8(body) ? readFileSync8(body, "utf8") : entry.text;
+    const text = existsSync9(body) ? readFileSync9(body, "utf8") : entry.text;
     if (!text?.trim()) return void 0;
     return { ...entry, text };
   } catch {
@@ -9989,11 +10322,11 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function composeAssets() {
-  const base2 = join13(cacheDir(), "compose");
+  const base2 = join14(cacheDir(), "compose");
   return [
-    { path: join13(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
-    { path: join13(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
-    { path: join13(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
+    { path: join14(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
+    { path: join14(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
+    { path: join14(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
   ];
 }
 function ensureComposeMaterialized() {
@@ -10006,7 +10339,7 @@ function untrustedStack() {
   for (const a of assets) {
     let body;
     try {
-      body = readFileSync9(a.path, "utf8");
+      body = readFileSync10(a.path, "utf8");
     } catch {
     }
     if (body !== a.content) return `${a.path} does not hold the stack this binary ships, and could not be rewritten`;
@@ -10022,7 +10355,7 @@ function untrustedStack() {
   }
   for (const p of [top, ...paths]) {
     try {
-      const st = p === top && chosen ? statSync7(p) : lstatSync3(p);
+      const st = p === top && chosen ? statSync8(p) : lstatSync3(p);
       if (st.isSymbolicLink()) return `${p} is a symbolic link`;
       if (st.uid !== uid) return `${p} belongs to another user`;
       if (st.mode & 2 && !(st.isDirectory() && st.mode & 512)) return `${p} is writable by anyone`;
@@ -10034,9 +10367,9 @@ function untrustedStack() {
 }
 function writeIfChanged(path, content) {
   try {
-    if (existsSync9(path) && readFileSync9(path, "utf8") === content) return;
+    if (existsSync10(path) && readFileSync10(path, "utf8") === content) return;
     mkdirSync6(dirname2(path), { recursive: true, mode: 448 });
-    writeFileSync5(path, content);
+    writeFileSync6(path, content);
   } catch {
   }
 }
@@ -10198,7 +10531,7 @@ function shq(s) {
 }
 function readJsonSafe(path) {
   try {
-    return JSON.parse(readFileSync10(path, "utf8"));
+    return JSON.parse(readFileSync11(path, "utf8"));
   } catch {
     return void 0;
   }
@@ -10379,7 +10712,7 @@ function assertWorkflowSafe(script, phaseName) {
 }
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
-  const scriptPath = join15(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
+  const scriptPath = join16(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
@@ -10459,7 +10792,7 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
       const batches = phaseBatches(ph, emission, smallWorklist);
       const widest = batches.reduce((w, b) => Math.max(w, b.length), 0);
       lines.push(
-        `Fan out: \`Workflow({ scriptPath: "${join15(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
+        `Fan out: \`Workflow({ scriptPath: "${join16(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
         `(${batches.length} agent(s) of at most ${widest} item(s), contract \`agents/${emission.role}.md\`).`,
         ``,
         `Sequentially instead: play \`agents/${emission.role}.md\` yourself over ${shq(ph.ids.join(","))}.`,
@@ -10477,7 +10810,7 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
 function listPhases(runDir, engineAbs, defs) {
   const run = resolve6(runDir);
   return defs.map((def) => {
-    const worklist = join16(run, def.worklist);
+    const worklist = join17(run, def.worklist);
     const parsed = readJsonSafe(worklist);
     const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
@@ -10494,7 +10827,7 @@ function listPhases(runDir, engineAbs, defs) {
 }
 function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
   const run = resolve6(runDir);
-  if (!existsSync10(run)) {
+  if (!existsSync11(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
   const phases = listPhases(run, engineAbs, defs);
@@ -10523,14 +10856,14 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join16(run, "orchestration");
-  const agentsDir = join16(orchDir, "agents");
-  ensureDir(join16(orchDir, "out"));
+  const orchDir = join17(run, "orchestration");
+  const agentsDir = join17(orchDir, "agents");
+  ensureDir(join17(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(contracts(run, engineAbs, phases))) {
-    written.push(writeArtifact(join16(agentsDir, `${name}.md`), content));
+    written.push(writeArtifact(join17(agentsDir, `${name}.md`), content));
   }
   if (!opts.eco) {
     for (const ph of selected) {
@@ -10544,10 +10877,10 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join16(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
+      written.push(writeArtifact(join17(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
-  written.push(writeArtifact(join16(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
+  written.push(writeArtifact(join17(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 init_cli_kit();
@@ -10650,17 +10983,17 @@ function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname3(fileURLToPath(import.meta.url));
   const name = brand().name;
   const candidates2 = [resolve7(here, ".."), resolve7(here, "..", "skills", name), resolve7(here, "..", "..", "skills", name)];
-  return candidates2.find((dir) => existsSync11(join17(dir, "SKILL.md")));
+  return candidates2.find((dir) => existsSync12(join18(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join17(root, "references");
-  if (!existsSync11(refDir)) return out;
+  const refDir = join18(root, "references");
+  if (!existsSync12(refDir)) return out;
   for (const file of readdirSync8(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join17("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
+    out.push(describe(root, join18("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
   }
   return out;
 }
@@ -10687,8 +11020,8 @@ function readResource(uri, moduleDir) {
   if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
-  if (!statSync8(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync11(targetReal, "utf8") };
+  if (!statSync9(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync12(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
 };
@@ -10699,14 +11032,14 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join17(root, rel));
+  const summary = firstProse(join18(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
 function firstProse(file) {
   let text;
   try {
-    text = readFileSync11(file, "utf8");
+    text = readFileSync12(file, "utf8");
   } catch {
     return void 0;
   }
@@ -13338,7 +13671,7 @@ async function runBackends(kinds, ctx) {
 
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 
 // src/authority.ts
 function sourceSignals(opts) {
@@ -13595,7 +13928,7 @@ function renderSourceExtract(s, text, depth, question = "") {
   return head + selectSourcePassages(text, question, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join10(dir, s.extract);
+  const p = join11(dir, s.extract);
   if (!existsSync4(p)) return s.snippet ?? "";
   const lines = readFileSync6(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
@@ -13603,12 +13936,12 @@ function readSourceText(dir, s) {
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth, question = "") {
-  writeArtifact(join10(dir, s.extract), renderSourceExtract(s, text, depth, question));
+  writeArtifact(join11(dir, s.extract), renderSourceExtract(s, text, depth, question));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join10(dir, "sources.json");
-  const dossierMd = join10(dir, "DOSSIER.md");
-  const manifestJson = join10(dir, "manifest.json");
+  const sourcesJson = join11(dir, "sources.json");
+  const dossierMd = join11(dir, "DOSSIER.md");
+  const manifestJson = join11(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   const blocks = writeExtras(dir, sources, manifest);
@@ -13616,7 +13949,7 @@ function writeDossierIndex(dir, sources, manifest, template) {
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join10(dir, "sources"));
+  ensureDir(join11(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const text = rs.text ?? rs.snippet ?? "";
@@ -13721,10 +14054,10 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   return out.join("\n");
 }
 function readDossier(dir) {
-  const sources = readJson3(join10(dir, "sources.json"), "sources.json");
+  const sources = readJson3(join11(dir, "sources.json"), "sources.json");
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
-  const manifest = readJson3(join10(dir, "manifest.json"), "manifest.json");
+  const manifest = readJson3(join11(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
 }
 
@@ -13893,7 +14226,7 @@ function headingLines(text) {
 var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode2, question, d) {
-  return join11(tmpdir3(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
+  return join12(tmpdir3(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -14367,7 +14700,7 @@ async function runGather(options) {
 }
 
 // src/enrich.ts
-import { existsSync as existsSync7, readFileSync as readFileSync12, statSync as statSync5 } from "fs";
+import { existsSync as existsSync8, readFileSync as readFileSync13, statSync as statSync6 } from "fs";
 import { basename, resolve } from "path";
 import { pathToFileURL } from "url";
 function loadState(dir) {
@@ -14446,14 +14779,14 @@ async function addFiles(dir, paths, opts = {}) {
 }
 async function prepareFile(stateOf, abs, opts) {
   const url = pathToFileURL(abs).href;
-  if (!existsSync7(abs) || !statSync5(abs).isFile()) {
+  if (!existsSync8(abs) || !statSync6(abs).isFile()) {
     return { ok: false, result: { id: "", added: false, note: `${abs} is not a readable file` } };
   }
   const state = stateOf();
   const question = opts.question ?? state.manifest.question;
   const existing = state.byCanon.get(canonicalizeUrl(url));
   if (existing) return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
-  const bytes = readFileSync12(abs);
+  const bytes = readFileSync13(abs);
   const name = basename(abs);
   let text;
   let extractor;
@@ -14614,8 +14947,8 @@ async function prepareSource(stateOf, url, opts) {
 }
 
 // src/render.ts
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "fs";
-import { join as join14 } from "path";
+import { existsSync as existsSync13, readFileSync as readFileSync14 } from "fs";
+import { join as join15 } from "path";
 
 // src/claims.ts
 var SOURCE_RE = /^S\d+$/;
@@ -14935,9 +15268,9 @@ function loadRenderContext(dir) {
   const tiers = [];
   const cited = /* @__PURE__ */ new Set();
   for (const tier of TIERS) {
-    const p = join14(dir, tier.file);
-    if (!existsSync12(p)) continue;
-    const text = readFileSync13(p, "utf8");
+    const p = join15(dir, tier.file);
+    if (!existsSync13(p)) continue;
+    const text = readFileSync14(p, "utf8");
     tiers.push({ tier, text });
     for (const id of citedSourceIds(text)) cited.add(id);
   }
@@ -14947,10 +15280,10 @@ function toContext(dirOrCtx) {
   return typeof dirOrCtx === "string" ? loadRenderContext(dirOrCtx) : dirOrCtx;
 }
 function readVerify(dir) {
-  const p = join14(dir, "VERIFY.json");
-  if (!existsSync12(p)) return void 0;
+  const p = join15(dir, "VERIFY.json");
+  if (!existsSync13(p)) return void 0;
   try {
-    return JSON.parse(readFileSync13(p, "utf8"));
+    return JSON.parse(readFileSync14(p, "utf8"));
   } catch {
     return void 0;
   }
@@ -15068,7 +15401,7 @@ function sourcesSection(sources, cited) {
 function writeHtml(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const html = renderHtml(ctx);
-  const path = out ?? join14(ctx.dir, "index.html");
+  const path = out ?? join15(ctx.dir, "index.html");
   return writeArtifact(path, html);
 }
 function mdLinkText(s) {
@@ -15129,18 +15462,18 @@ function buildReportMarkdown(dirOrCtx) {
 function writeReportMarkdown(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const md = buildReportMarkdown(ctx);
-  const path = out ?? join14(ctx.dir, "index.md");
+  const path = out ?? join15(ctx.dir, "index.md");
   return writeArtifact(path, md);
 }
 
 // src/check.ts
-import { existsSync as existsSync14, readFileSync as readFileSync15 } from "fs";
-import { join as join19 } from "path";
+import { existsSync as existsSync15, readFileSync as readFileSync16 } from "fs";
+import { join as join20 } from "path";
 
 // src/verify.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync13, readFileSync as readFileSync14, readdirSync as readdirSync4 } from "fs";
-import { join as join18 } from "path";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync4 } from "fs";
+import { join as join19 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function pairFingerprint(claim, extract) {
@@ -15155,7 +15488,7 @@ function claimStrings(text) {
   return out;
 }
 function buildWorklist(dir, opts = {}) {
-  const sources = readJson3(join18(dir, "sources.json"), "sources.json");
+  const sources = readJson3(join19(dir, "sources.json"), "sources.json");
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const byId = new Map(sources.map((s) => [s.id, s]));
@@ -15180,9 +15513,9 @@ function buildWorklist(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
-    const p = join18(dir, file);
-    if (!existsSync13(p)) continue;
-    const text = readFileSync14(p, "utf8");
+    const p = join19(dir, file);
+    if (!existsSync14(p)) continue;
+    const text = readFileSync15(p, "utf8");
     for (const claim of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
@@ -15242,8 +15575,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeArtifact(join18(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join18(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join19(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join19(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -15309,7 +15642,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
   if (!opts.strict) {
     for (const name of readdirSync4(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
       try {
-        const todo = JSON.parse(readFileSync14(join18(dir, name), "utf8"));
+        const todo = JSON.parse(readFileSync15(join19(dir, name), "utf8"));
         if (!Array.isArray(todo?.pairs)) continue;
         for (const p of todo.pairs) {
           if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
@@ -15370,7 +15703,7 @@ function applyVerdicts(dir, verdictsPath) {
   }
   const verdicts = binding.bound;
   const result = reduceVerdicts(verdicts);
-  writeArtifact(join18(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join19(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -15507,15 +15840,15 @@ function analyzeFile(file, text) {
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
-  const p = join19(dir, "VERIFY.json");
-  if (!existsSync14(p)) {
+  const p = join20(dir, "VERIFY.json");
+  if (!existsSync15(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
     return;
   }
   let stored;
   try {
-    stored = JSON.parse(readFileSync15(p, "utf8"));
+    stored = JSON.parse(readFileSync16(p, "utf8"));
   } catch (e) {
     result.ok = false;
     result.errors.push(`${flag}: VERIFY.json is unreadable (${e.message}) \u2014 re-run \`verify --apply <verdicts.json>\`.`);
@@ -15578,7 +15911,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync15(join19(dir, "manifest.json"), "utf8"));
+    return JSON.parse(readFileSync16(join20(dir, "manifest.json"), "utf8"));
   } catch {
     return void 0;
   }
@@ -15586,24 +15919,24 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join19(dir, "sources.json");
-  if (!existsSync14(sourcesPath)) {
+  const sourcesPath = join20(dir, "sources.json");
+  if (!existsSync15(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync15(sourcesPath, "utf8"));
+    sources = JSON.parse(readFileSync16(sourcesPath, "utf8"));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
   const identityError = sourceIdentityError(sources);
   if (identityError) return blank(false, [`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`]);
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync14(join19(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync15(join20(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync15(join19(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync16(join20(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -15654,7 +15987,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync14(join19(dir, s.extract)) ? readSourceText(dir, s) : null;
+        t = s && existsSync15(join20(dir, s.extract)) ? readSourceText(dir, s) : null;
       } catch {
         t = null;
       }
@@ -15908,7 +16241,7 @@ function refreshed(manifest, sources) {
 }
 
 // src/plan.ts
-import { join as join20 } from "path";
+import { join as join21 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -16177,12 +16510,12 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join20(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join21(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join20(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join21(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -16224,7 +16557,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join21 } from "path";
+import { join as join22 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -16331,8 +16664,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join21(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join21(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join22(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join22(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -16440,10 +16773,10 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { join as join23 } from "path";
+import { join as join24 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join22 } from "path";
+import { join as join23 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -16500,7 +16833,7 @@ function agentContracts(runAbs, engineAbs) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join22(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join23(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
@@ -16523,7 +16856,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join22(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join23(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -16549,7 +16882,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
-  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join22(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join23(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gatherPlan ? shq(gatherPlan.question) : '"<question>"';
   const mode2 = gatherPlan ? gatherPlan.mode : "<m>";
   const run = shq(runAbs);
@@ -16569,15 +16902,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join22(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join22(runAbs, "PLAN.json")}\`, apply \`${join22(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join23(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join23(runAbs, "PLAN.json")}\`, apply \`${join23(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join22(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join22(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join22(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join23(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join23(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join23(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join22(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join23(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `
   ];
 }
@@ -16585,7 +16918,7 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 // src/orchestrate.ts
 var PHASES = ["gather", "verify"];
 function mergeHint(runAbs, engineAbs, plan) {
-  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join23(runAbs, s.id.toLowerCase())) : [`${join23(runAbs, "q1")},\u2026`];
+  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join24(runAbs, s.id.toLowerCase())) : [`${join24(runAbs, "q1")},\u2026`];
   const q = plan ? plan.question : "<question>";
   const mode2 = plan ? plan.mode : "<mode>";
   return [
@@ -16626,7 +16959,7 @@ var VERIFY = {
   applyHint: (run, engineAbs) => [
     `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
     `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-    `save each returned fragment as ${join23(run, "verdicts.<i>.json")} then reassemble + gate:`,
+    `save each returned fragment as ${join24(run, "verdicts.<i>.json")} then reassemble + gate:`,
     `node ${shq(engineAbs)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
   ]
 };
@@ -16642,8 +16975,8 @@ function listPhasesFor(runDir, engineAbs) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync15, readFileSync as readFileSync16, realpathSync as realpathSync3, statSync as statSync9 } from "fs";
-import { isAbsolute as isAbsolute2, join as join24, relative as relative2, resolve as resolve3, sep as sep3 } from "path";
+import { existsSync as existsSync16, readFileSync as readFileSync17, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
+import { isAbsolute as isAbsolute3, join as join25, relative as relative2, resolve as resolve3, sep as sep3 } from "path";
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -16691,9 +17024,9 @@ function webResultsArg(v) {
 function requiredRun(args, defaults) {
   const run = str2(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
-  if (!isAbsolute2(run)) throw new ToolError("`run` must be an absolute path.");
+  if (!isAbsolute3(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve3(run);
-  if (!existsSync15(join24(abs, "manifest.json"))) {
+  if (!existsSync16(join25(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -16706,7 +17039,7 @@ function gatherOptions(args) {
     }
   }
   const out = str2(args.out);
-  if (out !== void 0 && !isAbsolute2(out)) throw new ToolError("`out` must be an absolute path.");
+  if (out !== void 0 && !isAbsolute3(out)) throw new ToolError("`out` must be an absolute path.");
   const depth = oneOf(str2(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
   const caps = DEPTH_CAPS[depth];
   const web = webResultsArg(args.web_results);
@@ -16846,9 +17179,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join24(res.dir, "DOSSIER.md"),
+    dossier_md: join25(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join24(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join25(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -16873,7 +17206,7 @@ function handlePlan(args) {
   const question = requiredStr(args, "question", "the umbrella question to decompose.");
   const mode2 = oneOf(str2(args.mode), ALL_MODES, "mode", "topic");
   const runRoot = str2(args.run_root);
-  if (runRoot !== void 0 && !isAbsolute2(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
+  if (runRoot !== void 0 && !isAbsolute3(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
   const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
   if (isNoWrite()) takeArtifacts();
   return {
@@ -16885,15 +17218,15 @@ function handleMerge(args) {
   const runs = strArray(args.runs);
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
-    if (!isAbsolute2(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync15(join24(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!isAbsolute3(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
+    if (!existsSync16(join25(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
-  if (master !== void 0 && !isAbsolute2(master)) throw new ToolError("`master` must be an absolute path.");
+  if (master !== void 0 && !isAbsolute3(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join24(res.dir, "DOSSIER.md"),
+    dossier_md: join25(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -16986,7 +17319,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute2(raw) ? raw : join24(run, raw);
+  const target = isAbsolute3(raw) ? raw : join25(run, raw);
   let real;
   try {
     real = realpathSync3(target);
@@ -16997,17 +17330,17 @@ function handleRead(args, run) {
   if (real !== root && !real.startsWith(root + sep3)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
-  const st = statSync9(real);
+  const st = statSync10(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync16(real, "utf8").split("\n");
+  const lines = readFileSync17(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
   const requestedEnd = Math.floor(num3(args.end_line) ?? total);
   const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
   return {
-    path: isAbsolute2(raw) ? real : raw,
+    path: isAbsolute3(raw) ? real : raw,
     start_line: start,
     end_line: end,
     total_lines: total,
@@ -17805,7 +18138,7 @@ function parseList(s) {
 function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve4(x));
   const abs = resolve4(spec);
-  if (existsSync16(abs) && statSync10(abs).isDirectory()) {
+  if (existsSync17(abs) && statSync11(abs).isDirectory()) {
     const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve4(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
@@ -17835,15 +18168,15 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync17(0, "utf8");
+      return readFileSync18(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
   }
   const abs = resolve4(spec);
-  if (!existsSync16(abs)) fail(`--web-results file not found: ${abs}`);
+  if (!existsSync17(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync17(abs, "utf8");
+    return readFileSync18(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -18101,10 +18434,10 @@ async function main(argv = process.argv.slice(2)) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join25(resolve4(runDir), "manifest.json");
-        if (!existsSync16(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
+        const mf = join26(resolve4(runDir), "manifest.json");
+        if (!existsSync17(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync17(mf, "utf8"));
+          manifest = JSON.parse(readFileSync18(mf, "utf8"));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -18190,7 +18523,7 @@ ${formatServices(rows)}
     case "merge": {
       const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve4(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync16(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync17(d)) fail(`run dir not found: ${d}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
@@ -18362,7 +18695,7 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync16(resolve4(dir))) {
+        if (!existsSync17(resolve4(dir))) {
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve4(dir)}
 `);
           process.exit(2);
@@ -18387,7 +18720,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join25(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join26(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}

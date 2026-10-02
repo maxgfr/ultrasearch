@@ -1,10 +1,10 @@
 {
-  "tag": "v1.27.1",
-  "engineVersion": "1.27.1",
+  "tag": "v1.28.0",
+  "engineVersion": "1.28.0",
   "sha256": {
-    "webindex-engine.mjs": "c2be502fb6134b59651ef9e285b35b5c127f254e0bc94ccea8e3ba1e1034d5c4",
-    "webindex-engine.d.mts": "2e8804fae4c43f62d1fbbb51b76afa310aaf720b9368ad30221b98770845be27"
+    "webindex-engine.mjs": "2f742279fbaf3e00dd467984929144e76f0452486484521d30919ee200efc9d0",
+    "webindex-engine.d.mts": "aab9883ba5835e2e0efd060476f2b07c406078e80a50516f76d81b2febf7248f"
   },
-  "syncedAt": "2026-10-02T08:31:42.572Z",
-  "commit": "1cd2c423d1a80f6695b2ad2e90706bff5b5753a2"
+  "syncedAt": "2026-10-02T09:51:48.628Z",
+  "commit": "66c557c5cf420de9bdc3a570bcfb4b702b7fe658"
 }

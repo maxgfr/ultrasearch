@@ -4809,19 +4809,33 @@ function detectBrowserBinary(opts = {}) {
     if (!found) throw new Error(`BROWSER_BIN points at "${explicit}", which is not an executable file`);
     return { kind: kindOf(found), path: found };
   }
-  const kinds = opts.prefer ? [opts.prefer, ...ORDER.filter((k) => k !== opts.prefer)] : ORDER;
+  let only = opts.kind;
+  if (!only && !opts.prefer) {
+    const asked = (opts.env ? opts.env("BROWSER_KIND") : env("BROWSER_KIND"))?.trim().toLowerCase();
+    if (asked && !isBrowserKind(asked)) throw new Error(`${envName("BROWSER_KIND")} is "${asked}", not one of ${ORDER.join(", ")}`);
+    if (asked && isBrowserKind(asked)) only = asked;
+  }
+  const prefer = opts.prefer;
+  const kinds = only ? [only] : prefer ? [prefer, ...ORDER.filter((k) => k !== prefer)] : ORDER;
   for (const kind of kinds) {
     const path = candidates(kind, platform, sys, home).find(exists);
     if (path) return { kind, path };
   }
   return null;
 }
-var ORDER, MAC_APPS, LINUX_NAMES, WINDOWS_PATHS;
+function ignoresUnpackedExtensions(bin, browserVersion) {
+  if (bin.kind !== "chrome" || /for[ _-]?testing|[\\/]chrome-(?:linux|mac|win)[^\\/]*[\\/]/i.test(bin.path)) return false;
+  if (browserVersion === void 0) return true;
+  const major = /^(?:Headless)?Chrome\/(\d+)\./.exec(browserVersion)?.[1];
+  return major !== void 0 && Number(major) >= 137;
+}
+var ORDER, isBrowserKind, MAC_APPS, LINUX_NAMES, WINDOWS_PATHS;
 var init_detect = __esm({
   "src/browser/detect.ts"() {
     "use strict";
     init_brand();
     ORDER = ["chrome", "brave", "chromium", "edge"];
+    isBrowserKind = (v) => ORDER.includes(v);
     MAC_APPS = {
       chrome: "Google Chrome",
       brave: "Brave Browser",
@@ -4979,7 +4993,7 @@ function defaultBrowserDeps() {
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
     discovery: discovery_exports,
-    detectBrowser: () => detectBrowserBinary(),
+    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
     kill: (pid, signal) => void process.kill(pid, signal),
     env: (name) => env(name),
     platform: process.platform
@@ -5135,12 +5149,46 @@ var init_cli_kit = __esm({
   }
 });
 
+// src/browser/extensions.ts
+import { existsSync as existsSync5, statSync as statSync3 } from "fs";
+import { isAbsolute as isAbsolute2, join as join7 } from "path";
+function extensionDirs(raw) {
+  const name = envName("BROWSER_EXTENSIONS");
+  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
+    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
+    let isDir = false;
+    try {
+      isDir = statSync3(dir).isDirectory();
+    } catch {
+    }
+    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
+    if (!existsSync5(join7(dir, "manifest.json"))) {
+      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
+    }
+    return dir;
+  });
+}
+function extensionArgs(dirs) {
+  if (dirs.length === 0) return [];
+  const list = dirs.join(",");
+  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
+}
+var unpackedIgnoredNote;
+var init_extensions = __esm({
+  "src/browser/extensions.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
+  }
+});
+
 // src/browser/profile.ts
-import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, realpathSync, rmSync as rmSync4, statSync as statSync3 } from "fs";
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync6, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync4, writeFileSync as writeFileSync5 } from "fs";
 import { homedir as homedir2 } from "os";
-import { basename as basename2, join as join7, resolve as resolve2, sep } from "path";
+import { basename as basename2, join as join8, resolve as resolve2, sep } from "path";
 function browserHome() {
-  return env("BROWSER_DIR") ?? brand().browserDir ?? join7(homedir2(), `.${brand().name}`, "browser");
+  return env("BROWSER_DIR") ?? brand().browserDir ?? join8(homedir2(), `.${brand().name}`, "browser");
 }
 function checkName(name) {
   if (!PROFILE_NAME.test(name) || name === "." || name === "..") {
@@ -5149,7 +5197,23 @@ function checkName(name) {
 }
 function profileDir(name = "default") {
   checkName(name);
-  return join7(browserHome(), "profiles", name);
+  return join8(browserHome(), "profiles", name);
+}
+function profileKindFile(name = "default") {
+  return join8(profileDir(name), `.${brand().name}-kind`);
+}
+function readProfileKind(name = "default") {
+  try {
+    const kind = readFileSync7(profileKindFile(name), "utf8").trim();
+    return isBrowserKind(kind) ? kind : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function writeProfileKind(name, kind) {
+  ensurePrivateDir(profileDir(name));
+  writeFileSync5(profileKindFile(name), `${kind}
+`, { mode: 384 });
 }
 function ensurePrivateDir(path) {
   try {
@@ -5173,32 +5237,33 @@ var init_profile = __esm({
     "use strict";
     init_brand();
     init_cli_kit();
+    init_detect();
     PROFILE_NAME = /^[A-Za-z0-9._-]{1,64}$/;
   }
 });
 
 // src/browser/state.ts
 import { randomUUID } from "crypto";
-import { appendFileSync, closeSync, existsSync as existsSync6, openSync, readFileSync as readFileSync7, rmSync as rmSync5, statSync as statSync4, unlinkSync as unlinkSync2, writeSync } from "fs";
-import { join as join8 } from "path";
+import { appendFileSync, closeSync, existsSync as existsSync7, openSync, readFileSync as readFileSync8, rmSync as rmSync5, statSync as statSync5, unlinkSync as unlinkSync2, writeSync } from "fs";
+import { join as join9 } from "path";
 function checkTargetId(id) {
   if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(id)) throw new Error(`invalid target id: ${JSON.stringify(id)}`);
   return id;
 }
 function readJson2(path) {
   try {
-    return JSON.parse(readFileSync7(path, "utf8"));
+    return JSON.parse(readFileSync8(path, "utf8"));
   } catch {
     return null;
   }
 }
 function writeJson(dir, name, value) {
   ensurePrivateDir(dir);
-  writeFileAtomic(join8(dir, name), `${JSON.stringify(value)}
+  writeFileAtomic(join9(dir, name), `${JSON.stringify(value)}
 `, FILE_MODE);
 }
 function readSession(o) {
-  const v = readJson2(join8(homeOf(o), "session.json"));
+  const v = readJson2(join9(homeOf(o), "session.json"));
   if (!isObj(v) || v.version !== 1 || typeof v.port !== "number" || typeof v.targetId !== "string") return null;
   return v;
 }
@@ -5208,16 +5273,16 @@ function writeSession(s, o) {
 }
 function clearSession(o) {
   if (isNoWrite()) return;
-  rmSync5(join8(homeOf(o), "session.json"), { force: true });
+  rmSync5(join9(homeOf(o), "session.json"), { force: true });
 }
 function clearRefs(targetId, o) {
   const id = targetId === void 0 ? void 0 : checkTargetId(targetId);
   if (isNoWrite()) return;
-  const dir = join8(homeOf(o), "refs");
-  rmSync5(id === void 0 ? dir : join8(dir, `${id}.json`), { recursive: true, force: true });
+  const dir = join9(homeOf(o), "refs");
+  rmSync5(id === void 0 ? dir : join9(dir, `${id}.json`), { recursive: true, force: true });
 }
 function clearNetwork(targetId, o) {
-  const path = targetId === void 0 ? join8(homeOf(o), "network") : networkFile(targetId, o);
+  const path = targetId === void 0 ? join9(homeOf(o), "network") : networkFile(targetId, o);
   if (isNoWrite()) return;
   rmSync5(path, { recursive: true, force: true });
 }
@@ -5233,7 +5298,7 @@ function staleReason(path, staleMs, now) {
   let at;
   let pid;
   try {
-    const held = JSON.parse(readFileSync7(path, "utf8"));
+    const held = JSON.parse(readFileSync8(path, "utf8"));
     pid = held.pid;
     at = typeof held.at === "number" ? held.at : Number.NaN;
   } catch {
@@ -5241,7 +5306,7 @@ function staleReason(path, staleMs, now) {
   }
   if (Number.isNaN(at)) {
     try {
-      at = statSync4(path).mtimeMs;
+      at = statSync5(path).mtimeMs;
     } catch {
       return "gone";
     }
@@ -5252,7 +5317,7 @@ function staleReason(path, staleMs, now) {
 }
 function holds(path, token) {
   try {
-    const held = JSON.parse(readFileSync7(path, "utf8"));
+    const held = JSON.parse(readFileSync8(path, "utf8"));
     return held.pid === process.pid && held.token === token;
   } catch {
     return false;
@@ -5264,7 +5329,7 @@ async function withBrowserLock(fn, opts = {}) {
   const { now, sleep: sleep2 } = opts.deps ?? realDeps;
   const dir = homeOf(opts);
   ensurePrivateDir(dir);
-  const path = join8(dir, "lock");
+  const path = join9(dir, "lock");
   const token = randomUUID();
   const stamp = () => JSON.stringify({ pid: process.pid, at: now(), token });
   const deadline = now() + waitMs;
@@ -5320,7 +5385,7 @@ var init_state = __esm({
     FILE_MODE = 384;
     homeOf = (o) => o?.home ?? browserHome();
     isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-    networkFile = (targetId, o) => join8(homeOf(o), "network", `${checkTargetId(targetId)}.jsonl`);
+    networkFile = (targetId, o) => join9(homeOf(o), "network", `${checkTargetId(targetId)}.jsonl`);
     realDeps = {
       now: () => Date.now(),
       sleep: (ms) => new Promise((r) => setTimeout(r, ms))
@@ -5329,7 +5394,7 @@ var init_state = __esm({
 });
 
 // src/browser/launch.ts
-import { join as join9 } from "path";
+import { join as join10 } from "path";
 async function resolveEndpoint(opts = {}) {
   const deps = browserDeps(opts.deps);
   const profile = opts.profile ?? "default";
@@ -5364,24 +5429,49 @@ async function resolveEndpoint(opts = {}) {
     }
     clearSession();
   }
-  return launch(deps, opts.binary, profile, headless);
+  return launch(deps, opts.binary, profile, headless, opts.kind);
 }
-async function launch(deps, binary, profile, headless) {
-  const bin = binary ?? deps.detectBrowser()?.path;
-  if (!bin) {
+function wantedKind(deps, kind, profile) {
+  if (kind) return kind;
+  const asked = deps.env("BROWSER_KIND")?.trim().toLowerCase();
+  if (asked && !isBrowserKind(asked)) throw new UsageError(`${envName("BROWSER_KIND")} is "${asked}", not one of chrome, brave, chromium, edge`);
+  return asked && isBrowserKind(asked) ? asked : readProfileKind(profile);
+}
+async function launch(deps, binary, profile, headless, kind) {
+  const wanted = binary ? void 0 : wantedKind(deps, kind, profile);
+  const found = binary ? { kind: kindOf(binary), path: binary } : deps.detectBrowser(wanted);
+  if (!found && wanted) throw new UsageError(`no ${wanted} found: install it, or name its executable with ${envName("BROWSER_BIN")}`);
+  if (!found) {
     throw new Error(`no Chrome, Brave, Chromium or Edge found: install one, or set ${envName("BROWSER_BIN")} to the browser's executable`);
   }
+  const bin = found.path;
   const dir = profileDir(profile);
   ensurePrivateDir(browserHome());
-  ensurePrivateDir(join9(browserHome(), "profiles"));
+  ensurePrivateDir(join10(browserHome(), "profiles"));
   ensurePrivateDir(dir);
-  const portFile = join9(dir, "DevToolsActivePort");
+  const portFile = join10(dir, "DevToolsActivePort");
   const running = await readActivePort(deps, portFile);
   if (running && await isSameBrowser(deps, running.port, "127.0.0.1", running.path)) {
     return { host: "127.0.0.1", port: running.port, launchedByUs: true, profile, headless };
   }
+  const owner = readProfileKind(profile);
+  if (owner && owner !== found.kind) {
+    const named = binary !== void 0 || !!deps.env("BROWSER_BIN");
+    const hint = named ? `; ${envName("BROWSER_BIN")} names a ${found.kind} binary` : `, or ${owner} (\`--browser-kind ${owner}\`)`;
+    throw new UsageError(
+      `the profile "${profile}" belongs to ${owner} (its logins are encrypted for that browser), not ${found.kind}: use a profile of its own (\`--profile ${found.kind}\`)${hint}`
+    );
+  }
+  const extensions = extensionDirs(deps.env("BROWSER_EXTENSIONS"));
+  const dropped = extensions.length > 0 && ignoresUnpackedExtensions(found);
   await deps.fs.rm(portFile, { force: true });
-  const args = ["--remote-debugging-port=0", `--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check"];
+  const args = [
+    "--remote-debugging-port=0",
+    `--user-data-dir=${dir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    ...dropped ? [] : extensionArgs(extensions)
+  ];
   if (headless) args.push("--headless=new");
   args.push("about:blank");
   const child = deps.spawn(bin, args, { detached: true, stdio: "ignore" });
@@ -5400,7 +5490,22 @@ async function launch(deps, binary, profile, headless) {
     const active2 = await readActivePort(deps, portFile);
     if (active2 && await isSameBrowser(deps, active2.port, "127.0.0.1", active2.path)) {
       const port = active2.port;
-      return { host: "127.0.0.1", port, launchedByUs: true, ...child.pid !== void 0 ? { pid: child.pid } : {}, profile, headless };
+      if (!owner) {
+        try {
+          writeProfileKind(profile, found.kind);
+        } catch {
+        }
+      }
+      const notes = dropped ? [unpackedIgnoredNote()] : [];
+      return {
+        host: "127.0.0.1",
+        port,
+        launchedByUs: true,
+        ...child.pid !== void 0 ? { pid: child.pid } : {},
+        profile,
+        headless,
+        ...notes.length ? { notes } : {}
+      };
     }
     if (failure2) throw new Error(failure2);
     if (deps.now() >= deadline) {
@@ -5445,7 +5550,9 @@ var init_launch = __esm({
     init_brand();
     init_cli_kit();
     init_deps();
+    init_detect();
     init_discovery();
+    init_extensions();
     init_profile();
     init_state();
     STARTUP_TIMEOUT_MS = 2e4;
@@ -5454,7 +5561,7 @@ var init_launch = __esm({
 });
 
 // src/browser/session.ts
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 function cleanTabs(v) {
   const out = {};
   if (typeof v !== "object" || v === null) return out;
@@ -5623,6 +5730,12 @@ var init_session = __esm({
       }
       get headless() {
         return this.endpoint.headless;
+      }
+      /** What the launch had to say (extensions the browser will not load), once: the next call gets nothing. */
+      takeNotes() {
+        const notes = this.endpoint.notes ?? [];
+        this.endpoint.notes = void 0;
+        return notes;
       }
       get targetId() {
         return this.current.targetId;
@@ -8665,6 +8778,220 @@ var init_challenge = __esm({
   }
 });
 
+// src/browser/overlay.ts
+var CONSENT_SELECTORS, HELPERS, OVERLAYS_SOURCE, OVERLAY_ROOT_SOURCE, DESCRIBE_SOURCE, OVERLAY_INFO_SOURCE, READ_DOCUMENT;
+var init_overlay = __esm({
+  "src/browser/overlay.ts"() {
+    "use strict";
+    CONSENT_SELECTORS = [
+      // OneTrust
+      "#onetrust-consent-sdk",
+      "#onetrust-banner-sdk",
+      "#onetrust-pc-sdk",
+      // Didomi
+      "#didomi-host",
+      "#didomi-notice",
+      'div[class^="didomi-"]',
+      // Sourcepoint
+      '[id^="sp_message_container"]',
+      // Quantcast Choice
+      ".qc-cmp2-container",
+      "#qc-cmp2-container",
+      // Cookiebot
+      "#CybotCookiebotDialog",
+      "#CybotCookiebotDialogBodyUnderlay",
+      // Usercentrics
+      "#usercentrics-root",
+      "#usercentrics-cmp-ui",
+      // TrustArc
+      "#truste-consent-track",
+      "#consent_blackbar",
+      'div[class^="truste_"]',
+      // consentmanager.net, Commanders Act, Axeptio, Iubenda, Complianz, CookieYes, Osano, Borlabs, Google Funding Choices
+      "#cmpbox",
+      "#cmpbox2",
+      "#tc-privacy-wrapper",
+      "#axeptio_overlay",
+      "#iubenda-cs-banner",
+      "#cmplz-cookiebanner-container",
+      ".cky-consent-container",
+      ".osano-cm-window",
+      "#BorlabsCookieBox",
+      ".fc-consent-root",
+      // The IAB TCF / GPP locator frames
+      'iframe[name="__tcfapiLocator"]',
+      'iframe[name="__cmpLocator"]',
+      'iframe[name="__gppLocator"]'
+    ];
+    HELPERS = `const up = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || n.host || null;
+  const body = document.body;
+  const roleOf = (el) => String((el.getAttribute && el.getAttribute("role")) || "").toLowerCase();
+  const isDialog = (el) =>
+    roleOf(el) === "dialog" ||
+    roleOf(el) === "alertdialog" ||
+    (!!el.getAttribute && el.getAttribute("aria-modal") === "true") ||
+    (String(el.tagName || "").toUpperCase() === "DIALOG" && el.open === true);
+  const CONSENT = ${JSON.stringify(CONSENT_SELECTORS.join(", "))};
+  const isConsent = (el) => {
+    try {
+      return !!el.matches && el.matches(CONSENT);
+    } catch (e) {
+      return false;
+    }
+  };
+  /** Fixed or sticky, itself or an ancestor up to the body: what a click's covering node belongs to. */
+  const pinned = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) {
+      const p = getComputedStyle(n).position;
+      if (p === "fixed" || p === "sticky") return true;
+    }
+    return false;
+  };`;
+    OVERLAYS_SOURCE = `function findOverlays() {
+  ${HELPERS}
+  const found = [];
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (!body || !(vw > 0) || !(vh > 0)) return found;
+  const isMain = (el) => String(el.tagName || "").toUpperCase() === "MAIN" || roleOf(el) === "main";
+  const holdsMain = (el) => isMain(el) || Array.prototype.some.call(el.querySelectorAll("*"), isMain);
+  const textOf = (el) => String(el.textContent || "").length;
+  const pageText = textOf(body);
+  const fixed = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) if (getComputedStyle(n).position === "fixed") return true;
+    return false;
+  };
+  /** Out of the flow of the page, itself or an ancestor: what can be over something. */
+  const floating = (el) => {
+    for (let n = el; n && n.nodeType === 1 && n !== body && n !== document.documentElement; n = up(n)) {
+      const p = getComputedStyle(n).position;
+      if (p === "fixed" || p === "absolute") return true;
+    }
+    return false;
+  };
+  const hiddenUp = (el) => {
+    for (let n = el; n && n.nodeType === 1; n = up(n)) {
+      if (n.getAttribute && (n.getAttribute("aria-hidden") === "true" || n.getAttribute("inert") !== null)) return true;
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || Number(cs.opacity) === 0) return true;
+    }
+    return false;
+  };
+  const shown = (el) => {
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    const cs = getComputedStyle(el);
+    if (cs.visibility === "hidden" || cs.visibility === "collapse") return false;
+    const r = el.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0) || r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) return false;
+    return !hiddenUp(el);
+  };
+  /** The part of the viewport the element covers, or null when it is under 30%. */
+  const area = (el) => {
+    const r = el.getBoundingClientRect();
+    const left = Math.max(r.left, 0);
+    const top = Math.max(r.top, 0);
+    const w = Math.min(r.right, vw) - left;
+    const h = Math.min(r.bottom, vh) - top;
+    return w > 0 && h > 0 && w * h >= 0.3 * vw * vh ? { left, top, w, h } : null;
+  };
+  const covers = (el, a) => {
+    // A side column is no overlay: one is wide, or strictly across the middle of the screen.
+    const middle = a.left < vw / 2 && a.left + a.w > vw / 2 && a.top < vh / 2 && a.top + a.h > vh / 2;
+    if (a.w < 0.6 * vw && !middle) return false;
+    const root = el.getRootNode ? el.getRootNode() : document;
+    const at = (root && root.elementFromPoint ? root : document).elementFromPoint(a.left + a.w / 2, a.top + a.h / 2);
+    for (let n = at; n; n = up(n)) if (n === el) return true;
+    return false;
+  };
+  const kids = (n) => Array.from((n && n.children) || []);
+  const visit = (el, inShell) => {
+    let shell = inShell;
+    let take = false;
+    const role = roleOf(el);
+    if (isConsent(el)) take = shown(el) && !holdsMain(el);
+    else if (isDialog(el)) take = floating(el) && shown(el) && !holdsMain(el);
+    else if (!inShell && role !== "presentation" && role !== "none") {
+      const a = area(el);
+      if (a && fixed(el) && shown(el) && covers(el, a)) {
+        if (holdsMain(el) || (pageText > 0 && textOf(el) > 0.6 * pageText)) shell = true;
+        else take = true;
+      }
+    }
+    // An overlay is taken whole: what is inside it is its own.
+    if (take) {
+      found.push(el);
+      return;
+    }
+    for (const k of kids(el)) visit(k, shell);
+    if (el.shadowRoot) for (const k of kids(el.shadowRoot)) visit(k, shell);
+  };
+  for (const k of kids(body)) visit(k, false);
+  return found.slice(0, 5);
+}`;
+    OVERLAY_ROOT_SOURCE = `function overlayRoot() {
+  ${HELPERS}
+  const overlays = (${OVERLAYS_SOURCE})();
+  for (let n = this; n; n = up(n)) if (overlays.indexOf(n) >= 0) return n;
+  let outer = null;
+  for (let n = this; n && n !== body && n !== document.documentElement; n = up(n)) {
+    if (n.nodeType !== 1) continue;
+    if (isDialog(n)) return n;
+    if (pinned(n) && !pinned(up(n) || body)) outer = n;
+  }
+  return outer;
+}`;
+    DESCRIBE_SOURCE = `const describe = (el) => {
+    const tag = String(el.tagName || "").toLowerCase();
+    const attr = (n) => (el.getAttribute ? el.getAttribute(n) : null);
+    const role = attr("role");
+    const type = tag === "input" ? attr("type") : null;
+    const text = String(el.innerText || el.textContent || "").replace(/\\s+/g, " ").trim();
+    const shown = text.length > 60 ? text.slice(0, 57) + "..." : text;
+    return "<" + tag + (el.id ? "#" + el.id : "") + (role ? ' role="' + role + '"' : "") + (type ? ' type="' + type + '"' : "") + ">" + (shown ? ' "' + shown + '"' : "");
+  };`;
+    OVERLAY_INFO_SOURCE = `function overlayInfo() {
+  ${HELPERS}
+  ${DESCRIBE_SOURCE}
+  const overlays = (${OVERLAYS_SOURCE})();
+  return { what: describe(this), overlay: overlays.indexOf(this) >= 0 || isDialog(this) || isConsent(this) };
+}`;
+    READ_DOCUMENT = `(() => {
+  const findOverlays = ${OVERLAYS_SOURCE};
+  const root = document.documentElement;
+  if (!root) return { html: "", url: location.href };
+  const mark = "data-overlay-" + Math.random().toString(36).slice(2, 10);
+  let overlays = [];
+  let html = "";
+  try {
+    try {
+      overlays = findOverlays();
+    } catch (e) {}
+    for (const el of overlays) if (el.getRootNode && el.getRootNode() === document) el.setAttribute(mark, "");
+    html = root.outerHTML;
+  } finally {
+    for (const el of overlays) if (el.removeAttribute) el.removeAttribute(mark);
+  }
+  let parsed;
+  try {
+    parsed = new DOMParser().parseFromString(html, "text/html");
+  } catch (e) {
+    return { html, url: location.href };
+  }
+  const drop = ["[" + mark + "]", '[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]', "dialog", ${CONSENT_SELECTORS.map((s) => JSON.stringify(s)).join(", ")}];
+  const keep = (el) =>
+    el === parsed.body || el === parsed.documentElement || el.tagName === "MAIN" || el.getAttribute("role") === "main" || !!el.querySelector("main, [role=main]");
+  for (const sel of drop) {
+    let els = [];
+    try {
+      els = Array.from(parsed.querySelectorAll(sel));
+    } catch (e) {}
+    for (const el of els) if (!keep(el)) el.remove();
+  }
+  return { html: parsed.documentElement.outerHTML, url: location.href };
+})()`;
+  }
+});
+
 // src/browser/wait.ts
 async function watchNetwork(page) {
   const inflight2 = /* @__PURE__ */ new Set();
@@ -8880,7 +9207,7 @@ async function render(url, opts, deps, timeoutMs, run) {
     const challenge = await detectChallenge(session);
     const got = await page.send(
       "Runtime.evaluate",
-      { expression: DOCUMENT, returnByValue: true },
+      { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
       { timeoutMs }
     );
     const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
@@ -8937,7 +9264,7 @@ async function readRenderedPage(url, opts = {}) {
     signal?.removeEventListener("abort", onAbort);
   }
 }
-var IDLE_CAP_MS, WEB_PAGE, active, queue, DOCUMENT;
+var IDLE_CAP_MS, WEB_PAGE, active, queue, WHOLE_DOCUMENT;
 var init_read = __esm({
   "src/browser/read.ts"() {
     "use strict";
@@ -8945,6 +9272,7 @@ var init_read = __esm({
     init_fetch();
     init_challenge();
     init_deps();
+    init_overlay();
     init_session();
     init_state();
     init_wait();
@@ -8952,12 +9280,12 @@ var init_read = __esm({
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     active = 0;
     queue = [];
-    DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
+    WHOLE_DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
   }
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.27.1";
+var ENGINE_VERSION = "1.28.0";
 
 // src/index.ts
 init_brand();
@@ -8970,8 +9298,10 @@ init_session();
 init_read();
 
 // src/browser/snapshot.ts
+init_overlay();
 init_state();
 var NAME_MAX = 120;
+var OVERLAY_HEADER = "- overlay (covers the page):";
 var COLLAPSIBLE = /* @__PURE__ */ new Set(["generic", "none", "presentation", "GenericContainer"]);
 var HOISTED = /* @__PURE__ */ new Set(["RootWebArea", "WebArea"]);
 var TEXT_ROLES = /* @__PURE__ */ new Set(["StaticText", "text"]);
@@ -9146,12 +9476,24 @@ function flat(items, out) {
 function renderSnapshot(nodes, opts) {
   const r = new Renderer(opts.refs, opts.frames ?? {});
   const main = buildTree(nodes);
+  const all = [];
   let items = [];
   if (opts.rootBackendId !== void 0) {
     const hit = r.find(main, opts.rootBackendId);
     if (hit) items = merge(r.collect(hit.tree, hit.node));
-  } else if (main.root) items = merge(r.collect(main, main.root));
-  const all = [];
+  } else {
+    for (const id of opts.overlays ?? []) {
+      const hit = r.find(main, id);
+      if (!hit) continue;
+      const lines = [];
+      const over = merge(r.collect(hit.tree, hit.node));
+      if (opts.interactive) flat(over, lines);
+      else nested(over, 1, lines);
+      if (lines.length === 0) continue;
+      all.push({ text: OVERLAY_HEADER, ref: false }, ...opts.interactive ? lines.map((l) => ({ ...l, text: `  ${l.text}` })) : lines);
+    }
+    if (main.root) items = merge(r.collect(main, main.root));
+  }
   if (opts.interactive) flat(items, all);
   else nested(items, 0, all);
   let kept = all;
@@ -9336,9 +9678,9 @@ init_exec2();
 init_brand();
 init_exec2();
 import { createHash as createHash2, randomBytes as randomBytes2 } from "crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync3, rmSync as rmSync6, statSync as statSync5 } from "fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync3, rmSync as rmSync6, statSync as statSync6 } from "fs";
 import { tmpdir as tmpdir4 } from "os";
-import { basename as basename3, join as join11, resolve as resolve3 } from "path";
+import { basename as basename3, join as join12, resolve as resolve3 } from "path";
 
 // src/forge-host.ts
 init_brand();
@@ -9372,7 +9714,7 @@ function hostForgeKind(host) {
 // src/repo.ts
 init_text();
 function repoCacheRoot() {
-  return env("REPO_DIR") ?? brand().repoDir ?? join11(tmpdir4(), brand().name, "repos");
+  return env("REPO_DIR") ?? brand().repoDir ?? join12(tmpdir4(), brand().name, "repos");
 }
 var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3);
 var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3);
@@ -9381,7 +9723,7 @@ function resolveRepo(raw, opts = {}) {
   const trimmed = raw.trim();
   if (trimmed && opts.local !== false) {
     const asPath = resolve3(trimmed);
-    if (existsSync7(asPath) && statSync5(asPath).isDirectory()) {
+    if (existsSync8(asPath) && statSync6(asPath).isDirectory()) {
       return { raw: trimmed, host: "local", isLocal: true, slug: `local-${slugify(`${basename3(asPath)}-${asPath}`)}` };
     }
   }
@@ -9491,7 +9833,7 @@ async function ensureClone(ref, opts = {}) {
   if (!have("git")) throw new Error(`git is not installed or not on PATH \u2014 cannot clone ${ref.cloneUrl}`);
   const branch = opts.branch?.trim() || void 0;
   if (branch?.startsWith("-")) throw new Error(`"${branch}" is not a branch name`);
-  const dir = join11(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
+  const dir = join12(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
   const pending = inflight.get(dir);
   if (pending && !opts.refresh) {
     return pending.catch((e) => {
@@ -9512,17 +9854,17 @@ function branchSlug(branch) {
 }
 async function obtainClone(ref, dir, opts) {
   let target = dir;
-  if (!existsSync7(join11(dir, ".git")) && !opts.branch) {
+  if (!existsSync8(join12(dir, ".git")) && !opts.branch) {
     for (const old of legacySlugs(ref)) {
-      const legacy = join11(repoCacheRoot(), old);
-      const origin = existsSync7(join11(legacy, ".git")) ? originUrl(legacy) : void 0;
+      const legacy = join12(repoCacheRoot(), old);
+      const origin = existsSync8(join12(legacy, ".git")) ? originUrl(legacy) : void 0;
       if (origin && resolveRepo(origin).slug === ref.slug) {
         target = legacy;
         break;
       }
     }
   }
-  if (existsSync7(join11(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
+  if (existsSync8(join12(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
   return freshClone(ref, dir, opts.branch);
 }
 async function refreshClone(ref, dir, branch) {
@@ -9552,18 +9894,18 @@ function discard(path) {
 function sweepStaging(staging) {
   try {
     for (const name of readdirSync6(staging)) {
-      const at = join11(staging, name);
-      if (Date.now() - statSync5(at).mtimeMs > STALE_STAGING_MS) rmSync6(at, { recursive: true, force: true });
+      const at = join12(staging, name);
+      if (Date.now() - statSync6(at).mtimeMs > STALE_STAGING_MS) rmSync6(at, { recursive: true, force: true });
     }
   } catch {
   }
 }
 async function freshClone(ref, dir, branch) {
-  const staging = join11(repoCacheRoot(), ".partial");
+  const staging = join12(repoCacheRoot(), ".partial");
   mkdirSync4(staging, { recursive: true });
   sweepStaging(staging);
   const attempt = async (filter) => {
-    const tmp = join11(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
+    const tmp = join12(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
     const args = ["clone", "--depth", "1", ...filter ? ["--filter=blob:none"] : [], ...branch ? ["--branch", branch] : [], "--", ref.cloneUrl, tmp];
     const r = await shAsync("git", args, { timeoutMs: cloneTimeoutMs() });
     if (!r.ok) discard(tmp);
@@ -9583,13 +9925,13 @@ async function freshClone(ref, dir, branch) {
       );
     }
   }
-  if (!existsSync7(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
-  if (existsSync7(dir) && !existsSync7(join11(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
+  if (!existsSync8(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
+  if (existsSync8(dir) && !existsSync8(join12(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
   try {
     renameSync3(done.tmp, dir);
   } catch (e) {
     discard(done.tmp);
-    if (!existsSync7(join11(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
+    if (!existsSync8(join12(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
   }
   return dir;
 }
@@ -11642,8 +11984,8 @@ function closingNote(rungs, cancelled) {
 // src/stack.ts
 init_brand();
 import { spawnSync as spawnSync3 } from "child_process";
-import { existsSync as existsSync9, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync9, statSync as statSync7, writeFileSync as writeFileSync5 } from "fs";
-import { dirname as dirname2, join as join13, resolve as resolve5 } from "path";
+import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
+import { dirname as dirname2, join as join14, resolve as resolve5 } from "path";
 
 // src/cache.ts
 init_fetch();
@@ -11654,12 +11996,12 @@ init_url();
 init_no_write();
 init_brand();
 init_mode();
-import { chmodSync as chmodSync2, existsSync as existsSync8, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync8, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync6 } from "fs";
-import { dirname, join as join12 } from "path";
+import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
+import { dirname, join as join13 } from "path";
 import { tmpdir as tmpdir5 } from "os";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return namedCacheDir() ?? join12(tmpdir5(), userScoped(brand().name), "cache");
+  return namedCacheDir() ?? join13(tmpdir5(), userScoped(brand().name), "cache");
 }
 var namedCacheDir = () => env("CACHE_DIR") ?? brand().cacheDir;
 function userScoped(name) {
@@ -11669,8 +12011,9 @@ function userScoped(name) {
 function cachePath(url, acceptLanguage = "", extractor = "native", variant = "") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
-  const key = `${canon}\0${acceptLanguage}\0${extractor}${variant ? `\0${variant}` : ""}`;
-  return join12(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
+  const ns = extractor === "browser" ? "browser\0no-overlays" : extractor;
+  const key = `${canon}\0${acceptLanguage}\0${ns}${variant ? `\0${variant}` : ""}`;
+  return join13(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
 }
 var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
@@ -11748,11 +12091,11 @@ function entryPaths(url, acceptLanguage, extractor, variant) {
 function readCache(url, acceptLanguage = "", extractor = "native", variant = "") {
   if (!entryDir(false)) return void 0;
   const { meta, body } = entryPaths(url, acceptLanguage, extractor, variant);
-  if (!existsSync8(meta)) return void 0;
+  if (!existsSync9(meta)) return void 0;
   try {
-    const entry = JSON.parse(readFileSync8(meta, "utf8"));
+    const entry = JSON.parse(readFileSync9(meta, "utf8"));
     if (typeof entry.cachedAt !== "number") return void 0;
-    const text = existsSync8(body) ? readFileSync8(body, "utf8") : entry.text;
+    const text = existsSync9(body) ? readFileSync9(body, "utf8") : entry.text;
     if (!text?.trim()) return void 0;
     return { ...entry, text };
   } catch {
@@ -11913,7 +12256,7 @@ function ownFile(name) {
 }
 function readEntryMeta(abs) {
   try {
-    const entry = JSON.parse(readFileSync8(abs, "utf8"));
+    const entry = JSON.parse(readFileSync9(abs, "utf8"));
     return entry && typeof entry.cachedAt === "number" && typeof entry.finalUrl === "string" ? entry : void 0;
   } catch {
     return void 0;
@@ -11922,7 +12265,7 @@ function readEntryMeta(abs) {
 var ORPHAN_GRACE_MS = 10 * 60 * 1e3;
 function sizeOf(abs) {
   try {
-    return statSync6(abs).size;
+    return statSync7(abs).size;
   } catch {
     return 0;
   }
@@ -11932,13 +12275,13 @@ function cacheStats(now = Date.now()) {
   const out = { dir, entries: 0, bytes: 0, fresh: 0, stale: 0, ttlMs: ttlMs() };
   const { refused } = openCacheDir(false);
   if (refused) return { ...out, refused };
-  if (!existsSync8(dir)) return out;
+  if (!existsSync9(dir)) return out;
   let oldest = Number.POSITIVE_INFINITY;
   let newest = 0;
   for (const name of readdirSync7(dir)) {
     const own = ownFile(name);
     if (!own) continue;
-    const abs = join12(dir, name);
+    const abs = join13(dir, name);
     if (own.kind !== "json") {
       out.bytes += sizeOf(abs);
       continue;
@@ -11960,12 +12303,12 @@ function cacheStats(now = Date.now()) {
 }
 function cacheClean(all = false, now = Date.now()) {
   const dir = cacheDir();
-  if (isNoWrite() || !openCacheDir(false).dir || !existsSync8(dir)) return 0;
+  if (isNoWrite() || !openCacheDir(false).dir || !existsSync9(dir)) return 0;
   const names = readdirSync7(dir);
   const present = new Set(names);
   const remove = (name) => {
     try {
-      rmSync7(join12(dir, name), { force: true });
+      rmSync7(join13(dir, name), { force: true });
       return true;
     } catch {
       return false;
@@ -11973,7 +12316,7 @@ function cacheClean(all = false, now = Date.now()) {
   };
   const abandoned = (name) => {
     try {
-      return all || now - statSync6(join12(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
+      return all || now - statSync7(join13(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
     } catch {
       return false;
     }
@@ -11983,7 +12326,7 @@ function cacheClean(all = false, now = Date.now()) {
     const own = ownFile(name);
     if (!own) continue;
     if (own.kind === "json") {
-      const entry = readEntryMeta(join12(dir, name));
+      const entry = readEntryMeta(join13(dir, name));
       if (!entry || !all && isCacheFresh(entry, now) || !remove(name)) continue;
       remove(`${own.stem}.body`);
       removed++;
@@ -12255,11 +12598,11 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function composeAssets() {
-  const base2 = join13(cacheDir(), "compose");
+  const base2 = join14(cacheDir(), "compose");
   return [
-    { path: join13(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
-    { path: join13(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
-    { path: join13(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
+    { path: join14(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
+    { path: join14(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
+    { path: join14(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
   ];
 }
 function ensureComposeMaterialized() {
@@ -12272,7 +12615,7 @@ function untrustedStack() {
   for (const a of assets) {
     let body;
     try {
-      body = readFileSync9(a.path, "utf8");
+      body = readFileSync10(a.path, "utf8");
     } catch {
     }
     if (body !== a.content) return `${a.path} does not hold the stack this binary ships, and could not be rewritten`;
@@ -12288,7 +12631,7 @@ function untrustedStack() {
   }
   for (const p of [top, ...paths]) {
     try {
-      const st = p === top && chosen ? statSync7(p) : lstatSync3(p);
+      const st = p === top && chosen ? statSync8(p) : lstatSync3(p);
       if (st.isSymbolicLink()) return `${p} is a symbolic link`;
       if (st.uid !== uid) return `${p} belongs to another user`;
       if (st.mode & 2 && !(st.isDirectory() && st.mode & 512)) return `${p} is writable by anyone`;
@@ -12300,9 +12643,9 @@ function untrustedStack() {
 }
 function writeIfChanged(path, content) {
   try {
-    if (existsSync9(path) && readFileSync9(path, "utf8") === content) return;
+    if (existsSync10(path) && readFileSync10(path, "utf8") === content) return;
     mkdirSync6(dirname2(path), { recursive: true, mode: 448 });
-    writeFileSync5(path, content);
+    writeFileSync6(path, content);
   } catch {
   }
 }
@@ -12464,8 +12807,8 @@ init_no_write();
 
 // src/run.ts
 init_no_write();
-import { join as join14 } from "path";
-import { readFileSync as readFileSync10 } from "fs";
+import { join as join15 } from "path";
+import { readFileSync as readFileSync11 } from "fs";
 function pad(n) {
   return String(n).padStart(2, "0");
 }
@@ -12477,16 +12820,16 @@ function shq(s) {
 }
 function readJsonSafe(path) {
   try {
-    return JSON.parse(readFileSync10(path, "utf8"));
+    return JSON.parse(readFileSync11(path, "utf8"));
   } catch {
     return void 0;
   }
 }
 function readManifest(dir, file = "manifest.json") {
-  return readJsonSafe(join14(dir, file));
+  return readJsonSafe(join15(dir, file));
 }
 function writeManifest(dir, value, file = "manifest.json") {
-  return writeArtifact(join14(dir, file), `${JSON.stringify(value, null, 2)}
+  return writeArtifact(join15(dir, file), `${JSON.stringify(value, null, 2)}
 `);
 }
 
@@ -13447,12 +13790,12 @@ function extractNumerals(text, max = 8) {
 // src/orchestrate.ts
 init_brand();
 init_no_write();
-import { existsSync as existsSync10 } from "fs";
-import { join as join16, resolve as resolve6 } from "path";
+import { existsSync as existsSync11 } from "fs";
+import { join as join17, resolve as resolve6 } from "path";
 
 // src/orchestrate/templates.ts
 init_brand();
-import { join as join15 } from "path";
+import { join as join16 } from "path";
 var WORKFLOW_FORBIDDEN = ["Date.now(", "Math.random(", "new Date("];
 function oneWriterFooter(runAbs, opts = {}) {
   const forbidden = opts.writingCommands?.length ? ` Do not run any engine command that writes (${opts.writingCommands.map((c) => `\`${c}\``).join(", ")}).` : "";
@@ -13463,7 +13806,7 @@ Return ONLY the structured output specified above. Do NOT write, edit, or delete
 
 One sanctioned exception: ${opts.sanctioned}` : ""}
 
-Exception for oversized prose: if a note is too large to return, write ONLY to \`${join15(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
+Exception for oversized prose: if a note is too large to return, write ONLY to \`${join16(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
 `;
 }
 var SMALL_WORKLIST = 3;
@@ -13488,7 +13831,7 @@ function assertWorkflowSafe(script, phaseName) {
 }
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
-  const scriptPath = join15(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
+  const scriptPath = join16(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
@@ -13568,7 +13911,7 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
       const batches = phaseBatches(ph, emission, smallWorklist);
       const widest = batches.reduce((w, b) => Math.max(w, b.length), 0);
       lines.push(
-        `Fan out: \`Workflow({ scriptPath: "${join15(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
+        `Fan out: \`Workflow({ scriptPath: "${join16(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
         `(${batches.length} agent(s) of at most ${widest} item(s), contract \`agents/${emission.role}.md\`).`,
         ``,
         `Sequentially instead: play \`agents/${emission.role}.md\` yourself over ${shq(ph.ids.join(","))}.`,
@@ -13589,7 +13932,7 @@ var BATCH_SIZE = 8;
 function listPhases(runDir, engineAbs, defs) {
   const run = resolve6(runDir);
   return defs.map((def) => {
-    const worklist = join16(run, def.worklist);
+    const worklist = join17(run, def.worklist);
     const parsed = readJsonSafe(worklist);
     const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
@@ -13606,7 +13949,7 @@ function listPhases(runDir, engineAbs, defs) {
 }
 function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
   const run = resolve6(runDir);
-  if (!existsSync10(run)) {
+  if (!existsSync11(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
   const phases = listPhases(run, engineAbs, defs);
@@ -13635,14 +13978,14 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join16(run, "orchestration");
-  const agentsDir = join16(orchDir, "agents");
-  ensureDir(join16(orchDir, "out"));
+  const orchDir = join17(run, "orchestration");
+  const agentsDir = join17(orchDir, "agents");
+  ensureDir(join17(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(contracts(run, engineAbs, phases))) {
-    written.push(writeArtifact(join16(agentsDir, `${name}.md`), content));
+    written.push(writeArtifact(join17(agentsDir, `${name}.md`), content));
   }
   if (!opts.eco) {
     for (const ph of selected) {
@@ -13656,10 +13999,10 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join16(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
+      written.push(writeArtifact(join17(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
-  written.push(writeArtifact(join16(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
+  written.push(writeArtifact(join17(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 
@@ -13764,8 +14107,8 @@ init_brand();
 
 // src/mcp/resources.ts
 init_brand();
-import { existsSync as existsSync11, readdirSync as readdirSync8, readFileSync as readFileSync11, realpathSync as realpathSync2, statSync as statSync8 } from "fs";
-import { basename as basename4, dirname as dirname3, join as join17, relative, resolve as resolve7, sep as sep2 } from "path";
+import { existsSync as existsSync12, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync2, statSync as statSync9 } from "fs";
+import { basename as basename4, dirname as dirname3, join as join18, relative, resolve as resolve7, sep as sep2 } from "path";
 import { fileURLToPath } from "url";
 var skillName = () => brand().name;
 var URI_SCHEME = "skill://";
@@ -13773,17 +14116,17 @@ function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname3(fileURLToPath(import.meta.url));
   const name = brand().name;
   const candidates2 = [resolve7(here, ".."), resolve7(here, "..", "skills", name), resolve7(here, "..", "..", "skills", name)];
-  return candidates2.find((dir) => existsSync11(join17(dir, "SKILL.md")));
+  return candidates2.find((dir) => existsSync12(join18(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join17(root, "references");
-  if (!existsSync11(refDir)) return out;
+  const refDir = join18(root, "references");
+  if (!existsSync12(refDir)) return out;
   for (const file of readdirSync8(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join17("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
+    out.push(describe(root, join18("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
   }
   return out;
 }
@@ -13810,8 +14153,8 @@ function readResource(uri, moduleDir) {
   if (targetReal !== rootReal && !targetReal.startsWith(rootReal + sep2)) {
     throw new ResourceError(`resource path escapes the skill root: ${uri}`);
   }
-  if (!statSync8(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
-  return { uri, mimeType: "text/markdown", text: readFileSync11(targetReal, "utf8") };
+  if (!statSync9(targetReal).isFile()) throw new ResourceError(`not a file: ${uri}`);
+  return { uri, mimeType: "text/markdown", text: readFileSync12(targetReal, "utf8") };
 }
 var ResourceError = class extends Error {
 };
@@ -13822,14 +14165,14 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join17(root, rel));
+  const summary = firstProse(join18(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
 function firstProse(file) {
   let text;
   try {
-    text = readFileSync11(file, "utf8");
+    text = readFileSync12(file, "utf8");
   } catch {
     return void 0;
   }
