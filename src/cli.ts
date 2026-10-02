@@ -1,12 +1,12 @@
 import { basename, join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { realpathSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
-import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, ALL_SEARCH_PROFILES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
+import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, ALL_SEARCH_PROFILES, ALL_BROWSER_MODES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
 
 // Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
 // bundle and cross-checks the documented flag surface against these tables.
 export { ALL_WEB_ENGINES, ALL_SEARCH_PROFILES };
-import type { BackendKind, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine } from "./types.js";
+import type { BackendKind, BrowserMode, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine } from "./types.js";
 import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
@@ -23,7 +23,8 @@ import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, emitOrchestration, listPhasesFor } from "./orchestrate.js";
-import { type CommandArgs, type ParsedArgs, parseArgs, runStdioServer, startHttpServer, UsageError } from "./engine.js";
+import { type CommandArgs, type ParsedArgs, closeBrowserReads, openBrowserSession, parseArgs, runStdioServer, startHttpServer, UsageError } from "./engine.js";
+import { resolveBrowserRung } from "./browser.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
@@ -50,7 +51,8 @@ Usage:
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
   ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
-  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list]
+  ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
+  ultrasearch browser open <url>
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -79,12 +81,15 @@ Commands:
            --list is the dry run. --id <S#> --url <page> folds in your answer.
   modes    List the report modes and their backend profiles.
   doctor   Report the state of the engine and its optional helpers: the SearXNG
-           and Firecrawl containers, the PDF extractor ladder. The helpers are
+           and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
            With --run <dossier-dir>, also says whether THAT run had a WebSearch
            lane — a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
+  browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
+           for YOU to deal with — the CAPTCHA or anti-bot check a read reported.
+           The engine never solves one; once you have, the next read gets the page.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
            (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
@@ -126,6 +131,19 @@ Options:
   --firecrawl <url>    Self-hosted Firecrawl base URL for browser-rendered page
                        extraction; "off" disables it   (env ULTRASEARCH_FIRECRAWL,
                        default http://localhost:3002, skipped when unreachable)
+  --browser <m>        ${ALL_BROWSER_MODES.join(" | ")}   the browser rung, for gather / search /
+                       fetch / ingest / orchestrate: a real, separate Chrome or
+                       Brave (own profile) renders the pages the built-in reader
+                       cannot — JS shells, consent and anti-bot walls. A window
+                       may appear during the run; it is closed when the command
+                       ends. It never accepts a consent wall for you and never
+                       solves a challenge.
+                       fallback = only a page that was refused, walled or empty
+                       always   = every web page (slow)
+                       off      = never
+                       (env ULTRASEARCH_BROWSER_FETCH; default: fallback when a
+                       Chrome/Brave/Chromium/Edge is installed and a window can
+                       be shown — macOS, Windows, Linux with a display — else off)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, …]
                        (a bare array of URLs, or '-' for stdin, also work). This
                        is the PRIMARY discovery lane — the strongest index here,
@@ -223,6 +241,7 @@ export const COMMANDS = new Set([
   "doctor",
   "searxng",
   "firecrawl",
+  "browser",
 ]);
 export const VALUE_FLAGS = new Set([
   "q",
@@ -244,6 +263,7 @@ export const VALUE_FLAGS = new Set([
   "region",
   "searxng",
   "firecrawl",
+  "browser",
   "web-engine",
   "web-results",
   "search",
@@ -554,6 +574,26 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   };
 }
 
+// The browser rung for this command: the validated --browser flag, else
+// ULTRASEARCH_BROWSER_FETCH, else the detected default. Resolved ONCE and passed
+// to every read explicitly.
+export function browserMode(p: Parsed): BrowserMode {
+  const flag = p.values.browser === undefined ? undefined : oneOf<BrowserMode>("browser", p.values.browser, ALL_BROWSER_MODES);
+  return resolveBrowserRung({ flag }).mode;
+}
+
+// Commands that may read pages, and so may launch the browser rung. Each closes
+// the browser its reads launched on the way out — error and Ctrl-C included —
+// so no window is left behind.
+const PAGE_COMMANDS = new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm"]);
+
+// Close what this process's reads launched, then exit: process.exit would
+// otherwise skip the close in main()'s finally.
+async function exitClosed(code: number): Promise<never> {
+  await closeBrowserReads();
+  process.exit(code);
+}
+
 export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {}): GatherOptions {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
@@ -616,6 +656,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     // `--cache` stays an accepted no-op so every prompt and emitted contract
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
+    browser: browserMode(p),
     out: p.values.out ? resolve(p.values.out) : undefined,
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
@@ -648,6 +689,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
+  if (!PAGE_COMMANDS.has(p.command)) return dispatch(p);
+  // A browser the engine launched is a detached process: a Ctrl-C that killed
+  // only this one would leave its window behind.
+  const onSignal = (sig: NodeJS.Signals) => {
+    void closeBrowserReads({ waitMs: 0 }).finally(() => process.exit(sig === "SIGINT" ? 130 : 143));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  try {
+    await dispatch(p);
+  } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    await closeBrowserReads();
+  }
+}
+
+async function dispatch(p: Parsed): Promise<void> {
   switch (p.command) {
     case "gather": {
       const options = buildGatherOptions(p);
@@ -760,13 +819,43 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
           fail(`could not read ${mf}: ${(e as Error).message}`);
         }
       }
-      const rows = [describeWebSearchLane(manifest), ...(await probeServices({ firecrawl: p.values.firecrawl, searxng: p.values.searxng }))];
+      const rows = [
+        describeWebSearchLane(manifest),
+        ...(await probeServices({
+          firecrawl: p.values.firecrawl,
+          searxng: p.values.searxng,
+          browser: p.values.browser === undefined ? undefined : oneOf<BrowserMode>("browser", p.values.browser, ALL_BROWSER_MODES),
+        })),
+      ];
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
       const head = runDir ? `ultrasearch ${VERSION} — ${resolve(runDir)}` : `ultrasearch ${VERSION} — the engine, and the optional helpers`;
       process.stdout.write(`${head}\n\n${formatServices(rows)}\n`);
+      return;
+    }
+
+    // The human's half of the browser rung. A read that meets a CAPTCHA or an
+    // anti-bot check reports it and moves on — it is never solved for anyone.
+    // This opens the page in the same dedicated browser (its own profile), and
+    // leaves it open: once the human has passed the check there, the next read
+    // of that host gets the page.
+    case "browser": {
+      const action = p.positional[0];
+      const url = p.positional[1] ?? p.values.url;
+      if (action !== "open") fail(`browser: unknown action '${action ?? ""}' (expected: open <url>)`);
+      if (!url || !/^https?:\/\//i.test(url)) fail("browser open: expected an absolute http(s) URL");
+      let session: Awaited<ReturnType<typeof openBrowserSession>>;
+      try {
+        session = await openBrowserSession({ url, newTab: true });
+      } catch (e) {
+        fail(`browser open: ${(e as Error).message}`);
+      }
+      for (const n of session.takeNotes()) process.stderr.write(`ultrasearch: ${n}\n`);
+      // Detach only: the window is the human's now.
+      await session.detach();
+      process.stderr.write(`ultrasearch: opened ${url} in the dedicated browser — deal with the check there, then re-run the read.\n`);
       return;
     }
 
@@ -890,17 +979,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"), // same default-on policy as gather
+        browser: browserMode(p),
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else if (r.added) {
         process.stdout.write(`${r.id}\n`);
         process.stderr.write(`ultrasearch: added ${r.id} ← ${url}\n`);
+        if (r.note) process.stderr.write(`ultrasearch: ${r.note}\n`);
       } else {
         process.stderr.write(`ultrasearch: ${r.note ?? "not added"}\n`);
         if (r.id) process.stdout.write(`${r.id}\n`);
       }
-      if (!r.id) process.exit(1);
+      if (!r.id) await exitClosed(1);
       return;
     }
 
@@ -926,6 +1017,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         question: p.values.q ?? p.values.question,
         cache: !p.bools.has("no-cache"),
         firecrawl: p.values.firecrawl,
+        browser: browserMode(p),
       };
       // URLs and files share one ingest so an agent can pin a page and the deck
       // it links to in a single call. Sequential for the reason addSources is:
@@ -944,12 +1036,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         // half its input would be worse than one that failed outright.
         for (const o of r.results) {
           process.stdout.write(o.added ? `${o.id}\t${o.url}\n` : `-\t${o.url}\t${o.note ?? "not added"}\n`);
+          // How an ADDED page was had, when that is news (a browser rescue).
+          if (o.added && o.note) process.stderr.write(`ultrasearch: ${o.note}\n`);
         }
         const what = files.length ? (hits.length ? "input(s)" : "file(s)") : "URL(s)";
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
       }
       // Nothing added at all is a failed acquisition, not a quiet success.
-      if (!r.added) process.exit(1);
+      if (!r.added) await exitClosed(1);
       return;
     }
 
@@ -1052,6 +1146,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
       const res = emitOrchestration(dir, engineAbs, {
         phase: p.values.phase,
         eco: p.bools.has("eco"),
+        // Only an EXPLICIT flag is carried into the gatherers' commands; each
+        // gather otherwise resolves its own default, in its own environment.
+        ...(p.values.browser === undefined ? {} : { browser: oneOf<BrowserMode>("browser", p.values.browser, ALL_BROWSER_MODES) }),
       });
       if (res.exitCode !== 0) {
         for (const e of res.errors) process.stderr.write(`ultrasearch orchestrate: ${e}\n`);

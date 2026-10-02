@@ -23,6 +23,7 @@ import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
 import { describeServices } from "./services.js";
+import { rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
   domainOf,
   rrf,
@@ -350,6 +351,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   options.pages = effPages;
   const breadth = Math.max(1, options.webBreadth ?? WEB_BREADTH_PER_DEPTH[options.depth] ?? 1);
   const acceptLanguage = acceptLanguageHeader(options.lang, options.region);
+  // The browser rung, decided once for the whole run and written back onto the
+  // options so the backends that read pages themselves (generic) see the same.
+  const browser = (options.browser ??= resolveBrowserRung().mode);
   const ctx: RunContext = { question: options.question, mode, options, variants };
 
   // Run the mode's non-web backends in parallel, and the general-web discovery
@@ -433,7 +437,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       docExtractorUse.set(k, (docExtractorUse.get(k) ?? 0) + 1);
     }
   };
-  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl };
+  const extractOpts = { acceptLanguage, firecrawl: options.firecrawl, browser };
   // Declared AFTER everything it closes over (`cacheHits`, `tallyExtractor`,
   // `extractOpts`): as a `const` arrow it would hit the temporal dead zone if it
   // were ever called from above this line.
@@ -587,6 +591,33 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           // re-scraping — and so the run counts this page exactly once.
           hydrateCache.set(key, Promise.resolve({ ...res, text: fc.data.markdown, title, extractor: "firecrawl" }));
           hydrateNotes.push(`Extraction from ${it.url} looked like a ${wall} — re-extracted it with Firecrawl.`);
+        }
+      }
+
+      // Junk rescue via the browser rung: the keyless way past the same walls,
+      // for when Firecrawl is not running or could not get past one either. A
+      // real, separate browser renders the page — it never clicks "accept" on a
+      // consent wall for the user and never solves a challenge, so what it reads
+      // is what the page shows; that is still the article on most consent walls,
+      // and the junk check below keeps whatever is not. Skipped when the text
+      // already came from the browser (asking again returns the same page).
+      // An EMPTY read is rendered too, when the engine's own fallback skipped it
+      // (a 402 paywall gate: the browser gets the article's opening).
+      const emptyRead = !text && rescuesEmptyRead(res.status, browser);
+      if (((text && junk) || emptyRead) && browser !== "off" && res.extractor !== "browser") {
+        const wall = junk ? `a ${junk}` : `an empty HTTP ${res.status || "0"} answer`;
+        const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
+        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
+          text = rendered.text;
+          junk = undefined;
+          title = title || rendered.title;
+          tallyExtractor({ extractor: "browser" });
+          // Folded back like the Firecrawl rescue: the gap round reuses it, and
+          // the run counts this page once.
+          hydrateCache.set(key, Promise.resolve({ ...res, text: rendered.text, title, extractor: "browser" }));
+          hydrateNotes.push(`Recovered ${it.url} in a real browser — the built-in read was ${wall}.`);
+        } else if (rendered.note) {
+          hydrateNotes.push(rendered.note);
         }
       }
 
@@ -768,6 +799,8 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         .filter(([, n]) => n > 0),
     ),
     ...(docExtractorUse.size ? { doc: Object.fromEntries(docExtractorUse) } : {}),
+    // Absent when the rung was off: nothing could have been rendered.
+    ...(browser !== "off" || extractorUse.has("browser") ? { browser: { mode: browser, pages: extractorUse.get("browser") ?? 0 } } : {}),
   };
   const notes = [
     ...results.flatMap((res) => res.notes),
@@ -830,7 +863,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           ...(services.firecrawl.pages === 0
             ? [
                 `⚠ max asked for Firecrawl and no page came back through it — the stack is down. Start it: \`ultrasearch firecrawl up\`. ` +
-                  `Without it you lose browser-rendered extraction and the consent-wall rescue, so this run is max-minus-the-stack.`,
+                  `Without it you lose Firecrawl's extraction and its consent-wall rescue, so this run is max-minus-the-stack. ` +
+                  (browser !== "off"
+                    ? `The browser rung (${browser}) was on, so walled and JS-rendered pages still went through a real browser — the keyless alternative to the stack.`
+                    : `The keyless alternative is the browser rung: \`--browser fallback\` renders walled and JS-rendered pages in a real Chrome or Brave, no container needed.`),
               ]
             : []),
         ]
@@ -850,6 +886,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : []),
     ...(services.firecrawl.pages > 0
       ? [`Firecrawl cleaned ${services.firecrawl.pages} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`]
+      : []),
+    ...(services.browser?.pages
+      ? [
+          `Rendered ${services.browser.pages} page(s) in a real browser (the keyless browser rung, --browser ${browser}): JS shells and walls the built-in reader could not see past.`,
+        ]
       : []),
     // The optional helpers are silent by design when absent, so ONE line per run
     // says what they actually did. Without it a container can be up for weeks,

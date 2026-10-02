@@ -225,6 +225,20 @@ export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 export const ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"] as const;
 export type SearchProfile = (typeof ALL_SEARCH_PROFILES)[number];
 
+// The browser rung: when the engine renders a page in a real, separate Chrome /
+// Brave / Chromium / Edge with its own profile (~/.ultrasearch/browser).
+//
+//   fallback — only when the built-in read was refused (HTTP 0/401/403/429/503),
+//              came back a consent or anti-bot wall, or found almost no text.
+//              The default wherever a browser is installed and a window can be
+//              shown (src/browser.ts decides).
+//   always   — every web page, ahead of Firecrawl. Slow; for JS-heavy sweeps.
+//   off      — never. The default with no browser or no display.
+//
+// The order is the CLI's help order; the MCP schema sorts it.
+export const ALL_BROWSER_MODES = ["fallback", "always", "off"] as const;
+export type BrowserMode = (typeof ALL_BROWSER_MODES)[number];
+
 // One hit from the agent's own WebSearch tool, as handed to `--web-results`.
 // Only `url` is required — a hit with no title falls back to the URL, and a
 // missing snippet just means the excerpt comes from the hydrated page.
@@ -384,6 +398,10 @@ export interface GatherOptions {
   concurrency?: number; // in-flight page hydration fetches (default 6)
   rounds?: number; // retrieval rounds; ≥2 enables a gap-driven follow-up web search
   cache?: boolean; // --cache: reuse an on-disk fetch cache across runs (deep fan-out)
+  // The browser rung, resolved ONCE per command (flag > ULTRASEARCH_BROWSER_FETCH
+  // > default) and passed explicitly to every page read. Absent: runGather
+  // resolves it itself, so a library caller gets the same default as the CLI.
+  browser?: BrowserMode;
   out?: string;
   json: boolean;
   stdout?: boolean; // --stdout / ULTRASEARCH_NO_WRITE: nothing is written, so the guidance changes
@@ -454,6 +472,11 @@ export interface ManifestServices {
   pdf: Record<string, number>;
   /** Document ladder rung → office documents read by it. Same convention. */
   doc?: Record<string, number>;
+  /**
+   * The browser rung: the mode this run resolved to and the pages a real browser
+   * rendered. Absent when the rung was off — nothing could have been rendered.
+   */
+  browser?: { mode: BrowserMode; pages: number };
 }
 
 // Result of `ultrasearch check`. Fails (ok=false) on dangling citations, on

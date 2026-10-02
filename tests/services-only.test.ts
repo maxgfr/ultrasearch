@@ -49,7 +49,7 @@ afterEach(() => {
   runMock.mockResolvedValue({ ok: false, stdout: "", error: "not installed" });
 });
 
-const ALL_ROWS = ["searxng", "firecrawl", "pdf-inspector", "pdftotext", "ocr", "pdf ladder", "anydoc", "doc ladder"];
+const ALL_ROWS = ["searxng", "firecrawl", "browser", "pdf-inspector", "pdftotext", "ocr", "pdf ladder", "anydoc", "doc ladder"];
 
 describe("probeServices — the `only` filter", () => {
   // `formatServices` pads the name column to the widest name IN THE ARRAY it is

@@ -15,12 +15,14 @@ import { autoRelink, listIssues, relink } from "../relink.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "../render.js";
 import {
   ALL_BACKENDS,
+  ALL_BROWSER_MODES,
   ALL_DEPTHS,
   ALL_MODES,
   ALL_SEARCH_PROFILES,
   ALL_WEB_ENGINES,
   DEPTH_CAPS,
   type BackendKind,
+  type BrowserMode,
   type Depth,
   type GatherOptions,
   type ModeName,
@@ -30,6 +32,7 @@ import {
 } from "../types.js";
 import { runVerify } from "../verify.js";
 import { withRunLock } from "../run-lock.js";
+import { resolveBrowserRung, withBrowserClosed } from "../browser.js";
 import { isNoWrite, takeArtifacts } from "../no-write.js";
 
 // Where a tool name becomes work. Every handler calls the same library
@@ -121,6 +124,13 @@ function webResultsArg(v: unknown): { hits: WebSearchHit[]; rejected: number } |
   return { hits: parsed.hits, rejected: parsed.rejected };
 }
 
+// The browser rung for one call: the argument, else ULTRASEARCH_BROWSER_FETCH,
+// else the detected default — resolved once, passed to every read explicitly.
+function browserArg(args: Record<string, unknown>): BrowserMode {
+  const v = str(args.browser);
+  return resolveBrowserRung({ flag: v === undefined ? undefined : oneOf<BrowserMode>(v, ALL_BROWSER_MODES, "browser", "fallback") }).mode;
+}
+
 function requiredRun(args: Record<string, unknown>, defaults: HandlerDefaults): string {
   const run = str(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
@@ -171,6 +181,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     since: str(args.since),
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
+    browser: browserArg(args),
     out,
     json: true,
   };
@@ -180,8 +191,15 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
 // Dispatch
 // --------------------------------------------------------------------------
 
+// The tools that may read pages, and so may launch the browser rung. A server
+// lives for a whole session, so the browser is closed after EACH such call —
+// failures included — rather than left open until the server stops: a window
+// nobody is using for minutes is exactly what the rung must never leave behind.
+const PAGE_TOOLS = new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
+
 export async function callTool(name: string, args: Record<string, unknown>, defaults: HandlerDefaults = {}): Promise<ToolOutcome> {
-  const result = await dispatch(name, args, defaults);
+  const run = () => dispatch(name, args, defaults);
+  const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
   return outcome(name, result);
 }
 
@@ -390,7 +408,7 @@ function handleMerge(args: Record<string, unknown>): unknown {
 async function handleFetch(args: Record<string, unknown>, run: string): Promise<unknown> {
   const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
   if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
-  const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url) });
+  const res = await addSource(run, url, { question: str(args.question), title: str(args.title), citeUrl: str(args.cite_url), browser: browserArg(args) });
   return { run, url, ...res };
 }
 
@@ -403,7 +421,7 @@ async function handleIngest(args: Record<string, unknown>, run: string): Promise
   const hits: (string | WebSearchHit)[] = [...listed, ...(web?.hits ?? [])];
   if (!hits.length) throw new ToolError("`web_results` or `urls` is required — the URLs to fold into the dossier.");
 
-  const res = await addSources(run, hits, { question: str(args.question), firecrawl: str(args.firecrawl), cache: true });
+  const res = await addSources(run, hits, { question: str(args.question), firecrawl: str(args.firecrawl), cache: true, browser: browserArg(args) });
   return {
     run,
     ...res,
