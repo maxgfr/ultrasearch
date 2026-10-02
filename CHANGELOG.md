@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.37.2](https://github.com/maxgfr/ultrasearch/compare/v1.37.1...v1.37.2) (2026-10-02)
+
+
+### Bug Fixes
+
+* **standards:** relevance re-check for MDN hits ([#40](https://github.com/maxgfr/ultrasearch/issues/40)) ([21e64ff](https://github.com/maxgfr/ultrasearch/commit/21e64ff59a7e05f4c8e20137ab8bdbef4aa3645f))
+
 ## [1.37.1](https://github.com/maxgfr/ultrasearch/compare/v1.37.0...v1.37.1) (2026-10-02)
 
 
