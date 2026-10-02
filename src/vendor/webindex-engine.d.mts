@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.29.3";
+declare const ENGINE_VERSION = "1.30.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1675,6 +1675,8 @@ interface RefTable {
     /** The number the next new ref gets (`e<next>`). */
     next: number;
     refs: Record<string, number>;
+    /** The refs that name a container only (a table, a figure…): to scope a snapshot or a screenshot to, never to click. */
+    containers?: string[];
 }
 
 /** A CDP Accessibility.AXValue, reduced to what we read. */
@@ -1698,7 +1700,7 @@ interface AXNode {
     parentId?: string;
 }
 interface RenderOptions {
-    /** Only nodes that have a ref, flat (no indentation, no text, no `/url` lines). */
+    /** Only the nodes an agent acts on, flat (no indentation, no text, no `/url` lines, no containers). */
     interactive?: boolean;
     /** Cut the tree at a line boundary once it is longer than this (a first line longer than all of it is cut itself). No limit by default. */
     maxChars?: number;
@@ -1715,13 +1717,14 @@ interface RenderResult {
     text: string;
     refs: RefTable;
     truncated: boolean;
-    /** Refs visible in `text`. */
+    /** Refs visible in `text`: the controls', and in a full snapshot the containers' too. */
     refCount: number;
 }
 /**
  * Render AX nodes as a compact text tree (2 spaces per level, one node per line),
- * giving refs to what an agent can act on. In `interactive` mode only the nodes
- * with refs are printed, flat; no landmark context is added, to keep it cheap.
+ * giving refs to what an agent can act on and to the structural containers. In
+ * `interactive` mode only the nodes to act on are printed, flat; no landmark
+ * context is added, to keep it cheap.
  */
 declare function renderSnapshot(nodes: AXNode[], opts: RenderOptions): RenderResult;
 interface SnapshotOptions {
@@ -1729,6 +1732,8 @@ interface SnapshotOptions {
     maxChars?: number;
     /** Render only this ref's subtree. */
     ref?: string;
+    /** Render only the subtree of the first element this CSS selector matches. */
+    selector?: string;
 }
 interface SnapshotResult {
     text: string;
@@ -1816,7 +1821,10 @@ interface ActionResult {
     dialog?: DialogInfo;
     /** An anti-bot challenge on the page after the action; null when none. */
     challenge?: Challenge | null;
+    /** What the action yields: the value a field holds after fill or type, the options select chose, the scroll position. */
     value?: unknown;
+    /** fill or type on a password field: its value is never echoed. */
+    valueHidden?: true;
     /** The page the move landed on committed but was still loading when the wait ran out. */
     note?: string;
 }

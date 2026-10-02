@@ -8908,7 +8908,7 @@ var init_challenge = __esm({
 });
 
 // src/browser/overlay.ts
-var CONSENT_SELECTORS, HELPERS, OVERLAYS_SOURCE, OVERLAY_ROOT_SOURCE, DESCRIBE_SOURCE, OVERLAY_INFO_SOURCE, READ_DOCUMENT;
+var CONSENT_SELECTORS, BARE_TEXT_MAX, CONTROL_TAGS, CONTROL_ROLES, HELPERS, OVERLAYS_SOURCE, OVERLAY_ROOT_SOURCE, DESCRIBE_SOURCE, OVERLAY_INFO_SOURCE, READ_DOCUMENT;
 var init_overlay = __esm({
   "src/browser/overlay.ts"() {
     "use strict";
@@ -8952,6 +8952,25 @@ var init_overlay = __esm({
       'iframe[name="__cmpLocator"]',
       'iframe[name="__gppLocator"]'
     ];
+    BARE_TEXT_MAX = 40;
+    CONTROL_TAGS = ["A", "BUTTON", "INPUT", "SELECT", "TEXTAREA", "IFRAME", "SUMMARY", "DETAILS"];
+    CONTROL_ROLES = [
+      "button",
+      "link",
+      "checkbox",
+      "radio",
+      "switch",
+      "tab",
+      "menuitem",
+      "menuitemcheckbox",
+      "menuitemradio",
+      "option",
+      "textbox",
+      "searchbox",
+      "combobox",
+      "slider",
+      "spinbutton"
+    ];
     HELPERS = `const up = (n) => n.parentElement || (n.parentNode && n.parentNode.host) || n.host || null;
   const body = document.body;
   const roleOf = (el) => String((el.getAttribute && el.getAttribute("role")) || "").toLowerCase();
@@ -8967,6 +8986,48 @@ var init_overlay = __esm({
     } catch (e) {
       return false;
     }
+  };
+  const CONTROL_TAGS = ${JSON.stringify(CONTROL_TAGS)};
+  const CONTROL_ROLES = ${JSON.stringify(CONTROL_ROLES)};
+  /** Something to act on: a native control, a control role, a focusable (tabindex >= 0) or editable element. */
+  const isControl = (el) => {
+    const attr = (n) => (el.getAttribute ? el.getAttribute(n) : null);
+    const tag = String(el.tagName || "").toUpperCase();
+    if (tag === "A") return attr("href") !== null;
+    if (tag === "INPUT") return String(attr("type") || "").toLowerCase() !== "hidden";
+    if (CONTROL_TAGS.indexOf(tag) >= 0 || CONTROL_ROLES.indexOf(roleOf(el)) >= 0) return true;
+    const tab = attr("tabindex");
+    if (tab !== null && tab !== "" && Number(tab) >= 0) return true;
+    const edit = attr("contenteditable");
+    return edit === "" || edit === "true" || edit === "plaintext-only";
+  };
+  const textLength = (n) => String((typeof n.innerText === "string" ? n.innerText : n.textContent) || "").replace(/\\s+/g, " ").trim().length;
+  /**
+   * Nothing to answer in it: no control, itself or inside (open shadow roots
+   * included), and under ${BARE_TEXT_MAX} characters of text. An ad slot holding
+   * an image is one; a cookie wall, a login dialog, a notice to read are not.
+   * Never bare: a consent vendor's container (its buttons may be plain divs),
+   * nor anything holding a custom element with no open shadow root (a closed
+   * one hides its text and controls from here).
+   */
+  const bare = (el) => {
+    let text = textLength(el);
+    const stack = [el];
+    for (let seen = 0; stack.length > 0; seen++) {
+      // Too big to look through: whatever it is, it is no empty layer.
+      if (text >= ${BARE_TEXT_MAX} || seen > 5000) return false;
+      const n = stack.pop();
+      if (n.nodeType === 1 && (isControl(n) || isConsent(n))) return false;
+      if (n.nodeType === 1 && String(n.tagName || "").indexOf("-") >= 0 && !n.shadowRoot) return false;
+      for (const k of Array.from(n.children || [])) stack.push(k);
+      if (n.shadowRoot) {
+        for (const k of Array.from(n.shadowRoot.children || [])) {
+          text += textLength(k);
+          stack.push(k);
+        }
+      }
+    }
+    return text < ${BARE_TEXT_MAX};
   };
   /** Fixed or sticky, itself or an ancestor up to the body: what a click's covering node belongs to. */
   const pinned = (el) => {
@@ -9046,7 +9107,8 @@ var init_overlay = __esm({
         else take = true;
       }
     }
-    // An overlay is taken whole: what is inside it is its own.
+    // An overlay is taken whole: what is inside it is its own. A bare one is none, nor is anything inside it.
+    if (take && bare(el)) return;
     if (take) {
       found.push(el);
       return;
@@ -9082,7 +9144,7 @@ var init_overlay = __esm({
   ${HELPERS}
   ${DESCRIBE_SOURCE}
   const overlays = (${OVERLAYS_SOURCE})();
-  return { what: describe(this), overlay: overlays.indexOf(this) >= 0 || isDialog(this) || isConsent(this) };
+  return { what: describe(this), overlay: (overlays.indexOf(this) >= 0 || isDialog(this) || isConsent(this)) && !bare(this) };
 }`;
     READ_DOCUMENT = `(() => {
   const findOverlays = ${OVERLAYS_SOURCE};
@@ -9468,7 +9530,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.29.3";
+var ENGINE_VERSION = "1.30.0";
 
 // src/index.ts
 init_brand();
@@ -9481,6 +9543,8 @@ init_session();
 init_read();
 
 // src/browser/snapshot.ts
+init_cli_kit();
+init_cdp();
 init_overlay();
 init_state();
 var NAME_MAX = 120;
@@ -9509,6 +9573,8 @@ var REF_ROLES = /* @__PURE__ */ new Set([
   "iframe",
   "heading"
 ]);
+var CONTAINER_ROLES = /* @__PURE__ */ new Set(["table", "figure", "article", "main", "complementary", "form"]);
+var NAMED_CONTAINER_ROLES = /* @__PURE__ */ new Set(["region", "image", "img"]);
 var VALUE_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton", "slider"]);
 var FIELD_ROLES = /* @__PURE__ */ new Set(["textbox", "searchbox", "combobox", "spinbutton"]);
 var str2 = (v) => typeof v?.value === "string" ? v.value : typeof v?.value === "number" ? String(v.value) : "";
@@ -9560,10 +9626,13 @@ var Renderer = class {
   constructor(table, frames) {
     this.frames = frames;
     this.refs = { ...table.refs };
+    this.containers = new Set(table.containers ?? []);
     this.next = table.next;
   }
   frames;
   refs;
+  /** The refs that name a container only, never a control. */
+  containers;
   next;
   seen = /* @__PURE__ */ new Set();
   trees = /* @__PURE__ */ new Map();
@@ -9610,8 +9679,10 @@ var Renderer = class {
     if (HOISTED.has(role)) return this.children(tree, n, parent);
     const name = squash(str2(n.name));
     const hasRole = REF_ROLES.has(role.toLowerCase());
-    const wantsRef = n.backendDOMNodeId !== void 0 && (hasRole || truthy(prop(n, "focusable")) || truthy(prop(n, "editable")));
-    const editor = wantsRef && !hasRole && !name && truthy(prop(n, "editable")) && parent?.ref === true && FIELD_ROLES.has(parent.role);
+    const acts = n.backendDOMNodeId !== void 0 && (hasRole || truthy(prop(n, "focusable")) || truthy(prop(n, "editable")));
+    const container = CONTAINER_ROLES.has(role) || NAMED_CONTAINER_ROLES.has(role) && name !== "";
+    const wantsRef = acts || n.backendDOMNodeId !== void 0 && container;
+    const editor = acts && !hasRole && !name && truthy(prop(n, "editable")) && parent?.ref === true && FIELD_ROLES.has(parent.role);
     if (COLLAPSIBLE.has(role) && !name && !wantsRef || editor) return [{ t: "break" }, ...this.children(tree, n, parent), { t: "break" }];
     const isFrame = role.toLowerCase() === "iframe";
     const shown = isFrame ? "iframe" : role;
@@ -9619,7 +9690,12 @@ var Renderer = class {
     if (name) head += ` "${(name.length > NAME_MAX ? `${name.slice(0, NAME_MAX)}\u2026` : name).replace(/"/g, '\\"')}"`;
     const level = prop(n, "level");
     if (level !== void 0 && role === "heading") head += ` [level=${String(level)}]`;
-    if (wantsRef) head += ` [ref=${this.refFor(n.backendDOMNodeId)}]`;
+    if (wantsRef) {
+      const ref = this.refFor(n.backendDOMNodeId);
+      if (acts) this.containers.delete(ref);
+      else this.containers.add(ref);
+      head += ` [ref=${ref}]`;
+    }
     for (const s of states(n)) head += ` ${s}`;
     let kids;
     let note = "";
@@ -9635,7 +9711,9 @@ var Renderer = class {
     kids = kids.filter((k) => !(k.t === "text" && (name && k.text === name || value && k.text === value)));
     const rawUrl = role === "link" ? prop(n, "url") : void 0;
     const url = typeof rawUrl === "string" ? rawUrl : "";
-    return [{ t: "node", head: value ? `${head}${note}: ${value}` : `${head}${note}`, ref: wantsRef, ...url ? { url } : {}, note, children: kids }];
+    return [
+      { t: "node", head: value ? `${head}${note}: ${value}` : `${head}${note}`, ref: wantsRef, act: acts, ...url ? { url } : {}, note, children: kids }
+    ];
   }
 };
 function nested(items, depth, out) {
@@ -9652,7 +9730,7 @@ function nested(items, depth, out) {
 function flat(items, out) {
   for (const it of items) {
     if (it.t !== "node") continue;
-    if (it.ref) out.push({ text: it.head, ref: true });
+    if (it.act) out.push({ text: it.head, ref: true });
     flat(it.children, out);
   }
 }
@@ -9706,7 +9784,13 @@ function renderSnapshot(nodes, opts) {
   const text = [...kept.map((l) => l.text), ...tail ? [tail] : []].join("\n");
   return {
     text,
-    refs: { loaderId: opts.refs.loaderId, url: opts.refs.url, next: r.next, refs: r.refs },
+    refs: {
+      loaderId: opts.refs.loaderId,
+      url: opts.refs.url,
+      next: r.next,
+      refs: r.refs,
+      ...r.containers.size ? { containers: [...r.containers].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))) } : {}
+    },
     truncated: tail !== "",
     refCount: kept.filter((l) => l.ref).length
   };
