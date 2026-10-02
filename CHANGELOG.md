@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.37.0](https://github.com/maxgfr/ultrasearch/compare/v1.36.5...v1.37.0) (2026-10-02)
+
+
+### Bug Fixes
+
+* **browser:** render only what the engine skips, and never cut a shared browser ([54763e7](https://github.com/maxgfr/ultrasearch/commit/54763e7d261788c85662349b279ccba9fd9bd81b)), closes [#38](https://github.com/maxgfr/ultrasearch/issues/38)
+* **browser:** wait for a closing browser, and cap ingest's 402 renders ([1550327](https://github.com/maxgfr/ultrasearch/commit/1550327d164659a0ea12c3c251800d380d084ffb)), closes [#38](https://github.com/maxgfr/ultrasearch/issues/38)
+
+
+### Features
+
+* **browser:** make the browser rung a default part of retrieval ([1675543](https://github.com/maxgfr/ultrasearch/commit/16755433c6630d948893d4ba8c5a79cda19f957c)), closes [#38](https://github.com/maxgfr/ultrasearch/issues/38)
+
 ## [1.36.5](https://github.com/maxgfr/ultrasearch/compare/v1.36.4...v1.36.5) (2026-10-02)
 
 
