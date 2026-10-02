@@ -12742,9 +12742,19 @@ var standardsBackend = async (ctx) => {
   ]);
   for (const s of rfcHits) add2(s);
   const mdnDocs = Array.isArray(mdnResult.data?.documents) ? mdnResult.data.documents : [];
-  for (let i = 0; i < Math.min(perSource, mdnDocs.length, 5); i++) {
+  const ranked = rankedKeywords(ctx.question).map((t) => t.toLowerCase());
+  const mdnRelevant = (d) => {
+    const top = ranked[0];
+    if (top === void 0) return true;
+    const hay = new Set(keywords(`${d.title ?? ""} ${d.summary ?? ""}`).map((t) => t.toLowerCase()));
+    if (hay.has(top)) return true;
+    return ranked.length >= 2 && ranked.filter((t) => hay.has(t)).length >= 2;
+  };
+  let mdnKept = 0;
+  for (let i = 0; i < mdnDocs.length && mdnKept < Math.min(perSource, 5); i++) {
     const d = mdnDocs[i];
-    if (!d?.mdn_url) continue;
+    if (!d?.mdn_url || !mdnRelevant(d)) continue;
+    mdnKept++;
     add2({
       url: `https://developer.mozilla.org${d.mdn_url}`,
       title: String(d.title ?? d.mdn_url),

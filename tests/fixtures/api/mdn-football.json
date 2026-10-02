@@ -1,0 +1,54 @@
+{
+ "documents": [
+  {
+   "mdn_url": "/en-US/docs/Learn_web_development/Core/Scripting/Arrays",
+   "title": "Arrays",
+   "summary": "In this lesson we'll look at arrays — a neat way of storing a list of data items under a single variable name. Here we look at why this is useful, then explore how to create an array, retrieve, add, and remove items stored in an array, and more besides."
+  },
+  {
+   "mdn_url": "/en-US/docs/Learn_web_development/Core/Scripting/Useful_string_methods",
+   "title": "Useful string methods",
+   "summary": "Now that we've looked at the very basics of strings, let's move up a gear and start thinking about what useful operations we can do on strings with built-in methods, such as finding the length of a text string, joining and splitting strings, substituting one character in a string for another, and more."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/CSS/Reference/Properties/line-clamp",
+   "title": "line-clamp CSS property",
+   "summary": "The line-clamp CSS property allows limiting of the contents of a block to the specified number of lines. Optionally, it also allows inserting content into the last line to indicate that content was truncated."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/CSS/Reference/Properties/border-shape",
+   "title": "border-shape CSS property",
+   "summary": "The border-shape CSS property defines an element's border shape using <basic-shape> values."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/CSS/Guides/Borders_and_box_decorations/Border_shape_nav_menu",
+   "title": "Creating an irregular nav menu with border-shape",
+   "summary": "The CSS border-shape property can be applied to elements to create precisely-shaped containers such as speech bubbles, abstract tooltip designs, and more, enabling many new creative ideas to be put into production without the need for workarounds or hacks. You can learn all about the property and see basic examples in action on the property reference page."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/API/Prompt_API/Multimodal",
+   "title": "Multimodal prompts",
+   "summary": "The Prompt API accepts multimodal inputs, including image and audio content. This article looks at how to handle multimodal inputs in your app."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/CSS/Reference/Properties/animation",
+   "title": "animation CSS property",
+   "summary": "The animation CSS shorthand property applies an animation between styles. It is a shorthand for animation-name, animation-duration, animation-timing-function, animation-delay, animation-iteration-count, animation-direction, animation-fill-mode, animation-play-state, and animation-timeline."
+  },
+  {
+   "mdn_url": "/en-US/docs/WebAssembly",
+   "title": "WebAssembly",
+   "summary": "WebAssembly (Wasm) is a low-level assembly-like language that brings near-native performance to the web. It serves as a compilation target for languages like C/C++, C#, and Rust, allowing high-performance code to run directly in the browser."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/CSS/Reference/Properties/text-overflow",
+   "title": "text-overflow CSS property",
+   "summary": "The text-overflow CSS property sets how hidden overflow content is signaled to users."
+  },
+  {
+   "mdn_url": "/en-US/docs/Mozilla/Firefox/Releases/156",
+   "title": "Firefox 156 release notes for developers",
+   "summary": "This article provides information about the changes in Firefox 156 that affect developers.\nFirefox 156 was released on September 15, 2026."
+  }
+ ]
+}

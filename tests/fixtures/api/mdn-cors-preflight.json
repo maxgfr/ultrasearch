@@ -1,0 +1,54 @@
+{
+ "documents": [
+  {
+   "mdn_url": "/en-US/docs/Glossary/Preflight_request",
+   "title": "Preflight request",
+   "summary": "A CORS preflight request is a CORS request that checks to see if the CORS protocol is understood and a server is aware using specific methods and headers."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS/Errors/CORSPreflightDidNotSucceed",
+   "title": "Reason: CORS preflight channel did not succeed",
+   "summary": "The CORS request requires preflight, preflighting could not be\nperformed. There are a couple of reasons why preflighting might fail:"
+  },
+  {
+   "mdn_url": "/en-US/docs/Glossary/CORS-safelisted_request_header",
+   "title": "CORS-safelisted request header",
+   "summary": "A CORS-safelisted request header (also known as \"simple header\") is one of the following HTTP headers:"
+  },
+  {
+   "mdn_url": "/en-US/docs/Glossary/CORS",
+   "title": "CORS",
+   "summary": "CORS (Cross-Origin Resource Sharing) is a system, consisting of transmitting HTTP headers, that determines whether browsers block frontend JavaScript code from accessing responses for cross-origin requests."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS/Errors/CORSDidNotSucceed",
+   "title": "Reason: CORS request did not succeed",
+   "summary": "The HTTP request which makes use of CORS failed because the HTTP connection failed at either the network or protocol level. The error is not directly related to CORS, but is a fundamental network error of some kind."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS/Errors/CORSMissingAllowHeaderFromPreflight",
+   "title": "Reason: missing token 'xyz' in CORS header 'Access-Control-Allow-Headers' from CORS preflight channel",
+   "summary": "The Access-Control-Allow-Headers header is sent by the server to let the client know which headers it supports for CORS requests. The value of Access-Control-Allow-Headers should be a comma-delineated list of header names, such as X-Custom-Information or any of the standard but non-basic header names (which are always allowed)."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS/Errors",
+   "title": "CORS errors",
+   "summary": "Cross-Origin Resource Sharing (CORS) is a standard that allows a server to relax the same-origin policy. This is used to explicitly allow some cross-origin requests while rejecting others. For example, if a site offers an embeddable service, it may be necessary to relax certain restrictions. Setting up such a CORS configuration isn't necessarily easy and may present some challenges. In these pages, we'll look into some common CORS error messages and how to resolve them."
+  },
+  {
+   "mdn_url": "/en-US/docs/Mozilla/Firefox/Experimental_features",
+   "title": "Experimental features in Firefox",
+   "summary": "This page lists Firefox's experimental and partially-implemented features, including evolving or proposed web platform standards.\nEach entry below includes information about the builds in which a feature is included (Nightly, Beta, Developer Edition, or Release), whether it is activated by default or not, and the name of the preference you can use to activate or configure the feature.\nThe description of each feature also includes links to relevant Bugzilla bugs that implement or enable the feature.\nThis information allows you to try out experimental features and provide feedback before they are officially released."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS/Errors/CORSRequestNotHttp",
+   "title": "Reason: CORS request not HTTP",
+   "summary": "CORS requests may only use the HTTP or HTTPS URL scheme, but the URL specified by the request is of a different type.\nThis often occurs if the URL specifies a local file, using the file:/// scheme."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/CORS",
+   "title": "Cross-Origin Resource Sharing (CORS)",
+   "summary": "Cross-Origin Resource Sharing (CORS) is an HTTP-header based mechanism that allows a server to indicate any origins (domain, scheme, or port) other than its own from which a browser should permit loading resources. CORS also relies on a mechanism by which browsers make a \"preflight\" request to the server hosting the cross-origin resource, in order to check that the server will permit the actual request. In that preflight, the browser sends headers that indicate the HTTP method and headers that will be used in the actual request."
+  }
+ ]
+}

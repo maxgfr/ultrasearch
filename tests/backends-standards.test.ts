@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { standardsBackend } from "../src/backends/standards.js";
 import { installFetchMock } from "./fetchmock.js";
@@ -73,5 +74,35 @@ describe("standardsBackend", () => {
     expect(r.items).toHaveLength(0);
     expect(r.backend).toBe("standards");
     expect(r.notes.length).toBeGreaterThan(0);
+  });
+});
+
+describe("standards backend: MDN relevance re-check (recorded live fixtures)", () => {
+  const fx = (n: string) => readFileSync(new URL(`./fixtures/api/${n}.json`, import.meta.url), "utf8");
+  const run = async (fixture: string, q: string) => {
+    installFetchMock((url) => {
+      if (url.includes("developer.mozilla.org")) return { body: fx(fixture), contentType: "application/json" };
+      if (url.includes("datatracker")) return { body: JSON.stringify({ objects: [] }), contentType: "application/json" };
+      return undefined;
+    });
+    const r = await standardsBackend(makeCtx(q));
+    return r.items.filter((i) => i.url.includes("developer.mozilla.org"));
+  };
+
+  it("drops every MDN page for a football query (issue #40)", async () => {
+    expect(await run("mdn-football", "Florian Wirtz Liverpool performances octobre 2026")).toHaveLength(0);
+  });
+  it("keeps the 429 page for 'HTTP 429 Too Many Requests'", async () => {
+    const hits = await run("mdn-429", "HTTP 429 Too Many Requests");
+    expect(hits.some((h) => h.title === "429 Too Many Requests")).toBe(true);
+  });
+  it("keeps Array.prototype.flat", async () => {
+    const hits = await run("mdn-array-flat", "Array.prototype.flat");
+    expect(hits.map((h) => h.url).some((u) => u.endsWith("/Array/flat"))).toBe(true);
+  });
+  it("keeps the CORS preflight pages", async () => {
+    const hits = await run("mdn-cors-preflight", "CORS preflight request");
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.some((h) => h.title === "Preflight request")).toBe(true);
   });
 });

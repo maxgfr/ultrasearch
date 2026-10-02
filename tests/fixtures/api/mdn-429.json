@@ -1,0 +1,54 @@
+{
+ "documents": [
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Reference/Status/429",
+   "title": "429 Too Many Requests",
+   "summary": "The HTTP 429 Too Many Requests client error response status code indicates the client has sent too many requests in a given amount of time.\nThis mechanism of asking the client to slow down the rate of requests is commonly called \"rate limiting\"."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/Range_requests",
+   "title": "HTTP range requests",
+   "summary": "An HTTP Range request asks the server to send parts of a resource back to a client.\nRange requests are useful for various clients, including media players that support random access, data tools that require only part of a large file, and download managers that let users pause and resume a download."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/Conditional_requests",
+   "title": "HTTP conditional requests",
+   "summary": "HTTP has a concept of conditional requests, where the result, and even the success of a request, can be controlled by comparing the affected resources with a validator.\nThese requests are useful for validating cached content, ensuring that it is only fetched if it differs from the copy that is already available to the browser.\nConditional requests are also useful for ensuring the integrity of a document when resuming a download, or preventing lost updates when uploading or modifying a document on the server."
+  },
+  {
+   "mdn_url": "/en-US/docs/Mozilla/Add-ons/WebExtensions/Intercept_HTTP_requests",
+   "title": "Intercept HTTP requests",
+   "summary": "Two APIs are available for intercepting HTTP requests: webRequest and declarativeNetRequest."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Reference/Status",
+   "title": "HTTP response status codes",
+   "summary": "HTTP response status codes indicate whether a specific HTTP request has been successfully completed.\nResponses are grouped in five classes:"
+  },
+  {
+   "mdn_url": "/en-US/docs/Mozilla/Firefox/Releases/1.5/Changing_the_priority_of_HTTP_requests",
+   "title": "Changing the Priority of HTTP Requests (Non-Standard)",
+   "summary": "In Firefox 1.5, an API was added to support changing the priority of HTTP requests. Prior to this, there was no way to directly indicate that a request was of a different priority. The API is defined in nsISupportsPriority, but is defined in very generic terms so that any object can implement this interface to enable the concept of priority. This article deals specifically with using that interface to change the priority of HTTP requests."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/Caching",
+   "title": "HTTP caching",
+   "summary": "The HTTP cache stores a response associated with a request and reuses the stored response for subsequent requests."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/Messages",
+   "title": "HTTP messages",
+   "summary": "HTTP messages are the mechanism used to exchange data between a server and a client in the HTTP protocol.\nThere are two types of messages: requests sent by the client to trigger an action on the server, and responses, the answer that the server sends in response to a request."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/API/XMLHttpRequest_API/Synchronous_and_Asynchronous_Requests",
+   "title": "Synchronous and asynchronous requests",
+   "summary": "XMLHttpRequest supports both synchronous and asynchronous communications. In general, however, asynchronous requests should be preferred to synchronous requests for performance reasons."
+  },
+  {
+   "mdn_url": "/en-US/docs/Web/HTTP/Guides/Evolution_of_HTTP",
+   "title": "Evolution of HTTP",
+   "summary": "HTTP (HyperText Transfer Protocol) is the underlying protocol of the World Wide Web. Developed by Tim Berners-Lee and his team between 1989-1991, HTTP has gone through many changes that have helped maintain its simplicity while shaping its flexibility. Keep reading to learn how HTTP evolved from a protocol designed to exchange files in a semitrusted laboratory environment into a modern internet maze that carries images and videos in high resolution and 3D."
+  }
+ ]
+}
