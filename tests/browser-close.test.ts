@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
 import { callTool } from "../src/mcp/handlers.js";
-import { closeBrowserOnSignal } from "../src/browser.js";
+import { closeBrowserOnSignal, withBrowserClosed } from "../src/browser.js";
 
 // Every command that may read pages closes the browser its reads launched, on
 // the way out — errors included — so no window is ever left behind. The engine
@@ -228,5 +228,30 @@ describe("browser open — the human's half of a challenge", () => {
     await run(["browser", "open", "https://nowhere.test/"]);
     expect(s.shutdown).not.toHaveBeenCalled();
     expect(s.detach).toHaveBeenCalled();
+  });
+});
+
+describe("a call that starts while the browser is closing", () => {
+  // The last call out closes the browser; a call arriving during that close must
+  // not start reading in a browser that is shutting down under it.
+  it("waits for the close to finish before it reads", async () => {
+    let finish!: () => void;
+    close.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          finish = () => r({ closed: true });
+        }),
+    );
+    const a = withBrowserClosed(async () => "a");
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    const fnB = vi.fn(async () => "b");
+    const b = withBrowserClosed(fnB);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(fnB).not.toHaveBeenCalled();
+    finish();
+    expect(await a).toBe("a");
+    expect(await b).toBe("b");
+    expect(fnB).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(2);
   });
 });

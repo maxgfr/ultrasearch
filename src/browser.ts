@@ -142,6 +142,9 @@ function originOf(r: BrowserRung): string {
 // it is the LAST one's job: an earlier one closing it would cut a sibling's
 // render off.
 let sharing = 0;
+// The close the last call out started, while it runs. A call arriving meanwhile
+// waits for it: reading now would reuse a browser that is shutting down.
+let closing: Promise<unknown> | undefined;
 
 /**
  * Run `fn`, then close the browser a read of THIS process launched — whatever
@@ -150,11 +153,18 @@ let sharing = 0;
  * (closeBrowserReads never throws).
  */
 export async function withBrowserClosed<T>(fn: () => Promise<T>): Promise<T> {
+  while (closing) await closing;
   sharing++;
   try {
     return await fn();
   } finally {
-    if (--sharing === 0) await closeBrowserReads();
+    if (--sharing === 0) {
+      const done = closeBrowserReads().finally(() => {
+        if (closing === done) closing = undefined;
+      });
+      closing = done;
+      await done;
+    }
   }
 }
 

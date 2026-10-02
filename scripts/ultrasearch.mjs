@@ -6417,31 +6417,31 @@ function extractTables(html) {
     const top = stack[stack.length - 1];
     if (top) top.text(src.slice(last, m.index));
     last = tag2.lastIndex;
-    const closing = m[1] === "/";
+    const closing2 = m[1] === "/";
     const name = m[2].toLowerCase();
-    if (top && (buried || name === "table" && !closing && stack.length >= MAX_DEPTH)) {
-      if (name === "table") buried += closing ? -1 : 1;
+    if (top && (buried || name === "table" && !closing2 && stack.length >= MAX_DEPTH)) {
+      if (name === "table") buried += closing2 ? -1 : 1;
       top.text(" ");
       continue;
     }
     if (name === "table") {
-      if (!closing) stack.push(new OpenTable(order++));
+      if (!closing2) stack.push(new OpenTable(order++));
       else if (top) closeTable(stack, done);
       continue;
     }
     if (!top) continue;
     if (name === "td" || name === "th") {
-      if (closing) top.endCell();
+      if (closing2) top.endCell();
       else top.startCell(name === "th", htmlAttributes(m[0]));
     } else if (name === "tr") {
       top.endRow();
-      if (!closing) top.startRow();
+      if (!closing2) top.startRow();
     } else if (name === "caption") {
       top.endRow();
-      top.inCaption = !closing;
+      top.inCaption = !closing2;
     } else {
       top.endRow();
-      top.inHead = name === "thead" && !closing;
+      top.inHead = name === "thead" && !closing2;
     }
   }
   while (stack.length) closeTable(stack, done);
@@ -6566,14 +6566,14 @@ function markdownAgainst(html, base2, fullPage) {
     if (m.index > last) w.text(s.slice(last, m.index));
     last = tag2.lastIndex;
     const t = m[0];
-    const closing = t[1] === "/";
-    const adjacent = m.index === prevEnd && prevClosed && !closing;
+    const closing2 = t[1] === "/";
+    const adjacent = m.index === prevEnd && prevClosed && !closing2;
     prevEnd = tag2.lastIndex;
-    prevClosed = closing;
+    prevClosed = closing2;
     const name = tagName(t);
     if (!name) continue;
     if (name === "div") {
-      if (closing) {
+      if (closing2) {
         if (divOverflow) divOverflow--;
         else divs.pop();
       } else if (divs.length < MAX_BLOCK_DEPTH * 4) divs.push(t);
@@ -6584,7 +6584,7 @@ function markdownAgainst(html, base2, fullPage) {
       if (heading) {
         w.flush();
         headingEnd = -1;
-        if (closing) continue;
+        if (closing2) continue;
       } else if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") {
         if (headingEnd >= 0 && m.index < headingEnd) {
           w.space();
@@ -6596,14 +6596,14 @@ function markdownAgainst(html, base2, fullPage) {
     }
     if (heading) {
       w.flush();
-      if (closing) continue;
+      if (closing2) continue;
       w.heading = heading;
       headingEdge.lastIndex = tag2.lastIndex;
       const edge = headingEdge.exec(s);
       headingEnd = edge && edge[0][1] === "/" ? edge.index : -1;
       continue;
     }
-    if (name === "pre" && !closing && !preUnclosed) {
+    if (name === "pre" && !closing2 && !preUnclosed) {
       const close = closeTagRe("pre");
       close.lastIndex = tag2.lastIndex;
       const c = close.exec(s);
@@ -6616,7 +6616,7 @@ function markdownAgainst(html, base2, fullPage) {
       }
       preUnclosed = true;
     }
-    if (name === "table" && !closing) {
+    if (name === "table" && !closing2) {
       const region = tables.get(m.index);
       const table = region && !isLayoutTable(t, s, region) ? extractTables(s.slice(region.from, region.to))[0] : void 0;
       if (region && table) {
@@ -6636,17 +6636,17 @@ function markdownAgainst(html, base2, fullPage) {
       case "ul":
       case "ol":
         w.flush();
-        if (closing) w.closeList();
+        if (closing2) w.closeList();
         else w.openList(name === "ol", listStart(t));
         continue;
       case "li":
         w.flush();
-        if (closing) w.closeItem();
+        if (closing2) w.closeItem();
         else w.openItem();
         continue;
       case "blockquote":
         w.flush();
-        if (closing) w.closeQuote();
+        if (closing2) w.closeQuote();
         else w.openQuote();
         continue;
       case "hr":
@@ -6662,7 +6662,7 @@ function markdownAgainst(html, base2, fullPage) {
     }
     const kind = INLINE_KIND[name];
     if (kind) {
-      if (closing) {
+      if (closing2) {
         w.close(kind);
         continue;
       }
@@ -7901,13 +7901,13 @@ function htmlToText(html, opts = {}) {
   let prevEnd = -1;
   let prevClosed = false;
   s = s.replace(TAG_RE, (tag2, at) => {
-    const closing = tag2[1] === "/";
-    const adjacent = at === prevEnd && prevClosed && !closing;
+    const closing2 = tag2[1] === "/";
+    const adjacent = at === prevEnd && prevClosed && !closing2;
     prevEnd = at + tag2.length;
-    prevClosed = closing;
+    prevClosed = closing2;
     const name = tagName(tag2);
     if (/^h[1-6]$/.test(name)) {
-      return closing ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
+      return closing2 ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
     }
     if (BLOCK_TAGS.has(name) || name === "br" || name === "hr") return "\n";
     if (INLINE_TAGS.has(name)) return adjacent ? " " : "";
@@ -12194,12 +12194,20 @@ function originOf(r) {
   return r.source === "flag" ? "--browser" : r.source === "env" ? ENV : "default: a browser is installed and a window can be shown";
 }
 var sharing = 0;
+var closing;
 async function withBrowserClosed(fn) {
+  while (closing) await closing;
   sharing++;
   try {
     return await fn();
   } finally {
-    if (--sharing === 0) await closeBrowserReads();
+    if (--sharing === 0) {
+      const done = closeBrowserReads().finally(() => {
+        if (closing === done) closing = void 0;
+      });
+      closing = done;
+      await done;
+    }
   }
 }
 function closeBrowserOnSignal() {
@@ -14902,6 +14910,7 @@ function flushIndex(dir, state) {
 }
 async function addSources(dir, hits, opts = {}) {
   opts = { ...opts, browser: opts.browser ?? resolveBrowserRung().mode };
+  const rescues = { left: BROWSER_RESCUE_CAP };
   const results = [];
   let state;
   const stateOf = () => state ??= loadState(dir);
@@ -14909,7 +14918,7 @@ async function addSources(dir, hits, opts = {}) {
   try {
     for (const hit of hits) {
       const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
-      const p = await prepareSource(stateOf, url, { ...opts, title });
+      const p = await prepareSource(stateOf, url, { ...opts, title, rescues });
       let r;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -15074,7 +15083,9 @@ async function prepareSource(stateOf, url, opts) {
     }
   }
   let note;
-  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser)) {
+  const rescues = opts.rescues ?? { left: BROWSER_RESCUE_CAP };
+  if (!text?.trim() && rescuesEmptyRead(fetched.status, browser) && rescues.left > 0) {
+    rescues.left--;
     const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
     if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
       note = `Recovered ${readUrl} in a real browser \u2014 the built-in read was an empty HTTP ${fetched.status} answer.`;

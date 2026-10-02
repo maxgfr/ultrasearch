@@ -180,6 +180,14 @@ describe("ingest / fetch", () => {
     expect(r.note).toContain("Recovered https://paywall.test/article in a real browser");
   });
 
+  it(`caps the renders at ${BROWSER_RESCUE_CAP} per ingest batch`, async () => {
+    await dossier();
+    fetchPage.mockImplementation(empty(402, false));
+    const urls = Array.from({ length: BROWSER_RESCUE_CAP + 3 }, (_, i) => `https://paywall${i}.test/a`);
+    await addSources(dir, urls, { browser: "fallback" });
+    expect(renders()).toBe(BROWSER_RESCUE_CAP);
+  });
+
   it("hands the resolved mode to the Wayback rescue too", async () => {
     await dossier();
     fetchPage.mockImplementation(empty(404));
