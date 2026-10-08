@@ -1,11 +1,10 @@
 ---
 name: ultrasearch
-description: Research a web topic, brainstorm research angles, and produce an evidence dossier and citation-checked report.
-disable-model-invocation: true
+description: Research a web topic, brainstorm research angles, and produce an evidence dossier and citation-checked report. Use only when the user explicitly asks for ultrasearch or web research.
 license: MIT
 metadata:
   version: 1.37.6
-  opencode/autoinvoke: 'false'
+  opencode/autoinvoke: 'true'
 ---
 
 # ultrasearch — recap the web, grounded not guessed
