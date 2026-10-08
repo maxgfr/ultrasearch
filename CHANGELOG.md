@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.38.0](https://github.com/maxgfr/ultrasearch/compare/v1.37.6...v1.38.0) (2026-10-08)
+
+
+### Features
+
+* **skill:** let the agent invoke ultrasearch on request ([a8051dc](https://github.com/maxgfr/ultrasearch/commit/a8051dc0d0c437470c6e21d3a4718f3340cad4de))
+
 ## [1.37.6](https://github.com/maxgfr/ultrasearch/compare/v1.37.5...v1.37.6) (2026-10-02)
 
 
