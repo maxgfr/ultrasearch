@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.32.0";
+declare const ENGINE_VERSION = "1.33.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
