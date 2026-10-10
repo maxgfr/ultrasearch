@@ -277,7 +277,11 @@ describe("gather hydration: two workers reaching for one URL fetch it once", () 
     await runGather(opts({ question: "Cas9 dual RNA guided endonuclease", backends: ["pubmed", "duckduckgo"], out: dir }));
 
     expect(pageCalls).toBe(1);
-    expect(spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("efetch.fcgi"))).toEqual([]); // the fallback never had to look further
+    // E-utilities is asked ONCE — PubMed pages are read through it first
+    // (src/providers/ncbi.ts), memoised for the run, so the DOI item's fallback
+    // to the same record reuses that answer (a 404 here) instead of asking
+    // again; past that, the fallback never had to look further than the page.
+    expect(spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("efetch.fcgi"))).toHaveLength(1);
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources.length).toBeGreaterThan(0);
     expect(sources.every((s) => s.fullText !== false)).toBe(true); // both items got the text

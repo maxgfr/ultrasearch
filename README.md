@@ -294,7 +294,9 @@ that override silently voided.
   depth, and which angles to cover. Start here.
 - `gather` — the main entrypoint: fetch → rank → dedupe → write dossier, driven
   by `--web-results` (your hits) and sized by `--search light|full`.
-- `ingest` — fold a whole round of URLs into a dossier in ONE process.
+- `ingest` — fold a whole round of URLs into a dossier in ONE process (a hit may
+  carry `citeUrl`: read its `url`, cite that page). PubMed and PMC are read
+  through E-utilities and Europe PMC, never through their cookie / anti-bot walls.
 - `search --backend <kind>` — drill one backend (debugging retrieval).
 - `fetch` / `add-source` — ingest a single URL into a dossier.
 - `render --run <dir>` — render the report tiers to a self-contained `index.html`.

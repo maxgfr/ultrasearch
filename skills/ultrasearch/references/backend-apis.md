@@ -181,9 +181,29 @@ So the two roles are kept apart, by rules that are **provider-agnostic**:
    first becomes the recorded URL; the endpoint is kept in `meta.textVia`.
 3. **If nothing answers**, the engine refuses rather than cite an endpoint —
    and hands the job back to you, because reconstructing a page from a title is
-   a search, not a regex. Two ways in: `fetch --url "<endpoint>" --cite-url
-   "<page>"` at ingest time, or `relink --id S# --url "<page>"` afterwards. Both
-   keep the endpoint in `meta.textVia`.
+   a search, not a regex. Three ways in: `fetch --url "<endpoint>" --cite-url
+   "<page>"` at ingest time, a `citeUrl` on each hit of `ingest --web-results`
+   (`[{"url": "<endpoint>", "citeUrl": "<page>"}]` — `cite_url` works too), or
+   `relink --id S# --url "<page>"` afterwards. All keep the endpoint in
+   `meta.textVia`.
+
+A URL that IS a text endpoint the engine can map onto a page (an `efetch` URL,
+say) is read where it points. The page it resolves to is only read when the
+endpoint returns nothing — never back over text the endpoint already gave.
+
+**PubMed and PMC have a native reader** (`src/providers/ncbi.ts`), because both
+landing pages are walls to anything but a browser — PubMed's "Cookies must be
+enabled", PMC's anti-bot interstitial. For these, the endpoint is read
+**first**, in `gather`, `ingest` and `fetch` alike, and the page is cited:
+
+| Address | Text read from |
+|---|---|
+| `pubmed.ncbi.nlm.nih.gov/<pmid>/` (or `ncbi.nlm.nih.gov/pubmed/<pmid>`, or a single-id `efetch.fcgi?db=pubmed`) | E-utilities `efetch … rettype=abstract&retmode=text` |
+| `pmc.ncbi.nlm.nih.gov/articles/PMC<n>/` (or the legacy `ncbi.nlm.nih.gov/pmc/articles/`, or `efetch.fcgi?db=pmc`) | Europe PMC `…/rest/PMC<n>/fullTextXML`, converted to title + abstract + section headings + paragraphs (tables, formulas and the reference list dropped) |
+
+When the endpoint has nothing (an article outside the open-access subset), the
+ordinary ladder runs — landing page, Firecrawl, Wayback, the browser rung — and
+a refusal names what the endpoint answered.
 
 Two things need the URL's shape *before* a request is spent, and those are the
 only per-provider entries — a short, optional table (an unlisted URL just falls
@@ -192,10 +212,10 @@ through to the generic path):
 | Shape | Effect |
 |---|---|
 | `…/efetch.fcgi?db=pubmed&id=<pmid>` (one id) | recorded as `https://pubmed.ncbi.nlm.nih.gov/<pmid>/` |
-| `pubmed.ncbi.nlm.nih.gov/<pmid>/` | text falls back to `efetch.fcgi?…&rettype=abstract&retmode=text` when the page walls |
+| `pubmed.ncbi.nlm.nih.gov/<pmid>/` | text read from `efetch.fcgi?…&rettype=abstract&retmode=text` first (above) |
 | `…?id=<a,b,c>` (several ids) | **refused** — a source is ONE document; pass the ids one at a time |
 | `…/esearch.fcgi?term=…` | **refused** — a query points at a result list, not a document |
-| `pmc.ncbi.nlm.nih.gov/articles/PMC<n>/` ↔ `…?db=pmc&id=PMC<n>` | recorded as the PMC page |
+| `pmc.ncbi.nlm.nih.gov/articles/PMC<n>/` ↔ `…?db=pmc&id=PMC<n>` | recorded as the PMC page, text read from Europe PMC's full-text XML first |
 | `arxiv.org/pdf/<id>` | recorded as `arxiv.org/abs/<id>`, text still read from the PDF |
 
 The same three rules run again as a repair pass over a finished dossier:

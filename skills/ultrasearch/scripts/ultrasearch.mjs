@@ -70,6 +70,7 @@ var ALL_BROWSER_MODES = ["fallback", "always", "off"];
 var URL_KEYS = ["url", "link", "href", "uri"];
 var TITLE_KEYS = ["title", "name", "heading"];
 var SNIPPET_KEYS = ["snippet", "description", "summary", "content", "text", "excerpt"];
+var CITE_KEYS = ["citeUrl", "cite_url", "citeURL", "cite"];
 function firstString(o, keys) {
   for (const k of keys) {
     const v = o[k];
@@ -99,10 +100,12 @@ function hitFrom(entry) {
   if (!raw) return void 0;
   const url = normalizeUrl(raw);
   if (!url) return void 0;
+  const citeUrl = firstString(o, CITE_KEYS);
   return {
     url,
     title: firstString(o, TITLE_KEYS),
-    snippet: firstString(o, SNIPPET_KEYS)
+    snippet: firstString(o, SNIPPET_KEYS),
+    ...citeUrl ? { citeUrl } : {}
   };
 }
 function entriesOf(parsed) {
@@ -1631,10 +1634,10 @@ function markdownTable(rows, budget) {
   }
   return out.join("\n");
 }
-function joinBlocks(blocks) {
+function joinBlocks(blocks2) {
   const out = [];
-  for (const [i, block] of blocks.entries()) {
-    if (i) out.push(block.startsWith("- ") && blocks[i - 1].startsWith("- ") ? "\n" : "\n\n");
+  for (const [i, block] of blocks2.entries()) {
+    if (i) out.push(block.startsWith("- ") && blocks2[i - 1].startsWith("- ") ? "\n" : "\n\n");
     out.push(block);
   }
   return out.join("");
@@ -1710,7 +1713,7 @@ function wordStyles(xml) {
   return prefixes;
 }
 function wordText(xml, budget, styles) {
-  const blocks = [];
+  const blocks2 = [];
   const paragraphs = [];
   const tables = [];
   let inText = 0;
@@ -1723,7 +1726,7 @@ function wordText(xml, budget, styles) {
   const emit = (block) => {
     const table = tables[tables.length - 1];
     if (table?.cell) table.cell.push(block);
-    else if (block.trim()) blocks.push(block);
+    else if (block.trim()) blocks2.push(block);
   };
   walkXml(xml, {
     open(name, attrs) {
@@ -1777,7 +1780,7 @@ function wordText(xml, budget, styles) {
       if (!fallback2 && inText) add2(paragraphs[paragraphs.length - 1], s);
     }
   });
-  return joinBlocks(blocks);
+  return joinBlocks(blocks2);
 }
 function sharedStrings(xml) {
   const strings2 = [];
@@ -1907,17 +1910,17 @@ function spreadsheetText(zip, workbookPart, budget) {
       else if (n === "workbookPr") styles.date1904 = /^(?:1|true)$/i.test(attr(attrs, "date1904") ?? "");
     }
   });
-  const blocks = [];
+  const blocks2 = [];
   for (const sheet of sheets) {
     if (budget.spent) break;
     const part = rels.get(sheet.id)?.target;
     const xml = part ? zip.text(part) : void 0;
     const table = xml ? markdownTable(sheetRows(xml, shared, styles, budget), budget) : "";
-    if (table) blocks.push(`## ${sheet.name}
+    if (table) blocks2.push(`## ${sheet.name}
 
 ${table}`);
   }
-  return blocks.join("\n\n");
+  return blocks2.join("\n\n");
 }
 function drawingText(xml, budget, onlyBody = false) {
   const lines = [];
@@ -1999,23 +2002,23 @@ function presentationText(zip, presentationPart, budget) {
       if (target) order.push(target);
     }
   });
-  const blocks = [];
+  const blocks2 = [];
   for (const [i, part] of order.entries()) {
     if (budget.spent) break;
     const slide = drawingText(zip.text(part) ?? "", budget);
     const notesPart = relatedPart(relationships(zip, part), "notesSlide");
     const notes = notesPart ? drawingText(zip.text(notesPart) ?? "", budget, true).text : "";
     const heading = `## Slide ${i + 1}${slide.title ? `: ${slide.title}` : ""}`;
-    if (slide.title || slide.text || notes) blocks.push(`${heading}${slide.text ? `
+    if (slide.title || slide.text || notes) blocks2.push(`${heading}${slide.text ? `
 
 ${slide.text}` : ""}${notes ? `
 
 Notes: ${notes}` : ""}`);
   }
-  return blocks.join("\n\n");
+  return blocks2.join("\n\n");
 }
 function openDocumentText(xml, budget) {
-  const blocks = [];
+  const blocks2 = [];
   const paragraphs = [];
   const tables = [];
   let skip = 0;
@@ -2035,7 +2038,7 @@ function openDocumentText(xml, budget) {
     if (table?.cell) table.cell.push(block);
     else if (titleFrame) title.push(block);
     else if (inNotes) notes.push(block);
-    else if (block.trim()) blocks.push(block);
+    else if (block.trim()) blocks2.push(block);
   };
   const repeat = (attrs, name) => Math.min(MAX_REPEAT, Math.max(1, Number(attr(attrs, name)) || 1));
   walkXml(xml, {
@@ -2054,14 +2057,14 @@ function openDocumentText(xml, budget) {
       else if (name === "text:line-break") add2(p, "\n");
       else if (name === "office:spreadsheet") spreadsheet = true;
       else if (name === "draw:page") {
-        heading = blocks.push(`## Slide ${++slide}`) - 1;
+        heading = blocks2.push(`## Slide ${++slide}`) - 1;
         title.length = 0;
         notes.length = 0;
       } else if (name === "presentation:notes") inNotes++;
       else if (name === "draw:frame" && (titleFrame || attr(attrs, "presentation:class") === "title")) titleFrame++;
       else if (name === "table:table") {
         const sheet = attr(attrs, "table:name");
-        const heading2 = sheet && spreadsheet && !tables.length ? blocks.push(`## ${sheet}`) - 1 : void 0;
+        const heading2 = sheet && spreadsheet && !tables.length ? blocks2.push(`## ${sheet}`) - 1 : void 0;
         tables.push({ rows: [], repeatRow: 1, repeatCell: 1, ...heading2 !== void 0 ? { heading: heading2 } : {} });
       } else if (name === "table:table-row" && table) {
         table.row = [];
@@ -2099,13 +2102,13 @@ function openDocumentText(xml, budget) {
       } else if (name === "table:table") {
         const done = tables.pop();
         if (done) emit(tables.length ? done.rows.map((r) => r.join(" ")).join(" ") : markdownTable(done.rows, budget));
-        if (done?.heading !== void 0 && blocks.length === done.heading + 1) blocks.length = done.heading;
+        if (done?.heading !== void 0 && blocks2.length === done.heading + 1) blocks2.length = done.heading;
       } else if (name === "draw:frame" && titleFrame) titleFrame--;
       else if (name === "presentation:notes") inNotes = Math.max(0, inNotes - 1);
       else if (name === "draw:page" && heading >= 0) {
-        if (title.length) blocks[heading] = `## Slide ${slide}: ${title.join(" ")}`;
-        if (notes.length) blocks.push(`Notes: ${notes.join(" ")}`);
-        if (!title.length && !notes.length && blocks.length === heading + 1) blocks.length = heading;
+        if (title.length) blocks2[heading] = `## Slide ${slide}: ${title.join(" ")}`;
+        if (notes.length) blocks2.push(`Notes: ${notes.join(" ")}`);
+        if (!title.length && !notes.length && blocks2.length === heading + 1) blocks2.length = heading;
         heading = -1;
       }
     },
@@ -2113,7 +2116,7 @@ function openDocumentText(xml, budget) {
       if (!skip) add2(paragraphs[paragraphs.length - 1], s.replace(/[ \t\r\n]+/g, " "));
     }
   });
-  return joinBlocks(blocks);
+  return joinBlocks(blocks2);
 }
 function mainPart(zip) {
   const officeDocument = relatedPart(relationships(zip, ""), "officeDocument");
@@ -6824,8 +6827,8 @@ function documentBaseUrl(html, pageUrl) {
   }
   return pageUrl;
 }
-function codeLanguage(pre, inner, divs) {
-  const code = /^\s*(<code(?=[\s/>])[^<>]*>)/i.exec(inner)?.[1];
+function codeLanguage(pre, inner2, divs) {
+  const code = /^\s*(<code(?=[\s/>])[^<>]*>)/i.exec(inner2)?.[1];
   for (const t of [pre, code, divs[divs.length - 1], divs[divs.length - 2]]) {
     if (!t) continue;
     const lang = LANGUAGE_CLASS.exec(htmlAttributes(t).get("class") ?? "")?.[1]?.toLowerCase();
@@ -6835,9 +6838,9 @@ function codeLanguage(pre, inner, divs) {
 }
 function isLayoutTable(open2, html, region) {
   if (/^(?:presentation|none)$/i.test(htmlAttributes(open2).get("role")?.trim() ?? "")) return true;
-  const inner = new RegExp(LAYOUT_INSIDE.source, "gi");
-  inner.lastIndex = region.start;
-  const next = inner.exec(html);
+  const inner2 = new RegExp(LAYOUT_INSIDE.source, "gi");
+  inner2.lastIndex = region.start;
+  const next = inner2.exec(html);
   return next !== null && next.index < region.end;
 }
 function listStart(open2) {
@@ -6943,8 +6946,8 @@ var init_markdown2 = __esm({
         const alt = decodeEntities(attrs.get("alt") ?? "").replace(HTML_SPACE, " ").trim();
         this.push(`![${escapeText(alt)}](${destination(src)})`);
       }
-      codeBlock(inner, lang) {
-        const body = decodeEntities(inner.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
+      codeBlock(inner2, lang) {
+        const body = decodeEntities(inner2.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
         if (!body.trim()) return;
         const fence = "`".repeat(Math.max(3, longestRun(body, "`") + 1));
         this.block([fence + lang, ...body.split("\n"), fence]);
@@ -7893,16 +7896,16 @@ function preSlotIndex(line) {
   const i = Number(line.slice(1, -1));
   return Number.isInteger(i) ? i : void 0;
 }
-function restoreInlinePre(line, blocks) {
+function restoreInlinePre(line, blocks2) {
   const parts = line.split(NUL2);
   let out = parts[0];
   for (let i = 1; i < parts.length; i += 2) {
-    const code = (blocks[Number(parts[i])] ?? "").replace(/\s+/g, " ").trim();
+    const code = (blocks2[Number(parts[i])] ?? "").replace(/\s+/g, " ").trim();
     out += ` ${code} ${parts[i + 1] ?? ""}`;
   }
   return out.replace(/ {2,}/g, " ").trim();
 }
-function setAsidePre(html, blocks) {
+function setAsidePre(html, blocks2) {
   const open2 = /<pre(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
   const close = closeTagRe("pre");
   let out = "";
@@ -7912,10 +7915,10 @@ function setAsidePre(html, blocks) {
     close.lastIndex = open2.lastIndex;
     const c = close.exec(html);
     if (!c) break;
-    const inner = html.slice(open2.lastIndex, c.index);
-    const text = decodeEntities(inner.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
-    blocks.push(text);
-    out += html.slice(last, m.index) + PRE_SLOT(blocks.length - 1);
+    const inner2 = html.slice(open2.lastIndex, c.index);
+    const text = decodeEntities(inner2.replace(/<br\s*\/?>/gi, "\n").replace(LOOSE_TAG_RE, "")).replace(/\r\n?/g, "\n").replace(/^\n/, "").trimEnd();
+    blocks2.push(text);
+    out += html.slice(last, m.index) + PRE_SLOT(blocks2.length - 1);
     last = open2.lastIndex = c.index + c[0].length;
   }
   return last === 0 ? html : out + html.slice(last);
@@ -7974,8 +7977,8 @@ function firstElementText(html, name) {
   close.lastIndex = open2.index + open2[0].length;
   const c = close.exec(html);
   if (!c) return void 0;
-  const inner = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag2) => INLINE_TAGS.has(tagName(tag2)) ? "" : " ");
-  return decodeEntities(inner).replace(/\s+/g, " ").trim() || void 0;
+  const inner2 = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag2) => INLINE_TAGS.has(tagName(tag2)) ? "" : " ");
+  return decodeEntities(inner2).replace(/\s+/g, " ").trim() || void 0;
 }
 function metaContent(html, keys) {
   const found = /* @__PURE__ */ new Map();
@@ -7988,13 +7991,13 @@ function metaContent(html, keys) {
   return keys.map((k) => found.get(k)).find(Boolean);
 }
 function pageTitle(html) {
-  const clean3 = dropElements(html, NOT_TITLE);
-  return firstElementText(clean3, "title") ?? metaContent(clean3, ["og:title", "twitter:title"]) ?? firstElementText(clean3, "h1");
+  const clean32 = dropElements(html, NOT_TITLE);
+  return firstElementText(clean32, "title") ?? metaContent(clean32, ["og:title", "twitter:title"]) ?? firstElementText(clean32, "h1");
 }
 function htmlCanonicalUrl(html) {
-  const clean3 = dropElements(html, ["script", "style", "template"]);
-  const end = clean3.search(/<\/head\s*>|<body(?=[\s/>])/i);
-  const head = end < 0 ? clean3 : clean3.slice(0, end);
+  const clean32 = dropElements(html, ["script", "style", "template"]);
+  const end = clean32.search(/<\/head\s*>|<body(?=[\s/>])/i);
+  const head = end < 0 ? clean32 : clean32.slice(0, end);
   let og;
   for (const m of head.matchAll(/<(link|meta)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
     const attrs = htmlAttributes(m[0]);
@@ -8074,7 +8077,7 @@ function textProfile(html) {
     return { len: len[j] - len[i], link: link[j] - link[i], prose: prose[j] - prose[i] };
   };
 }
-function headlineProse(clean3, stats, lists, minProse) {
+function headlineProse(clean32, stats, lists, minProse) {
   const firstAtOrAfter = (pos) => {
     let lo = 0;
     let hi = lists.length;
@@ -8089,9 +8092,9 @@ function headlineProse(clean3, stats, lists, minProse) {
     const k = firstAtOrAfter(pos + 1) - 1;
     return k >= 0 && pos < lists[k].to;
   };
-  const h1 = [...clean3.matchAll(/<h1(?=[\s/>])/gi)].map((m) => m.index).find((pos) => !inList(pos));
+  const h1 = [...clean32.matchAll(/<h1(?=[\s/>])/gi)].map((m) => m.index).find((pos) => !inList(pos));
   if (h1 === void 0) return void 0;
-  const ancestors = ["div", "section", "article", "main"].flatMap((tag2) => balancedRegions(clean3, tag2, () => true)).filter((r) => r.start <= h1 && h1 < r.end).sort((a, b) => a.end - a.start - (b.end - b.start));
+  const ancestors = ["div", "section", "article", "main"].flatMap((tag2) => balancedRegions(clean32, tag2, () => true)).filter((r) => r.start <= h1 && h1 < r.end).sort((a, b) => a.end - a.start - (b.end - b.start));
   const cum = [{ len: 0, link: 0, prose: 0 }];
   for (const r of lists) {
     const s = stats(r.from, r.to);
@@ -8116,30 +8119,30 @@ function headlineProse(clean3, stats, lists, minProse) {
   let out = "";
   let last = region.start;
   for (const r of lists.slice(i, j)) {
-    out += `${clean3.slice(last, r.from)} `;
+    out += `${clean32.slice(last, r.from)} `;
     last = r.to;
   }
-  return out + clean3.slice(last, region.end);
+  return out + clean32.slice(last, region.end);
 }
 function extractMainHtml(html) {
-  const clean3 = dropElements(html, ["script", "style", "template", "svg"]);
+  const clean32 = dropElements(html, ["script", "style", "template", "svg"]);
   const roleMainTags = /* @__PURE__ */ new Set(["main"]);
-  for (const m of clean3.matchAll(ROLE_MAIN_TAG)) roleMainTags.add(m[1].toLowerCase());
-  const stats = textProfile(clean3);
+  for (const m of clean32.matchAll(ROLE_MAIN_TAG)) roleMainTags.add(m[1].toLowerCase());
+  const stats = textProfile(clean32);
   const tiers = [
     { tags: [...roleMainTags], isCandidate: (open2) => /^<main[\s/>]/i.test(open2) || ROLE_MAIN.test(open2) },
     { tags: ["article"], isCandidate: () => true },
     { tags: ["div", "section"], isCandidate: isContentContainer }
   ];
   for (const tier of tiers) {
-    const regions = tier.tags.flatMap((tag2) => balancedRegions(clean3, tag2, tier.isCandidate)).sort((a, b) => a.start - b.start);
+    const regions = tier.tags.flatMap((tag2) => balancedRegions(clean32, tag2, tier.isCandidate)).sort((a, b) => a.start - b.start);
     if (!regions.length) continue;
     const outer = [];
     let reach = -1;
     for (const r of regions) {
       if (r.start < reach) continue;
       reach = r.end;
-      outer.push({ ...r, len: visibleLength(clean3.slice(r.start, r.end)) });
+      outer.push({ ...r, len: visibleLength(clean32.slice(r.start, r.end)) });
     }
     let best = outer[0];
     for (const r of outer) if (r.len > best.len) best = r;
@@ -8149,13 +8152,13 @@ function extractMainHtml(html) {
     const kept = outer.filter((r) => r === best || blockKind(r.open) === kind && (bestIsList || !linkList(r)));
     if (bestIsList) {
       const listProse = kept.reduce((n, r) => n + stats(r.start, r.end).prose, 0);
-      const prose = headlineProse(clean3, stats, outer.filter(linkList), Math.max(MIN_PROSE, listProse + 1));
+      const prose = headlineProse(clean32, stats, outer.filter(linkList), Math.max(MIN_PROSE, listProse + 1));
       if (prose !== void 0) return prose;
     }
     const keptLen = kept.reduce((n, r) => n + r.len, 0);
-    if (keptLen < 500 && keptLen < visibleLength(clean3) * 0.3) return html;
-    if (kept.length === 1) return clean3.slice(best.start, best.end);
-    return kept.map((r) => `<div>${clean3.slice(r.start, r.end)}</div>`).join("\n");
+    if (keptLen < 500 && keptLen < visibleLength(clean32) * 0.3) return html;
+    if (kept.length === 1) return clean32.slice(best.start, best.end);
+    return kept.map((r) => `<div>${clean32.slice(r.start, r.end)}</div>`).join("\n");
   }
   return html;
 }
@@ -9885,26 +9888,26 @@ function parseFeed(xml, baseUrl) {
   const atom = kind === "atom";
   const rootTag = atom ? openTags(xml, root)[0] : void 0;
   const feedBase = rootTag ? xmlBase(rootTag, baseUrl) : baseUrl;
-  const blocks = elements(xml, atom ? "entry" : "item");
+  const blocks2 = elements(xml, atom ? "entry" : "item");
   const items = [];
-  for (const block of blocks) {
-    const inner = block.inner;
+  for (const block of blocks2) {
+    const inner2 = block.inner;
     const it = {};
-    const title2 = proseText(inner, atom, "title");
+    const title2 = proseText(inner2, atom, "title");
     if (title2) it.title = title2;
-    const url = itemUrl(inner, atom ? xmlBase(block.attrs, feedBase) : feedBase);
+    const url = itemUrl(inner2, atom ? xmlBase(block.attrs, feedBase) : feedBase);
     if (url) it.url = url;
-    const published = tagText(inner, "pubDate", "published", "updated", "dc:date");
+    const published = tagText(inner2, "pubDate", "published", "updated", "dc:date");
     if (published) it.published = published;
-    const summary = proseText(inner, atom, "description", "summary") ?? clip2(proseText(inner, atom, "content", "content:encoded"));
+    const summary = proseText(inner2, atom, "description", "summary") ?? clip2(proseText(inner2, atom, "content", "content:encoded"));
     if (summary) it.summary = summary;
-    const id = tagText(inner, "guid", "id");
+    const id = tagText(inner2, "guid", "id");
     if (id) it.id = id;
     if (it.title || it.url) items.push(it);
   }
   let head = "";
   let last = 0;
-  for (const b of blocks) {
+  for (const b of blocks2) {
     head += xml.slice(last, b.from);
     last = b.to;
   }
@@ -10020,9 +10023,9 @@ function parseBlocks(body, limit, shape) {
 function elementText(html, el) {
   for (const m of html.matchAll(el.open)) {
     if (!hasClass(m[1], el.cls)) continue;
-    const inner = html.slice(m.index + m[0].length);
-    const end = el.close.exec(inner);
-    return end ? stripTags(inner.slice(0, end.index)) : "";
+    const inner2 = html.slice(m.index + m[0].length);
+    const end = el.close.exec(inner2);
+    return end ? stripTags(inner2.slice(0, end.index)) : "";
   }
   return "";
 }
@@ -14270,6 +14273,99 @@ async function readPastCachedWall(url, opts, enabled) {
   }
 }
 
+// src/providers/ncbi.ts
+var PUBMED_PAGE = /^https?:\/\/(?:(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pubmed)\/(\d{4,9})\/?(?:[?#].*)?$/i;
+var PMC_PAGE = /^https?:\/\/(?:(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pmc)\/articles\/(pmc\d+)\/?(?:[?#].*)?$/i;
+var EFETCH = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/efetch\.fcgi\?/i;
+var EUROPE_PMC_XML = /^https?:\/\/(?:www\.)?ebi\.ac\.uk\/europepmc\/webservices\/rest\/(pmc\d+)\/fulltextxml\/?(?:[?#].*)?$/i;
+function europePmcFullTextUrl(pmcid) {
+  return `https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcid.toUpperCase()}/fullTextXML`;
+}
+function pmcPage(pmcid) {
+  return `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid.toUpperCase()}/`;
+}
+function ncbiDocument(url) {
+  const raw = url.trim();
+  const pubmed = raw.match(PUBMED_PAGE);
+  if (pubmed) return { kind: "pubmed", id: pubmed[1], citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pubmed[1]}/`, textUrl: pubmedAbstractUrl(pubmed[1]) };
+  const pmc = raw.match(PMC_PAGE) ?? raw.match(EUROPE_PMC_XML);
+  if (pmc) {
+    const id = pmc[1].toUpperCase();
+    return { kind: "pmc", id, citeUrl: pmcPage(id), textUrl: europePmcFullTextUrl(id) };
+  }
+  if (EFETCH.test(raw)) {
+    let params;
+    try {
+      params = new URL(raw).searchParams;
+    } catch {
+      return void 0;
+    }
+    const ids = (params.get("id") ?? "").split(/[,\s+]+/).filter(Boolean);
+    if (ids.length !== 1) return void 0;
+    const db = (params.get("db") ?? "").toLowerCase();
+    const id = ids[0];
+    if (db === "pubmed" && /^\d+$/.test(id)) return { kind: "pubmed", id, citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: raw };
+    if (db === "pmc") {
+      const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
+      return { kind: "pmc", id: pmcid, citeUrl: pmcPage(pmcid), textUrl: europePmcFullTextUrl(pmcid) };
+    }
+  }
+  return void 0;
+}
+async function readNcbiDocument(doc, opts = {}) {
+  if (doc.kind === "pubmed") {
+    const res2 = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
+    const text2 = res2.text?.trim() ?? "";
+    if (!text2) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res2.status || "no response"})` };
+    const wall2 = looksLikeWall(text2);
+    if (wall2) return { ok: false, why: `E-utilities returned a ${wall2} for PMID ${doc.id}` };
+    return { ok: true, text: text2, via: doc.textUrl };
+  }
+  const res = await httpGet(doc.textUrl, { accept: "application/xml, text/xml;q=0.9, */*;q=0.1" });
+  if (!res.ok || !/<article\b/i.test(res.body)) {
+    return { ok: false, why: `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})` };
+  }
+  const { text, title } = jatsToText(res.body);
+  const wall = looksLikeWall(text);
+  if (wall) return { ok: false, why: `Europe PMC's full text for ${doc.id} is a ${wall}` };
+  return { ok: true, text, ...title ? { title } : {}, via: doc.textUrl };
+}
+var DROP = ["table-wrap", "table", "disp-formula", "inline-formula", "mml:math", "supplementary-material", "ref-list", "ack", "fn-group", "alternatives"];
+function inner(xml, tag2) {
+  return xml.match(new RegExp(`<${tag2}\\b[^>]*>([\\s\\S]*?)</${tag2}>`, "i"))?.[1];
+}
+function clean2(s) {
+  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").replace(/\s+([,.;:)\]])/g, "$1").replace(/([([])\s+/g, "$1").trim();
+}
+function blocks(xml) {
+  let x = xml;
+  for (const tag2 of DROP) x = x.replace(new RegExp(`<${tag2}\\b[^>]*>[\\s\\S]*?</${tag2}>`, "gi"), " ");
+  const out = [];
+  const re = /<(title|p)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while (m = re.exec(x)) {
+    const body = clean2(m[2]);
+    if (!body) continue;
+    out.push(m[1].toLowerCase() === "title" ? `## ${body}` : body);
+  }
+  return out;
+}
+function jatsToText(xml) {
+  const front = inner(xml, "front") ?? xml;
+  const titleXml = inner(inner(front, "title-group") ?? front, "article-title");
+  const title = titleXml ? clean2(titleXml) : void 0;
+  const parts = [];
+  if (title) parts.push(`# ${title}`);
+  const abstract = inner(front, "abstract");
+  if (abstract) {
+    const ab = blocks(abstract);
+    if (ab.length) parts.push("## Abstract", ...ab.filter((b) => b !== "## Abstract"));
+  }
+  const body = inner(xml, "body");
+  if (body) parts.push(...blocks(body));
+  return { text: parts.join("\n\n"), ...title ? { title } : {} };
+}
+
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { join as join11 } from "path";
@@ -14289,7 +14385,7 @@ function sourceSignals(opts) {
 import { join as join6 } from "path";
 
 // src/bibtex.ts
-function clean2(s) {
+function clean3(s) {
   return s.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 function bibKey(s, used) {
@@ -14312,13 +14408,13 @@ function toBibtex(sources) {
   const out = ["% Generated by ultrasearch \u2014 research mode", ""];
   for (const s of scholarly) {
     const key = bibKey(s, used);
-    const fields = [`  title = {${clean2(s.title)}}`];
-    if (s.meta?.authors?.length) fields.push(`  author = {${s.meta.authors.map(clean2).join(" and ")}}`);
+    const fields = [`  title = {${clean3(s.title)}}`];
+    if (s.meta?.authors?.length) fields.push(`  author = {${s.meta.authors.map(clean3).join(" and ")}}`);
     if (s.meta?.year) fields.push(`  year = {${s.meta.year}}`);
-    if (s.meta?.venue) fields.push(`  journal = {${clean2(String(s.meta.venue))}}`);
-    if (s.meta?.doi) fields.push(`  doi = {${clean2(String(s.meta.doi))}}`);
+    if (s.meta?.venue) fields.push(`  journal = {${clean3(String(s.meta.venue))}}`);
+    if (s.meta?.doi) fields.push(`  doi = {${clean3(String(s.meta.doi))}}`);
     if (s.meta?.arxivId) {
-      fields.push(`  eprint = {${clean2(String(s.meta.arxivId))}}`);
+      fields.push(`  eprint = {${clean3(String(s.meta.arxivId))}}`);
       fields.push(`  archivePrefix = {arXiv}`);
     }
     if (s.url) fields.push(`  url = {${s.url}}`);
@@ -14366,12 +14462,12 @@ function annotateExtras(text, source2, manifest) {
   return out;
 }
 function writeExtras(dir, sources, manifest) {
-  const blocks = [];
+  const blocks2 = [];
   for (const spec of active2(manifest)) {
     const lines = spec.write?.({ dir, sources, manifest }) ?? [];
-    if (lines.length) blocks.push(lines);
+    if (lines.length) blocks2.push(lines);
   }
-  return blocks;
+  return blocks2;
 }
 function extraSummaries(sources, manifest) {
   return active2(manifest).map((spec) => spec.summary?.({ dir: "", sources, manifest })).filter((s) => s !== void 0);
@@ -14549,8 +14645,8 @@ function writeDossierIndex(dir, sources, manifest, template) {
   const manifestJson = join11(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
-  const blocks = writeExtras(dir, sources, manifest);
-  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks));
+  const blocks2 = writeExtras(dir, sources, manifest);
+  writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks2));
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
 function writeDossier(dir, rawSources, manifest, template) {
@@ -15042,6 +15138,16 @@ async function runGather(options) {
     }
     return p;
   };
+  const ncbiCache = /* @__PURE__ */ new Map();
+  const ncbiServed = /* @__PURE__ */ new Set();
+  const readNcbi = (doc) => {
+    let p = ncbiCache.get(doc.textUrl);
+    if (!p) {
+      p = readNcbiDocument(doc, { cache: !!options.cache });
+      ncbiCache.set(doc.textUrl, p);
+    }
+    return p;
+  };
   async function assemble(rawLists) {
     let merged2 = fuse(rawLists);
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
@@ -15062,6 +15168,19 @@ async function runGather(options) {
         return;
       }
       const key = canonicalizeUrl(it.url);
+      const ncbi = ncbiDocument(it.url);
+      if (ncbi) {
+        const got = await readNcbi(ncbi);
+        if (got.ok) {
+          it.text = got.text;
+          it.fullText = true;
+          it.meta = { ...it.meta, textVia: got.via };
+          if (!it.snippet) it.snippet = bestExcerpt(got.text, options.question);
+          if ((!it.title || it.title === it.url) && got.title) it.title = got.title;
+          ncbiServed.add(ncbi.id);
+          return;
+        }
+      }
       const fromCache = hydrateCache.has(key);
       const res = await hydrate(it.url, key);
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
@@ -15078,6 +15197,17 @@ async function runGather(options) {
         const candidates2 = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : void 0];
         for (const cand of [...new Set(candidates2)]) {
           if (!cand || cand === it.url) continue;
+          const doc = ncbiDocument(cand);
+          const viaNcbi = doc ? await readNcbi(doc) : void 0;
+          if (doc && viaNcbi?.ok) {
+            text = viaNcbi.text;
+            junk = void 0;
+            title = title || viaNcbi.title;
+            it.meta = { ...it.meta, textVia: viaNcbi.via };
+            ncbiServed.add(doc.id);
+            hydrateNotes.push(`Primary page for ${it.url} was unusable \u2014 hydrated the fallback ${cand} instead.`);
+            break;
+          }
           const alt = await hydrate(cand, canonicalizeUrl(cand));
           if (alt.text?.trim() && !looksLikeWall(alt.text)) {
             text = alt.text;
@@ -15291,6 +15421,9 @@ async function runGather(options) {
       ] : [],
       ...(options.rounds ?? 1) >= 2 ? [`--rounds 2 needs a discovery engine for its gap search; --search light has none. Use --search full.`] : []
     ] : [],
+    ...ncbiServed.size ? [
+      `Read ${ncbiServed.size} PubMed/PMC record(s) through their endpoints (E-utilities abstracts, Europe PMC full text) \u2014 their pages are cookie/anti-bot walls to this reader; each still cites its PubMed or PMC page.`
+    ] : [],
     ...cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : [],
     ...services.firecrawl.pages > 0 ? [`Firecrawl cleaned ${services.firecrawl.pages} page(s) (self-hosted, browser-rendered main-content markdown instead of the built-in HTML stripper).`] : [],
     ...services.browser?.pages ? [
@@ -15368,8 +15501,8 @@ async function addSources(dir, hits, opts = {}) {
   let committed = 0;
   try {
     for (const hit of hits) {
-      const { url, title } = typeof hit === "string" ? { url: hit, title: void 0 } : hit;
-      const p = await prepareSource(stateOf, url, { ...opts, title, rescues });
+      const { url, title, citeUrl } = typeof hit === "string" ? { url: hit, title: void 0, citeUrl: void 0 } : hit;
+      const p = await prepareSource(stateOf, url, { ...opts, title, ...citeUrl ? { citeUrl } : {}, rescues });
       let r;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -15490,14 +15623,34 @@ async function prepareSource(stateOf, url, opts) {
   }
   const provider = resolveProvider(url);
   if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
-  let citeUrl = supplied || provider.citeUrl;
+  const ncbi = ncbiDocument(url);
+  let citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
   const canon = canonicalizeUrl(citeUrl);
   const existing = state.byCanon.get(canon);
   if (existing) {
     return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
+  let ncbiMiss;
+  if (ncbi) {
+    const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
+    if (got.ok) {
+      const backend2 = opts.backend ?? "claude";
+      const raw2 = {
+        url: citeUrl,
+        title: opts.title || got.title || titleFromText(got.text) || citeUrl,
+        backend: backend2,
+        score: 0,
+        snippet: bestExcerpt(got.text, question),
+        text: got.text,
+        meta: { textVia: got.via }
+      };
+      return { ok: true, raw: raw2, backend: backend2, text: got.text, question };
+    }
+    ncbiMiss = got.why;
+  }
   const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
-  const readUrl = supplied ? url : preferred;
+  const readsEndpoint = !isCitableUrl(url) && citeUrl !== url;
+  const readUrl = supplied || readsEndpoint ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
   const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
@@ -15562,12 +15715,13 @@ async function prepareSource(stateOf, url, opts) {
       result: {
         id: "",
         added: false,
-        note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.`
+        note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.` + (ncbiMiss ? ` (${ncbiMiss}.)` : "")
       }
     };
   }
   if (!text?.trim()) {
-    return { ok: false, result: { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` } };
+    const why = fetched.note ?? `no readable content at ${readUrl}`;
+    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
   }
   if (supplied && supplied !== url) {
     meta.textVia = url;
@@ -15867,11 +16021,11 @@ function mdToHtml(md, idPrefix, opts = {}) {
         quote.push(q);
         i++;
       }
-      const inner = inline(escapeHtml(quote.join(" ").trim()));
+      const inner2 = inline(escapeHtml(quote.join(" ").trim()));
       if (isHint) {
-        out.push(`<blockquote class="model-hint"><span class="mhint-badge">model hint \xB7 unverified</span> ${inner}</blockquote>`);
+        out.push(`<blockquote class="model-hint"><span class="mhint-badge">model hint \xB7 unverified</span> ${inner2}</blockquote>`);
       } else {
-        out.push(`<blockquote>${inner}</blockquote>`);
+        out.push(`<blockquote>${inner2}</blockquote>`);
       }
       continue;
     }
@@ -18145,7 +18299,7 @@ var langProp = { type: "string", description: "Search language, e.g. 'fr'. Defau
 var webResultsProp = {
   type: "array",
   items: { type: "object" },
-  description: "YOUR OWN web-search hits \u2014 [{url, title, snippet}, \u2026]. This is the PRIMARY discovery lane: the strongest index available here, and the only one that needs neither a container nor a scrape. Run your web search first, pass the hits, and the engine fetches, ranks and dedupes them like any other candidate. A bare list of URL strings works too."
+  description: "YOUR OWN web-search hits \u2014 [{url, title, snippet}, \u2026]. This is the PRIMARY discovery lane: the strongest index available here, and the only one that needs neither a container nor a scrape. Run your web search first, pass the hits, and the engine fetches, ranks and dedupes them like any other candidate. A bare list of URL strings works too. For ultrasearch_ingest, a hit may add citeUrl: the text is read from url and that page is cited."
 };
 var searchProfileProp = {
   type: "string",
@@ -18682,6 +18836,8 @@ Commands:
            batch form of 'fetch', and the way to top up a dossier from your own
            WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
            reports one outcome per URL (added / already there / refused).
+           PubMed and PMC pages (and efetch URLs) are read through E-utilities
+           and Europe PMC, never through their cookie / anti-bot walls.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -18762,7 +18918,9 @@ Options:
                        off; always off by default under --stdout, which writes
                        nothing, not even the browser's profile)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, \u2026]
-                       (a bare array of URLs, or '-' for stdin, also work). This
+                       (a bare array of URLs, or '-' for stdin, also work). For
+                       'ingest', a hit may add citeUrl: read the text from url,
+                       cite that page (fetch --cite-url, per hit). This
                        is the PRIMARY discovery lane \u2014 the strongest index here,
                        and the only one needing neither a container nor a scrape.
   --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
@@ -18796,7 +18954,10 @@ Options:
   --cache              (default; kept as an accepted no-op) Reuse the on-disk
                        fetch cache across runs \u2014 24h TTL, keyed by canonical URL
                        + Accept-Language, successful extractions only
-  --no-cache           Disable the on-disk fetch cache: fetch every page live
+  --no-cache           Disable the on-disk fetch cache: every read is live \u2014 the
+                       page, its text endpoint (E-utilities, Europe PMC) and the
+                       landing-page fallback alike. A cached copy that turns out
+                       to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
   --phase <name>       For 'orchestrate': emit one phase only \u2014 gather | verify

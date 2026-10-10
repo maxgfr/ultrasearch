@@ -250,6 +250,9 @@ export interface WebSearchHit {
   url: string;
   title?: string;
   snippet?: string;
+  // `ingest` only: read the text from `url` but CITE this page — the per-hit
+  // form of `fetch --cite-url`, for an endpoint whose document you already know.
+  citeUrl?: string;
 }
 
 // Optional, backend-specific metadata carried on a source.

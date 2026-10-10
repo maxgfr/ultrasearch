@@ -20,6 +20,7 @@ import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { isWordedWall, looksLikeWall, readPastCachedWall } from "./walls.js";
+import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from "./providers/ncbi.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
@@ -464,6 +465,21 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     return p;
   };
 
+  // PubMed / PMC documents read through their endpoints (src/providers/ncbi.ts),
+  // memoised per endpoint for the whole run like `hydrate` — the gap round and a
+  // second item pointing at the same record share one read. `ncbiServed` names
+  // the records whose text came that way, for the run's single note about it.
+  const ncbiCache = new Map<string, Promise<NcbiRead>>();
+  const ncbiServed = new Set<string>();
+  const readNcbi = (doc: NcbiDocument): Promise<NcbiRead> => {
+    let p = ncbiCache.get(doc.textUrl);
+    if (!p) {
+      p = readNcbiDocument(doc, { cache: !!options.cache });
+      ncbiCache.set(doc.textUrl, p);
+    }
+    return p;
+  };
+
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
   // pool-relative recency) → collapse near-duplicate CONTENT → cap. Shared by
@@ -497,6 +513,24 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         return;
       }
       const key = canonicalizeUrl(it.url);
+      // PubMed and PMC pages are walls to this reader ("Cookies must be
+      // enabled", an anti-bot interstitial); their endpoints are not. So the
+      // endpoint is read FIRST — E-utilities for an abstract, Europe PMC's
+      // full-text XML for a PMC article — and the page is only fetched when the
+      // endpoint has nothing. `it.url` stays the page: that is what gets cited.
+      const ncbi = ncbiDocument(it.url);
+      if (ncbi) {
+        const got = await readNcbi(ncbi);
+        if (got.ok) {
+          it.text = got.text;
+          it.fullText = true;
+          it.meta = { ...it.meta, textVia: got.via };
+          if (!it.snippet) it.snippet = bestExcerpt(got.text, options.question);
+          if ((!it.title || it.title === it.url) && got.title) it.title = got.title;
+          ncbiServed.add(ncbi.id);
+          return;
+        }
+      }
       const fromCache = hydrateCache.has(key); // asked BEFORE hydrate() fills it
       const res = await hydrate(it.url, key);
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
@@ -532,6 +566,20 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const candidates = [absUrl, resolveProvider(it.url).textUrl, absUrl ? resolveProvider(absUrl).textUrl : undefined];
         for (const cand of [...new Set(candidates)]) {
           if (!cand || cand === it.url) continue;
+          // A candidate that is itself a PubMed / PMC document is read through
+          // its endpoint — a PMC page is an interstitial, its Europe PMC XML is
+          // the article — before the generic read of the page.
+          const doc = ncbiDocument(cand);
+          const viaNcbi = doc ? await readNcbi(doc) : undefined;
+          if (doc && viaNcbi?.ok) {
+            text = viaNcbi.text;
+            junk = undefined;
+            title = title || viaNcbi.title;
+            it.meta = { ...it.meta, textVia: viaNcbi.via };
+            ncbiServed.add(doc.id);
+            hydrateNotes.push(`Primary page for ${it.url} was unusable — hydrated the fallback ${cand} instead.`);
+            break;
+          }
           const alt = await hydrate(cand, canonicalizeUrl(cand));
           if (alt.text?.trim() && !looksLikeWall(alt.text)) {
             text = alt.text;
@@ -893,6 +941,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
               ]
             : []),
           ...((options.rounds ?? 1) >= 2 ? [`--rounds 2 needs a discovery engine for its gap search; --search light has none. Use --search full.`] : []),
+        ]
+      : []),
+    ...(ncbiServed.size
+      ? [
+          `Read ${ncbiServed.size} PubMed/PMC record(s) through their endpoints (E-utilities abstracts, Europe PMC full text) — ` +
+            `their pages are cookie/anti-bot walls to this reader; each still cites its PubMed or PMC page.`,
         ]
       : []),
     ...(cacheHits > 0 ? [`Fetch cache served ${cacheHits} page(s) from disk (up to 24h old). Use --no-cache for an all-live run.`] : []),

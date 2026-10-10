@@ -15,6 +15,7 @@ import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, titleFromText } from "./util.js";
 import { looksLikeWall, readPastCachedWall } from "./walls.js";
+import { ncbiDocument, readNcbiDocument } from "./providers/ncbi.js";
 
 export interface EnrichResult {
   id: string;
@@ -129,8 +130,10 @@ export async function addSources(
   let committed = 0;
   try {
     for (const hit of hits) {
-      const { url, title } = typeof hit === "string" ? { url: hit, title: undefined } : hit;
-      const p = await prepareSource(stateOf, url, { ...opts, title, rescues });
+      const { url, title, citeUrl } = typeof hit === "string" ? { url: hit, title: undefined, citeUrl: undefined } : hit;
+      // A hit's own citeUrl is `fetch --cite-url` for that hit: the text comes
+      // from `url`, the citation is the page. Without one, the provider decides.
+      const p = await prepareSource(stateOf, url, { ...opts, title, ...(citeUrl ? { citeUrl } : {}), rescues });
       let r: EnrichResult;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -333,7 +336,10 @@ async function prepareSource(
   }
   const provider = resolveProvider(url);
   if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
-  let citeUrl = supplied || provider.citeUrl;
+  // PubMed and PMC have a native reader (src/providers/ncbi.ts): their pages are
+  // walls to anything but a browser, their text endpoints are not.
+  const ncbi = ncbiDocument(url);
+  let citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
 
   // Dedupe on the CITE url so the same paper can't enter twice — once as its
   // page and once as the endpoint that carries its text. Against the batch's
@@ -345,12 +351,39 @@ async function prepareSource(
     return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
 
+  // The endpoint first, for PubMed and PMC: E-utilities for an abstract, Europe
+  // PMC's full-text XML for a PMC article. The landing page is only read when the
+  // endpoint has nothing — and never read back OVER text the endpoint returned,
+  // which is how 40 efetch URLs used to come out of `ingest` as 40 cookie walls.
+  let ncbiMiss: string | undefined;
+  if (ncbi) {
+    const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
+    if (got.ok) {
+      const backend: BackendKind = opts.backend ?? "claude";
+      const raw: RawSource = {
+        url: citeUrl,
+        title: opts.title || got.title || titleFromText(got.text) || citeUrl,
+        backend,
+        score: 0,
+        snippet: bestExcerpt(got.text, question),
+        text: got.text,
+        meta: { textVia: got.via },
+      };
+      return { ok: true, raw, backend, text: got.text, question };
+    }
+    ncbiMiss = got.why;
+  }
+
   // Where the TEXT comes from. Normally the citation page, but a provider that
   // marks its textUrl as the real content (arXiv: /abs/ is an abstract, the PDF
   // is the paper) is read there first — otherwise the landing page always
-  // "succeeds" and the full text is never fetched at all.
+  // "succeeds" and the full text is never fetched at all. And a URL that IS a
+  // machine endpoint the provider maps onto a page (an efetch, say) is read
+  // where it points: the caller handed over the text's address on purpose, and
+  // re-reading the page it resolves to would throw that text away.
   const preferred = provider.preferText && provider.textUrl ? provider.textUrl : citeUrl;
-  const readUrl = supplied ? url : preferred;
+  const readsEndpoint = !isCitableUrl(url) && citeUrl !== url;
+  const readUrl = supplied || readsEndpoint ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
   const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
@@ -439,12 +472,15 @@ async function prepareSource(
       result: {
         id: "",
         added: false,
-        note: `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.`,
+        note:
+          `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.` +
+          (ncbiMiss ? ` (${ncbiMiss}.)` : ""),
       },
     };
   }
   if (!text?.trim()) {
-    return { ok: false, result: { id: "", added: false, note: fetched.note ?? `no readable content at ${readUrl}` } };
+    const why = fetched.note ?? `no readable content at ${readUrl}`;
+    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
   }
 
   // We have the text; now settle what gets CITED. If the url we read is a

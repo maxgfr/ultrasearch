@@ -34,7 +34,7 @@ const webResultsProp: JsonSchemaProp = {
   description:
     "YOUR OWN web-search hits — [{url, title, snippet}, …]. This is the PRIMARY discovery lane: the strongest index available here, and the only one that " +
     "needs neither a container nor a scrape. Run your web search first, pass the hits, and the engine fetches, ranks and dedupes them like any other candidate. " +
-    "A bare list of URL strings works too.",
+    "A bare list of URL strings works too. For ultrasearch_ingest, a hit may add citeUrl: the text is read from url and that page is cited.",
 };
 const searchProfileProp: JsonSchemaProp = {
   type: "string",

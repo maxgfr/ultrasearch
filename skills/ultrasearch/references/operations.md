@@ -39,7 +39,11 @@ turns that into a hard failure for a high-stakes run.
 
 ## The fetch cache
 
-**On by default.** Pass `--no-cache` for an all-live run.
+**On by default.** Pass `--no-cache` for an all-live run — every read of the run,
+the page itself, its text endpoint (E-utilities, Europe PMC) and the
+landing-page fallback alike. A cached copy that turns out to be a **wall** is
+never served: the read is redone live (and the good copy replaces it on disk),
+cache or no cache.
 
 - On disk, shared **across processes** — the deep tier's fan-out fetches an
   overlapping URL once instead of once per sub-question.

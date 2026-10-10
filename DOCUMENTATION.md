@@ -155,6 +155,12 @@ extracts, so it costs no extra retrieval. See
   and a 300-character content floor. `gather` keeps a wall as snippet-only with
   `wall: true`, `ingest`/`fetch` refuse it, `check` fails a report citing one.
   `readPastCachedWall` re-reads live when the fetch cache serves a wall.
+- `providers/ncbi.ts` — the native PubMed / PMC reader: `ncbiDocument` maps a
+  PubMed page, a PMC article page (current or legacy host), a single-record
+  efetch or a Europe PMC URL to its citable page + text endpoint;
+  `readNcbiDocument` reads E-utilities (abstract) or Europe PMC `fullTextXML`
+  (converted by `jatsToText`). `gather` and `ingest`/`fetch` read it BEFORE the
+  page, and `gather`'s fallback ladder uses it for PubMed/PMC candidates.
 - `locale.ts` — pure locale derivation (`Accept-Language`, DuckDuckGo `kl`).
 - `brainstorm.ts` — `runBrainstorm`: the clarity gate's shallow probe, ambiguity
   signals and candidate angles.

@@ -28,6 +28,7 @@ export interface ParsedWebResults {
 const URL_KEYS = ["url", "link", "href", "uri"];
 const TITLE_KEYS = ["title", "name", "heading"];
 const SNIPPET_KEYS = ["snippet", "description", "summary", "content", "text", "excerpt"];
+const CITE_KEYS = ["citeUrl", "cite_url", "citeURL", "cite"];
 
 function firstString(o: Record<string, unknown>, keys: string[]): string | undefined {
   for (const k of keys) {
@@ -63,10 +64,14 @@ function hitFrom(entry: unknown): WebSearchHit | undefined {
   if (!raw) return undefined;
   const url = normalizeUrl(raw);
   if (!url) return undefined;
+  // Kept as given, not normalised: an unusable cite url must reach `ingest`,
+  // which refuses that one hit with a note instead of silently citing the endpoint.
+  const citeUrl = firstString(o, CITE_KEYS);
   return {
     url,
     title: firstString(o, TITLE_KEYS),
     snippet: firstString(o, SNIPPET_KEYS),
+    ...(citeUrl ? { citeUrl } : {}),
   };
 }
 
@@ -89,6 +94,9 @@ function entriesOf(parsed: unknown): unknown[] | undefined {
  * agent wrapped its hits in `{results: […]}` or pasted bare URLs. Everything
  * it refuses is COUNTED and explained, so a malformed payload is visible in
  * the dossier instead of quietly halving recall.
+ *
+ * Each object may carry `citeUrl` (or `cite_url`): `ingest` then reads the text
+ * from `url` and cites that page instead — `fetch --cite-url`, per hit.
  *
  * Accepts: a JSON array of objects, a JSON array of URL strings, a JSON object
  * wrapping either under `results`/`hits`/`items`/…, or a plain newline-separated

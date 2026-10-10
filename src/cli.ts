@@ -6,7 +6,7 @@ import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, ALL_SEAR
 // Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
 // bundle and cross-checks the documented flag surface against these tables.
 export { ALL_WEB_ENGINES, ALL_SEARCH_PROFILES };
-import type { BackendKind, BrowserMode, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine } from "./types.js";
+import type { BackendKind, BrowserMode, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine, WebSearchHit } from "./types.js";
 import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
@@ -69,6 +69,8 @@ Commands:
            batch form of 'fetch', and the way to top up a dossier from your own
            WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
            reports one outcome per URL (added / already there / refused).
+           PubMed and PMC pages (and efetch URLs) are read through E-utilities
+           and Europe PMC, never through their cookie / anti-bot walls.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -149,7 +151,9 @@ Options:
                        off; always off by default under --stdout, which writes
                        nothing, not even the browser's profile)
   --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, …]
-                       (a bare array of URLs, or '-' for stdin, also work). This
+                       (a bare array of URLs, or '-' for stdin, also work). For
+                       'ingest', a hit may add citeUrl: read the text from url,
+                       cite that page (fetch --cite-url, per hit). This
                        is the PRIMARY discovery lane — the strongest index here,
                        and the only one needing neither a container nor a scrape.
   --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
@@ -183,7 +187,10 @@ Options:
   --cache              (default; kept as an accepted no-op) Reuse the on-disk
                        fetch cache across runs — 24h TTL, keyed by canonical URL
                        + Accept-Language, successful extractions only
-  --no-cache           Disable the on-disk fetch cache: fetch every page live
+  --no-cache           Disable the on-disk fetch cache: every read is live — the
+                       page, its text endpoint (E-utilities, Europe PMC) and the
+                       landing-page fallback alike. A cached copy that turns out
+                       to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
   --phase <name>       For 'orchestrate': emit one phase only — gather | verify
@@ -1015,7 +1022,7 @@ async function dispatch(p: Parsed): Promise<void> {
       const files = p.values.files ? parseList(p.values.files) : [];
       if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...> or --files <p,...>");
 
-      const hits: (string | { url: string; title?: string })[] = [...listed];
+      const hits: (string | WebSearchHit)[] = [...listed];
       if (spec) {
         const parsed = parseWebResults(readWebResultsPayload(spec));
         for (const n of parsed.notes) process.stderr.write(`ultrasearch: ${n}\n`);
