@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.41.1](https://github.com/maxgfr/ultrasearch/compare/v1.41.0...v1.41.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* harden PubMed reads, walls, dedupe and refcheck after the thesis audit ([5ffbaf5](https://github.com/maxgfr/ultrasearch/commit/5ffbaf54928a7d3e7907d622fcbcfcb07ba0ff14))
+
 # [1.41.0](https://github.com/maxgfr/ultrasearch/compare/v1.40.0...v1.41.0) (2026-10-10)
 
 
