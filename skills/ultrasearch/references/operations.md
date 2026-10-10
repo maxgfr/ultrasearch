@@ -13,7 +13,8 @@ decision surface; this is the operations manual.
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
 | `drop` | 1 | An `--id` that is not in the dossier (the others were still dropped). |
-| `merge` · `fetch` · `relink` · `drop` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
+| `refcheck` | 1 | No `--refs`, an unreadable file, no reference found in it, or `--out` holding a dossier `refcheck` did not write. Discrepancies are findings, not failures: they never change the exit code. |
+| `merge` · `fetch` · `relink` · `drop` · `verify` · `orchestrate` · `refcheck` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
 | `render` | 2 | `--stdout --no-md` — that combination leaves nothing to emit, because `--stdout` never produces HTML. |
 
 Anything non-zero means *stop and fix*, never *present anyway*.
@@ -70,8 +71,14 @@ more than saving ten seconds.
 - `--concurrency <n>` (default 6) bounds in-flight page fetches.
 - Rate-limited backends (GitHub, Stack Exchange, Semantic Scholar, PubMed) get a
   single query variant per run; the polite scholarly APIs (arXiv, Crossref,
-  OpenAlex, Europe PMC, dblp) run their per-variant calls sequentially.
+  OpenAlex, Europe PMC, ClinicalTrials.gov, dblp) run their per-variant calls
+  sequentially.
 - Every request retries once on 429/503/502/504, honouring `Retry-After`.
+- The scholarly APIs (PubMed, Europe PMC, ClinicalTrials.gov, Crossref,
+  OpenAlex, Semantic Scholar — and every `refcheck` lookup) go further on a
+  429/503: 3 attempts, a `Retry-After` of up to 30 s waited out as sent, else
+  1 s then 2 s. A backend still throttled after that says `rate-limited` in the
+  run's notes.
 
 ## Environment variables
 
@@ -99,9 +106,11 @@ more than saving ten seconds.
 | `ULTRASEARCH_MAX_ATTEMPTS` | 2 | Attempts per request (1-5). |
 | `ULTRASEARCH_RETRY_MS` | 600 | Backoff between attempts. |
 | `ULTRASEARCH_PAGE_DELAY_MS` | 350 | Pause between result pages of one engine. |
-| `ULTRASEARCH_POLITE_DELAY_MS` | 400 | Pause between a scholarly API's per-variant calls. |
+| `ULTRASEARCH_POLITE_DELAY_MS` | 400 | Pause between a scholarly API's per-variant calls, and between `refcheck`'s lookups. |
+| `ULTRASEARCH_BACKOFF_MS` | 1000 | First wait of the scholarly APIs' 429/503 back-off (doubles once). |
+| `ULTRASEARCH_BACKOFF_CAP_MS` | 30000 | Longest `Retry-After` the scholarly APIs wait out; a longer one ends the attempt. |
 
-> **The last four are politeness, not performance.** They exist so tests and CI
+> **The last six are politeness, not performance.** They exist so tests and CI
 > can run fast offline. Zeroing them against the live web hammers free services
 > and gets the host rate-limited or blocked. **Never lower them on a real run.**
 
@@ -119,7 +128,7 @@ files, not the fetch cache. What it would have written goes to stdout instead.
 | `plan` | its JSON payload, unchanged; the `<RUN>/q#` dirs stay in it as hints but are not created |
 | `render` | `index.md` only — `index.html` is never built, since its value is being a file you open |
 | `search` · `modes` · `check` | nothing changes; they already wrote nothing |
-| `merge` · `fetch` · `relink` · `verify` · `orchestrate` | **exit 2** — see Exit codes |
+| `merge` · `fetch` · `relink` · `verify` · `orchestrate` · `refcheck` | **exit 2** — see Exit codes |
 
 Add `--json` for the parse-safe form: `{ dir: null, manifest, artifacts: { "<path>": "<content>" } }`,
 carrying every artifact including `sources.json` and `manifest.json`. The plain
@@ -133,6 +142,36 @@ grounding-rules section rather than threatening a gate that cannot run. Cite
 
 This is not a sandbox. It stops the writes ultrasearch performs; it cannot stop
 a caller from redirecting stdout into a file.
+
+## Checking a bibliography (`refcheck`)
+
+```
+node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <thesis.docx|refs.txt|refs.bib> [--citing <text.md|.docx|.pdf>] --out <dir> [--offline] [--json]
+```
+
+| Step | What it does |
+|---|---|
+| Parse | A numbered list (`1.`, `1)`, `[1]`) under the document's last References / Références / Bibliographie heading — or the whole file when there is none; one paragraph per reference when the numbering was not text (Word's automatic lists). Vancouver fields: authors (with `et al.`), title, journal, year, volume, issue, pages, DOI, PMID, PMCID. Or a `.bib`. `.docx`/`.odt` are read by the engine's built-in reader, `.pdf` by the PDF ladder. |
+| Resolve | Its own PMID → `ecitmatch` (journal\|year\|volume\|first page\|first author, batched) → its DOI as `[aid]` → a PubMed title search (kept only when the titles agree) → Crossref by DOI → Crossref `query.bibliographic` (kept only at ≥ 85 % title overlap). `esummary` and `efetch` are batched (100 ids per call). |
+| DOI | Every cited DOI is asked of doi.org's handle API: `resolves: false` is a broken DOI, `undefined` means doi.org could not be asked. |
+| Diff | Per field `match` / `mismatch` (with the record's value) / `missing` (the record has it, the citation does not). Pages compare expanded (`157-62` = `157-162`); the journal is compared with the NLM abbreviation (PubMed `source`). Authors: names and initials in order; a shorter list with `et al.` is a style note, not an error (Vancouver lists 6). |
+| Citing text | `[n]`, `[n,m]`, `[n–m]`, `(n)` (only when no bracket call exists and every number is a reference) and superscripts (`¹²`, `<sup>`, `^n^`). Orphans, unknown numbers, and first-citation order. Each call's claim is the text since the previous call in its sentence; its figures are looked up in the cited abstract as whole numbers (`found` / `absent` / `no-abstract`). |
+| Outputs | `refcheck.json` (everything), `REFCHECK.md` (the `verification` template) and, unless `--offline` or nothing resolved, a dossier in the same dir: source `S<n>` is reference `n` (its record and abstract), `refs.bib` regenerated from the records. Write `REPORT.md` from it and run `check` as usual. |
+
+`refcheck` never fails on a finding: discrepancies are its output. An absent
+figure is a lead (the number may be in the full text); `fetch --url` the
+article before calling the citation wrong. The same run under MCP is
+`ultrasearch_refcheck`.
+
+## Report templates are guidance
+
+Each mode carries a template, and `--template <t>` (on `gather` and `ingest`)
+swaps it for another — any mode's, or `verification`. Headings are free:
+rename, merge or drop them. `check` expects only one structural thing, an
+"Open questions" section (English or French; "contradictions" counts), and
+warns — never fails — when it is missing. A `## References (see refs.bib)` or
+`## Sources (…)` heading is the appendix: its lines are neither claims nor
+citations.
 
 ## Optional local containers
 

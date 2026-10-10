@@ -150,7 +150,9 @@ extracts, so it costs no extra retrieval. See
   (`unitsOfFile` / `unitSourceTokens`) for `verify`, and the `--semantic` fold.
 - `claims.ts` — the shared claim parser (`check`, `verify` and `render` all import
   it, so they can never disagree on what a claim is). Masks code fences, HTML
-  comments, model-hint blockquotes and the trailing Sources appendix; drops a
+  comments, model-hint blockquotes and the trailing Sources appendix (the engine's bare
+  titles plus a parenthetical tail — `## References (see refs.bib)`, via
+  `reportAppendixMask`); drops a
   table's index column and marks blocks under `<!-- ultrasearch:no-numerals -->`
   as exempt from the numeral pass.
 - `walls.ts` — `looksLikeWall`: the engine's junk detector plus the walls it
@@ -219,6 +221,18 @@ extracts, so it costs no extra retrieval. See
   is a ZIP, so the fall-through this replaced put kilobytes of U+FFFD into
   dossiers as citable evidence, silently.
 - `modes/` — the seven `ModeProfile`s + their registry.
+- `templates.ts` — report templates no mode owns (`verification`),
+  `templateFor(manifest)` (the dossier's `template`, else its mode's — every
+  writer of `DOSSIER.md` goes through it), `setDossierTemplate` (`ingest
+  --template`) and `hasOpenQuestions`, the one structural check `check` makes.
+- `refcheck/` — the `refcheck` command. `parse.ts` (numbered Vancouver list under
+  a References heading, or BibTeX → `CitedReference`), `citing.ts` (call
+  styles, orphans, Vancouver first-citation order, each call's claim and its
+  figures), `resolve.ts` (PMID → ecitmatch → DOI `[aid]` → title search on
+  PubMed, then Crossref; batched `esummary`/`efetch`; doi.org handle API),
+  `diff.ts` (field-by-field `match`/`mismatch`/`missing`), `index.ts`
+  (`runRefcheck`: `refcheck.json`, `REFCHECK.md`, and a dossier where `S<n>` is
+  reference `n`).
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the
   polite-sequential fan-out), and one file per backend (web discovery, scholarly

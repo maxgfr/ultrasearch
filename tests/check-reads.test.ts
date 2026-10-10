@@ -110,6 +110,7 @@ describe("runCheck — extract reads", () => {
           "1 source(s) were never cited (informational).",
           "1 cited source(s) hold no readable page: S1 (near-empty extract (52 useful characters)). Nobody can check a claim against them — re-\`fetch --url\` the page or cite a source that carries the text.",
           "1 numeral(s) in cited claim(s) not found in any cited source extract (e.g. "4200" cited to S2). Verify the attribution, \`fetch --url\` the page that carries the figure, or flag it [M].",
+          "REPORT.md has no "Open questions" section — section titles are free, but say what the sources leave open.",
         ],
       }
     `);

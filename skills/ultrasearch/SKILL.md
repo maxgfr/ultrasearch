@@ -158,7 +158,10 @@ me", "from scratch" ⇒ `learn` · market, competitors, pricing ⇒ `startup` ·
 a shop's coupons, promo or discount codes ⇒ `deals` (with `--lang` + `--region`
 for the country — see [Deals](#deals--discount-codes-for-a-merchant)) ·
 anything else ⇒ `topic` (the default). `modes` prints the live mode → backend
-map; trust it over any table in a doc.
+map; trust it over any table in a doc. **Checking a reference list** ("do these
+references exist, are they right, do they say what we cite them for?") is not a
+mode at all — it is the `refcheck` command
+([Checking a bibliography](#checking-a-bibliography--refcheck)).
 
 **Route C — clarify.**
 ```
@@ -202,13 +205,14 @@ node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--requi
 node <skill-dir>/scripts/ultrasearch.mjs relink --run <dir> [--id <S#> --url "<page>"]
 node <skill-dir>/scripts/ultrasearch.mjs drop --run <dir> (--id S43,S44 | --where wall|snippet|offtopic) [--dry-run]
 node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
+node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <list.txt|thesis.docx|refs.bib> [--citing <text.md|.docx>] --out <RUN>/refcheck
 ```
 
 | Command | Writes | Flags that matter |
 |---|---|---|
 | `queries` | nothing (prints) | `--q` · `--mode` · `--depth` · `--lang` · `--json`. Your WebSearch worklist: how many distinct queries to run, and the angles to cover. Start every route here (I0). |
-| `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--browser fallback\|always\|off` (the browser rung, Tuning) · `--backends` (⚠ Tuning) |
-| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` (a hit may carry `citeUrl`: read its `url`, cite that page) · `--urls a,b,c` · `--q` (excerpt hint) · `--browser` · `--json`. PubMed / PMC pages and efetch URLs are read through E-utilities / Europe PMC, never through their walls. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
+| `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--browser fallback\|always\|off` (the browser rung, Tuning) · `--template <t>` (write to another template than the mode's — e.g. `verification`) · `--backends` (⚠ Tuning) |
+| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` (a hit may carry `citeUrl`: read its `url`, cite that page) · `--urls a,b,c` · `--q` (excerpt hint) · `--browser` · `--template <t>` (switch the report template; alone, that is all it does) · `--json`. PubMed / PMC pages and efetch URLs are read through E-utilities / Europe PMC, never through their walls. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
 | `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
@@ -223,6 +227,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
 | `verify` | `VERIFY.todo.json` → `VERIFY.json` — exit 2 under `--stdout` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
+| `refcheck` | `refcheck.json` + `REFCHECK.md` + a dossier where `S<n>` is reference `n` — exit 2 under `--stdout` | `--refs <file>` (numbered Vancouver list, or a .docx/.pdf with a References heading, or .bib) · `--citing <file>` (defaults to the body of `--refs`) · `--out` · `--offline` (no lookup) · `--json`. See [Checking a bibliography](#checking-a-bibliography--refcheck). |
 | `orchestrate` | `<RUN>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` · `--browser` (carried into the gatherers' commands) |
 
 ## The standard route (route S)
@@ -391,6 +396,31 @@ tool (Claude in Chrome, computer use) is available AND the user asked for it:
   codes**: only the cited candidates are tried.
 - Stop at the first CAPTCHA or login wall and hand back to the user.
 - Fill the "tested" column with what you saw, then re-run `check`.
+
+## Checking a bibliography — refcheck
+
+When the ask is "are these references right?" — a thesis, a manuscript, a
+grant — run one command instead of resolving references by hand:
+```
+node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <RUN>/thesis.docx --out <RUN>/refcheck
+```
+It parses the numbered list (under its References / Références heading; or a
+`.bib`), resolves every reference on PubMed (its PMID, else ecitmatch, else its
+DOI, else a title search) or Crossref, checks each cited DOI on doi.org, and
+diffs authors, title, NLM journal, year, volume, issue, pages and DOI field by
+field. With a citing text — `--citing`, or the body of `--refs` itself — it
+also lists references never cited, calls to numbers not in the list, Vancouver
+first-citation order, and every figure a citing passage states, looked up in
+the cited abstract.
+
+Read `REFCHECK.md` (verdict, one row per reference, discrepancies, figures,
+not verifiable). The run dir is also a dossier in which **source `S<n>` is
+reference `n`** (its record + abstract), written to the `verification`
+template: write your `REPORT.md` from it, citing `[S#]`, and `check` it like any
+report. A figure missing from an abstract is a lead, not a verdict — it may sit
+in the full text: `fetch --url` the article's full text before calling it
+wrong. `--offline` parses and checks the citing
+text without any lookup.
 
 ## Orchestration — route by harness
 

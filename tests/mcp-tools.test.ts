@@ -89,6 +89,7 @@ describe("annotations", () => {
     ultrasearch_plan: { readOnlyHint: true, openWorldHint: false },
     ultrasearch_merge: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_brainstorm: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    ultrasearch_refcheck: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     ultrasearch_modes: { readOnlyHint: true, openWorldHint: false },
     ultrasearch_read: { readOnlyHint: true, openWorldHint: false },
   };
@@ -108,7 +109,7 @@ describe("annotations", () => {
     // A client that batches or caches read-only calls must be told which ones
     // depend on the outside world.
     const openWorld = ALL.filter((t) => TOOL_META[t.name]!.openWorld).map((t) => t.name);
-    expect(openWorld.sort()).toEqual(["ultrasearch_fetch", "ultrasearch_gather", "ultrasearch_ingest", "ultrasearch_search"]);
+    expect(openWorld.sort()).toEqual(["ultrasearch_fetch", "ultrasearch_gather", "ultrasearch_ingest", "ultrasearch_refcheck", "ultrasearch_search"]);
   });
 
   it("declares only drop destructive — it removes sources, and no tool removes a dossier", () => {
@@ -166,6 +167,7 @@ describe("declared schemas accept what the handlers expect", () => {
       ultrasearch_plan: { question: "rust async", mode: "research", subquestions: ["a", "b"] },
       ultrasearch_merge: { runs: ["/tmp/a", "/tmp/b"], master: "/tmp/m" },
       ultrasearch_brainstorm: { question: "vague", mode: "topic" },
+      ultrasearch_refcheck: { refs: "/tmp/refs.txt", citing: "/tmp/thesis.md", out: "/tmp/rc", offline: true },
       ultrasearch_modes: {},
       ultrasearch_read: { run: "/tmp/d", path: "DOSSIER.md", start_line: 1, end_line: 40 },
     };

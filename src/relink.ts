@@ -1,6 +1,6 @@
 import type { Manifest, Source } from "./types.js";
 import { readDossier, readSourceText, writeSourceExtract, writeDossierIndex } from "./dossier.js";
-import { getMode } from "./modes/registry.js";
+import { templateFor } from "./templates.js";
 import { deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, domainOf, titleFromText, trustScore } from "./util.js";
 import { wallPattern } from "./walls.js";
@@ -108,7 +108,7 @@ export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: 
   const { sources, manifest } = readDossier(dir);
   // Resolved with the dossier, not at index-write time: an unknown
   // `manifest.mode` throws before the loop has rewritten a single extract.
-  const template = getMode(manifest.mode).template;
+  const template = templateFor(manifest);
   const state = newState(sources);
   // One read per extract for the whole pass. The loop used to re-read every
   // source's text on every round; the text of a source only ever changes when
@@ -246,7 +246,7 @@ export function relink(dir: string, id: string, url: string, opts: { title?: str
   if (!result.relinked || !relinked) return result; // a refusal writes nothing
   // The extract's header carries the url and title, so it has to be rewritten.
   writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
-  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), templateFor(manifest));
   return result;
 }
 

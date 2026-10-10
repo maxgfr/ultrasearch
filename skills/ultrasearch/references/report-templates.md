@@ -6,6 +6,12 @@ tiers: `SUMMARY.md` = the top-level headings with one or two sentences each;
 source's detail, plus a closing "Open questions / contradictions" section.
 The exact skeleton for the active mode is echoed in the run's `DOSSIER.md`.
 
+A template is guidance, not a contract: rename, merge or drop its headings to
+fit the material. `check` expects one thing only — an "Open questions" section
+(English or French) — and warns when it is missing. `--template <t>` on
+`gather` / `ingest` swaps the mode's skeleton for another one: any mode's, or
+`verification` below.
+
 ## topic
 ```
 ## TL;DR
@@ -118,6 +124,24 @@ code was actually tried in a cart — then `accepted` / `refused` with what the
 cart said. Never write a code no source shows, and never complete a partial one.
 Expired and single-source codes go under "Expired, fake or unverifiable codes",
 cited too.
+
+## verification  (`--template verification`; `refcheck` dossiers carry it)
+```
+## Verdict
+## Reference-by-reference table
+### (# · resolved as · authors · title · journal · year · vol · issue · pages · DOI · source)
+## Discrepancies
+## Claims checked against their sources
+## Not verifiable
+## Open questions
+## Sources
+```
+
+For a reference or claim check. Start from `REFCHECK.md` when `refcheck` wrote
+the dossier: there source `S<n>` is reference `n`, so a row about reference 12
+cites `[S12]`. "Not verifiable" is where an unresolved reference, a record with
+no abstract, or a figure only the full text could confirm goes — never silently
+dropped.
 
 The `## Sources` section is rendered automatically from `sources.json` into the
 HTML appendix — you don't need to hand-list URLs there, but you may add notable

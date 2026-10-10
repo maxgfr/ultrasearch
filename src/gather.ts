@@ -17,6 +17,7 @@ import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
 import { bestExcerpt, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
+import { templateFor } from "./templates.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
 import { isWordedWall, looksLikeWall, readPastCachedWall } from "./walls.js";
@@ -1002,6 +1003,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     version: VERSION,
     question: options.question,
     mode: options.mode,
+    ...(options.template && options.template !== options.mode ? { template: options.template } : {}),
     depth: options.depth,
     lang: options.lang,
     ...(options.region ? { region: options.region } : {}),
@@ -1026,6 +1028,6 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   };
 
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
-  const { sources } = writeDossier(dir, merged, manifest, mode.template);
+  const { sources } = writeDossier(dir, merged, manifest, templateFor(manifest));
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }

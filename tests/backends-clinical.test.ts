@@ -106,7 +106,13 @@ describe("withBackoff", () => {
 
   it("stops after three attempts and says it is still rate-limited", async () => {
     let calls = 0;
-    const out = await withBackoff(async () => (calls++, { status: 429 }), { baseMs: 0 });
+    const out = await withBackoff(
+      async () => {
+        calls++;
+        return { status: 429 };
+      },
+      { baseMs: 0 },
+    );
     expect(calls).toBe(3);
     expect(out.rateLimited).toBe(true);
   });

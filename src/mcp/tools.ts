@@ -1,4 +1,4 @@
-import { ALL_BACKENDS, ALL_BROWSER_MODES, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_WEB_ENGINES } from "../types.js";
+import { ALL_BACKENDS, ALL_BROWSER_MODES, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_TEMPLATES, ALL_WEB_ENGINES } from "../types.js";
 import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "../engine.js";
 import { isNoWrite } from "../no-write.js";
 
@@ -24,6 +24,13 @@ const modeProp: JsonSchemaProp = {
     "Which research profile to use: topic (general), bug (an error — StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), clinical (PubMed, Europe PMC, ClinicalTrials.gov — a clinical or biomedical question; no arXiv; BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant — pair with lang + region for the country; writes codes.json). Default: topic.",
 };
 const langProp: JsonSchemaProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
+const templateProp: JsonSchemaProp = {
+  type: "string",
+  enum: [...ALL_TEMPLATES].sort(),
+  description:
+    "The report template the dossier asks for, when not the mode's own — any mode's, or 'verification' (verdict, reference-by-reference table, " +
+    "discrepancies, not verifiable). Headings are free; ultrasearch_check only expects an 'Open questions' section.",
+};
 
 // The WebSearch lane, as an MCP client sees it: structured args, not a file
 // path. A client passes values, so the payload comes inline here where the CLI
@@ -130,6 +137,7 @@ export const TOOLS: ToolDecl[] = [
         searxng: searxngProp,
         firecrawl: firecrawlProp,
         browser: browserProp,
+        template: templateProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." },
       },
       required: ["question"],
@@ -150,6 +158,7 @@ export const TOOLS: ToolDecl[] = [
         question: { type: "string", description: "What you're looking for on these pages — ranks the excerpts kept. Defaults to the dossier's question." },
         firecrawl: firecrawlProp,
         browser: browserProp,
+        template: { ...templateProp, description: `${templateProp.description} Alone (no urls/web_results), it only switches the template.` },
       },
       required: ["run"],
     },
@@ -316,6 +325,29 @@ export const TOOLS: ToolDecl[] = [
     },
   },
   {
+    name: "ultrasearch_refcheck",
+    title: "Check a bibliography against PubMed and Crossref",
+    description:
+      "Check a reference list the way a reviewer would: resolve each reference on PubMed (E-utilities) or Crossref, diff authors, title, NLM journal, year, " +
+      "volume, issue, pages and DOI field by field, and check every cited DOI on doi.org. With a citing text (or a document whose body precedes its reference " +
+      "list), it also lists references never cited, calls with no reference, the Vancouver first-citation order, and every figure a citing passage states " +
+      "that the cited abstract lacks. Writes refcheck.json, REFCHECK.md and a dossier in which source S<n> is reference n — write a report from it and " +
+      "prove it with ultrasearch_check.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        refs: {
+          type: "string",
+          description: "Absolute path to the reference list: numbered Vancouver (.txt/.md, or a .docx/.pdf with a References heading) or .bib.",
+        },
+        citing: { type: "string", description: "Absolute path to the text that cites them (.md/.txt/.docx/.pdf). Defaults to the body of `refs`." },
+        out: { type: "string", description: "Absolute output directory (default: a timestamped dir under the temp root)." },
+        offline: { type: "boolean", description: "Parse and read the citing text only — no PubMed, Crossref or doi.org." },
+      },
+      required: ["refs"],
+    },
+  },
+  {
     name: "ultrasearch_modes",
     title: "List the research modes",
     description: "What each mode is for and which backends it searches. Read this when unsure which mode a question belongs to. Writes nothing.",
@@ -380,6 +412,7 @@ export const TOOL_META: Record<string, { write?: boolean; destructive?: boolean;
   ultrasearch_plan: { openWorld: false },
   ultrasearch_merge: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_brainstorm: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_refcheck: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_modes: { openWorld: false },
   ultrasearch_read: { openWorld: false },
 };

@@ -337,7 +337,7 @@ export function renderHtml(dirOrCtx: string | RenderContext): string {
   // Hoist an "open questions / contradictions" heading into a top callout.
   let contradictionsId: string | undefined;
   for (const t of rendered) {
-    const h = t.headings.find((x) => /open question|contradiction/i.test(x.text));
+    const h = t.headings.find((x) => /open question|contradiction|questions? ouvertes?/i.test(x.text));
     if (h) {
       contradictionsId = h.id;
       break;

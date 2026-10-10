@@ -76,6 +76,14 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
 export type ModeName = "topic" | "bug" | "research" | "clinical" | "learn" | "startup" | "deals";
 export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
 
+// Report templates a dossier can be written to: every mode's own, plus the
+// ones no retrieval profile owns. `verification` is the shape of a reference or
+// claim check (verdict, reference-by-reference table, discrepancies, what could
+// not be verified) — the template `refcheck` dossiers carry. A dossier records
+// the one it was given (Manifest.template); absent, it is its mode's.
+export const ALL_TEMPLATES = [...ALL_MODES, "verification"] as const;
+export type TemplateName = (typeof ALL_TEMPLATES)[number];
+
 // How far a run fans out. `summary` is a quick survey, `deep` runs every
 // backend (including deep-only ones) and keeps the most sources. Tiers
 // (SUMMARY/REPORT) are always written regardless of depth — depth caps
@@ -422,6 +430,7 @@ export interface GatherOptions {
   out?: string;
   json: boolean;
   stdout?: boolean; // --stdout / ULTRASEARCH_NO_WRITE: nothing is written, so the guidance changes
+  template?: TemplateName; // --template: the report template, when not the mode's own
 }
 
 // Context handed to every backend for a run. `question` is the active query (a
@@ -440,6 +449,8 @@ export interface Manifest {
   version: string;
   question: string;
   mode: ModeName;
+  /** The report template the dossier asks for, when it is not the mode's own (`--template`). */
+  template?: TemplateName;
   depth: Depth;
   lang: string;
   region?: string; // region/country used for locale-aware web search (when set)

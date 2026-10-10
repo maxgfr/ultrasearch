@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename3, join as join27, relative as relative3, resolve as resolve4 } from "path";
+import { basename as basename5, join as join28, relative as relative3, resolve as resolve8 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync4, existsSync as existsSync18, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync19 } from "fs";
+import { realpathSync as realpathSync4, existsSync as existsSync19, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync20 } from "fs";
 
 // src/types.ts
 var VERSION = "1.40.0";
@@ -34,6 +34,7 @@ var ALL_BACKENDS = [
   "claude"
 ];
 var ALL_MODES = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
+var ALL_TEMPLATES = [...ALL_MODES, "verification"];
 var ALL_DEPTHS = ["summary", "standard", "deep"];
 var DEPTH_CAPS = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
@@ -1043,7 +1044,7 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve82) => {
     let child;
     try {
       const bin = binaryName(cmd);
@@ -1052,7 +1053,7 @@ function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
       const common = { stdio: ["pipe", "pipe", "pipe"], ...opts.env ? { env: opts.env } : {} };
       child = viaShell ? spawn2([bin, ...args].map(quote).join(" "), { ...common, shell: true, windowsHide: true }) : spawn2(bin, args, common);
     } catch (e) {
-      resolve8({ ok: false, stdout: "", error: e.message });
+      resolve82({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -1071,7 +1072,7 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve8(r);
+      resolve82(r);
     };
     const timer = setTimeout(() => {
       killTree(child);
@@ -2152,6 +2153,9 @@ function readOffice(bytes) {
     return { failure: e instanceof Refused ? e.message : "the built-in reader could not parse it" };
   }
 }
+function officeToText(bytes) {
+  return readOffice(bytes).text;
+}
 var MAX_ENTRIES;
 var MAX_ENTRY_BYTES;
 var MAX_TOTAL_BYTES2;
@@ -2599,7 +2603,7 @@ function have(cmd) {
 function shAsync(cmd, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs();
   if (opts.signal?.aborted) return Promise.resolve({ ok: false, status: 130, stdout: "", stderr: "aborted" });
-  return new Promise((resolve8) => {
+  return new Promise((resolve82) => {
     let settled = false;
     let timer;
     let onAbort;
@@ -2608,7 +2612,7 @@ function shAsync(cmd, args, opts = {}) {
       settled = true;
       clearTimeout(timer);
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-      resolve8(r);
+      resolve82(r);
     };
     let child;
     try {
@@ -4391,7 +4395,7 @@ function unmask(payload, key) {
 }
 async function connectWebSocket(url, opts = {}) {
   const { request } = await import("http");
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve82, reject) => {
     let u;
     try {
       u = new URL(url);
@@ -4426,7 +4430,7 @@ async function connectWebSocket(url, opts = {}) {
         socket.destroy();
         return settle(() => reject(new Error("WebSocket handshake failed: bad Accept")));
       }
-      settle(() => resolve8(new WsClient(socket, opts, head)));
+      settle(() => resolve82(new WsClient(socket, opts, head)));
     });
     req.on("response", (res) => {
       res.resume();
@@ -4530,14 +4534,14 @@ var init_ws = __esm({
           this.closing = true;
           this.writeClose(code, reason);
         }
-        await new Promise((resolve8) => {
+        await new Promise((resolve82) => {
           const timer = setTimeout(() => {
             this.socket.destroy();
             this.finish(code, reason);
           }, this.closeTimeoutMs);
           this.once("close", () => {
             clearTimeout(timer);
-            resolve8();
+            resolve82();
           });
         });
       }
@@ -4690,12 +4694,12 @@ ${method}`;
         if (this.isClosed) return Promise.reject(new Error(`CDP connection closed (${method})`));
         const id = ++this.nextId;
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve8, reject) => {
+        return new Promise((resolve82, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id);
             reject(new Error(`CDP command timed out: ${method} (${timeoutMs} ms)`));
           }, timeoutMs);
-          this.pending.set(id, { method, resolve: resolve8, reject, timer });
+          this.pending.set(id, { method, resolve: resolve82, reject, timer });
           try {
             this.ws.send(JSON.stringify({ id, method, params, sessionId: opts.sessionId }));
           } catch (e) {
@@ -4721,7 +4725,7 @@ ${method}`;
       /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
       once(method, opts = {}) {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve8, reject) => {
+        return new Promise((resolve82, reject) => {
           const cleanup = () => {
             clearTimeout(timer);
             this.off(method, handler, opts.sessionId);
@@ -4730,7 +4734,7 @@ ${method}`;
           const handler = (params) => {
             if (opts.predicate && !opts.predicate(params)) return;
             cleanup();
-            resolve8(params);
+            resolve82(params);
           };
           const onClose = () => {
             cleanup();
@@ -4960,11 +4964,11 @@ function dialHost(host) {
 }
 async function http(method, port, host, path, timeoutMs = REQUEST_TIMEOUT_MS) {
   const { request } = await import("http");
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve82, reject) => {
     const req = request({ host: dialHost(host), port, path, method, timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve8({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("end", () => resolve82({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
       res.on("error", reject);
     });
     req.on("timeout", () => req.destroy(new Error(`DevTools request ${method} ${path} timed out after ${timeoutMs} ms`)));
@@ -5775,14 +5779,14 @@ var init_session = __esm({
           },
           /** Whether such an event has come, whatever was waited for. */
           saw: (match) => seen.some(match),
-          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve8, reject) => {
+          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve82, reject) => {
             const timer = setTimeout(() => {
               wake = void 0;
               reject(new NavigationTimeoutError(`${what} within ${timeoutMs} ms`));
             }, timeoutMs);
             wake = () => {
               const hit = seen.find(match);
-              if (hit) resolve8(hit);
+              if (hit) resolve82(hit);
               else if (cancelled) reject(new Error(`${cancelledWhat} was cancelled: the page asked to confirm leaving it (beforeunload), and that was declined`));
               else if (closed) reject(new Error("the browser connection closed while waiting for the page to load"));
               else return;
@@ -6446,13 +6450,13 @@ function expand(rows) {
   for (let r = 0; r < rows.length; r++) {
     const out = grid[r];
     let c = 0;
-    for (const cell2 of rows[r]) {
+    for (const cell22 of rows[r]) {
       while (out[c] !== void 0) c++;
-      const down = Math.min(cell2.rowspan, rows.length - r);
-      slots += down * cell2.colspan;
+      const down = Math.min(cell22.rowspan, rows.length - r);
+      slots += down * cell22.colspan;
       if (slots > MAX_SLOTS) return void 0;
-      for (let j = 0; j < down; j++) for (let i = 0; i < cell2.colspan; i++) grid[r + j][c + i] = cell2.text;
-      c += cell2.colspan;
+      for (let j = 0; j < down; j++) for (let i = 0; i < cell22.colspan; i++) grid[r + j][c + i] = cell22.text;
+      c += cell22.colspan;
     }
   }
   const width = grid.reduce((w, row) => Math.max(w, row.length), 0);
@@ -6675,8 +6679,8 @@ function markdownAgainst(html, base2, fullPage) {
         w.flush();
         const escaped = {
           ...table.caption ? { caption: escapeText(table.caption) } : {},
-          headers: table.headers.map((cell2) => escapeText(cell2)),
-          rows: table.rows.map((row) => row.map((cell2) => escapeText(cell2)))
+          headers: table.headers.map((cell22) => escapeText(cell22)),
+          rows: table.rows.map((row) => row.map((cell22) => escapeText(cell22)))
         };
         w.block(tableToMarkdown(escaped).split("\n"));
         last = tag2.lastIndex = region.to;
@@ -7587,12 +7591,12 @@ function sleep(ms, signal) {
   return signal ? sleepUnlessAborted(ms, signal) : new Promise((r) => setTimeout(r, ms));
 }
 function sleepUnlessAborted(ms, signal) {
-  return new Promise((resolve8) => {
-    if (signal?.aborted) return resolve8();
+  return new Promise((resolve82) => {
+    if (signal?.aborted) return resolve82();
     const done = () => {
       clearTimeout(t);
       signal?.removeEventListener("abort", done);
-      resolve8();
+      resolve82();
     };
     const t = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
@@ -9358,7 +9362,7 @@ function pump() {
 async function acquire(limit, signal, cancelled) {
   if (queue.length === 0 && active < limit) active++;
   else {
-    await new Promise((resolve8, reject) => {
+    await new Promise((resolve82, reject) => {
       const onAbort = () => {
         queue.splice(queue.indexOf(waiter), 1);
         reject(cancelled());
@@ -9367,7 +9371,7 @@ async function acquire(limit, signal, cancelled) {
         limit,
         go: () => {
           signal?.removeEventListener("abort", onAbort);
-          resolve8();
+          resolve82();
         }
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -11631,7 +11635,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve8) => waiting.push(resolve8));
+      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve82) => waiting.push(resolve82));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -11733,14 +11737,14 @@ async function startHttpServer(adapter, opts = {}) {
   server.requestTimeout = REQUEST_TIMEOUT_MS2;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve82, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve8({
+      resolve82({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -11885,7 +11889,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve82, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -11909,7 +11913,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve8(Buffer.concat(chunks).toString("utf8"));
+      else resolve82(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -12923,14 +12927,14 @@ ${abstract || "(no abstract provided by Europe PMC)"}`,
 var pubmedBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base2 = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
-  const esearch = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
-  const sr = await apiGet(esearch);
+  const esearch2 = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
+  const sr = await apiGet(esearch2);
   const ids = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
     return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr)] };
   }
-  const esummary = `${base2}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;
-  const dr = await apiGet(esummary);
+  const esummary2 = `${base2}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;
+  const dr = await apiGet(esummary2);
   const result = dr.ok ? dr.data?.result : void 0;
   if (!result) {
     return { backend: "pubmed", items: [], notes: [dr.rateLimited ? apiFailure("PubMed esummary", dr) : `PubMed esummary failed (status ${dr.status}).`] };
@@ -13827,7 +13831,7 @@ function codesSummary(sources, manifest) {
   const lines = [
     `  codes:    ${candidates2.length} to try \u2014 UNVERIFIED: confirm each in its [S#], never pay to test (full list: codes.json)`,
     ...cells.map(
-      (row) => `            ${row.map((cell2, i) => i === row.length - 1 ? cell2 : cell2.padEnd(widths[i])).filter((_, i) => widths[i] > 0).join("  ")}`.trimEnd()
+      (row) => `            ${row.map((cell3, i) => i === row.length - 1 ? cell3 : cell3.padEnd(widths[i])).filter((_, i) => widths[i] > 0).join("  ")}`.trimEnd()
     ),
     ...expired.length ? [`            expired: ${data.expired.join(", ")}`] : []
   ];
@@ -14166,8 +14170,8 @@ var SINGLE_QUERY = /* @__PURE__ */ new Set([
   "pepper"
 ]);
 var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp"]);
-async function fanOutVariants(handler, ctx, variants, polite) {
-  if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
+async function fanOutVariants(handler, ctx, variants, polite2) {
+  if (!polite2) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
   const out = [];
   for (let i = 0; i < variants.length; i++) {
     if (i > 0 && politeDelayMs()) await sleep(politeDelayMs());
@@ -14220,152 +14224,6 @@ async function runBackends(kinds, ctx) {
   return Promise.all(tasks);
 }
 
-// src/walls.ts
-var MIN_USEFUL_CHARS = 300;
-var LOCAL_WALLS = [
-  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
-  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
-  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
-  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
-  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
-  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
-  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
-  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
-];
-var WALL_MAX_CHARS = 2e3;
-function usefulChars(text) {
-  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
-}
-function wallPattern(text) {
-  const t = text.trim();
-  if (!t) return void 0;
-  const engine = looksLikeJunkExtraction(t);
-  if (engine) return engine;
-  if (t.length >= WALL_MAX_CHARS) return void 0;
-  const head = t.slice(0, 800);
-  return LOCAL_WALLS.find(([re]) => re.test(head))?.[1];
-}
-function looksLikeWall(text) {
-  const wall = wallPattern(text);
-  if (wall) return wall;
-  const n = usefulChars(text);
-  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
-}
-function isWordedWall(reason) {
-  return !!reason && !reason.startsWith("near-empty page");
-}
-var bypassing = 0;
-var saved;
-async function readPastCachedWall(url, opts, enabled) {
-  const res = await cachedFetchAndExtract(url, opts, enabled);
-  if (!res.cached || !res.text?.trim() || !looksLikeWall(res.text)) return res;
-  if (bypassing++ === 0) {
-    saved = cacheMode();
-    setCacheMode({ refresh: true });
-  }
-  try {
-    return await cachedFetchAndExtract(url, opts, enabled);
-  } finally {
-    if (--bypassing === 0 && saved) {
-      setCacheMode(saved);
-      saved = void 0;
-    }
-  }
-}
-
-// src/providers/ncbi.ts
-var PUBMED_PAGE = /^https?:\/\/(?:(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pubmed)\/(\d{4,9})\/?(?:[?#].*)?$/i;
-var PMC_PAGE = /^https?:\/\/(?:(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pmc)\/articles\/(pmc\d+)\/?(?:[?#].*)?$/i;
-var EFETCH = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/efetch\.fcgi\?/i;
-var EUROPE_PMC_XML = /^https?:\/\/(?:www\.)?ebi\.ac\.uk\/europepmc\/webservices\/rest\/(pmc\d+)\/fulltextxml\/?(?:[?#].*)?$/i;
-function europePmcFullTextUrl(pmcid) {
-  return `https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcid.toUpperCase()}/fullTextXML`;
-}
-function pmcPage(pmcid) {
-  return `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid.toUpperCase()}/`;
-}
-function ncbiDocument(url) {
-  const raw = url.trim();
-  const pubmed = raw.match(PUBMED_PAGE);
-  if (pubmed) return { kind: "pubmed", id: pubmed[1], citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pubmed[1]}/`, textUrl: pubmedAbstractUrl(pubmed[1]) };
-  const pmc = raw.match(PMC_PAGE) ?? raw.match(EUROPE_PMC_XML);
-  if (pmc) {
-    const id = pmc[1].toUpperCase();
-    return { kind: "pmc", id, citeUrl: pmcPage(id), textUrl: europePmcFullTextUrl(id) };
-  }
-  if (EFETCH.test(raw)) {
-    let params;
-    try {
-      params = new URL(raw).searchParams;
-    } catch {
-      return void 0;
-    }
-    const ids = (params.get("id") ?? "").split(/[,\s+]+/).filter(Boolean);
-    if (ids.length !== 1) return void 0;
-    const db = (params.get("db") ?? "").toLowerCase();
-    const id = ids[0];
-    if (db === "pubmed" && /^\d+$/.test(id)) return { kind: "pubmed", id, citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: raw };
-    if (db === "pmc") {
-      const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
-      return { kind: "pmc", id: pmcid, citeUrl: pmcPage(pmcid), textUrl: europePmcFullTextUrl(pmcid) };
-    }
-  }
-  return void 0;
-}
-async function readNcbiDocument(doc, opts = {}) {
-  if (doc.kind === "pubmed") {
-    const res2 = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
-    const text2 = res2.text?.trim() ?? "";
-    if (!text2) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res2.status || "no response"})` };
-    const wall2 = looksLikeWall(text2);
-    if (wall2) return { ok: false, why: `E-utilities returned a ${wall2} for PMID ${doc.id}` };
-    return { ok: true, text: text2, via: doc.textUrl };
-  }
-  const res = await httpGet(doc.textUrl, { accept: "application/xml, text/xml;q=0.9, */*;q=0.1" });
-  if (!res.ok || !/<article\b/i.test(res.body)) {
-    return { ok: false, why: `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})` };
-  }
-  const { text, title } = jatsToText(res.body);
-  const wall = looksLikeWall(text);
-  if (wall) return { ok: false, why: `Europe PMC's full text for ${doc.id} is a ${wall}` };
-  return { ok: true, text, ...title ? { title } : {}, via: doc.textUrl };
-}
-var DROP = ["table-wrap", "table", "disp-formula", "inline-formula", "mml:math", "supplementary-material", "ref-list", "ack", "fn-group", "alternatives"];
-function inner(xml, tag2) {
-  return xml.match(new RegExp(`<${tag2}\\b[^>]*>([\\s\\S]*?)</${tag2}>`, "i"))?.[1];
-}
-function clean2(s) {
-  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").replace(/\s+([,.;:)\]])/g, "$1").replace(/([([])\s+/g, "$1").trim();
-}
-function blocks(xml) {
-  let x = xml;
-  for (const tag2 of DROP) x = x.replace(new RegExp(`<${tag2}\\b[^>]*>[\\s\\S]*?</${tag2}>`, "gi"), " ");
-  const out = [];
-  const re = /<(title|p)\b[^>]*>([\s\S]*?)<\/\1>/gi;
-  let m;
-  while (m = re.exec(x)) {
-    const body = clean2(m[2]);
-    if (!body) continue;
-    out.push(m[1].toLowerCase() === "title" ? `## ${body}` : body);
-  }
-  return out;
-}
-function jatsToText(xml) {
-  const front = inner(xml, "front") ?? xml;
-  const titleXml = inner(inner(front, "title-group") ?? front, "article-title");
-  const title = titleXml ? clean2(titleXml) : void 0;
-  const parts = [];
-  if (title) parts.push(`# ${title}`);
-  const abstract = inner(front, "abstract");
-  if (abstract) {
-    const ab = blocks(abstract);
-    if (ab.length) parts.push("## Abstract", ...ab.filter((b) => b !== "## Abstract"));
-  }
-  const body = inner(xml, "body");
-  if (body) parts.push(...blocks(body));
-  return { text: parts.join("\n\n"), ...title ? { title } : {} };
-}
-
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { join as join11 } from "path";
@@ -14385,7 +14243,7 @@ function sourceSignals(opts) {
 import { join as join6 } from "path";
 
 // src/bibtex.ts
-function clean3(s) {
+function clean2(s) {
   return s.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 function bibKey(s, used) {
@@ -14408,13 +14266,13 @@ function toBibtex(sources) {
   const out = ["% Generated by ultrasearch \u2014 research mode", ""];
   for (const s of scholarly) {
     const key = bibKey(s, used);
-    const fields = [`  title = {${clean3(s.title)}}`];
-    if (s.meta?.authors?.length) fields.push(`  author = {${s.meta.authors.map(clean3).join(" and ")}}`);
+    const fields = [`  title = {${clean2(s.title)}}`];
+    if (s.meta?.authors?.length) fields.push(`  author = {${s.meta.authors.map(clean2).join(" and ")}}`);
     if (s.meta?.year) fields.push(`  year = {${s.meta.year}}`);
-    if (s.meta?.venue) fields.push(`  journal = {${clean3(String(s.meta.venue))}}`);
-    if (s.meta?.doi) fields.push(`  doi = {${clean3(String(s.meta.doi))}}`);
+    if (s.meta?.venue) fields.push(`  journal = {${clean2(String(s.meta.venue))}}`);
+    if (s.meta?.doi) fields.push(`  doi = {${clean2(String(s.meta.doi))}}`);
     if (s.meta?.arxivId) {
-      fields.push(`  eprint = {${clean3(String(s.meta.arxivId))}}`);
+      fields.push(`  eprint = {${clean2(String(s.meta.arxivId))}}`);
       fields.push(`  archivePrefix = {arXiv}`);
     }
     if (s.url) fields.push(`  url = {${s.url}}`);
@@ -14713,7 +14571,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   out.push("");
   out.push(noWrite ? CITATION_RULES_NO_WRITE : CITATION_RULES);
   out.push("");
-  out.push(`## Report template (${manifest.mode})`);
+  out.push(`## Report template (${manifest.template ?? manifest.mode})`);
   out.push("");
   out.push("```markdown");
   out.push(template);
@@ -14773,6 +14631,183 @@ function readDossier(dir) {
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const manifest = readJson3(join11(dir, "manifest.json"), "manifest.json");
   return { sources, manifest };
+}
+
+// src/templates.ts
+var EXTRA_TEMPLATES = {
+  verification: {
+    description: "A reference or claim check: verdict, one row per reference, the discrepancies, what could not be verified.",
+    template: [
+      "## Verdict",
+      "## Reference-by-reference table",
+      "### (# \xB7 resolved as \xB7 authors \xB7 title \xB7 journal \xB7 year \xB7 vol \xB7 issue \xB7 pages \xB7 DOI \xB7 source)",
+      "## Discrepancies",
+      "## Claims checked against their sources",
+      "## Not verifiable",
+      "## Open questions",
+      "## Sources"
+    ].join("\n")
+  }
+};
+function templateFor(manifest) {
+  const t = manifest.template;
+  if (t && t in EXTRA_TEMPLATES) return EXTRA_TEMPLATES[t].template;
+  return getMode(t && t !== manifest.mode ? t : manifest.mode).template;
+}
+function setDossierTemplate(dir, name) {
+  const { sources, manifest } = readDossier(dir);
+  const next = { ...manifest, template: name };
+  writeDossierIndex(dir, sources, next, templateFor(next));
+  return next;
+}
+function hasOpenQuestions(markdown) {
+  return /^\s{0,3}#{1,6}\s+.*\b(open questions?|questions? ouvertes?|contradictions?)\b/im.test(markdown);
+}
+
+// src/walls.ts
+var MIN_USEFUL_CHARS = 300;
+var LOCAL_WALLS = [
+  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
+  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
+  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
+  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
+  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
+  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
+  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
+];
+var WALL_MAX_CHARS = 2e3;
+function usefulChars(text) {
+  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
+}
+function wallPattern(text) {
+  const t = text.trim();
+  if (!t) return void 0;
+  const engine = looksLikeJunkExtraction(t);
+  if (engine) return engine;
+  if (t.length >= WALL_MAX_CHARS) return void 0;
+  const head = t.slice(0, 800);
+  return LOCAL_WALLS.find(([re]) => re.test(head))?.[1];
+}
+function looksLikeWall(text) {
+  const wall = wallPattern(text);
+  if (wall) return wall;
+  const n = usefulChars(text);
+  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
+}
+function isWordedWall(reason) {
+  return !!reason && !reason.startsWith("near-empty page");
+}
+var bypassing = 0;
+var saved;
+async function readPastCachedWall(url, opts, enabled) {
+  const res = await cachedFetchAndExtract(url, opts, enabled);
+  if (!res.cached || !res.text?.trim() || !looksLikeWall(res.text)) return res;
+  if (bypassing++ === 0) {
+    saved = cacheMode();
+    setCacheMode({ refresh: true });
+  }
+  try {
+    return await cachedFetchAndExtract(url, opts, enabled);
+  } finally {
+    if (--bypassing === 0 && saved) {
+      setCacheMode(saved);
+      saved = void 0;
+    }
+  }
+}
+
+// src/providers/ncbi.ts
+var PUBMED_PAGE = /^https?:\/\/(?:(?:www\.)?pubmed\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pubmed)\/(\d{4,9})\/?(?:[?#].*)?$/i;
+var PMC_PAGE = /^https?:\/\/(?:(?:www\.)?pmc\.ncbi\.nlm\.nih\.gov|(?:www\.)?ncbi\.nlm\.nih\.gov\/pmc)\/articles\/(pmc\d+)\/?(?:[?#].*)?$/i;
+var EFETCH = /^https?:\/\/eutils\.ncbi\.nlm\.nih\.gov\/entrez\/eutils\/efetch\.fcgi\?/i;
+var EUROPE_PMC_XML = /^https?:\/\/(?:www\.)?ebi\.ac\.uk\/europepmc\/webservices\/rest\/(pmc\d+)\/fulltextxml\/?(?:[?#].*)?$/i;
+function europePmcFullTextUrl(pmcid) {
+  return `https://www.ebi.ac.uk/europepmc/webservices/rest/${pmcid.toUpperCase()}/fullTextXML`;
+}
+function pmcPage(pmcid) {
+  return `https://pmc.ncbi.nlm.nih.gov/articles/${pmcid.toUpperCase()}/`;
+}
+function ncbiDocument(url) {
+  const raw = url.trim();
+  const pubmed = raw.match(PUBMED_PAGE);
+  if (pubmed) return { kind: "pubmed", id: pubmed[1], citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${pubmed[1]}/`, textUrl: pubmedAbstractUrl(pubmed[1]) };
+  const pmc = raw.match(PMC_PAGE) ?? raw.match(EUROPE_PMC_XML);
+  if (pmc) {
+    const id = pmc[1].toUpperCase();
+    return { kind: "pmc", id, citeUrl: pmcPage(id), textUrl: europePmcFullTextUrl(id) };
+  }
+  if (EFETCH.test(raw)) {
+    let params;
+    try {
+      params = new URL(raw).searchParams;
+    } catch {
+      return void 0;
+    }
+    const ids = (params.get("id") ?? "").split(/[,\s+]+/).filter(Boolean);
+    if (ids.length !== 1) return void 0;
+    const db = (params.get("db") ?? "").toLowerCase();
+    const id = ids[0];
+    if (db === "pubmed" && /^\d+$/.test(id)) return { kind: "pubmed", id, citeUrl: `https://pubmed.ncbi.nlm.nih.gov/${id}/`, textUrl: raw };
+    if (db === "pmc") {
+      const pmcid = /^pmc/i.test(id) ? id.toUpperCase() : `PMC${id}`;
+      return { kind: "pmc", id: pmcid, citeUrl: pmcPage(pmcid), textUrl: europePmcFullTextUrl(pmcid) };
+    }
+  }
+  return void 0;
+}
+async function readNcbiDocument(doc, opts = {}) {
+  if (doc.kind === "pubmed") {
+    const res2 = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
+    const text2 = res2.text?.trim() ?? "";
+    if (!text2) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res2.status || "no response"})` };
+    const wall2 = looksLikeWall(text2);
+    if (wall2) return { ok: false, why: `E-utilities returned a ${wall2} for PMID ${doc.id}` };
+    return { ok: true, text: text2, via: doc.textUrl };
+  }
+  const res = await httpGet(doc.textUrl, { accept: "application/xml, text/xml;q=0.9, */*;q=0.1" });
+  if (!res.ok || !/<article\b/i.test(res.body)) {
+    return { ok: false, why: `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})` };
+  }
+  const { text, title } = jatsToText(res.body);
+  const wall = looksLikeWall(text);
+  if (wall) return { ok: false, why: `Europe PMC's full text for ${doc.id} is a ${wall}` };
+  return { ok: true, text, ...title ? { title } : {}, via: doc.textUrl };
+}
+var DROP = ["table-wrap", "table", "disp-formula", "inline-formula", "mml:math", "supplementary-material", "ref-list", "ack", "fn-group", "alternatives"];
+function inner(xml, tag2) {
+  return xml.match(new RegExp(`<${tag2}\\b[^>]*>([\\s\\S]*?)</${tag2}>`, "i"))?.[1];
+}
+function clean3(s) {
+  return decodeEntities(s.replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").replace(/\s+([,.;:)\]])/g, "$1").replace(/([([])\s+/g, "$1").trim();
+}
+function blocks(xml) {
+  let x = xml;
+  for (const tag2 of DROP) x = x.replace(new RegExp(`<${tag2}\\b[^>]*>[\\s\\S]*?</${tag2}>`, "gi"), " ");
+  const out = [];
+  const re = /<(title|p)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let m;
+  while (m = re.exec(x)) {
+    const body = clean3(m[2]);
+    if (!body) continue;
+    out.push(m[1].toLowerCase() === "title" ? `## ${body}` : body);
+  }
+  return out;
+}
+function jatsToText(xml) {
+  const front = inner(xml, "front") ?? xml;
+  const titleXml = inner(inner(front, "title-group") ?? front, "article-title");
+  const title = titleXml ? clean3(titleXml) : void 0;
+  const parts = [];
+  if (title) parts.push(`# ${title}`);
+  const abstract = inner(front, "abstract");
+  if (abstract) {
+    const ab = blocks(abstract);
+    if (ab.length) parts.push("## Abstract", ...ab.filter((b) => b !== "## Abstract"));
+  }
+  const body = inner(xml, "body");
+  if (body) parts.push(...blocks(body));
+  return { text: parts.join("\n\n"), ...title ? { title } : {} };
 }
 
 // src/services.ts
@@ -15468,6 +15503,7 @@ async function runGather(options) {
     version: VERSION,
     question: options.question,
     mode: options.mode,
+    ...options.template && options.template !== options.mode ? { template: options.template } : {},
     depth: options.depth,
     lang: options.lang,
     ...options.region ? { region: options.region } : {},
@@ -15491,7 +15527,7 @@ async function runGather(options) {
     services
   };
   const dir = options.out ?? defaultRunDir(options.mode, options.question);
-  const { sources } = writeDossier(dir, merged, manifest, mode2.template);
+  const { sources } = writeDossier(dir, merged, manifest, templateFor(manifest));
   return { dir, sources, manifest: { ...manifest, sourceCount: sources.length } };
 }
 
@@ -15503,7 +15539,7 @@ function loadState(dir) {
   const { sources, manifest } = readDossier(dir);
   const byCanon = /* @__PURE__ */ new Map();
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: getMode(manifest.mode).template };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
 }
 function commit(dir, state, p) {
   const id = `S${++state.maxId}`;
@@ -15919,12 +15955,16 @@ function extractUnits(lines, code, hint, noNumerals = []) {
   flush();
   return units;
 }
+var APPENDIX_HEADING = /^(?:sources?|references?|r[ée]f[ée]rences(?:\s+bibliographiques)?|bibliograph(?:y|ie)|works cited)\s*\(.*\)$/i;
+function reportAppendixMask(lines) {
+  return appendixMask(lines, { headings: APPENDIX_HEADING });
+}
 function maskedFile(text) {
   const noNumerals = noNumeralsMask(text.split("\n"));
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
-  const appendix = appendixMask(lines);
+  const appendix = reportAppendixMask(lines);
   return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]), noNumerals };
 }
 function unitsOfMasked(m) {
@@ -15947,7 +15987,7 @@ function unitSourceTokens(text) {
 function citedSourceIds(text) {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
-  const appendix = appendixMask(lines);
+  const appendix = reportAppendixMask(lines);
   const out = /* @__PURE__ */ new Set();
   for (let i = 0; i < lines.length; i++) {
     if (code[i] || appendix[i]) continue;
@@ -16191,7 +16231,7 @@ function renderHtml(dirOrCtx) {
   });
   let contradictionsId;
   for (const t of rendered) {
-    const h = t.headings.find((x) => /open question|contradiction/i.test(x.text));
+    const h = t.headings.find((x) => /open question|contradiction|questions? ouvertes?/i.test(x.text));
     if (h) {
       contradictionsId = h.id;
       break;
@@ -16433,8 +16473,8 @@ function buildWorklist(dir, opts = {}) {
     if (opts.keysOnly) {
       return { claimId: p.claimId, file: p.file, sourceId: p.sourceId, claim: p.claim, extractPath: p.extractPath, extractDigest: "" };
     }
-    const norm2 = p.nums.length ? normOf(p.source) : "";
-    const numeralsAbsent = p.nums.filter((n) => !norm2.includes(n));
+    const norm3 = p.nums.length ? normOf(p.source) : "";
+    const numeralsAbsent = p.nums.filter((n) => !norm3.includes(n));
     return {
       claimId: p.claimId,
       file: p.file,
@@ -16962,6 +17002,9 @@ function runCheck(dir, opts = {}) {
       `Under-covered question term(s): ${manifest.coverage.under.slice(0, 6).join(", ")} \u2014 the dossier may not support claims about them; enrich with \`fetch --url\` or say so under "Open questions".`
     );
   }
+  if (!hasOpenQuestions(stripHtmlComments(readFileSync16(join20(dir, "REPORT.md"), "utf8")))) {
+    warnings.push(`REPORT.md has no "Open questions" section \u2014 section titles are free, but say what the sources leave open.`);
+  }
   if (opts.minSources !== void 0 && sources.length < opts.minSources) {
     errors.push(
       `Only ${sources.length} source(s) in the dossier (--min-sources ${opts.minSources}). Enrich with \`fetch --url\` or broaden the gather before relying on this report.`
@@ -17061,7 +17104,7 @@ function listIssuesFrom(sources, textOf) {
 }
 function autoRelink(dir) {
   const { sources, manifest } = readDossier(dir);
-  const template = getMode(manifest.mode).template;
+  const template = templateFor(manifest);
   const state = newState(sources);
   const cache = /* @__PURE__ */ new Map();
   const textOf = (s) => {
@@ -17137,7 +17180,7 @@ function relink(dir, id, url, opts = {}) {
   const { result, relinked, text } = applyRelink(state, id, url, (s) => safeText(dir, s), opts);
   if (!result.relinked || !relinked) return result;
   writeSourceExtract(dir, relinked, text ?? "", manifest.depth);
-  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), getMode(manifest.mode).template);
+  writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), templateFor(manifest));
   return result;
 }
 function refreshed(manifest, sources) {
@@ -17903,8 +17946,8 @@ ${skepticFooter}`
   };
 }
 function runbookPreamble(phases, runAbs, engineAbs) {
-  const cell2 = (s) => s.replace(/\r?\n/g, " ").replaceAll("|", "\\|");
-  const status = phases.map((p) => `| ${p.name} | \`${cell2(p.worklist)}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${cell2(p.prerequisite)}\` |`).join("\n");
+  const cell3 = (s) => s.replace(/\r?\n/g, " ").replaceAll("|", "\\|");
+  const status = phases.map((p) => `| ${p.name} | \`${cell3(p.worklist)}\` | ${p.ready ? `ready (${p.items} item(s))` : "not ready"} | \`${cell3(p.prerequisite)}\` |`).join("\n");
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
@@ -18002,8 +18045,851 @@ function listPhasesFor(runDir, engineAbs) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync17, readFileSync as readFileSync18, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
-import { isAbsolute as isAbsolute3, join as join26, relative as relative2, resolve as resolve3, sep as sep3 } from "path";
+import { existsSync as existsSync18, readFileSync as readFileSync19, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
+import { isAbsolute as isAbsolute3, join as join27, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+
+// src/refcheck/index.ts
+import { existsSync as existsSync17, readFileSync as readFileSync18 } from "fs";
+import { basename as basename3, extname, join as join26, resolve as resolve3 } from "path";
+import { tmpdir as tmpdir4 } from "os";
+
+// src/refcheck/parse.ts
+var REF_HEADING = /^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]?\s+)?(r[ée]f[ée]rences(?:\s+bibliographiques)?|bibliograph(?:y|ie)|references|works cited|literature cited|literatur(?:verzeichnis)?|referencias|bibliografia)\s*:?\s*$/i;
+var HEADING = /^\s{0,3}#{1,6}\s+\S/;
+var NUMBERED = new RegExp("^\\s*(?:\\[(\\d{1,4})\\]|(\\d{1,4})[.)]|(\\d{1,4})(?=\\s+\\p{Lu}))\\s*(.*)$", "u");
+function referenceHeadingLine(lines) {
+  let at = -1;
+  for (let i = 0; i < lines.length; i++) if (REF_HEADING.test(lines[i].trim())) at = i;
+  return at;
+}
+function splitDocument(text) {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const at = referenceHeadingLine(lines);
+  if (at < 0) return { body: "", list: text, hadHeading: false };
+  let end = lines.length;
+  for (let i = at + 1; i < lines.length; i++) {
+    if (HEADING.test(lines[i]) && !NUMBERED.test(lines[i].replace(/^\s*#+\s*/, ""))) {
+      end = i;
+      break;
+    }
+  }
+  return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
+}
+function splitEntries(list) {
+  const lines = list.replace(/\r\n?/g, "\n").split("\n");
+  const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
+  const out = [];
+  if (numbered >= 2) {
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || HEADING.test(line)) continue;
+      const m = NUMBERED.exec(t);
+      if (m && (m[4] ?? "").length > 8) out.push({ n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4].trim() });
+      else if (out.length) out[out.length - 1].raw += ` ${t}`;
+    }
+    return out;
+  }
+  const paras = list.replace(/\r\n?/g, "\n").split(new RegExp("\\n\\s*\\n|\\n(?=\\s*\\p{Lu}[\\p{L}'\u2019 -]+ \\p{Lu}{1,4}[,.])", "u")).map((p) => p.replace(/\s+/g, " ").trim()).filter((p) => p.length > 12 && !HEADING.test(p));
+  return paras.map((raw, i) => ({ n: i + 1, raw: raw.replace(/^[-*•]\s+/, "") }));
+}
+var DOI_RE2 = /(?:\bdoi:?\s*|https?:\/\/(?:dx\.)?doi\.org\/)(10\.\d{4,9}\/[^\s"<>]+)|\b(10\.\d{4,9}\/[^\s"<>]+)/i;
+var DATE_VOL = /[.?!]\s*((?:19|20)\d{2})(?:\s+[A-Z][a-z]{2}(?:[-–\s]+[A-Z]?[a-z]{0,2})?(?:\s+\d{1,2})?)?\s*;\s*([^():;.\s][^():;.]*?)?\s*(?:\(([^)]*)\))?\s*(?::\s*([A-Za-z]?\d+[A-Za-z]?(?:\s*[-–]\s*[A-Za-z]?\d+[A-Za-z]?)?))?\s*(?:\.|$)/;
+var DATE_ONLY = /[.?!]\s*((?:19|20)\d{2})(?:\s+[A-Z][a-z]{2}(?:\s+\d{1,2})?)?\s*\.(?:\s|$)/;
+var AUTHOR_TOKEN = new RegExp("^(?:(?:\\p{Ll}{1,4}\\s+)*\\p{Lu}[\\p{L}'\u2019-]*(?:\\s+(?:\\p{Ll}{1,4}\\s+)*\\p{L}[\\p{L}'\u2019-]*)*\\s+\\p{Lu}{1,4}(?:\\s+(?:Jr|Sr|II|III|IV))?|et\\s+al)$", "u");
+function trimDoi(doi) {
+  return doi.replace(/[.,;:)\]]+$/, "");
+}
+function parseAuthorList(s) {
+  const tokens = s.split(/\s*,\s*/).map((t) => t.trim().replace(/\.$/, "")).filter(Boolean);
+  if (!tokens.length || !tokens.every((t) => AUTHOR_TOKEN.test(t))) return void 0;
+  const etAl = tokens.some((t) => /^et\s+al$/i.test(t));
+  return { authors: tokens.filter((t) => !/^et\s+al$/i.test(t)), etAl };
+}
+function parseVancouver(raw, n) {
+  const ref = { n, raw, authors: [], etAl: false };
+  let work = ` ${raw.replace(/\s+/g, " ").trim()}`;
+  const doi = DOI_RE2.exec(work);
+  if (doi) {
+    ref.doi = trimDoi(doi[1] ?? doi[2]);
+    work = work.slice(0, doi.index) + work.slice(doi.index + doi[0].length);
+  }
+  const pmid = /\bPMID:?\s*(\d{4,9})/i.exec(work);
+  if (pmid) {
+    ref.pmid = pmid[1];
+    work = work.replace(pmid[0], " ");
+  }
+  const pmcid = /\bPMCID:?\s*(PMC\d+)|\b(PMC\d{4,})\b/i.exec(work);
+  if (pmcid) {
+    ref.pmcid = (pmcid[1] ?? pmcid[2]).toUpperCase();
+    work = work.replace(pmcid[0], " ");
+  }
+  work = work.replace(/\s+(?:Epub|Published)\b[^.]*\.?/gi, " ").replace(/\s+/g, " ");
+  let rest = work.trim();
+  for (const m of rest.matchAll(/\.\s+/g)) {
+    const parsed = parseAuthorList(rest.slice(0, m.index));
+    if (parsed) {
+      ref.authors = parsed.authors;
+      ref.etAl = parsed.etAl;
+      rest = rest.slice(m.index + m[0].length);
+    }
+    break;
+  }
+  const dv = DATE_VOL.exec(rest) ?? DATE_ONLY.exec(rest);
+  let head = rest;
+  if (dv) {
+    head = rest.slice(0, dv.index + 1);
+    ref.year = dv[1];
+    if (dv[2]?.trim()) ref.volume = dv[2].trim();
+    if (dv[3]?.trim()) ref.issue = dv[3].trim();
+    if (dv[4]?.trim()) ref.pages = dv[4].replace(/\s+/g, "").replace(/–/g, "-");
+  }
+  head = head.trim().replace(/[.]$/, "");
+  const breaks = [...head.matchAll(/[.?!]\s+/g)];
+  const last = breaks.at(-1);
+  if (dv && last) {
+    ref.title = head.slice(0, last.index + (last[0].startsWith(".") ? 0 : 1)).trim();
+    ref.journal = head.slice(last.index + last[0].length).trim() || void 0;
+  } else if (head) {
+    ref.title = head;
+  }
+  if (ref.title === "") delete ref.title;
+  return ref;
+}
+function bibValue(s, i) {
+  while (s[i] === " " || s[i] === "	" || s[i] === "\n" || s[i] === "\r") i++;
+  if (s[i] === "{") {
+    let depth = 0;
+    let j = i;
+    for (; j < s.length; j++) {
+      if (s[j] === "{") depth++;
+      else if (s[j] === "}" && --depth === 0) break;
+    }
+    return { value: s.slice(i + 1, j), end: j + 1 };
+  }
+  if (s[i] === '"') {
+    let j = i + 1;
+    let depth = 0;
+    for (; j < s.length; j++) {
+      if (s[j] === "{") depth++;
+      else if (s[j] === "}") depth--;
+      else if (s[j] === '"' && depth === 0) break;
+    }
+    return { value: s.slice(i + 1, j), end: j + 1 };
+  }
+  const m = /^[^,}\s]+/.exec(s.slice(i));
+  return { value: m ? m[0] : "", end: i + (m ? m[0].length : 0) };
+}
+var unbrace = (s) => s.replace(/\\&/g, "&").replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
+function vancouverName(name) {
+  const n = unbrace(name);
+  let family;
+  let given;
+  if (n.includes(",")) [family, given] = [n.slice(0, n.indexOf(",")).trim(), n.slice(n.indexOf(",") + 1).trim()];
+  else {
+    const parts = n.split(/\s+/);
+    family = parts.pop() ?? n;
+    given = parts.join(" ");
+  }
+  const initials = given.split(/[\s.-]+/).filter(Boolean).map((p) => p[0].toUpperCase()).join("");
+  return initials ? `${family} ${initials}` : family;
+}
+function parseBibtex(text) {
+  const out = [];
+  const re = /@(\w+)\s*\{\s*([^,\s]*)\s*,/g;
+  let m;
+  while (m = re.exec(text)) {
+    if (/^(comment|preamble|string)$/i.test(m[1])) continue;
+    const fields = {};
+    let i = re.lastIndex;
+    for (; ; ) {
+      const f = /^\s*([A-Za-z][\w-]*)\s*=\s*/.exec(text.slice(i));
+      if (!f) break;
+      const v = bibValue(text, i + f[0].length);
+      fields[f[1].toLowerCase()] = v.value;
+      i = v.end;
+      const sep4 = /^\s*,?/.exec(text.slice(i));
+      i += sep4 ? sep4[0].length : 0;
+      if (text[i] === "}") break;
+    }
+    re.lastIndex = i;
+    const names = fields.author ? unbrace(fields.author).split(/\s+and\s+/i) : [];
+    const etAl = names.some((x) => /^others$/i.test(x.trim()));
+    const authors = names.filter((x) => !/^others$/i.test(x.trim())).map(vancouverName);
+    const n = out.length + 1;
+    const ref = {
+      n,
+      key: m[2] || void 0,
+      raw: [authors.join(", ") + (etAl ? ", et al" : ""), unbrace(fields.title ?? ""), unbrace(fields.journal ?? fields.booktitle ?? ""), fields.year].filter(Boolean).join(". "),
+      authors,
+      etAl
+    };
+    if (fields.title) ref.title = unbrace(fields.title);
+    if (fields.journal || fields.booktitle) ref.journal = unbrace(fields.journal ?? fields.booktitle);
+    if (fields.year) ref.year = unbrace(fields.year);
+    if (fields.volume) ref.volume = unbrace(fields.volume);
+    if (fields.number || fields.issue) ref.issue = unbrace(fields.number ?? fields.issue);
+    if (fields.pages) ref.pages = unbrace(fields.pages).replace(/-{2,}|–/g, "-");
+    if (fields.doi) ref.doi = trimDoi(unbrace(fields.doi).replace(/^https?:\/\/(dx\.)?doi\.org\//i, ""));
+    if (fields.pmid) ref.pmid = unbrace(fields.pmid);
+    out.push(ref);
+  }
+  return out;
+}
+function parseReferences(text) {
+  if (/@\w+\s*\{[^,\s]*\s*,/.test(text) && /\b(title|author)\s*=/.test(text)) return parseBibtex(text);
+  return splitEntries(splitDocument(text).list).map((e) => parseVancouver(e.raw, e.n));
+}
+
+// src/refcheck/citing.ts
+var SUP = { "\u2070": "0", "\xB9": "1", "\xB2": "2", "\xB3": "3", "\u2074": "4", "\u2075": "5", "\u2076": "6", "\u2077": "7", "\u2078": "8", "\u2079": "9", "\u207B": "-", "\u02D2": "," };
+var LIST = String.raw`\d{1,4}(?:\s*[-–—]\s*\d{1,4})?(?:\s*[,;]\s*\d{1,4}(?:\s*[-–—]\s*\d{1,4})?)*`;
+var BRACKET = new RegExp(String.raw`\[\s*(${LIST})\s*\]`, "g");
+var PAREN = new RegExp(String.raw`\(\s*(${LIST})\s*\)`, "g");
+var SUPERSCRIPT = /<sup>\s*([\d,\s–—-]+)\s*<\/sup>|\^([\d,–—-]+)\^|([⁰¹²³⁴⁵⁶⁷⁸⁹][⁰¹²³⁴⁵⁶⁷⁸⁹⁻˒,]*)/g;
+function expandCallList(list) {
+  const out = [];
+  for (const part of list.split(/[,;]/)) {
+    const m = /^\s*(\d+)\s*(?:[-–—]\s*(\d+))?\s*$/.exec(part);
+    if (!m) return [];
+    const a = Number(m[1]);
+    const b = m[2] !== void 0 ? Number(m[2]) : a;
+    if (b < a || b - a > 50) return [];
+    for (let i = a; i <= b; i++) out.push(i);
+  }
+  return [...new Set(out)];
+}
+function findCalls(paragraph2, style, refCount) {
+  const out = [];
+  if (style === "brackets") {
+    for (const m of paragraph2.matchAll(BRACKET)) {
+      const numbers = expandCallList(m[1]);
+      if (numbers.length) out.push({ index: m.index, length: m[0].length, token: m[0], numbers });
+    }
+  } else if (style === "parentheses") {
+    for (const m of paragraph2.matchAll(PAREN)) {
+      const numbers = expandCallList(m[1]);
+      if (!numbers.length || numbers.some((x) => x < 1 || x > refCount)) continue;
+      if (/^\s*(?:%|‰|mm|cm|ans|years?|yeux|eyes|patients?)/i.test(paragraph2.slice(m.index + m[0].length))) continue;
+      out.push({ index: m.index, length: m[0].length, token: m[0], numbers });
+    }
+  }
+  for (const m of paragraph2.matchAll(SUPERSCRIPT)) {
+    if (m[3] && /(?:\d|\b(?:m|cm|mm|km|kg|µm|nm|ml|mL))\s*$/.test(paragraph2.slice(0, m.index))) continue;
+    const body = m[1] ?? m[2] ?? [...m[3]].map((c) => SUP[c] ?? c).join("");
+    const numbers = expandCallList(body);
+    if (numbers.length && numbers.every((x) => x >= 1 && x <= Math.max(refCount, 1))) out.push({ index: m.index, length: m[0].length, token: m[0], numbers });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+function detectStyle(text, refCount) {
+  if (new RegExp(BRACKET.source).test(text)) return "brackets";
+  if (findCalls(text, "none", refCount).length) return "superscript";
+  let paren = 0;
+  for (const m of text.matchAll(PAREN)) if (expandCallList(m[1]).every((x) => x >= 1 && x <= refCount)) paren++;
+  return paren >= 2 ? "parentheses" : "none";
+}
+var SENTENCE_BREAK = /(?<=[.!?](?:\[[\d\s,;–—-]+\]|[⁰¹²³⁴⁵⁶⁷⁸⁹⁻˒,]+)?)\s+(?=[\p{Lu}\d«"“([])/u;
+function hasWords(s) {
+  return new RegExp("\\p{L}{3,}", "u").test(s);
+}
+function analyseCiting(text, refNumbers) {
+  const known = new Set(refNumbers);
+  const refCount = refNumbers.length ? Math.max(...refNumbers) : 0;
+  const style = detectStyle(text, refCount);
+  const calls = [];
+  const paragraphs = text.replace(/\r\n?/g, "\n").split(/\n/).map((p) => p.trim());
+  paragraphs.forEach((para, pi) => {
+    if (!para) return;
+    const sentences = para.split(SENTENCE_BREAK);
+    let previous = "";
+    for (const sentence of sentences) {
+      const found = findCalls(sentence, style, refCount);
+      let from = 0;
+      found.forEach((c, k) => {
+        let claim = sentence.slice(from, c.index);
+        if (k === found.length - 1) claim += ` ${sentence.slice(c.index + c.length)}`;
+        claim = claim.replace(/^[\s,;:.]+|[\s,;:]+$/g, "");
+        if (!hasWords(claim) && !extractNumerals(claim).length) claim = previous;
+        const bare = claim.replace(BRACKET, " ").replace(SUPERSCRIPT, " ");
+        calls.push({ numbers: c.numbers, token: c.token, sentence: sentence.trim(), claim: claim.trim(), numerals: extractNumerals(bare, 12), paragraph: pi });
+        from = c.index + c.length;
+      });
+      if (hasWords(sentence.replace(BRACKET, " "))) previous = sentence.replace(BRACKET, " ").replace(/\s+/g, " ").trim();
+    }
+  });
+  const firstCitationOrder = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const c of calls) {
+    for (const n of c.numbers) {
+      if (!seen.has(n)) {
+        seen.add(n);
+        firstCitationOrder.push(n);
+      }
+    }
+  }
+  const outOfOrder = [];
+  let highest = 0;
+  for (const n of firstCitationOrder) {
+    if (n < highest && known.has(n)) outOfOrder.push({ n, after: highest });
+    highest = Math.max(highest, n);
+  }
+  return {
+    style,
+    calls,
+    uncited: refNumbers.filter((n) => !seen.has(n)),
+    unknown: firstCitationOrder.filter((n) => !known.has(n)).sort((a, b) => a - b),
+    firstCitationOrder,
+    outOfOrder
+  };
+}
+function numeralIn(numeral, text) {
+  const hay = normalizeNumeralText(text);
+  const esc = numeral.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\d.])${esc}(?![\\d]|\\.\\d)`).test(hay);
+}
+
+// src/refcheck/diff.ts
+var FIELDS = ["authors", "title", "journal", "year", "volume", "issue", "pages", "doi"];
+var VANCOUVER_AUTHORS = 6;
+var norm2 = (s) => deaccent(s.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function titleSimilarity(a, b) {
+  const ta = norm2(a).split(" ").filter(Boolean);
+  const tb = norm2(b).split(" ").filter(Boolean);
+  if (!ta.length || !tb.length) return 0;
+  const sb = new Set(tb);
+  const common = ta.filter((t) => sb.has(t)).length;
+  return common / Math.max(ta.length, tb.length);
+}
+function expandPages(p) {
+  const m = /^([A-Za-z]?)(\d+)([A-Za-z]?)\s*[-–]\s*([A-Za-z]?)(\d+)([A-Za-z]?)$/.exec(p.trim());
+  if (!m) return p.trim();
+  const [, pre, a, , , b] = m;
+  const last = b.length < a.length ? a.slice(0, a.length - b.length) + b : b;
+  return `${pre}${a}-${pre}${last}`;
+}
+function vancouverAuthors(authors) {
+  return authors.length > VANCOUVER_AUTHORS ? `${authors.slice(0, VANCOUVER_AUTHORS).join(", ")}, et al.` : authors.join(", ");
+}
+function splitName(a) {
+  const m = new RegExp("^(.*\\S)\\s+(\\p{Lu}{1,4})$", "u").exec(a.trim());
+  return m ? { family: norm2(m[1]), initials: m[2] } : { family: norm2(a), initials: "" };
+}
+function diffAuthors(ref, rec) {
+  const expected = vancouverAuthors(rec.authors);
+  if (!rec.authors.length) return { field: "authors", status: "match", note: "the record lists no individual author" };
+  const cited = ref.authors.join(", ") + (ref.etAl ? ", et al." : "");
+  if (!ref.authors.length) return { field: "authors", status: "missing", expected };
+  const problems = [];
+  ref.authors.forEach((a, i) => {
+    const want = rec.authors[i];
+    if (!want) {
+      problems.push(`"${a}" is not an author on the record (${rec.authors.length} listed)`);
+      return;
+    }
+    const x = splitName(a);
+    const y = splitName(want);
+    if (x.family !== y.family) problems.push(`author ${i + 1}: "${a}" \u2014 record has "${want}"`);
+    else if (x.initials && y.initials && x.initials !== y.initials) problems.push(`author ${i + 1}: initials "${x.initials}" \u2014 record has "${y.initials}"`);
+  });
+  if (!ref.etAl && ref.authors.length < rec.authors.length) {
+    problems.push(`${ref.authors.length} of ${rec.authors.length} authors listed and no "et al."`);
+  }
+  if (problems.length) return { field: "authors", status: "mismatch", cited, expected, note: problems.join("; ") };
+  const style = ref.etAl && rec.authors.length > VANCOUVER_AUTHORS && ref.authors.length < VANCOUVER_AUTHORS ? `style: ${ref.authors.length} author(s) before "et al." (Vancouver lists ${VANCOUVER_AUTHORS})` : ref.etAl && rec.authors.length <= VANCOUVER_AUTHORS ? `style: "et al." although the record has only ${rec.authors.length} author(s) (Vancouver lists them all)` : void 0;
+  return { field: "authors", status: "match", cited, expected, ...style ? { note: style } : {} };
+}
+function simple(field, cited, expected, same) {
+  if (!expected) return void 0;
+  if (!cited) return { field, status: "missing", expected };
+  return same(cited, expected) ? { field, status: "match", cited, expected } : { field, status: "mismatch", cited, expected };
+}
+function diffReference(ref, rec) {
+  const out = [diffAuthors(ref, rec)];
+  const title = simple("title", ref.title?.replace(/[.]$/, ""), rec.title.replace(/[.]$/, ""), (a, b) => norm2(a) === norm2(b));
+  if (title?.status === "mismatch") title.note = `${Math.round(titleSimilarity(title.cited, title.expected) * 100)}% of words in common`;
+  const journal = simple("journal", ref.journal, rec.journal, (a, b) => norm2(a) === norm2(b) || !!rec.journalFull && norm2(a) === norm2(rec.journalFull));
+  if (journal && rec.via === "crossref") journal.note = "Crossref short title \u2014 not necessarily the NLM abbreviation";
+  else if (journal?.status === "mismatch") journal.note = "the NLM abbreviation is the PubMed one";
+  const rest = [
+    title,
+    journal,
+    simple("year", ref.year, rec.year, (a, b) => a.trim() === b.trim()),
+    simple("volume", ref.volume, rec.volume, (a, b) => norm2(a) === norm2(b)),
+    simple("issue", ref.issue, rec.issue, (a, b) => norm2(a) === norm2(b)),
+    simple("pages", ref.pages, rec.pages, (a, b) => expandPages(a).toLowerCase() === expandPages(b).toLowerCase()),
+    simple("doi", ref.doi, rec.doi, (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase())
+  ];
+  for (const d of rest) if (d) out.push(d);
+  return out;
+}
+
+// src/refcheck/resolve.ts
+var EUTILS2 = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+var BATCH = 100;
+async function polite() {
+  const ms = politeDelayMs();
+  if (ms) await sleep(ms);
+}
+function firstPage(pages) {
+  return pages ? /^[A-Za-z]?\d+[A-Za-z]?/.exec(pages)?.[0] : void 0;
+}
+async function ecitmatch(refs) {
+  const out = /* @__PURE__ */ new Map();
+  const lines = refs.filter((r) => r.journal && r.year && (r.volume || firstPage(r.pages)) && r.authors.length).map((r) => [r.journal, r.year, r.volume ?? "", firstPage(r.pages) ?? "", r.authors[0], String(r.n), ""].join("|"));
+  for (let i = 0; i < lines.length; i += 50) {
+    const bdata = lines.slice(i, i + 50).join("\r");
+    const r = await apiGet(`${EUTILS2}/ecitmatch.cgi?db=pubmed&retmode=xml&tool=ultrasearch&bdata=${encodeURIComponent(bdata)}`, {
+      json: false,
+      accept: "text/plain"
+    });
+    if (!r.ok || typeof r.data !== "string") continue;
+    for (const line of r.data.split(/\r?\n/)) {
+      const cols = line.split("|");
+      const key = Number(cols[5]);
+      const pmid = cols[6]?.trim();
+      if (key && pmid && /^\d+$/.test(pmid)) out.set(key, pmid);
+    }
+    await polite();
+  }
+  return out;
+}
+async function esearch(term) {
+  const r = await apiGet(`${EUTILS2}/esearch.fcgi?db=pubmed&retmode=json&retmax=3&tool=ultrasearch&term=${encodeURIComponent(term)}`);
+  await polite();
+  return r.ok && Array.isArray(r.data?.esearchresult?.idlist) ? r.data.esearchresult.idlist : [];
+}
+async function esummary(pmids) {
+  const out = /* @__PURE__ */ new Map();
+  for (let i = 0; i < pmids.length; i += BATCH) {
+    const ids = pmids.slice(i, i + BATCH);
+    const r = await apiGet(`${EUTILS2}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`);
+    await polite();
+    const result = r.ok ? r.data?.result : void 0;
+    if (!result) continue;
+    for (const id of ids) {
+      const d = result[id];
+      if (!d || d.error) continue;
+      const articleIds = Array.isArray(d.articleids) ? d.articleids : [];
+      const doi = articleIds.find((a) => a?.idtype === "doi")?.value;
+      const pmcid = articleIds.find((a) => a?.idtype === "pmc")?.value;
+      const authors = (Array.isArray(d.authors) ? d.authors : []).filter((a) => !a?.authtype || a.authtype === "Author").map((a) => String(a?.name ?? "")).filter(Boolean);
+      out.set(id, {
+        via: "pubmed",
+        how: "pmid",
+        pmid: id,
+        ...pmcid ? { pmcid } : {},
+        ...doi ? { doi } : {},
+        authors,
+        title: cleanInline(String(d.title ?? "")).replace(/\.$/, ""),
+        journal: d.source ? String(d.source) : void 0,
+        journalFull: d.fulljournalname ? String(d.fulljournalname) : void 0,
+        year: /\d{4}/.exec(String(d.pubdate ?? d.epubdate ?? ""))?.[0],
+        volume: d.volume ? String(d.volume) : void 0,
+        issue: d.issue ? String(d.issue) : void 0,
+        pages: d.pages ? String(d.pages) : void 0,
+        url: `https://pubmed.ncbi.nlm.nih.gov/${id}/`
+      });
+    }
+  }
+  return out;
+}
+async function efetchAbstracts(pmids) {
+  const out = /* @__PURE__ */ new Map();
+  for (let i = 0; i < pmids.length; i += BATCH) {
+    const ids = pmids.slice(i, i + BATCH);
+    const r = await apiGet(`${EUTILS2}/efetch.fcgi?db=pubmed&retmode=xml&rettype=abstract&tool=ultrasearch&id=${ids.join(",")}`, {
+      json: false,
+      accept: "application/xml"
+    });
+    await polite();
+    if (!r.ok || typeof r.data !== "string") continue;
+    for (const art of r.data.split(/<PubmedArticle>/).slice(1)) {
+      const pmid = /<PMID[^>]*>(\d+)<\/PMID>/.exec(art)?.[1];
+      if (!pmid) continue;
+      const parts = [];
+      for (const m of art.matchAll(/<AbstractText([^>]*)>([\s\S]*?)<\/AbstractText>/g)) {
+        const label = /Label="([^"]+)"/.exec(m[1])?.[1];
+        const body = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+        if (body) parts.push(label ? `${label}: ${body}` : body);
+      }
+      if (parts.length) out.set(pmid, parts.join("\n\n"));
+    }
+  }
+  return out;
+}
+function crossrefRecord(w, how) {
+  if (!w?.DOI) return void 0;
+  const parts = w.issued?.["date-parts"]?.[0] ?? w["published-print"]?.["date-parts"]?.[0] ?? w["published-online"]?.["date-parts"]?.[0];
+  const authors = (Array.isArray(w.author) ? w.author : []).map((a) => a.family ? vancouverName(`${a.family}, ${a.given ?? ""}`) : String(a.name ?? "")).filter(Boolean);
+  const first = (v) => Array.isArray(v) ? v[0] : v;
+  return {
+    via: "crossref",
+    how,
+    doi: String(w.DOI),
+    authors,
+    title: cleanInline(String(first(w.title) ?? "")),
+    journal: first(w["short-container-title"]) ?? first(w["container-title"]),
+    journalFull: first(w["container-title"]),
+    year: parts?.[0] ? String(parts[0]) : void 0,
+    volume: w.volume ? String(w.volume) : void 0,
+    issue: w.issue ? String(w.issue) : void 0,
+    pages: w.page ? String(w.page) : w["article-number"] ? String(w["article-number"]) : void 0,
+    ...w.abstract ? {
+      abstract: decodeEntities(String(w.abstract).replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim()
+    } : {},
+    url: `https://doi.org/${w.DOI}`
+  };
+}
+async function crossrefByDoi(doi) {
+  const r = await apiGet(`https://api.crossref.org/works/${encodeURIComponent(doi)}`, { userAgent: contactUa() });
+  await polite();
+  return r.ok ? crossrefRecord(r.data?.message, "doi") : void 0;
+}
+async function crossrefBibliographic(ref) {
+  const r = await apiGet(`https://api.crossref.org/works?rows=2&query.bibliographic=${encodeURIComponent(ref.raw)}`, { userAgent: contactUa() });
+  await polite();
+  const items = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
+  for (const w of items) {
+    const rec = crossrefRecord(w, "bibliographic");
+    if (rec && ref.title && titleSimilarity(ref.title, rec.title) >= 0.85) return rec;
+  }
+  return void 0;
+}
+async function checkDoi(doi) {
+  const r = await apiGet(`https://doi.org/api/handles/${encodeURIComponent(doi)}`);
+  await polite();
+  const code = r.data?.responseCode;
+  if (code === 1) {
+    const url = (Array.isArray(r.data.values) ? r.data.values : []).find((v) => v?.type === "URL")?.data?.value;
+    return { doi, resolves: true, ...url ? { target: String(url) } : {} };
+  }
+  if (code === 100 || r.status === 404) return { doi, resolves: false };
+  return { doi, resolves: void 0 };
+}
+async function resolveReferences(refs) {
+  const notes = [];
+  const pmidOf = /* @__PURE__ */ new Map();
+  for (const r of refs) if (r.pmid) pmidOf.set(r.n, { pmid: r.pmid, how: "pmid" });
+  const matched = await ecitmatch(refs.filter((r) => !pmidOf.has(r.n)));
+  for (const [n, pmid] of matched) pmidOf.set(n, { pmid, how: "ecitmatch" });
+  for (const r of refs) {
+    if (pmidOf.has(r.n)) continue;
+    if (r.doi) {
+      const ids = await esearch(`${r.doi}[aid]`);
+      if (ids.length === 1) {
+        pmidOf.set(r.n, { pmid: ids[0], how: "doi" });
+        continue;
+      }
+    }
+    if (r.title) {
+      const t = r.title.replace(/[^\p{L}\p{N}\s-]/gu, " ").replace(/\s+/g, " ").trim();
+      const ids = await esearch(`${t}[ti]${r.year ? ` AND ${r.year}[dp]` : ""}`);
+      if (ids.length >= 1 && ids.length <= 3) pmidOf.set(r.n, { pmid: ids[0], how: "title" });
+    }
+  }
+  const pmids = [...new Set([...pmidOf.values()].map((v) => v.pmid))];
+  const summaries = pmids.length ? await esummary(pmids) : /* @__PURE__ */ new Map();
+  const abstracts = pmids.length ? await efetchAbstracts(pmids) : /* @__PURE__ */ new Map();
+  const records = /* @__PURE__ */ new Map();
+  for (const r of refs) {
+    const hit = pmidOf.get(r.n);
+    const rec = hit ? summaries.get(hit.pmid) : void 0;
+    if (rec && (hit.how !== "title" || !r.title || titleSimilarity(r.title, rec.title) >= 0.8)) {
+      const abs = abstracts.get(rec.pmid);
+      records.set(r.n, { ...rec, how: hit.how, ...abs ? { abstract: abs } : {} });
+      continue;
+    }
+    const viaCrossref = (r.doi ? await crossrefByDoi(r.doi) : void 0) ?? (r.title ? await crossrefBibliographic(r) : void 0);
+    if (viaCrossref) records.set(r.n, viaCrossref);
+  }
+  if (summaries.size < pmids.length) notes.push(`PubMed returned no summary for ${pmids.length - summaries.size} PMID(s).`);
+  const doiChecks = /* @__PURE__ */ new Map();
+  for (const r of refs) {
+    if (!r.doi || doiChecks.has(r.doi.toLowerCase())) continue;
+    doiChecks.set(r.doi.toLowerCase(), await checkDoi(r.doi));
+  }
+  return { records, doiChecks, notes };
+}
+
+// src/refcheck/index.ts
+var TEXT_EXT = /\.(txt|md|markdown|bib|bibtex|text|ris)$/i;
+async function readDocumentText(path) {
+  const abs = resolve3(path);
+  if (!existsSync17(abs)) throw new Error(`file not found: ${abs}`);
+  const bytes = readFileSync18(abs);
+  const ext = extname(abs).toLowerCase();
+  if (TEXT_EXT.test(ext) || !ext) return bytes.toString("utf8");
+  if (ext === ".pdf") {
+    const got = await extractPdf(bytes, {});
+    if (!got.text) throw new Error(`could not extract text from ${basename3(abs)}${got.reason ? ` \u2014 ${got.reason}` : ""}`);
+    return got.text;
+  }
+  const text = officeToText(bytes);
+  if (!text) throw new Error(`could not read ${basename3(abs)} as an office document (.docx, .odt, .pptx, .xlsx)`);
+  return text;
+}
+function recordText(ref, rec) {
+  const where = [rec.journal, [rec.year, rec.volume ? `;${rec.volume}` : "", rec.issue ? `(${rec.issue})` : "", rec.pages ? `:${rec.pages}` : ""].join("")].filter(Boolean).join(". ");
+  return [
+    `# ${rec.title}`,
+    "",
+    `${vancouverAuthors(rec.authors)}. ${where}.`,
+    [rec.pmid ? `PMID: ${rec.pmid}` : "", rec.pmcid ? `PMCID: ${rec.pmcid}` : "", rec.doi ? `DOI: ${rec.doi}` : ""].filter(Boolean).join(" \xB7 "),
+    `Cited as reference [${ref.n}] \u2014 resolved via ${rec.via === "pubmed" ? "PubMed" : "Crossref"} (${rec.how}).`,
+    "",
+    "## Abstract",
+    "",
+    rec.abstract || "(no abstract on record)"
+  ].join("\n");
+}
+function summarise(entries, citing) {
+  const fields = entries.flatMap((e) => e.fields);
+  const numerals = entries.flatMap((e) => e.claims.flatMap((c) => c.numerals));
+  return {
+    references: entries.length,
+    resolved: entries.filter((e) => e.record).length,
+    viaPubmed: entries.filter((e) => e.record?.via === "pubmed").length,
+    viaCrossref: entries.filter((e) => e.record?.via === "crossref").length,
+    unresolved: entries.filter((e) => e.status === "unresolved").length,
+    withDiscrepancies: entries.filter((e) => e.status === "discrepancies").length,
+    fieldMismatches: fields.filter((f) => f.status === "mismatch").length,
+    fieldsMissing: fields.filter((f) => f.status === "missing").length,
+    doisCited: entries.filter((e) => e.cited.doi).length,
+    doisBroken: entries.filter((e) => e.doi?.resolves === false).length,
+    uncited: citing?.uncited.length ?? 0,
+    unknownCalls: citing?.unknown.length ?? 0,
+    outOfOrder: citing?.outOfOrder.length ?? 0,
+    numeralsChecked: numerals.filter((x) => x.status !== "no-abstract").length,
+    numeralsAbsent: numerals.filter((x) => x.status === "absent").length
+  };
+}
+async function runRefcheck(opts) {
+  const refsText = await readDocumentText(opts.refs);
+  const refs = parseReferences(refsText);
+  if (!refs.length)
+    throw new Error(`no reference found in ${basename3(opts.refs)} \u2014 expected a numbered list ("1. Author A. Title. Journal. 2020;\u2026") or a .bib file`);
+  const notes = [];
+  let citingText;
+  let citingFile;
+  if (opts.citing) {
+    citingFile = resolve3(opts.citing);
+    const raw = await readDocumentText(opts.citing);
+    citingText = splitDocument(raw).body || raw;
+  } else {
+    const body = splitDocument(refsText).body;
+    if (new RegExp("\\p{L}{3,}", "u").test(body)) {
+      citingText = body;
+      citingFile = resolve3(opts.refs);
+      notes.push(`Citing text: the body of ${basename3(opts.refs)}, before its reference list.`);
+    }
+  }
+  const numbers = refs.map((r) => r.n);
+  const citing = citingText ? analyseCiting(citingText, numbers) : void 0;
+  if (citing && citing.style === "none") notes.push("No citation call ([n], (n) or superscript) was found in the citing text.");
+  const resolved = opts.offline ? void 0 : await resolveReferences(refs);
+  if (resolved) notes.push(...resolved.notes);
+  else notes.push("Offline: nothing was resolved \u2014 metadata, DOIs and figures are unchecked.");
+  const builtAt = (/* @__PURE__ */ new Date()).toISOString();
+  const dir = resolve3(opts.out ?? join26(tmpdir4(), "ultrasearch", `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`, runId()));
+  if (existsSync17(join26(dir, "sources.json")) && !existsSync17(join26(dir, "refcheck.json"))) {
+    throw new Error(`${dir} already holds a dossier that refcheck did not write \u2014 pass another --out`);
+  }
+  const entries = refs.map((ref) => {
+    const rec = resolved?.records.get(ref.n);
+    const fields = rec ? diffReference(ref, rec) : [];
+    const doi = ref.doi ? resolved?.doiChecks.get(ref.doi.toLowerCase()) : void 0;
+    if (doi?.resolves === false) {
+      const d = fields.find((f) => f.field === "doi");
+      if (d && d.status === "match") Object.assign(d, { status: "mismatch", note: "does not resolve on doi.org" });
+      else if (!d) fields.push({ field: "doi", status: "mismatch", cited: ref.doi, note: "does not resolve on doi.org" });
+    }
+    const own = citing?.calls.filter((c) => c.numbers.includes(ref.n)) ?? [];
+    const claims = own.filter((c) => c.numerals.length).map((c) => ({
+      claim: c.claim,
+      numerals: c.numerals.map((value) => ({
+        value,
+        status: !rec?.abstract ? "no-abstract" : numeralIn(value, rec.abstract) ? "found" : "absent"
+      }))
+    }));
+    const bad = fields.some((f) => f.status !== "match");
+    const status = !resolved ? "not-checked" : !rec ? "unresolved" : bad || doi?.resolves === false ? "discrepancies" : "ok";
+    const { abstract, ...meta } = rec ?? {};
+    return {
+      n: ref.n,
+      raw: ref.raw,
+      cited: ref,
+      status,
+      ...rec ? { record: { ...meta, hasAbstract: !!abstract } } : {},
+      fields,
+      ...doi ? { doi } : {},
+      calls: own.length,
+      claims
+    };
+  });
+  ensureDir(dir);
+  if (resolved) {
+    ensureDir(join26(dir, "sources"));
+    const manifest = {
+      version: VERSION,
+      question: `Reference check \u2014 ${basename3(opts.refs)}`,
+      mode: "research",
+      template: "verification",
+      depth: "deep",
+      lang: "en",
+      backends: ["pubmed", "crossref"],
+      backendsUsed: [...new Set(entries.map((e) => e.record?.via).filter((v) => !!v))],
+      sourceCount: 0,
+      builtAt,
+      slug: `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`,
+      tiers: ["SUMMARY.md", "REPORT.md"],
+      extras: ["bibtex"],
+      notes: [
+        "Built by `refcheck`: source S<n> is reference n (unresolved references have no source, so their ids are gaps).",
+        "REFCHECK.md is the generated check; write REPORT.md to the verification template, citing [S#], then `check`.",
+        ...notes
+      ],
+      timings: {},
+      cache: { enabled: false, hits: 0 }
+    };
+    const sources = [];
+    for (const e of entries) {
+      const rec = resolved.records.get(e.n);
+      if (!rec) continue;
+      const raw = {
+        url: rec.url,
+        title: rec.title || e.cited.title || `Reference ${e.n}`,
+        backend: rec.via,
+        score: 1,
+        snippet: (rec.abstract ?? rec.title).replace(/\s+/g, " ").slice(0, 360),
+        text: recordText(e.cited, rec),
+        meta: {
+          ...rec.doi ? { doi: rec.doi } : {},
+          ...rec.pmid ? { pmid: rec.pmid } : {},
+          ...rec.pmcid ? { pmcid: rec.pmcid } : {},
+          authors: rec.authors,
+          ...rec.year ? { year: Number(rec.year) } : {},
+          ...rec.journal ? { venue: rec.journal } : {},
+          reference: e.n
+        }
+      };
+      const s = buildSource(raw, `S${e.n}`, builtAt, manifest.question);
+      writeSourceExtract(dir, s, raw.text, manifest.depth, manifest.question);
+      sources.push(s);
+      e.sourceId = s.id;
+    }
+    manifest.sourceCount = sources.length;
+    if (sources.length) writeDossierIndex(dir, sources, manifest, templateFor(manifest));
+    else notes.push("No reference resolved: no dossier was written.");
+  }
+  const result = {
+    version: VERSION,
+    refsFile: resolve3(opts.refs),
+    ...citingFile ? { citingFile } : {},
+    builtAt,
+    offline: !resolved,
+    dir,
+    summary: summarise(entries, citing),
+    references: entries,
+    ...citing ? { citing: { ...citing, calls: citing.calls.length } } : {},
+    notes
+  };
+  writeArtifact(join26(dir, "refcheck.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join26(dir, "REFCHECK.md"), renderRefcheckMarkdown(result));
+  return result;
+}
+var cell2 = (s) => (s ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
+var MARK = { match: "\u2713", mismatch: "\u2717", missing: "\u2205" };
+function fieldMark(e, field) {
+  const f = e.fields.find((x) => x.field === field);
+  return f ? MARK[f.status] : "\u2014";
+}
+function renderRefcheckMarkdown(r) {
+  const s = r.summary;
+  const out = [`# Reference check \u2014 ${basename3(r.refsFile)}`, ""];
+  out.push(`_Generated by ultrasearch ${r.version} on ${r.builtAt}. \u2713 match \xB7 \u2717 mismatch \xB7 \u2205 missing from the citation \xB7 \u2014 not judged._`, "");
+  out.push("## Verdict", "");
+  if (r.offline) {
+    out.push(`- ${s.references} reference(s) parsed. **Offline run**: nothing was looked up \u2014 metadata, DOIs and figures are unchecked.`);
+  } else {
+    out.push(
+      `- ${s.references} reference(s): ${s.resolved} resolved (${s.viaPubmed} PubMed, ${s.viaCrossref} Crossref only), ${s.unresolved} unresolved.`,
+      `- ${s.withDiscrepancies} reference(s) with a discrepancy: ${s.fieldMismatches} field mismatch(es), ${s.fieldsMissing} field(s) missing from the citation.`,
+      `- DOIs: ${s.doisCited} cited, ${s.doisBroken} not resolving on doi.org.`
+    );
+  }
+  if (r.citing) {
+    out.push(
+      `- Citing text (${r.citing.style} calls, ${r.citing.calls} call site(s)): ${s.uncited} reference(s) never cited, ${s.unknownCalls} call(s) to a number not in the list, ${s.outOfOrder} reference(s) out of Vancouver order.`
+    );
+    if (!r.offline) out.push(`- Figures: ${s.numeralsChecked} checked against the cited abstract, ${s.numeralsAbsent} not found there.`);
+  } else {
+    out.push("- No citing text: orphans, order and figures were not checked (pass `--citing <file>`).");
+  }
+  out.push("");
+  out.push("## Reference-by-reference table", "");
+  out.push(`| # | Status | Resolved as | ${FIELDS.map((f) => f).join(" | ")} | Calls | Source |`);
+  out.push(`|---|---|---|${FIELDS.map(() => "---").join("|")}|---|---|`);
+  for (const e of r.references) {
+    const as = e.record ? `${e.record.via === "pubmed" ? `PMID ${e.record.pmid}` : `DOI ${e.record.doi}`}` : "\u2014";
+    out.push(
+      `| ${e.n} | ${e.status} | ${cell2(as)} | ${FIELDS.map((f) => fieldMark(e, f)).join(" | ")} | ${e.calls} | ${e.sourceId ? `[${e.sourceId}]` : "\u2014"} |`
+    );
+  }
+  out.push("");
+  out.push("## Discrepancies", "");
+  const bad = r.references.filter((e) => e.fields.some((f) => f.status !== "match") || e.fields.some((f) => f.note?.startsWith("style:")));
+  if (!bad.length) out.push(r.offline ? "_Not checked (offline)._" : "_None: every resolved reference matches its record._");
+  for (const e of bad) {
+    out.push(`### [${e.n}] ${cell2(e.cited.title ?? e.raw).slice(0, 140)}${e.sourceId ? ` [${e.sourceId}]` : ""}`, "");
+    for (const f of e.fields) {
+      if (f.status === "match" && !f.note?.startsWith("style:")) continue;
+      const what = f.status === "missing" ? `missing \u2014 the record has \`${cell2(f.expected)}\`` : f.status === "mismatch" ? `cited \`${cell2(f.cited)}\`${f.expected ? ` \u2014 record has \`${cell2(f.expected)}\`` : ""}` : "matches";
+      out.push(`- **${f.field}**: ${what}${f.note ? ` (${f.note})` : ""}`);
+    }
+    out.push("");
+  }
+  out.push("## Claims checked against their sources", "");
+  if (!r.citing) out.push("_No citing text._");
+  else {
+    if (r.citing.uncited.length) out.push(`- **Never cited:** ${r.citing.uncited.map((n) => `[${n}]`).join(", ")}`);
+    if (r.citing.unknown.length) out.push(`- **Called but not in the list:** ${r.citing.unknown.map((n) => `[${n}]`).join(", ")}`);
+    if (r.citing.outOfOrder.length) {
+      out.push(`- **Out of Vancouver order** (first cited after a higher number): ${r.citing.outOfOrder.map((o) => `[${o.n}] after [${o.after}]`).join(", ")}`);
+    }
+    if (!r.citing.uncited.length && !r.citing.unknown.length && !r.citing.outOfOrder.length) {
+      out.push("- Every reference is cited, every call has a reference, and first citations run in order.");
+    }
+    const rows = r.references.flatMap((e) => e.claims.flatMap((c) => c.numerals.map((nu) => ({ e, claim: c.claim, value: nu.value, status: nu.status }))));
+    if (rows.length) {
+      out.push("", "| Ref | Figure | In the abstract | Citing passage |", "|---|---|---|---|");
+      for (const x of rows) {
+        out.push(`| [${x.e.n}]${x.e.sourceId ? ` [${x.e.sourceId}]` : ""} | ${x.value} | ${x.status} | ${cell2(x.claim).slice(0, 220)} |`);
+      }
+      out.push(
+        "",
+        "_A figure absent from an abstract is a lead, not a verdict: it may come from the full text, a table, or a calculation. Open the article before calling it wrong._"
+      );
+    }
+  }
+  out.push("");
+  out.push("## Not verifiable", "");
+  const nv = r.references.filter((e) => e.status === "unresolved" || e.status === "not-checked" || e.record && !e.record.hasAbstract);
+  if (!nv.length) out.push("_Nothing: every reference resolved, with an abstract._");
+  for (const e of nv) {
+    const why = e.status === "not-checked" ? "offline run" : e.status === "unresolved" ? "not found on PubMed or Crossref \u2014 check the reference by hand" : "resolved, but the record has no abstract: its figures could not be checked";
+    out.push(`- [${e.n}] ${cell2(e.raw).slice(0, 160)} \u2014 ${why}`);
+  }
+  out.push("");
+  out.push("## Open questions", "");
+  out.push("- Which discrepancies are typos in the citation, and which point at the wrong article?");
+  if (!r.offline && r.summary.numeralsAbsent) out.push("- Do the figures missing from the abstracts appear in the full texts?");
+  if (r.summary.unresolved) out.push("- Do the unresolved references exist (books, chapters, theses and grey literature are rarely indexed)?");
+  for (const n of r.notes) out.push(`- Note: ${n}`);
+  out.push("");
+  return out.join("\n");
+}
+
+// src/mcp/handlers.ts
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -18056,8 +18942,8 @@ function requiredRun(args, defaults) {
   const run = str2(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute3(run)) throw new ToolError("`run` must be an absolute path.");
-  const abs = resolve3(run);
-  if (!existsSync17(join26(abs, "manifest.json"))) {
+  const abs = resolve4(run);
+  if (!existsSync18(join27(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -18095,9 +18981,14 @@ function gatherOptions(args) {
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
     browser: browserArg(args),
+    ...templateArg(args) ? { template: templateArg(args) } : {},
     out,
     json: true
   };
+}
+function templateArg(args) {
+  const t = str2(args.template);
+  return t === void 0 ? void 0 : oneOf(t, ALL_TEMPLATES, "template", "verification");
 }
 var PAGE_TOOLS = /* @__PURE__ */ new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
 async function callTool(name, args, defaults = {}) {
@@ -18110,7 +19001,8 @@ var NO_WRITE_REFUSED_TOOLS = {
   ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
   ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
-  ultrasearch_drop: "it removes sources from a dossier on disk"
+  ultrasearch_drop: "it removes sources from a dossier on disk",
+  ultrasearch_refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references"
 };
 async function dispatch(name, args, defaults) {
   const refused = NO_WRITE_REFUSED_TOOLS[name];
@@ -18134,6 +19026,9 @@ async function dispatch(name, args, defaults) {
       return await handleBrainstorm(args);
     case "ultrasearch_merge":
       return handleMerge(args);
+    // Creates its own output dir, like gather.
+    case "ultrasearch_refcheck":
+      return await handleRefcheck(args);
     // Everything below mutates or reads ONE existing dossier, and is
     // serialized against other calls on the same one.
     default: {
@@ -18216,9 +19111,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join26(res.dir, "DOSSIER.md"),
+    dossier_md: join27(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join26(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join27(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -18256,14 +19151,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute3(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync17(join26(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync18(join27(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
   if (master !== void 0 && !isAbsolute3(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join26(res.dir, "DOSSIER.md"),
+    dossier_md: join27(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -18275,6 +19170,43 @@ async function handleFetch(args, run) {
   const res = await addSource(run, url, { question: str2(args.question), title: str2(args.title), citeUrl: str2(args.cite_url), browser: browserArg(args) });
   return { run, url, ...res };
 }
+async function handleRefcheck(args) {
+  const refs = requiredStr(args, "refs", "the absolute path to the reference list.");
+  const citing = str2(args.citing);
+  const out = str2(args.out);
+  for (const [k, v] of [
+    ["refs", refs],
+    ["citing", citing],
+    ["out", out]
+  ]) {
+    if (v !== void 0 && !isAbsolute3(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
+  }
+  if (!existsSync18(refs)) throw new ToolError(`no file at ${refs}`);
+  if (citing && !existsSync18(citing)) throw new ToolError(`no file at ${citing}`);
+  let res;
+  try {
+    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline) });
+  } catch (e) {
+    throw new ToolError(e.message);
+  }
+  const hasDossier = res.references.some((e) => e.sourceId);
+  return {
+    dir: res.dir,
+    report: join27(res.dir, "REFCHECK.md"),
+    summary: res.summary,
+    ...res.citing ? { citing: res.citing } : {},
+    // One line per reference that needs a look, not the whole record set.
+    issues: res.references.filter((e) => e.status !== "ok").map((e) => ({
+      n: e.n,
+      status: e.status,
+      ...e.sourceId ? { source: e.sourceId } : {},
+      fields: e.fields.filter((f) => f.status !== "match"),
+      ...e.doi?.resolves === false ? { doi: "does not resolve" } : {}
+    })),
+    notes: res.notes,
+    next: hasDossier ? `Read ${join27(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join27(res.dir, "REFCHECK.md")}.`
+  };
+}
 async function handleIngest(args, run) {
   const web = webResultsArg(args.web_results);
   const listed = strArray(args.urls) ?? [];
@@ -18282,6 +19214,11 @@ async function handleIngest(args, run) {
     if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
   }
   const hits = [...listed, ...web?.hits ?? []];
+  const template = templateArg(args);
+  if (template) {
+    setDossierTemplate(run, template);
+    if (!hits.length) return { run, template, next: "DOSSIER.md now carries that template. Write the report to it, then ultrasearch_check." };
+  }
   if (!hits.length) throw new ToolError("`web_results` or `urls` is required \u2014 the URLs to fold into the dossier.");
   const res = await addSources(run, hits, { question: str2(args.question), firecrawl: str2(args.firecrawl), cache: true, browser: browserArg(args) });
   return {
@@ -18370,7 +19307,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute3(raw) ? raw : join26(run, raw);
+  const target = isAbsolute3(raw) ? raw : join27(run, raw);
   let real;
   try {
     real = realpathSync3(target);
@@ -18384,7 +19321,7 @@ function handleRead(args, run) {
   const st = statSync10(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync18(real, "utf8").split("\n");
+  const lines = readFileSync19(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
@@ -18412,6 +19349,11 @@ var modeProp = {
   description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), clinical (PubMed, Europe PMC, ClinicalTrials.gov \u2014 a clinical or biomedical question; no arXiv; BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant \u2014 pair with lang + region for the country; writes codes.json). Default: topic."
 };
 var langProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
+var templateProp = {
+  type: "string",
+  enum: [...ALL_TEMPLATES].sort(),
+  description: "The report template the dossier asks for, when not the mode's own \u2014 any mode's, or 'verification' (verdict, reference-by-reference table, discrepancies, not verifiable). Headings are free; ultrasearch_check only expects an 'Open questions' section."
+};
 var webResultsProp = {
   type: "array",
   items: { type: "object" },
@@ -18488,6 +19430,7 @@ var TOOLS = [
         searxng: searxngProp,
         firecrawl: firecrawlProp,
         browser: browserProp,
+        template: templateProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." }
       },
       required: ["question"]
@@ -18505,7 +19448,8 @@ var TOOLS = [
         urls: { type: "array", items: { type: "string" }, description: "Plain list of absolute http(s) URLs (alternative to web_results)." },
         question: { type: "string", description: "What you're looking for on these pages \u2014 ranks the excerpts kept. Defaults to the dossier's question." },
         firecrawl: firecrawlProp,
-        browser: browserProp
+        browser: browserProp,
+        template: { ...templateProp, description: `${templateProp.description} Alone (no urls/web_results), it only switches the template.` }
       },
       required: ["run"]
     }
@@ -18653,6 +19597,24 @@ var TOOLS = [
     }
   },
   {
+    name: "ultrasearch_refcheck",
+    title: "Check a bibliography against PubMed and Crossref",
+    description: "Check a reference list the way a reviewer would: resolve each reference on PubMed (E-utilities) or Crossref, diff authors, title, NLM journal, year, volume, issue, pages and DOI field by field, and check every cited DOI on doi.org. With a citing text (or a document whose body precedes its reference list), it also lists references never cited, calls with no reference, the Vancouver first-citation order, and every figure a citing passage states that the cited abstract lacks. Writes refcheck.json, REFCHECK.md and a dossier in which source S<n> is reference n \u2014 write a report from it and prove it with ultrasearch_check.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        refs: {
+          type: "string",
+          description: "Absolute path to the reference list: numbered Vancouver (.txt/.md, or a .docx/.pdf with a References heading) or .bib."
+        },
+        citing: { type: "string", description: "Absolute path to the text that cites them (.md/.txt/.docx/.pdf). Defaults to the body of `refs`." },
+        out: { type: "string", description: "Absolute output directory (default: a timestamped dir under the temp root)." },
+        offline: { type: "boolean", description: "Parse and read the citing text only \u2014 no PubMed, Crossref or doi.org." }
+      },
+      required: ["refs"]
+    }
+  },
+  {
     name: "ultrasearch_modes",
     title: "List the research modes",
     description: "What each mode is for and which backends it searches. Read this when unsure which mode a question belongs to. Writes nothing.",
@@ -18702,6 +19664,7 @@ var TOOL_META = {
   ultrasearch_plan: { openWorld: false },
   ultrasearch_merge: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_brainstorm: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_refcheck: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_modes: { openWorld: false },
   ultrasearch_read: { openWorld: false }
 };
@@ -18938,7 +19901,8 @@ Usage:
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
-  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--template <t>] [--json]
+  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -18971,6 +19935,14 @@ Commands:
            reports one outcome per URL (added / already there / refused).
            PubMed and PMC pages (and efetch URLs) are read through E-utilities
            and Europe PMC, never through their cookie / anti-bot walls.
+  refcheck Check a bibliography: resolve every reference on PubMed (E-utilities)
+           or Crossref, diff authors / title / NLM journal / year / volume /
+           issue / pages / DOI field by field, check each cited DOI on doi.org,
+           and \u2014 with a citing text (--citing, or the body of --refs itself) \u2014
+           list orphan references and calls, the Vancouver first-citation order,
+           and every figure a citing sentence states that its abstract lacks.
+           Writes refcheck.json + REFCHECK.md and a dossier in which source
+           S<n> is reference n (verification template), so 'check' applies.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -19023,6 +19995,12 @@ Deep research (the agentic tier \u2014 see references/deep-research-playbook.md)
 Options:
   --q, --question <s>  The topic or question                      (required)
   --mode <m>           ${ALL_MODES.join(" | ")}   (default: topic)
+                       (checking a bibliography is the 'refcheck' command, not a mode)
+  --template <t>       For gather / ingest: write the report to another template
+                       than the mode's: ${ALL_TEMPLATES.join(" | ")}
+                       (verification = verdict, reference-by-reference table,
+                       discrepancies, not verifiable). Headings are free; 'check'
+                       only expects an "Open questions" section.
   --depth <d>          ${ALL_DEPTHS.join(" | ")}            (default: standard)
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
@@ -19078,6 +20056,12 @@ Options:
   --files <p,...>      For 'ingest': local documents to add \u2014 PDFs, office files
                        (.docx/.pptx/.xlsx/.odt/\u2026) and plain text. Their contents
                        enter the dossier and any report rendered from it.
+  --refs <file>        For 'refcheck': the reference list \u2014 a numbered Vancouver
+                       list (.txt/.md, or the text of a .docx/.pdf, found under
+                       its References heading) or a .bib file
+  --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
+  --offline            For 'refcheck': parse and read the citing text only \u2014 no
+                       PubMed, Crossref or doi.org lookup
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -19162,6 +20146,7 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "merge",
   "verify",
   "orchestrate",
+  "refcheck",
   "mcp",
   "doctor",
   "searxng",
@@ -19213,6 +20198,9 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "shard",
   "min-sources",
   "phase",
+  "template",
+  "refs",
+  "citing",
   // `mcp` only. The flag sets are global, so these are accepted (and ignored)
   // on every command — the same as --phase and --list already are.
   "transport",
@@ -19235,7 +20223,8 @@ var BOOL_FLAGS = /* @__PURE__ */ new Set([
   "eco",
   "list",
   "dry-run",
-  "allow-remote"
+  "allow-remote",
+  "offline"
 ]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
@@ -19270,10 +20259,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve4(x));
-  const abs = resolve4(spec);
-  if (existsSync18(abs) && statSync11(abs).isDirectory()) {
-    const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve4(abs, f));
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve8(x));
+  const abs = resolve8(spec);
+  if (existsSync19(abs) && statSync11(abs).isDirectory()) {
+    const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve8(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -19302,15 +20291,15 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync19(0, "utf8");
+      return readFileSync20(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
   }
-  const abs = resolve4(spec);
-  if (!existsSync18(abs)) fail(`--web-results file not found: ${abs}`);
+  const abs = resolve8(spec);
+  if (!existsSync19(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync19(abs, "utf8");
+    return readFileSync20(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -19334,14 +20323,15 @@ var NO_WRITE_REFUSED = {
   relink: "it rewrites a source's url in a dossier on disk",
   drop: "it removes sources from a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
-  orchestrate: "it emits workflow scripts and agent contracts the harness opens by path"
+  orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
+  refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references"
 };
 var STDOUT_BRIEF = ["DOSSIER.md", "BRAINSTORM.md", "PLAN.json", "index.md"];
 function sourceNum(rel) {
   return Number(/^sources\/S(\d+)\.md$/.exec(rel)?.[1] ?? 0);
 }
 function emitArtifacts(dir, asJson, extra = {}) {
-  const artifacts = takeArtifacts().map((a) => ({ rel: relative3(dir, a.path) || basename3(a.path), content: a.content }));
+  const artifacts = takeArtifacts().map((a) => ({ rel: relative3(dir, a.path) || basename5(a.path), content: a.content }));
   if (asJson) {
     const files = {};
     for (const a of artifacts) files[a.rel] = a.content;
@@ -19427,10 +20417,18 @@ async function exitClosed(code) {
   await closeBrowserReads();
   process.exit(code);
 }
+var REFCHECK_POINTER = "checking a bibliography is the `refcheck` command, not a mode: ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text>] --out <dir>";
+function modeOf(p) {
+  if (p.values.mode === "refcheck") fail(REFCHECK_POINTER);
+  return oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
+}
+function templateOf(p) {
+  return p.values.template === void 0 ? void 0 : oneOf2("template", p.values.template, ALL_TEMPLATES);
+}
 function buildGatherOptions(p, opts = {}) {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
-  const mode2 = oneOf2("mode", p.values.mode ?? "topic", ALL_MODES);
+  const mode2 = modeOf(p);
   const askedMax = p.values.search === "max";
   const depth = oneOf2("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
@@ -19475,11 +20473,12 @@ function buildGatherOptions(p, opts = {}) {
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
-    out: p.values.out ? resolve4(p.values.out) : void 0,
+    out: p.values.out ? resolve8(p.values.out) : void 0,
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
-    stdout: isNoWrite()
+    stdout: isNoWrite(),
+    ...templateOf(p) ? { template: templateOf(p) } : {}
   };
 }
 async function main(argv = process.argv.slice(2)) {
@@ -19561,11 +20560,16 @@ async function dispatch2(p) {
       return;
     }
     case "queries": {
+      if (p.values.mode === "refcheck") {
+        process.stdout.write(`ultrasearch: ${REFCHECK_POINTER}
+`);
+        return;
+      }
       const question = p.values.q ?? p.values.question;
       if (!question) fail('missing --q "<question>"');
       const plan = planQueries({
         question,
-        mode: oneOf2("mode", p.values.mode ?? "topic", ALL_MODES),
+        mode: modeOf(p),
         depth: oneOf2("depth", p.values.depth ?? "standard", ALL_DEPTHS),
         lang: p.values.lang
       });
@@ -19594,10 +20598,10 @@ async function dispatch2(p) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join27(resolve4(runDir), "manifest.json");
-        if (!existsSync18(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
+        const mf = join28(resolve8(runDir), "manifest.json");
+        if (!existsSync19(mf)) fail(`no dossier at ${resolve8(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync19(mf, "utf8"));
+          manifest = JSON.parse(readFileSync20(mf, "utf8"));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -19614,7 +20618,7 @@ async function dispatch2(p) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve4(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
+      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve8(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
       process.stdout.write(`${head}
 
 ${formatServices(rows)}
@@ -19697,7 +20701,7 @@ ${formatServices(rows)}
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve4(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve8(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -19705,7 +20709,7 @@ ${formatServices(rows)}
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num4("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve4(p.values["run-root"]) : void 0;
+      const runRoot = p.values["run-root"] ? resolve8(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       if (options.stdout) takeArtifacts();
@@ -19718,13 +20722,13 @@ ${formatServices(rows)}
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve4(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve8(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync18(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync19(d)) fail(`run dir not found: ${d}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve4(p.values.master) : void 0,
+        master: p.values.master ? resolve8(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode: mode2
       });
@@ -19747,7 +20751,7 @@ ${formatServices(rows)}
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve4(dir), url, {
+      const r = await addSource(resolve8(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
@@ -19780,7 +20784,15 @@ ${formatServices(rows)}
       const spec = p.values["web-results"];
       const listed = p.values.urls ? parseList(p.values.urls) : [];
       const files = p.values.files ? parseList(p.values.files) : [];
-      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...> or --files <p,...>");
+      const template = templateOf(p);
+      if (template) {
+        if (!existsSync19(join28(resolve8(dir), "manifest.json"))) fail(`no dossier at ${resolve8(dir)} (no manifest.json)`);
+        setDossierTemplate(resolve8(dir), template);
+        process.stderr.write(`ultrasearch: ${resolve8(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
+`);
+        if (!spec && !listed.length && !files.length) return;
+      }
+      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...>, --files <p,...> or --template <t>");
       const hits = [...listed];
       if (spec) {
         const parsed = parseWebResults(readWebResultsPayload(spec));
@@ -19797,8 +20809,8 @@ ${formatServices(rows)}
         firecrawl: p.values.firecrawl,
         browser: browserMode(p)
       };
-      const web = hits.length ? await addSources(resolve4(dir), hits, enrichOpts) : void 0;
-      const local2 = files.length ? await addFiles(resolve4(dir), files, enrichOpts) : void 0;
+      const web = hits.length ? await addSources(resolve8(dir), hits, enrichOpts) : void 0;
+      const local2 = files.length ? await addFiles(resolve8(dir), files, enrichOpts) : void 0;
       const r = {
         results: [...web?.results ?? [], ...local2?.results ?? []],
         added: (web?.added ?? 0) + (local2?.added ?? 0),
@@ -19815,16 +20827,42 @@ ${formatServices(rows)}
 `);
         }
         const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve4(dir)}
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve8(dir)}
 `);
       }
       if (!r.added) await exitClosed(1);
       return;
     }
+    case "refcheck": {
+      const refs = p.values.refs;
+      if (!refs) fail("missing --refs <list.txt|.docx|.pdf|.bib>");
+      const r = await runRefcheck({ refs, citing: p.values.citing, out: p.values.out ?? p.values.run, offline: p.bools.has("offline") });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+        return;
+      }
+      const s = r.summary;
+      const lines = [
+        `ultrasearch refcheck: ${s.references} reference(s) in ${basename5(r.refsFile)}`,
+        r.offline ? `  offline:  parsed only \u2014 nothing looked up` : `  resolved: ${s.resolved} (${s.viaPubmed} PubMed, ${s.viaCrossref} Crossref) \xB7 unresolved: ${s.unresolved}`,
+        ...r.offline ? [] : [
+          `  fields:   ${s.withDiscrepancies} reference(s) with a discrepancy \u2014 ${s.fieldMismatches} mismatch(es), ${s.fieldsMissing} missing`,
+          `  DOIs:     ${s.doisCited} cited, ${s.doisBroken} not resolving`
+        ],
+        ...r.citing ? [
+          `  citing:   ${r.citing.calls} call(s) \xB7 ${s.uncited} never cited \xB7 ${s.unknownCalls} unknown number(s) \xB7 ${s.outOfOrder} out of order`,
+          ...r.offline ? [] : [`  figures:  ${s.numeralsChecked} checked against abstracts, ${s.numeralsAbsent} not found`]
+        ] : [`  citing:   none \u2014 pass --citing <file> to check orphans, order and figures`],
+        `  report:   ${join28(r.dir, "REFCHECK.md")}`,
+        ...r.references.some((e) => e.sourceId) ? [`  dossier:  ${r.dir} \u2014 source S<n> is reference n; write REPORT.md (verification template), then check --run ${r.dir}`] : []
+      ];
+      process.stderr.write(lines.join("\n") + "\n");
+      return;
+    }
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve8(dir);
       if (isNoWrite()) {
         if (p.bools.has("no-md")) {
           process.stderr.write("ultrasearch render: --stdout --no-md leaves nothing to emit (--stdout never produces HTML).\n");
@@ -19842,7 +20880,7 @@ ${formatServices(rows)}
       if (wantHtml || wantMd) {
         const ctx = loadRenderContext(rdir);
         if (wantHtml) {
-          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve4(p.values.out) : void 0);
+          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve8(p.values.out) : void 0);
           process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
         }
@@ -19858,7 +20896,7 @@ ${formatServices(rows)}
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve8(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -19898,8 +20936,8 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync18(resolve4(dir))) {
-          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve4(dir)}
+        if (!existsSync19(resolve8(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve8(dir)}
 `);
           process.exit(2);
         }
@@ -19926,7 +20964,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join27(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join28(resolve8(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -19981,14 +21019,14 @@ ${formatServices(rows)}
           void closeBrowserReads({ waitMs: 0 }).then(() => running.close()).finally(() => process.exit(0));
         });
       }
-      await new Promise((resolve8) => running.server.once("close", resolve8));
+      await new Promise((resolve9) => running.server.once("close", resolve9));
       return;
     }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num4("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve4(dir), {
+      const res = runCheck(resolve8(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -19998,7 +21036,7 @@ ${formatServices(rows)}
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve4(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve8(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;
@@ -20009,7 +21047,7 @@ ${formatServices(rows)}
       const where = p.values.where === void 0 ? void 0 : oneOf2("where", p.values.where, DROP_WHERE);
       const ids = p.values.id ? parseList(p.values.id) : [];
       if (!ids.length && !where) fail("drop: pass --id <S#,...> or --where wall|snippet|offtopic");
-      const r = dropSources(resolve4(dir), { ids, where, dryRun: p.bools.has("dry-run") });
+      const r = dropSources(resolve8(dir), { ids, where, dryRun: p.bools.has("dry-run") });
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       else process.stdout.write(formatDropReport(r) + "\n");
       if (r.missing.length) process.exitCode = 1;
@@ -20018,7 +21056,7 @@ ${formatServices(rows)}
     case "relink": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve4(dir);
+      const rdir = resolve8(dir);
       if (p.bools.has("list")) {
         const issues = listIssues(rdir);
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");

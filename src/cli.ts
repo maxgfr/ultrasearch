@@ -1,12 +1,23 @@
 import { basename, join, relative, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { realpathSync, existsSync, statSync, readdirSync, readFileSync } from "node:fs";
-import { VERSION, ALL_MODES, ALL_DEPTHS, ALL_BACKENDS, ALL_WEB_ENGINES, ALL_SEARCH_PROFILES, ALL_BROWSER_MODES, DEPTH_CAPS, DEEP_CAPS } from "./types.js";
+import {
+  VERSION,
+  ALL_MODES,
+  ALL_DEPTHS,
+  ALL_BACKENDS,
+  ALL_WEB_ENGINES,
+  ALL_SEARCH_PROFILES,
+  ALL_BROWSER_MODES,
+  ALL_TEMPLATES,
+  DEPTH_CAPS,
+  DEEP_CAPS,
+} from "./types.js";
 
 // Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
 // bundle and cross-checks the documented flag surface against these tables.
 export { ALL_WEB_ENGINES, ALL_SEARCH_PROFILES };
-import type { BackendKind, BrowserMode, Depth, GatherOptions, Manifest, ModeName, SearchProfile, WebEngine, WebSearchHit } from "./types.js";
+import type { BackendKind, BrowserMode, Depth, GatherOptions, Manifest, ModeName, SearchProfile, TemplateName, WebEngine, WebSearchHit } from "./types.js";
 import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
@@ -29,6 +40,8 @@ import { closeBrowserOnSignal, resolveBrowserRung, withBrowserClosed } from "./b
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
+import { runRefcheck } from "./refcheck/index.js";
+import { setDossierTemplate } from "./templates.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -40,7 +53,8 @@ Usage:
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
-  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
+  ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--template <t>] [--json]
+  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -73,6 +87,14 @@ Commands:
            reports one outcome per URL (added / already there / refused).
            PubMed and PMC pages (and efetch URLs) are read through E-utilities
            and Europe PMC, never through their cookie / anti-bot walls.
+  refcheck Check a bibliography: resolve every reference on PubMed (E-utilities)
+           or Crossref, diff authors / title / NLM journal / year / volume /
+           issue / pages / DOI field by field, check each cited DOI on doi.org,
+           and — with a citing text (--citing, or the body of --refs itself) —
+           list orphan references and calls, the Vancouver first-citation order,
+           and every figure a citing sentence states that its abstract lacks.
+           Writes refcheck.json + REFCHECK.md and a dossier in which source
+           S<n> is reference n (verification template), so 'check' applies.
   render   Render the report tiers in a dossier to a self-contained index.html
            AND a consolidated index.md (both by default; --no-html / --no-md skip one).
   check    Validate citation grounding of SUMMARY/REPORT.md (--semantic
@@ -125,6 +147,12 @@ Deep research (the agentic tier — see references/deep-research-playbook.md):
 Options:
   --q, --question <s>  The topic or question                      (required)
   --mode <m>           ${ALL_MODES.join(" | ")}   (default: topic)
+                       (checking a bibliography is the 'refcheck' command, not a mode)
+  --template <t>       For gather / ingest: write the report to another template
+                       than the mode's: ${ALL_TEMPLATES.join(" | ")}
+                       (verification = verdict, reference-by-reference table,
+                       discrepancies, not verifiable). Headings are free; 'check'
+                       only expects an "Open questions" section.
   --depth <d>          ${ALL_DEPTHS.join(" | ")}            (default: standard)
   --backends <list>    Override the mode profile (comma-separated backend kinds)
   --backend <kind>     For 'search': the single backend to drill
@@ -180,6 +208,12 @@ Options:
   --files <p,...>      For 'ingest': local documents to add — PDFs, office files
                        (.docx/.pptx/.xlsx/.odt/…) and plain text. Their contents
                        enter the dossier and any report rendered from it.
+  --refs <file>        For 'refcheck': the reference list — a numbered Vancouver
+                       list (.txt/.md, or the text of a .docx/.pdf, found under
+                       its References heading) or a .bib file
+  --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
+  --offline            For 'refcheck': parse and read the citing text only — no
+                       PubMed, Crossref or doi.org lookup
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -265,6 +299,7 @@ export const COMMANDS = new Set([
   "merge",
   "verify",
   "orchestrate",
+  "refcheck",
   "mcp",
   "doctor",
   "searxng",
@@ -316,6 +351,9 @@ export const VALUE_FLAGS = new Set([
   "shard",
   "min-sources",
   "phase",
+  "template",
+  "refs",
+  "citing",
   // `mcp` only. The flag sets are global, so these are accepted (and ignored)
   // on every command — the same as --phase and --list already are.
   "transport",
@@ -339,6 +377,7 @@ export const BOOL_FLAGS = new Set([
   "list",
   "dry-run",
   "allow-remote",
+  "offline",
 ]);
 
 function fail(message: string): never {
@@ -490,6 +529,7 @@ export const NO_WRITE_REFUSED: Record<string, string> = {
   drop: "it removes sources from a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
+  refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references",
 };
 
 // The brief each command leads with, in the order a reader wants them. Only one
@@ -635,10 +675,24 @@ async function exitClosed(code: number): Promise<never> {
   process.exit(code);
 }
 
+// Checking a bibliography is a command, not a retrieval profile: point there
+// instead of answering "invalid --mode".
+const REFCHECK_POINTER =
+  "checking a bibliography is the `refcheck` command, not a mode: ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text>] --out <dir>";
+
+function modeOf(p: Parsed): ModeName {
+  if (p.values.mode === "refcheck") fail(REFCHECK_POINTER);
+  return oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
+}
+
+function templateOf(p: Parsed): TemplateName | undefined {
+  return p.values.template === undefined ? undefined : oneOf<TemplateName>("template", p.values.template, ALL_TEMPLATES);
+}
+
 export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean } = {}): GatherOptions {
   const question = p.values.q ?? p.values.question ?? "";
   if (opts.requireQuestion !== false && !question) fail('missing --q "<question>"');
-  const mode = oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES);
+  const mode = modeOf(p);
   // `--search max` means the ceiling, and the biggest single lever on how much
   // detail comes back is --depth. Raising it here (only when the caller pinned
   // no depth) is the difference between "max retrieval at standard caps" and
@@ -703,6 +757,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
     stdout: isNoWrite(),
+    ...(templateOf(p) ? { template: templateOf(p) } : {}),
   };
 }
 
@@ -806,11 +861,16 @@ async function dispatch(p: Parsed): Promise<void> {
     }
 
     case "queries": {
+      // A bibliography check has no search worklist: say which command does it.
+      if (p.values.mode === "refcheck") {
+        process.stdout.write(`ultrasearch: ${REFCHECK_POINTER}\n`);
+        return;
+      }
       const question = p.values.q ?? p.values.question;
       if (!question) fail('missing --q "<question>"');
       const plan = planQueries({
         question,
-        mode: oneOf<ModeName>("mode", p.values.mode ?? "topic", ALL_MODES),
+        mode: modeOf(p),
         depth: oneOf<Depth>("depth", p.values.depth ?? "standard", ALL_DEPTHS),
         lang: p.values.lang,
       });
@@ -1046,7 +1106,16 @@ async function dispatch(p: Parsed): Promise<void> {
       const spec = p.values["web-results"];
       const listed = p.values.urls ? parseList(p.values.urls) : [];
       const files = p.values.files ? parseList(p.values.files) : [];
-      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...> or --files <p,...>");
+      // --template switches the report template the dossier asks for; alone, it
+      // is all this ingest does.
+      const template = templateOf(p);
+      if (template) {
+        if (!existsSync(join(resolve(dir), "manifest.json"))) fail(`no dossier at ${resolve(dir)} (no manifest.json)`);
+        setDossierTemplate(resolve(dir), template);
+        process.stderr.write(`ultrasearch: ${resolve(dir)} now asks for the ${template} template (DOSSIER.md rewritten)\n`);
+        if (!spec && !listed.length && !files.length) return;
+      }
+      if (!spec && !listed.length && !files.length) fail("missing --web-results <f.json|->, --urls <u,...>, --files <p,...> or --template <t>");
 
       const hits: (string | WebSearchHit)[] = [...listed];
       if (spec) {
@@ -1089,6 +1158,41 @@ async function dispatch(p: Parsed): Promise<void> {
       }
       // Nothing added at all is a failed acquisition, not a quiet success.
       if (!r.added) await exitClosed(1);
+      return;
+    }
+
+    case "refcheck": {
+      const refs = p.values.refs;
+      if (!refs) fail("missing --refs <list.txt|.docx|.pdf|.bib>");
+      const r = await runRefcheck({ refs, citing: p.values.citing, out: p.values.out ?? p.values.run, offline: p.bools.has("offline") });
+      if (p.bools.has("json")) {
+        process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+        return;
+      }
+      const s = r.summary;
+      const lines = [
+        `ultrasearch refcheck: ${s.references} reference(s) in ${basename(r.refsFile)}`,
+        r.offline
+          ? `  offline:  parsed only — nothing looked up`
+          : `  resolved: ${s.resolved} (${s.viaPubmed} PubMed, ${s.viaCrossref} Crossref) · unresolved: ${s.unresolved}`,
+        ...(r.offline
+          ? []
+          : [
+              `  fields:   ${s.withDiscrepancies} reference(s) with a discrepancy — ${s.fieldMismatches} mismatch(es), ${s.fieldsMissing} missing`,
+              `  DOIs:     ${s.doisCited} cited, ${s.doisBroken} not resolving`,
+            ]),
+        ...(r.citing
+          ? [
+              `  citing:   ${r.citing.calls} call(s) · ${s.uncited} never cited · ${s.unknownCalls} unknown number(s) · ${s.outOfOrder} out of order`,
+              ...(r.offline ? [] : [`  figures:  ${s.numeralsChecked} checked against abstracts, ${s.numeralsAbsent} not found`]),
+            ]
+          : [`  citing:   none — pass --citing <file> to check orphans, order and figures`]),
+        `  report:   ${join(r.dir, "REFCHECK.md")}`,
+        ...(r.references.some((e) => e.sourceId)
+          ? [`  dossier:  ${r.dir} — source S<n> is reference n; write REPORT.md (verification template), then check --run ${r.dir}`]
+          : []),
+      ];
+      process.stderr.write(lines.join("\n") + "\n");
       return;
     }
 

@@ -212,7 +212,19 @@ export function extractUnits(lines: string[], code: boolean[], hint: boolean[], 
 // pointer, not research prose: its boilerplate must not count as a factual
 // claim and its [S#] listing must not count as citation coverage (it would
 // otherwise mark every source "cited" and pad verify's supported count).
-const APPENDIX_HEADING = /^\s*(#{2,6})\s+(sources|references)\b/i;
+//
+// The engine's `appendixMask` knows the bare titles ("References",
+// "Bibliographie", …) and only those. The heading the research and clinical
+// templates actually ship is "References (see refs.bib)", which it did not
+// recognise — the pointer line under it was scored as an unsourced claim and
+// its listing as citations. This regex was meant to cover it and was never
+// wired in; it now extends the engine's list with a parenthetical tail.
+const APPENDIX_HEADING = /^(?:sources?|references?|r[ée]f[ée]rences(?:\s+bibliographiques)?|bibliograph(?:y|ie)|works cited)\s*\(.*\)$/i;
+
+/** The Sources/References appendix lines of a report, the engine's titles plus "References (see refs.bib)". */
+export function reportAppendixMask(lines: string[]): boolean[] {
+  return appendixMask(lines, { headings: APPENDIX_HEADING });
+}
 
 /** A report file's lines plus every mask `check`'s accounting reads them through. */
 export interface MaskedFile {
@@ -245,7 +257,7 @@ export function maskedFile(text: string): MaskedFile {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
-  const appendix = appendixMask(lines);
+  const appendix = reportAppendixMask(lines);
   return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]!), noNumerals };
 }
 
@@ -284,7 +296,7 @@ export function unitSourceTokens(text: string): string[] {
 export function citedSourceIds(text: string): Set<string> {
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
-  const appendix = appendixMask(lines);
+  const appendix = reportAppendixMask(lines);
   const out = new Set<string>();
   for (let i = 0; i < lines.length; i++) {
     if (code[i] || appendix[i]) continue;

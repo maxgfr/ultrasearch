@@ -85,6 +85,10 @@ function offline() {
   // WARN by default and FAIL under --strict-numerals, end-to-end.
   numeralGateProbe();
 
+  // Bibliography check, offline: the parser, the citing-text analysis and the
+  // REFCHECK.md report, end-to-end through the bundle with no lookup.
+  refcheckProbe();
+
   // Retrieval self-awareness: a gather must NAME the question terms its sources
   // barely cover, and must say out loud when --backends voided other flags.
   retrievalSignalsProbe();
@@ -161,6 +165,37 @@ function numeralGateProbe() {
     pass("[numeral-gate] warns by default, --strict-numerals fails an unattributed figure");
   } catch (e) {
     fail(`[numeral-gate] ${e.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function refcheckProbe() {
+  const dir = mkdtempSync(join(tmpdir(), "us-eval-ref-"));
+  try {
+    const doc = join(dir, "thesis.md");
+    writeFileSync(
+      doc,
+      [
+        "Rupture concerned 1 % of 2,8 million procedures [2]. Without capsular support another technique is needed [1,2]. An unlisted call [4].",
+        "",
+        "## References",
+        "",
+        "1. Gurney NT, Al-Mohtaseb Z. Intraocular lens implantation in the absence of capsular support. Saudi J Ophthalmol. 2022;36(2):157-62.",
+        "2. Segers MHM, Behndig A, et al. Risk factors for posterior capsule rupture. J Cataract Refract Surg. 2022;48(1):51-55.",
+        "3. Doe J. Never cited. Some J. 2019;5:10-20.",
+      ].join("\n"),
+    );
+    const r = run(["refcheck", "--refs", doc, "--out", join(dir, "out"), "--offline", "--json"]);
+    if (r.status !== 0) return fail(`[refcheck] exited ${r.status}: ${r.stderr?.trim()?.split("\n").pop()}`);
+    const res = JSON.parse(r.stdout);
+    if (res.summary.references !== 3) return fail(`[refcheck] expected 3 references, got ${res.summary.references}`);
+    if (JSON.stringify(res.citing.uncited) !== "[3]" || JSON.stringify(res.citing.unknown) !== "[4]") return fail("[refcheck] orphans / unknown calls not found");
+    if (JSON.stringify(res.citing.outOfOrder) !== JSON.stringify([{ n: 1, after: 2 }])) return fail("[refcheck] Vancouver order violation not found");
+    if (!/## Reference-by-reference table/.test(readFileSync(join(dir, "out", "REFCHECK.md"), "utf8"))) return fail("[refcheck] REFCHECK.md lacks its table");
+    pass("[refcheck] parses the list, finds orphans, unknown calls and order violations offline");
+  } catch (e) {
+    fail(`[refcheck] ${e.message}`);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

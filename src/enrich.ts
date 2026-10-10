@@ -3,7 +3,7 @@ import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BackendKind, BrowserMode, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
-import { getMode } from "./modes/registry.js";
+import { templateFor } from "./templates.js";
 import { annotateExtras } from "./extras.js";
 import { bestExcerpt, rescueViaWayback, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
 import { extractPdf } from "./backends/pdf.js";
@@ -72,7 +72,7 @@ function loadState(dir: string): IngestState {
   // dossier that somehow holds two sources on one canonical url has to keep
   // reporting the earlier [S#], or a re-ingest silently re-points at the other.
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: getMode(manifest.mode).template };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
 }
 
 // Bank a prepared source into the in-memory dossier. Synchronous and total: it

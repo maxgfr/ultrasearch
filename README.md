@@ -88,6 +88,16 @@ Each mode is a **report template** + a **backend-priority profile**:
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
 | `deals` | coupons & discount codes for a merchant, by country | Dealabs/hotukdeals/mydealz…, Reddit, general web → ranked, UNVERIFIED candidates (+ `codes.json`) |
 
+Every mode carries a report template; `--template <t>` swaps it for another one
+(any mode's, or `verification`). Headings are free — `check` only expects an
+"Open questions" section.
+
+**Checking a bibliography** is a command, not a mode: `refcheck --refs
+<thesis.docx|refs.txt|refs.bib>` resolves each reference on PubMed or Crossref,
+diffs every Vancouver field against the record, checks DOIs on doi.org, and
+reads the citing text for orphans, order and figures absent from the cited
+abstracts — see `skills/ultrasearch/references/operations.md`.
+
 ## How it's used (the agent's loop)
 
 > Paths below are relative to a repo checkout. An **installed** skill runs from
@@ -297,6 +307,11 @@ that override silently voided.
 - `ingest` — fold a whole round of URLs into a dossier in ONE process (a hit may
   carry `citeUrl`: read its `url`, cite that page). PubMed and PMC are read
   through E-utilities and Europe PMC, never through their cookie / anti-bot walls.
+  `--template <t>` switches the report template.
+- `refcheck --refs <file> [--citing <file>]` — check a bibliography: PubMed /
+  Crossref resolution, a field-by-field diff, DOIs on doi.org, orphans,
+  Vancouver order and figures vs abstracts → `REFCHECK.md` + a dossier where
+  `S<n>` is reference `n`.
 - `search --backend <kind>` — drill one backend (debugging retrieval).
 - `fetch` / `add-source` — ingest a single URL into a dossier.
 - `render --run <dir>` — render the report tiers to a self-contained `index.html`.
@@ -347,7 +362,7 @@ to (**resources**). A client given only the tools has to invent the rest.
 
 ### Tools
 
-14 tools. `ultrasearch_gather` is the one to reach for first:
+15 tools. `ultrasearch_gather` is the one to reach for first:
 
 | Tool | What it does |
 |------|--------------|
@@ -363,6 +378,7 @@ to (**resources**). A client given only the tools has to invent the rest.
 | `ultrasearch_plan` | Decompose a broad question into sub-questions |
 | `ultrasearch_merge` | Union sub-dossiers, re-assigning `[S#]` ids to stay unique |
 | `ultrasearch_brainstorm` | Probe a vague ask before committing to a run |
+| `ultrasearch_refcheck` | Check a bibliography against PubMed / Crossref / doi.org, field by field, plus its citing text |
 | `ultrasearch_modes` | What each mode is for and which backends it searches |
 | `ultrasearch_read` | A file, or a line range, from a dossier |
 

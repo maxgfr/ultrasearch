@@ -304,7 +304,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   out.push("");
   out.push(noWrite ? CITATION_RULES_NO_WRITE : CITATION_RULES);
   out.push("");
-  out.push(`## Report template (${manifest.mode})`);
+  out.push(`## Report template (${manifest.template ?? manifest.mode})`);
   out.push("");
   out.push("```markdown");
   out.push(template);

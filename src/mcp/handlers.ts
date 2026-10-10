@@ -20,6 +20,7 @@ import {
   ALL_DEPTHS,
   ALL_MODES,
   ALL_SEARCH_PROFILES,
+  ALL_TEMPLATES,
   ALL_WEB_ENGINES,
   DEPTH_CAPS,
   type BackendKind,
@@ -28,10 +29,13 @@ import {
   type GatherOptions,
   type ModeName,
   type SearchProfile,
+  type TemplateName,
   type WebEngine,
   type WebSearchHit,
 } from "../types.js";
 import { runVerify } from "../verify.js";
+import { runRefcheck } from "../refcheck/index.js";
+import { setDossierTemplate } from "../templates.js";
 import { withRunLock } from "../run-lock.js";
 import { resolveBrowserRung, withBrowserClosed } from "../browser.js";
 import { isNoWrite, takeArtifacts } from "../no-write.js";
@@ -183,9 +187,15 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     excludeDomains: strArray(args.exclude_domains) ?? [],
     seedDomains: strArray(args.seed_domains),
     browser: browserArg(args),
+    ...(templateArg(args) ? { template: templateArg(args) } : {}),
     out,
     json: true,
   };
+}
+
+function templateArg(args: Record<string, unknown>): TemplateName | undefined {
+  const t = str(args.template);
+  return t === undefined ? undefined : oneOf<TemplateName>(t, ALL_TEMPLATES, "template", "verification");
 }
 
 // --------------------------------------------------------------------------
@@ -215,6 +225,7 @@ const NO_WRITE_REFUSED_TOOLS: Record<string, string> = {
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
   ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
   ultrasearch_drop: "it removes sources from a dossier on disk",
+  ultrasearch_refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references",
 };
 
 async function dispatch(name: string, args: Record<string, unknown>, defaults: HandlerDefaults): Promise<unknown> {
@@ -241,6 +252,9 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
       return await handleBrainstorm(args);
     case "ultrasearch_merge":
       return handleMerge(args);
+    // Creates its own output dir, like gather.
+    case "ultrasearch_refcheck":
+      return await handleRefcheck(args);
 
     // Everything below mutates or reads ONE existing dossier, and is
     // serialized against other calls on the same one.
@@ -416,6 +430,48 @@ async function handleFetch(args: Record<string, unknown>, run: string): Promise<
   return { run, url, ...res };
 }
 
+async function handleRefcheck(args: Record<string, unknown>): Promise<unknown> {
+  const refs = requiredStr(args, "refs", "the absolute path to the reference list.");
+  const citing = str(args.citing);
+  const out = str(args.out);
+  for (const [k, v] of [
+    ["refs", refs],
+    ["citing", citing],
+    ["out", out],
+  ] as const) {
+    if (v !== undefined && !isAbsolute(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
+  }
+  if (!existsSync(refs)) throw new ToolError(`no file at ${refs}`);
+  if (citing && !existsSync(citing)) throw new ToolError(`no file at ${citing}`);
+  let res: Awaited<ReturnType<typeof runRefcheck>>;
+  try {
+    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline) });
+  } catch (e) {
+    throw new ToolError((e as Error).message);
+  }
+  const hasDossier = res.references.some((e) => e.sourceId);
+  return {
+    dir: res.dir,
+    report: join(res.dir, "REFCHECK.md"),
+    summary: res.summary,
+    ...(res.citing ? { citing: res.citing } : {}),
+    // One line per reference that needs a look, not the whole record set.
+    issues: res.references
+      .filter((e) => e.status !== "ok")
+      .map((e) => ({
+        n: e.n,
+        status: e.status,
+        ...(e.sourceId ? { source: e.sourceId } : {}),
+        fields: e.fields.filter((f) => f.status !== "match"),
+        ...(e.doi?.resolves === false ? { doi: "does not resolve" } : {}),
+      })),
+    notes: res.notes,
+    next: hasDossier
+      ? `Read ${join(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n — write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.`
+      : `Read ${join(res.dir, "REFCHECK.md")}.`,
+  };
+}
+
 async function handleIngest(args: Record<string, unknown>, run: string): Promise<unknown> {
   const web = webResultsArg(args.web_results);
   const listed = strArray(args.urls) ?? [];
@@ -423,6 +479,11 @@ async function handleIngest(args: Record<string, unknown>, run: string): Promise
     if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
   }
   const hits: (string | WebSearchHit)[] = [...listed, ...(web?.hits ?? [])];
+  const template = templateArg(args);
+  if (template) {
+    setDossierTemplate(run, template);
+    if (!hits.length) return { run, template, next: "DOSSIER.md now carries that template. Write the report to it, then ultrasearch_check." };
+  }
   if (!hits.length) throw new ToolError("`web_results` or `urls` is required — the URLs to fold into the dossier.");
 
   const res = await addSources(run, hits, { question: str(args.question), firecrawl: str(args.firecrawl), cache: true, browser: browserArg(args) });

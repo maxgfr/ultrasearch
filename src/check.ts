@@ -8,6 +8,7 @@ import {
   unitSourceTokens,
   extractNumerals,
   normalizeNumeralText,
+  stripHtmlComments,
   type Unit,
   TOKEN_RE,
   SOURCE_RE,
@@ -17,6 +18,7 @@ import { isApiEndpoint } from "./citable.js";
 import { bindToWorklist, reduceVerdicts } from "./verify.js";
 import { sourceTextWithoutPassageLabels } from "./passages.js";
 import { MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./walls.js";
+import { hasOpenQuestions } from "./templates.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -486,6 +488,13 @@ export function runCheck(
       `Under-covered question term(s): ${manifest.coverage.under.slice(0, 6).join(", ")} — ` +
         `the dossier may not support claims about them; enrich with \`fetch --url\` or say so under "Open questions".`,
     );
+  }
+  // The one structural expectation. Templates are guidance — a report may
+  // rename, merge or drop their headings — but every one of them closes on what
+  // the sources leave open, and a report without that section reads as more
+  // certain than its evidence.
+  if (!hasOpenQuestions(stripHtmlComments(readFileSync(join(dir, "REPORT.md"), "utf8")))) {
+    warnings.push(`REPORT.md has no "Open questions" section — section titles are free, but say what the sources leave open.`);
   }
   if (opts.minSources !== undefined && sources.length < opts.minSources) {
     errors.push(
