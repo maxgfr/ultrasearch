@@ -6,7 +6,7 @@ import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from
 import { realpathSync as realpathSync4, existsSync as existsSync17, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync18 } from "fs";
 
 // src/types.ts
-var VERSION = "1.39.0";
+var VERSION = "1.39.1";
 var ALL_BACKENDS = [
   "searxng",
   "firecrawl",

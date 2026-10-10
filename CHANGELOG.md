@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.39.1](https://github.com/maxgfr/ultrasearch/compare/v1.39.0...v1.39.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **sources:** refuse and fail on cookie walls, skip index columns ([1f2d7c9](https://github.com/maxgfr/ultrasearch/commit/1f2d7c99178956b0da0e1672a6b5236c4c13294e))
+
 # [1.39.0](https://github.com/maxgfr/ultrasearch/compare/v1.38.1...v1.39.0) (2026-10-10)
 
 
