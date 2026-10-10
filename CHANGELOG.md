@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.41.0](https://github.com/maxgfr/ultrasearch/compare/v1.40.0...v1.41.0) (2026-10-10)
+
+
+### Features
+
+* **refcheck:** bibliography verification and the verification template ([a5f062c](https://github.com/maxgfr/ultrasearch/commit/a5f062c31b05d8db7e841884973b83e7c2547260))
+
 # [1.40.0](https://github.com/maxgfr/ultrasearch/compare/v1.39.2...v1.40.0) (2026-10-10)
 
 
