@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.39.0](https://github.com/maxgfr/ultrasearch/compare/v1.38.1...v1.39.0) (2026-10-10)
+
+
+### Features
+
+* **modes:** clinical mode with ClinicalTrials.gov and 429 back-off ([15b9670](https://github.com/maxgfr/ultrasearch/commit/15b96707350cc966e1189d626810c19d7291188a))
+
 ## [1.38.1](https://github.com/maxgfr/ultrasearch/compare/v1.38.0...v1.38.1) (2026-10-09)
 
 
