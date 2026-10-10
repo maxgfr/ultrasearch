@@ -304,6 +304,9 @@ that override silently voided.
   verify verdicts + contradictions; `--min-sources N` fails a too-thin dossier).
   A cited source whose extract is a cookie / consent / anti-bot wall fails it;
   `--fail-on-wall` fails a cited snippet-only source too.
+- `drop --run <dir> --id S43,S44 | --where wall|snippet|offtopic [--dry-run]` —
+  remove sources from a dossier. Ids stay stable (the gaps remain) and a dropped
+  id is never reused, so a report still citing one fails `check` as dangling.
 - `modes` — list modes and their backend profiles.
 - `brainstorm` — probe a vague ask and propose angles + clarifying questions
   before committing to a run.
@@ -344,7 +347,7 @@ to (**resources**). A client given only the tools has to invent the rest.
 
 ### Tools
 
-13 tools. `ultrasearch_gather` is the one to reach for first:
+14 tools. `ultrasearch_gather` is the one to reach for first:
 
 | Tool | What it does |
 |------|--------------|
@@ -354,6 +357,7 @@ to (**resources**). A client given only the tools has to invent the rest.
 | `ultrasearch_fetch` | Ingest a URL you found yourself into a dossier as a citable `[S#]` |
 | `ultrasearch_check` | The grounding gate: every `[S#]` must resolve |
 | `ultrasearch_relink` | Repair source citation URLs without fetching their content again |
+| `ultrasearch_drop` | Remove sources from a dossier by id or kind (wall, snippet, off-topic) — ids never reused |
 | `ultrasearch_verify` | Claim↔source worklist for adversarial support-checking |
 | `ultrasearch_render` | Dossier + report → self-contained `index.html` and `index.md` |
 | `ultrasearch_plan` | Decompose a broad question into sub-questions |
@@ -364,7 +368,9 @@ to (**resources**). A client given only the tools has to invent the rest.
 
 Pass `--run <dir>` at startup to dedicate the server to one dossier — `run` then
 becomes optional on every tool. There is no `--allow-write`: nothing here
-deletes a dossier, and every write lands in a directory the caller named.
+deletes a dossier, and every write lands in a directory the caller named. The
+one destructive tool, `ultrasearch_drop`, removes sources from such a dossier
+and is annotated so a client asks before calling it.
 
 ### Prompts — the workflow, not just the tools
 

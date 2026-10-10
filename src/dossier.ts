@@ -81,15 +81,19 @@ function idNum(id: string): number {
 // can allocate ids serially IN MEMORY (`S${++maxId}`) without re-deriving this
 // from the whole list per source — and, more importantly, without the two
 // having to agree by coincidence: both go through the same parse.
-export function maxSourceId(sources: Source[]): number {
-  return sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
+//
+// `dropped` are the ids `drop` removed (manifest.droppedIds): ids are stable and
+// never reused, so a removed id still counts as taken.
+export function maxSourceId(sources: Source[], dropped: readonly string[] = []): number {
+  const kept = sources.reduce((acc, s) => Math.max(acc, idNum(s.id)), 0);
+  return dropped.reduce((acc, id) => Math.max(acc, idNum(id)), kept);
 }
 
 // The next free "S<n>" id given the existing sources. The single-shot allocator:
 // batch ingest now walks `maxSourceId` in memory instead, so this has no
 // production caller left — kept for API compatibility and the tests.
-export function nextSourceId(sources: Source[]): string {
-  return `S${maxSourceId(sources) + 1}`;
+export function nextSourceId(sources: Source[], dropped: readonly string[] = []): string {
+  return `S${maxSourceId(sources, dropped) + 1}`;
 }
 
 // Build a Source record (no file written) from a backend's RawSource.
@@ -252,6 +256,22 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     );
     out.push("");
   }
+  // Sources gather judged unrelated to the question, named up front so they are
+  // cleared before anyone reads 40 extracts to find them.
+  const offTopic = sources.filter((s) => s.offTopic).map((s) => s.id);
+  if (offTopic.length) {
+    out.push(
+      `> 🗑 **Probably off-topic** — ${offTopic.join(", ")}: few of the question's terms, low content score. ` +
+        (noWrite
+          ? `Skim them, and leave them out of the answer if they are what they look like.`
+          : `Skim them, then clear them in one call: \`ultrasearch drop --run <dir> --where offtopic\` (ids are never reused).`),
+    );
+    out.push("");
+  }
+  if (manifest.droppedIds?.length) {
+    out.push(`> **Dropped:** ${manifest.droppedIds.join(", ")} — removed with \`drop\`; these ids are never reused, and citing one fails \`check\`.`);
+    out.push("");
+  }
   if (manifest.recallFloor) {
     out.push(
       `> ⚠ **Thin dossier** — only ${manifest.recallFloor.count} on-topic source(s) were retrieved ` +
@@ -341,6 +361,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
+    const off = s.offTopic ? " · 🗑 probably off-topic" : "";
     const quality = s.wall
       ? " · ⛔ wall (the page was a consent/anti-bot wall — snippet only, do not cite)"
       : s.fullText === false
@@ -348,7 +369,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
         : "";
     // Under no-write `sources/S#.md` is a stream label, not a path on disk.
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
-    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}`);
+    out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}${off}`);
     // Measured facts about the document, on their own line. Never a verdict —
     // they cost one line per source and let the reader judge without opening
     // every extract first.

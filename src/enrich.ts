@@ -72,7 +72,7 @@ function loadState(dir: string): IngestState {
   // dossier that somehow holds two sources on one canonical url has to keep
   // reporting the earlier [S#], or a re-ingest silently re-points at the other.
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources), template: getMode(manifest.mode).template };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: getMode(manifest.mode).template };
 }
 
 // Bank a prepared source into the in-memory dossier. Synchronous and total: it

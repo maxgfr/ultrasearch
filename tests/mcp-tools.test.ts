@@ -83,6 +83,7 @@ describe("annotations", () => {
     ultrasearch_ingest: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     ultrasearch_check: { readOnlyHint: true, openWorldHint: false },
     ultrasearch_relink: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    ultrasearch_drop: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     ultrasearch_verify: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_render: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     ultrasearch_plan: { readOnlyHint: true, openWorldHint: false },
@@ -110,8 +111,8 @@ describe("annotations", () => {
     expect(openWorld.sort()).toEqual(["ultrasearch_fetch", "ultrasearch_gather", "ultrasearch_ingest", "ultrasearch_search"]);
   });
 
-  it("declares nothing destructive — no tool here removes a dossier", () => {
-    expect(ALL.filter((t) => TOOL_META[t.name]!.destructive)).toEqual([]);
+  it("declares only drop destructive — it removes sources, and no tool removes a dossier", () => {
+    expect(ALL.filter((t) => TOOL_META[t.name]!.destructive).map((t) => t.name)).toEqual(["ultrasearch_drop"]);
     expect(WRITE_TOOLS).toEqual([]);
   });
 });
@@ -159,6 +160,7 @@ describe("declared schemas accept what the handlers expect", () => {
       ultrasearch_ingest: { run: "/tmp/d", web_results: [{ url: "https://example.com/a" }], urls: ["https://example.com/b"] },
       ultrasearch_check: { run: "/tmp/d", semantic: true, min_sources: 3 },
       ultrasearch_relink: { run: "/tmp/d", id: "S12", url: "https://example.com/a" },
+      ultrasearch_drop: { run: "/tmp/d", ids: ["S12"], where: "wall", dry_run: true },
       ultrasearch_verify: { run: "/tmp/d", max_verify: 10, shards: 2, shard: 0 },
       ultrasearch_render: { run: "/tmp/d", no_html: true },
       ultrasearch_plan: { question: "rust async", mode: "research", subquestions: ["a", "b"] },

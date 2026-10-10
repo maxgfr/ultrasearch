@@ -468,6 +468,10 @@ export interface Manifest {
   // Computed in-memory from the already-hydrated extracts, so it costs no extra
   // retrieval. Absent on merge dossiers (a master has no single query basis).
   coverage?: { terms: { term: string; sources: number }[]; under: string[] };
+  // Ids `drop` removed from this dossier. Kept so they are NEVER handed out
+  // again: a REPORT written before the drop that still cites one fails `check`
+  // as dangling, instead of silently resolving to whatever took the id next.
+  droppedIds?: string[];
   // On-disk fetch cache state for this run. `enabled: false` ⇒ every page was
   // fetched live. `hits` counts pages served from disk (≤ the TTL old), so a
   // dossier is self-describing about how fresh its page bodies are.

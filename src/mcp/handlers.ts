@@ -12,6 +12,7 @@ import { getMode, listModes } from "../modes/registry.js";
 import { extraSummaries } from "../extras.js";
 import { runPlan } from "../plan.js";
 import { autoRelink, listIssues, relink } from "../relink.js";
+import { DROP_WHERE, dropSources } from "../drop.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "../render.js";
 import {
   ALL_BACKENDS,
@@ -213,6 +214,7 @@ const NO_WRITE_REFUSED_TOOLS: Record<string, string> = {
   ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
   ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
+  ultrasearch_drop: "it removes sources from a dossier on disk",
 };
 
 async function dispatch(name: string, args: Record<string, unknown>, defaults: HandlerDefaults): Promise<unknown> {
@@ -254,6 +256,8 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
             return handleCheck(args, run);
           case "ultrasearch_relink":
             return handleRelink(args, run);
+          case "ultrasearch_drop":
+            return handleDrop(args, run);
           case "ultrasearch_verify":
             return handleVerify(args, run);
           case "ultrasearch_render":
@@ -467,6 +471,24 @@ function handleRelink(args: Record<string, unknown>, run: string): unknown {
     next: remaining.length
       ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url."
       : "Every source cites a page a reader can open.",
+  };
+}
+
+function handleDrop(args: Record<string, unknown>, run: string): unknown {
+  const ids = strArray(args.ids) ?? [];
+  const whereRaw = str(args.where);
+  if (whereRaw !== undefined && !(DROP_WHERE as readonly string[]).includes(whereRaw)) {
+    throw new ToolError(`\`where\` must be one of: ${DROP_WHERE.join(", ")}.`);
+  }
+  if (!ids.length && !whereRaw) throw new ToolError("Pass `ids` or `where` — which sources to remove.");
+  const res = dropSources(run, { ids, where: whereRaw as (typeof DROP_WHERE)[number] | undefined, dryRun: bool(args.dry_run) });
+  return {
+    ...res,
+    next: res.citedBy.length
+      ? "Some report tiers cite a dropped id — rewrite those claims onto another source, then run ultrasearch_check."
+      : res.dryRun
+        ? "Nothing was changed. Call again without dry_run to remove these."
+        : "Done. Ids are never reused; the next source ingested takes a fresh one.",
   };
 }
 

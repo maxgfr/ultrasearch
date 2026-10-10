@@ -401,7 +401,7 @@ export function runCheck(
         .slice(0, 5)
         .map((w) => `${w.id} (${w.wall})`)
         .join(", ")}${walledCited.length > 5 ? ", …" : ""}. ` +
-        `A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), or cite another source.`,
+        `A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), cite another source, or \`drop --where wall\`.`,
     );
   }
   if (snippetCited.length) {

@@ -53,6 +53,12 @@ import type { Bm25Doc } from "./util.js";
 // can promote a deeply-relevant page a backend ranked low.
 const OVERSHOOT: Record<string, number> = { summary: 5, standard: 10, deep: 20 };
 const HYDRATE_CONCURRENCY = 6;
+// A kept source is flagged off-topic when it matches under this share of the
+// question's word terms AND scores under this on content (BM25, pool-relative).
+// Both, so a short page that names every term, or a long one that scores on a
+// single repeated term, is left alone.
+const OFF_TOPIC_TERM_SHARE = 1 / 3;
+const OFF_TOPIC_CONTENT = 0.2;
 
 // Round a 0..1 score component for on-disk storage: enough precision to replay
 // a re-weighting exactly, short enough not to bloat sources.json.
@@ -747,6 +753,24 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => (isDisambiguation(it) ? [] : (matchedByUrl.get(it.url) ?? [])), bm25.queryTerms, floor);
     const floorDropped = dropped.length;
+    // What survives the floor can still be off-topic: an item the floor's
+    // safety valve put back, or one matching only a stray term of a longer
+    // question (a clinical question pulling arXiv papers that share one word
+    // with it). Those are FLAGGED, never dropped — the reader decides, and
+    // `drop --where offtopic` acts on the decision in one call.
+    const alphaTerms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t));
+    if (alphaTerms.length >= 2) {
+      for (const it of kept) {
+        const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => /\p{L}/u.test(t));
+        const content = it.meta?.rank?.content ?? 0;
+        const off =
+          isDisambiguation(it) ||
+          matched.length === 0 ||
+          (alphaTerms.length >= 3 && matched.length / alphaTerms.length < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
+        if (off) it.offTopic = true;
+        else delete it.offTopic;
+      }
+    }
     const near = dedupeNearDuplicates(kept);
     // Break up topical monopolies before handing the list over. Measured on a
     // real `topic` pool: eight content-marketing pages rewriting each other held

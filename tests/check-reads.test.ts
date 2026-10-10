@@ -71,7 +71,7 @@ describe("runCheck — extract reads", () => {
       {
         "dangling": [],
         "errors": [
-          "1 cited source(s) are a wall, not content: S2 (anti-bot interstitial). A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), or cite another source.",
+          "1 cited source(s) are a wall, not content: S2 (anti-bot interstitial). A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), cite another source, or \`drop --where wall\`.",
         ],
         "filesChecked": [
           "REPORT.md",

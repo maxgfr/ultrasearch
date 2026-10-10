@@ -17,6 +17,7 @@ import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js"
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
 import { runCheck, formatCheckReport } from "./check.js";
 import { autoRelink, listIssues, relink } from "./relink.js";
+import { DROP_WHERE, type DropWhere, dropSources, formatDropReport } from "./drop.js";
 import { runPlan } from "./plan.js";
 import { planQueries, formatQueryPlan } from "./queries.js";
 import { runBrainstorm } from "./brainstorm.js";
@@ -43,6 +44,7 @@ Usage:
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
+  ultrasearch drop   --run <dossier-dir> (--id <S#,...> | --where wall|snippet|offtopic) [--dry-run] [--json]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
@@ -83,6 +85,11 @@ Commands:
            rewrites every source whose own text names where it lives (canonical
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
            --list is the dry run. --id <S#> --url <page> folds in your answer.
+  drop     Remove sources from a dossier: --id S43,S44 or --where wall |
+           snippet | offtopic. Deletes their extracts and rewrites the index.
+           Ids are stable — the gaps stay, and a dropped id is never reused, so
+           a report still citing one fails 'check' as dangling. --dry-run lists
+           what would go.
   modes    List the report modes and their backend profiles.
   doctor   Report the state of the engine and its optional helpers: the SearXNG
            and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
@@ -175,7 +182,13 @@ Options:
                        enter the dossier and any report rendered from it.
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
-  --id <S#>            For 'relink': the source to repoint
+  --id <S#>            For 'relink': the source to repoint. For 'drop': the
+                       source(s) to remove (comma-separated)
+  --where <kind>       For 'drop': remove every source of a kind — wall (the
+                       page was a cookie/consent/anti-bot wall), snippet (only
+                       the search snippet is on file), offtopic (flagged by
+                       gather as unrelated to the question)
+  --dry-run            For 'drop': list what would be removed, change nothing
   --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
@@ -212,7 +225,7 @@ Options:
                        read-only phase. gather → DOSSIER.md + every source
                        extract · brainstorm → BRAINSTORM.md · plan → PLAN.json ·
                        render → index.md (no HTML). merge / fetch / verify /
-                       orchestrate exit 2: they exist to leave files behind.
+                       orchestrate / drop exit 2: they exist to leave files behind.
                        No 'check' gate is possible without files — cite carefully.
   --json               Machine-readable output
   -h, --help           Show this help
@@ -245,6 +258,7 @@ export const COMMANDS = new Set([
   "render",
   "check",
   "relink",
+  "drop",
   "modes",
   "brainstorm",
   "plan",
@@ -287,6 +301,7 @@ export const VALUE_FLAGS = new Set([
   "cite-url",
   "id",
   "since",
+  "where",
   "exclude-domains",
   "seed-domains",
   "title",
@@ -322,6 +337,7 @@ export const BOOL_FLAGS = new Set([
   "no-cache",
   "eco",
   "list",
+  "dry-run",
   "allow-remote",
 ]);
 
@@ -471,6 +487,7 @@ export const NO_WRITE_REFUSED: Record<string, string> = {
   "add-source": "it adds a new [S#] to a dossier on disk",
   ingest: "it adds new [S#] entries to a dossier on disk",
   relink: "it rewrites a source's url in a dossier on disk",
+  drop: "it removes sources from a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
 };
@@ -558,6 +575,7 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   // --backends silently voids several flags; say so rather than lose recall quietly.
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
+  const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
   // Say which lane drove discovery, and say it when there was none: an agent
   // that owns a WebSearch tool and did not use it should learn that from the
   // run, not from re-reading the docs.
@@ -574,6 +592,14 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
       ...(fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : []),
       ...(ignored.length ? [`  IGNORED:  ${ignored.join(", ")} — --backends bypasses the cascade, seed-domain and gap rounds`] : []),
       ...(under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} — enrich these before ${options.stdout ? "answering" : "writing"}`] : []),
+      // Named here as well as in DOSSIER.md: a 42-source dossier whose six arXiv
+      // papers are unrelated should not need reading end to end to find them.
+      ...(offTopicIds.length
+        ? [
+            `  offtopic: ${offTopicIds.slice(0, 8).join(", ")}${offTopicIds.length > 8 ? ", …" : ""} — probably unrelated` +
+              (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`),
+          ]
+        : []),
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...(options.stdout
@@ -1276,6 +1302,20 @@ async function dispatch(p: Parsed): Promise<void> {
         process.stdout.write(formatCheckReport(res, resolve(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
+      return;
+    }
+
+    case "drop": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const where = p.values.where === undefined ? undefined : oneOf<DropWhere>("where", p.values.where, DROP_WHERE);
+      const ids = p.values.id ? parseList(p.values.id) : [];
+      if (!ids.length && !where) fail("drop: pass --id <S#,...> or --where wall|snippet|offtopic");
+      const r = dropSources(resolve(dir), { ids, where, dryRun: p.bools.has("dry-run") });
+      if (p.bools.has("json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      else process.stdout.write(formatDropReport(r) + "\n");
+      // Asking for ids that are not there is a mistake worth an exit code.
+      if (r.missing.length) process.exitCode = 1;
       return;
     }
 

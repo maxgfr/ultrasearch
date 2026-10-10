@@ -98,6 +98,9 @@ extracts, so it costs no extra retrieval. See
 - `gather.ts` — the orchestrator: resolve backends → run (web discovery in
   concurrent cascade waves) → fuse → dedupe → cap → hydrate (junk-extraction
   rejection, arXiv/Wayback fallbacks) → write dossier (+ refs.bib for research).
+  A kept source matching under a third of the question's word terms with a low
+  content score (or none at all) is flagged `offTopic` — never dropped — and
+  listed at the head of `DOSSIER.md` and on gather's `offtopic:` line.
 - `cache.ts` — the on-disk fetch cache (on by default, `--no-cache` disables it):
   keyed by canonical URL **+ Accept-Language + extractor identity** so neither a
   locale nor an extractor is ever served the other's body, TTL-bounded,
@@ -155,6 +158,10 @@ extracts, so it costs no extra retrieval. See
   and a 300-character content floor. `gather` keeps a wall as snippet-only with
   `wall: true`, `ingest`/`fetch` refuse it, `check` fails a report citing one.
   `readPastCachedWall` re-reads live when the fetch cache serves a wall.
+- `drop.ts` — `dropSources`: remove sources by id or kind (wall / snippet /
+  offtopic), delete their extracts, rewrite the index. Ids are stable — gaps
+  stay, and `manifest.droppedIds` makes `maxSourceId` treat a dropped id as
+  taken forever. Warns when a report tier cites a dropped id.
 - `providers/ncbi.ts` — the native PubMed / PMC reader: `ncbiDocument` maps a
   PubMed page, a PMC article page (current or legacy host), a single-record
   efetch or a Europe PMC URL to its citable page + text endpoint;

@@ -200,6 +200,7 @@ node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
 node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>
 node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
 node <skill-dir>/scripts/ultrasearch.mjs relink --run <dir> [--id <S#> --url "<page>"]
+node <skill-dir>/scripts/ultrasearch.mjs drop --run <dir> (--id S43,S44 | --where wall|snippet|offtopic) [--dry-run]
 node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
 ```
 
@@ -211,6 +212,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
 | `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
+| `drop` | removes sources from an existing dossier — exit 2 under `--stdout` | `--run` · `--id S43,S44` · `--where wall\|snippet\|offtopic` · `--dry-run` · `--json`. Deletes the extracts and rewrites the index. Ids are stable: the gaps stay and a dropped id is never reused, so a report still citing one fails `check` as dangling — it says which tier cites what. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
 | `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--fail-on-wall` (a cited snippet-only source fails too) · `--min-sources <n>` · `--json`. A cited **wall** always fails. |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
@@ -302,7 +304,11 @@ not hand control back mid-retrieval.
    **⚠ Thin dossier**, **🔍 Under-covered** (named question terms barely present
    in the sources: your enrichment worklist), per-source **⚠ snippet only**, and
    per-source **⛔ wall** — the page was a cookie, consent or anti-bot wall. Never
-   cite a ⛔ source: `check` fails on it.
+   cite a ⛔ source: `check` fails on it. **🗑 Probably off-topic** lists the
+   sources that match few of the question's terms (gather prints them on its
+   `offtopic:` line too). Skim them, then clear walls and off-topic sources in
+   one call each — `drop --run <dir> --where wall`, `drop --run <dir> --where
+   offtopic` (`--dry-run` first if in doubt) — before reading the rest.
 
 4. **Top up the thin areas.** Your first sweep aimed at the question; the dossier
    now tells you where it fell short. Run **another WebSearch round** targeted at

@@ -12,7 +12,8 @@ decision surface; this is the operations manual.
 | `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, a **cited source whose extract is a wall**, or a `--semantic`/`--min-sources`/`--strict-numerals`/`--fail-on-wall` failure. |
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
-| `merge` · `fetch` · `relink` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
+| `drop` | 1 | An `--id` that is not in the dossier (the others were still dropped). |
+| `merge` · `fetch` · `relink` · `drop` · `verify` · `orchestrate` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
 | `render` | 2 | `--stdout --no-md` — that combination leaves nothing to emit, because `--stdout` never produces HTML. |
 
 Anything non-zero means *stop and fix*, never *present anyway*.
@@ -259,7 +260,7 @@ around them:
 | `index.md` isn't next to `index.html` | `render --run X --out Y` moves only the HTML | Copy it, or render without `--out`. |
 | A cited figure isn't in the source | Numeral asserted but absent from the extract | `fetch` the page that carries it, re-cite, or flag it `[M]`. `check --strict-numerals` makes this fatal. |
 | `numeral not in S#` on a table's first column, or on page/reference labels | The figure is an index or a label, not a claim | A first column headed `#`, `N°`, `No.`, `Ref`, `Réf.` — or holding only short running numbers — is skipped automatically. For anything else, put `<!-- ultrasearch:no-numerals -->` on the line before the block: it is still checked for citations, never for figures. |
-| `check` fails: "cited source(s) are a wall, not content" | A source's extract is a cookie / consent / anti-bot page (flagged `⛔ wall` in `DOSSIER.md`, or recognised from its wording in an older dossier) | Do not cite it. Re-`fetch --url` the page or its text endpoint, or cite another source. |
+| `check` fails: "cited source(s) are a wall, not content" | A source's extract is a cookie / consent / anti-bot page (flagged `⛔ wall` in `DOSSIER.md`, or recognised from its wording in an older dossier) | Do not cite it. Re-`fetch --url` the page or its text endpoint, cite another source, or `drop --where wall`. |
 | `fetch --url` refuses: "extracted to a … wall" | The host is throttling you (some serve a consent wall or a reCAPTCHA page as HTTP **200**) | Working as intended — a wall is not content. Retry later, pace the run, or pass an endpoint that carries the same document: the text comes from there, a **page** is still what gets cited. |
 | `fetch --url` refuses: "batches N ids" / "is a … query" | One URL listing many ids, or a search, is not one document | Pass the ids one at a time — one `S#` per document is what citation checking rests on. |
 | `fetch --url` refuses: "names no document" | An endpoint whose payload carries no canonical link, DOI, arXiv id or PMID | Nothing citable can be derived from it — reconstruct it. Search for the record's title, then re-run with `--cite-url "<page>"`: the text still comes from the endpoint. |

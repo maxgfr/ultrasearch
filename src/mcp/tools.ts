@@ -218,6 +218,23 @@ export const TOOLS: ToolDecl[] = [
     },
   },
   {
+    name: "ultrasearch_drop",
+    title: "Remove sources from a dossier",
+    description:
+      "Take sources out of a dossier — by id, or every source of a kind: `wall` (the page was a cookie/consent/anti-bot wall), `snippet` (only the search " +
+      "snippet is on file), `offtopic` (flagged by gather as unrelated). Ids stay stable: the gaps remain and a dropped id is never reused. Use dry_run first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        ids: { type: "array", items: { type: "string" }, description: 'The sources to remove, e.g. ["S43", "S44"].' },
+        where: { type: "string", enum: ["offtopic", "snippet", "wall"], description: "Remove every source of this kind." },
+        dry_run: { type: "boolean", description: "List what would be removed and change nothing." },
+      },
+      required: ["run"],
+    },
+  },
+  {
     name: "ultrasearch_verify",
     title: "Build a claim-support worklist",
     description:
@@ -335,10 +352,11 @@ export const TOOLS: ToolDecl[] = [
   },
 ];
 
-// ultrasearch has no destructive tool: every write lands in a dossier the
-// caller named, and nothing removes one. WRITE_TOOLS stays empty rather than
-// absent, so the shape matches the sibling servers and --allow-write remains
-// meaningful if a cache-clean tool is ever added.
+// Every write lands in a dossier the caller named. The one tool that removes
+// anything, `ultrasearch_drop`, removes sources from such a dossier and is
+// annotated destructive so a client asks first. WRITE_TOOLS stays empty rather
+// than absent, so the shape matches the sibling servers and --allow-write
+// remains meaningful if a cache-clean tool is ever added.
 export const WRITE_TOOLS: ToolDecl[] = [];
 
 // Behavioural hints clients use to decide what needs a confirmation prompt.
@@ -356,6 +374,7 @@ export const TOOL_META: Record<string, { write?: boolean; destructive?: boolean;
   ultrasearch_ingest: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
   ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_drop: { write: true, destructive: true, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_render: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_plan: { openWorld: false },

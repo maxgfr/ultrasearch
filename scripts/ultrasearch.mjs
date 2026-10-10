@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename3, join as join26, relative as relative3, resolve as resolve4 } from "path";
+import { basename as basename3, join as join27, relative as relative3, resolve as resolve4 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync4, existsSync as existsSync17, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync18 } from "fs";
+import { realpathSync as realpathSync4, existsSync as existsSync18, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync19 } from "fs";
 
 // src/types.ts
 var VERSION = "1.39.2";
@@ -14582,8 +14582,9 @@ function idNum2(id) {
   const m = /^S(\d+)$/.exec(id);
   return m ? Number(m[1]) : 0;
 }
-function maxSourceId(sources) {
-  return sources.reduce((acc, s) => Math.max(acc, idNum2(s.id)), 0);
+function maxSourceId(sources, dropped = []) {
+  const kept = sources.reduce((acc, s) => Math.max(acc, idNum2(s.id)), 0);
+  return dropped.reduce((acc, id) => Math.max(acc, idNum2(id)), kept);
 }
 function buildSource(rs, id, builtAt, question) {
   const text = rs.text ?? rs.snippet ?? "";
@@ -14681,6 +14682,17 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
     );
     out.push("");
   }
+  const offTopic = sources.filter((s) => s.offTopic).map((s) => s.id);
+  if (offTopic.length) {
+    out.push(
+      `> \u{1F5D1} **Probably off-topic** \u2014 ${offTopic.join(", ")}: few of the question's terms, low content score. ` + (noWrite ? `Skim them, and leave them out of the answer if they are what they look like.` : `Skim them, then clear them in one call: \`ultrasearch drop --run <dir> --where offtopic\` (ids are never reused).`)
+    );
+    out.push("");
+  }
+  if (manifest.droppedIds?.length) {
+    out.push(`> **Dropped:** ${manifest.droppedIds.join(", ")} \u2014 removed with \`drop\`; these ids are never reused, and citing one fails \`check\`.`);
+    out.push("");
+  }
   if (manifest.recallFloor) {
     out.push(
       `> \u26A0 **Thin dossier** \u2014 only ${manifest.recallFloor.count} on-topic source(s) were retrieved (recall floor ${manifest.recallFloor.floor}). ${enrich} BEFORE answering, or the answer will rest on too little evidence.`
@@ -14744,9 +14756,10 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
+    const off = s.offTopic ? " \xB7 \u{1F5D1} probably off-topic" : "";
     const quality = s.wall ? " \xB7 \u26D4 wall (the page was a consent/anti-bot wall \u2014 snippet only, do not cite)" : s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
-    out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 ${where}${quality}`);
+    out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 ${where}${quality}${off}`);
     for (const sig of s.signals ?? []) out.push(`_${sig}_`);
     out.push("");
     out.push(s.snippet);
@@ -14926,6 +14939,8 @@ function describeWebSearchLane(manifest) {
 // src/gather.ts
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
+var OFF_TOPIC_TERM_SHARE = 1 / 3;
+var OFF_TOPIC_CONTENT = 0.2;
 function round4(n) {
   return Number(n.toFixed(4));
 }
@@ -15308,6 +15323,16 @@ async function runGather(options) {
     const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
     const floorDropped = dropped.length;
+    const alphaTerms = bm25.queryTerms.filter((t) => new RegExp("\\p{L}", "u").test(t));
+    if (alphaTerms.length >= 2) {
+      for (const it of kept) {
+        const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => new RegExp("\\p{L}", "u").test(t));
+        const content = it.meta?.rank?.content ?? 0;
+        const off = isDisambiguation(it) || matched.length === 0 || alphaTerms.length >= 3 && matched.length / alphaTerms.length < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT;
+        if (off) it.offTopic = true;
+        else delete it.offTopic;
+      }
+    }
     const near = dedupeNearDuplicates(kept);
     const ordered = diversify(near.items, (it) => new Set(bm25Tokenize((it.text || it.snippet || "").slice(0, 2e4))));
     return {
@@ -15478,7 +15503,7 @@ function loadState(dir) {
   const { sources, manifest } = readDossier(dir);
   const byCanon = /* @__PURE__ */ new Map();
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources), template: getMode(manifest.mode).template };
+  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: getMode(manifest.mode).template };
 }
 function commit(dir, state, p) {
   const id = `S${++state.maxId}`;
@@ -16877,7 +16902,7 @@ function runCheck(dir, opts = {}) {
   }
   if (walledCited.length) {
     errors.push(
-      `${walledCited.length} cited source(s) are a wall, not content: ${walledCited.slice(0, 5).map((w) => `${w.id} (${w.wall})`).join(", ")}${walledCited.length > 5 ? ", \u2026" : ""}. A claim resting on one rests on nothing \u2014 re-\`fetch --url\` the page (or its text endpoint), or cite another source.`
+      `${walledCited.length} cited source(s) are a wall, not content: ${walledCited.slice(0, 5).map((w) => `${w.id} (${w.wall})`).join(", ")}${walledCited.length > 5 ? ", \u2026" : ""}. A claim resting on one rests on nothing \u2014 re-\`fetch --url\` the page (or its text endpoint), cite another source, or \`drop --where wall\`.`
     );
   }
   if (snippetCited.length) {
@@ -17119,8 +17144,83 @@ function refreshed(manifest, sources) {
   return { ...manifest, sourceCount: sources.length };
 }
 
-// src/plan.ts
+// src/drop.ts
+import { existsSync as existsSync16, readFileSync as readFileSync17, rmSync as rmSync3 } from "fs";
 import { join as join21 } from "path";
+var DROP_WHERE = ["wall", "snippet", "offtopic"];
+var TIERS2 = ["REPORT.md", "SUMMARY.md", "glossary.md"];
+function safeText2(dir, s) {
+  try {
+    return readSourceText(dir, s);
+  } catch {
+    return "";
+  }
+}
+function selects(dir, s, where) {
+  if (where === "offtopic") return s.offTopic ? "probably off-topic" : void 0;
+  if (where === "snippet") return s.fullText === false ? s.wall ? "a wall (snippet only)" : "snippet only" : void 0;
+  if (s.wall) return "a wall";
+  const worded = wallPattern(safeText2(dir, s));
+  return worded ? `a ${worded}` : void 0;
+}
+function dropSources(dir, sel) {
+  if (!sel.ids?.length && !sel.where) throw new Error("drop needs --id <S#,\u2026> or --where wall|snippet|offtopic");
+  const { sources, manifest } = readDossier(dir);
+  const template = getMode(manifest.mode).template;
+  const byId = new Map(sources.map((s) => [s.id, s]));
+  const reasons = /* @__PURE__ */ new Map();
+  const missing = [];
+  for (const raw of sel.ids ?? []) {
+    const id = raw.trim().toUpperCase();
+    if (!id) continue;
+    if (byId.has(id)) reasons.set(id, "asked for by id");
+    else if (!missing.includes(id)) missing.push(id);
+  }
+  if (sel.where) {
+    for (const s of sources) {
+      const why = selects(dir, s, sel.where);
+      if (why && !reasons.has(s.id)) reasons.set(s.id, why);
+    }
+  }
+  const dropped = sources.filter((s) => reasons.has(s.id)).map((s) => ({ id: s.id, url: s.url, title: s.title, reason: reasons.get(s.id) }));
+  const ids = new Set(dropped.map((d) => d.id));
+  const citedBy = [];
+  for (const file of TIERS2) {
+    const p = join21(dir, file);
+    if (!existsSync16(p)) continue;
+    const hit = [...citedSourceIds(readFileSync17(p, "utf8"))].filter((id) => ids.has(id));
+    if (hit.length) citedBy.push({ file, ids: hit });
+  }
+  const remaining = sources.filter((s) => !ids.has(s.id));
+  const dryRun = sel.dryRun === true;
+  if (dropped.length && !dryRun) {
+    if (!isNoWrite()) {
+      for (const d of dropped) {
+        const s = byId.get(d.id);
+        rmSync3(join21(dir, s.extract), { force: true });
+      }
+    }
+    const droppedIds = [.../* @__PURE__ */ new Set([...manifest.droppedIds ?? [], ...ids])].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+    writeDossierIndex(dir, remaining, { ...manifest, sourceCount: remaining.length, droppedIds }, template);
+  }
+  return { run: dir, dryRun, dropped, missing, citedBy, remaining: dryRun ? sources.length : remaining.length };
+}
+function formatDropReport(r) {
+  const lines = [];
+  const verb = r.dryRun ? "would drop" : "dropped";
+  if (!r.dropped.length) lines.push(`ultrasearch drop: nothing matched \u2014 the dossier is unchanged (${r.remaining} source(s)).`);
+  else lines.push(`ultrasearch drop: ${verb} ${r.dropped.length} source(s) \u2192 ${r.remaining} left in ${r.run}`);
+  for (const d of r.dropped) lines.push(`  ${d.id}  ${d.reason}  ${d.url}`);
+  if (r.missing.length) lines.push(`  \u26A0 not in this dossier: ${r.missing.join(", ")}`);
+  for (const c of r.citedBy) {
+    lines.push(`  \u26A0 ${c.file} cites ${c.ids.join(", ")} \u2014 \`check\` will fail them as dangling: rewrite those claims onto another source.`);
+  }
+  if (r.dropped.length && !r.dryRun) lines.push("  ids are never reused: the next source ingested takes a fresh one.");
+  return lines.join("\n");
+}
+
+// src/plan.ts
+import { join as join22 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -17433,12 +17533,12 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join21(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join22(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join21(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join22(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -17480,7 +17580,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join22 } from "path";
+import { join as join23 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -17587,8 +17687,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join22(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join22(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join23(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join23(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -17698,10 +17798,10 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { join as join24 } from "path";
+import { join as join25 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join23 } from "path";
+import { join as join24 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -17759,7 +17859,7 @@ function agentContracts(runAbs, engineAbs, opts = {}) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join23(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join24(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
@@ -17782,7 +17882,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join23(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join24(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -17808,7 +17908,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
-  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join23(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join24(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gatherPlan ? shq(gatherPlan.question) : '"<question>"';
   const mode2 = gatherPlan ? gatherPlan.mode : "<m>";
   const run = shq(runAbs);
@@ -17828,15 +17928,15 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join23(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join23(runAbs, "PLAN.json")}\`, apply \`${join23(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join24(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join24(runAbs, "PLAN.json")}\`, apply \`${join24(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join23(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join23(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join23(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join24(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join24(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join24(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join23(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join24(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
 `
   ];
 }
@@ -17844,7 +17944,7 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 // src/orchestrate.ts
 var PHASES = ["gather", "verify"];
 function mergeHint(runAbs, engineAbs, plan) {
-  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join24(runAbs, s.id.toLowerCase())) : [`${join24(runAbs, "q1")},\u2026`];
+  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join25(runAbs, s.id.toLowerCase())) : [`${join25(runAbs, "q1")},\u2026`];
   const q = plan ? plan.question : "<question>";
   const mode2 = plan ? plan.mode : "<mode>";
   return [
@@ -17885,7 +17985,7 @@ var VERIFY = {
   applyHint: (run, engineAbs) => [
     `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
     `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-    `save each returned fragment as ${join24(run, "verdicts.<i>.json")} then reassemble + gate:`,
+    `save each returned fragment as ${join25(run, "verdicts.<i>.json")} then reassemble + gate:`,
     `node ${shq(engineAbs)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
   ]
 };
@@ -17902,8 +18002,8 @@ function listPhasesFor(runDir, engineAbs) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync16, readFileSync as readFileSync17, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
-import { isAbsolute as isAbsolute3, join as join25, relative as relative2, resolve as resolve3, sep as sep3 } from "path";
+import { existsSync as existsSync17, readFileSync as readFileSync18, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
+import { isAbsolute as isAbsolute3, join as join26, relative as relative2, resolve as resolve3, sep as sep3 } from "path";
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
 var DEFAULT_DEPTH = "standard";
@@ -17957,7 +18057,7 @@ function requiredRun(args, defaults) {
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute3(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve3(run);
-  if (!existsSync16(join25(abs, "manifest.json"))) {
+  if (!existsSync17(join26(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -18009,7 +18109,8 @@ var NO_WRITE_REFUSED_TOOLS = {
   ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
   ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
   ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
-  ultrasearch_verify: "it emits a worklist for skeptics to read from disk"
+  ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
+  ultrasearch_drop: "it removes sources from a dossier on disk"
 };
 async function dispatch(name, args, defaults) {
   const refused = NO_WRITE_REFUSED_TOOLS[name];
@@ -18047,6 +18148,8 @@ async function dispatch(name, args, defaults) {
             return handleCheck(args, run);
           case "ultrasearch_relink":
             return handleRelink(args, run);
+          case "ultrasearch_drop":
+            return handleDrop(args, run);
           case "ultrasearch_verify":
             return handleVerify(args, run);
           case "ultrasearch_render":
@@ -18113,9 +18216,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join25(res.dir, "DOSSIER.md"),
+    dossier_md: join26(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join25(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join26(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -18153,14 +18256,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute3(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync16(join25(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync17(join26(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
   if (master !== void 0 && !isAbsolute3(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join25(res.dir, "DOSSIER.md"),
+    dossier_md: join26(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -18219,6 +18322,19 @@ function handleRelink(args, run) {
     next: remaining.length ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url." : "Every source cites a page a reader can open."
   };
 }
+function handleDrop(args, run) {
+  const ids = strArray(args.ids) ?? [];
+  const whereRaw = str2(args.where);
+  if (whereRaw !== void 0 && !DROP_WHERE.includes(whereRaw)) {
+    throw new ToolError(`\`where\` must be one of: ${DROP_WHERE.join(", ")}.`);
+  }
+  if (!ids.length && !whereRaw) throw new ToolError("Pass `ids` or `where` \u2014 which sources to remove.");
+  const res = dropSources(run, { ids, where: whereRaw, dryRun: bool(args.dry_run) });
+  return {
+    ...res,
+    next: res.citedBy.length ? "Some report tiers cite a dropped id \u2014 rewrite those claims onto another source, then run ultrasearch_check." : res.dryRun ? "Nothing was changed. Call again without dry_run to remove these." : "Done. Ids are never reused; the next source ingested takes a fresh one."
+  };
+}
 function handleVerify(args, run) {
   const shards = positive(args.shards, "shards");
   const shard = num3(args.shard);
@@ -18254,7 +18370,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute3(raw) ? raw : join25(run, raw);
+  const target = isAbsolute3(raw) ? raw : join26(run, raw);
   let real;
   try {
     real = realpathSync3(target);
@@ -18268,7 +18384,7 @@ function handleRead(args, run) {
   const st = statSync10(real);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync17(real, "utf8").split("\n");
+  const lines = readFileSync18(real, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
@@ -18451,6 +18567,21 @@ var TOOLS = [
     }
   },
   {
+    name: "ultrasearch_drop",
+    title: "Remove sources from a dossier",
+    description: "Take sources out of a dossier \u2014 by id, or every source of a kind: `wall` (the page was a cookie/consent/anti-bot wall), `snippet` (only the search snippet is on file), `offtopic` (flagged by gather as unrelated). Ids stay stable: the gaps remain and a dropped id is never reused. Use dry_run first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        run: runProp,
+        ids: { type: "array", items: { type: "string" }, description: 'The sources to remove, e.g. ["S43", "S44"].' },
+        where: { type: "string", enum: ["offtopic", "snippet", "wall"], description: "Remove every source of this kind." },
+        dry_run: { type: "boolean", description: "List what would be removed and change nothing." }
+      },
+      required: ["run"]
+    }
+  },
+  {
     name: "ultrasearch_verify",
     title: "Build a claim-support worklist",
     description: "Go past 'the citation resolves' to 'the source actually supports the claim'. Emits a deterministic claim-by-source worklist from the dossier and its report, for you to adjudicate each pair as supported / partial / refuted / unsupported.",
@@ -18565,6 +18696,7 @@ var TOOL_META = {
   ultrasearch_ingest: { write: true, destructive: false, idempotent: true, openWorld: true },
   ultrasearch_check: { openWorld: false },
   ultrasearch_relink: { write: true, destructive: false, idempotent: true, openWorld: false },
+  ultrasearch_drop: { write: true, destructive: true, idempotent: true, openWorld: false },
   ultrasearch_verify: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_render: { write: true, destructive: false, idempotent: true, openWorld: false },
   ultrasearch_plan: { openWorld: false },
@@ -18810,6 +18942,7 @@ Usage:
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
+  ultrasearch drop   --run <dossier-dir> (--id <S#,...> | --where wall|snippet|offtopic) [--dry-run] [--json]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
   ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
@@ -18850,6 +18983,11 @@ Commands:
            rewrites every source whose own text names where it lives (canonical
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
            --list is the dry run. --id <S#> --url <page> folds in your answer.
+  drop     Remove sources from a dossier: --id S43,S44 or --where wall |
+           snippet | offtopic. Deletes their extracts and rewrites the index.
+           Ids are stable \u2014 the gaps stay, and a dropped id is never reused, so
+           a report still citing one fails 'check' as dangling. --dry-run lists
+           what would go.
   modes    List the report modes and their backend profiles.
   doctor   Report the state of the engine and its optional helpers: the SearXNG
            and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
@@ -18942,7 +19080,13 @@ Options:
                        enter the dossier and any report rendered from it.
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
-  --id <S#>            For 'relink': the source to repoint
+  --id <S#>            For 'relink': the source to repoint. For 'drop': the
+                       source(s) to remove (comma-separated)
+  --where <kind>       For 'drop': remove every source of a kind \u2014 wall (the
+                       page was a cookie/consent/anti-bot wall), snippet (only
+                       the search snippet is on file), offtopic (flagged by
+                       gather as unrelated to the question)
+  --dry-run            For 'drop': list what would be removed, change nothing
   --title <s>          For 'fetch'/'relink': override the source's title
   --since <date>       Recency hint where a backend supports it
   --exclude-domains <list>  Drop these hosts from results
@@ -18979,7 +19123,7 @@ Options:
                        read-only phase. gather \u2192 DOSSIER.md + every source
                        extract \xB7 brainstorm \u2192 BRAINSTORM.md \xB7 plan \u2192 PLAN.json \xB7
                        render \u2192 index.md (no HTML). merge / fetch / verify /
-                       orchestrate exit 2: they exist to leave files behind.
+                       orchestrate / drop exit 2: they exist to leave files behind.
                        No 'check' gate is possible without files \u2014 cite carefully.
   --json               Machine-readable output
   -h, --help           Show this help
@@ -19011,6 +19155,7 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "render",
   "check",
   "relink",
+  "drop",
   "modes",
   "brainstorm",
   "plan",
@@ -19053,6 +19198,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "cite-url",
   "id",
   "since",
+  "where",
   "exclude-domains",
   "seed-domains",
   "title",
@@ -19088,6 +19234,7 @@ var BOOL_FLAGS = /* @__PURE__ */ new Set([
   "no-cache",
   "eco",
   "list",
+  "dry-run",
   "allow-remote"
 ]);
 function fail(message) {
@@ -19125,7 +19272,7 @@ function parseList(s) {
 function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve4(x));
   const abs = resolve4(spec);
-  if (existsSync17(abs) && statSync11(abs).isDirectory()) {
+  if (existsSync18(abs) && statSync11(abs).isDirectory()) {
     const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve4(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
@@ -19155,15 +19302,15 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync18(0, "utf8");
+      return readFileSync19(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
   }
   const abs = resolve4(spec);
-  if (!existsSync17(abs)) fail(`--web-results file not found: ${abs}`);
+  if (!existsSync18(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync18(abs, "utf8");
+    return readFileSync19(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -19185,6 +19332,7 @@ var NO_WRITE_REFUSED = {
   "add-source": "it adds a new [S#] to a dossier on disk",
   ingest: "it adds new [S#] entries to a dossier on disk",
   relink: "it rewrites a source's url in a dossier on disk",
+  drop: "it removes sources from a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path"
 };
@@ -19241,6 +19389,7 @@ function gatherReport(r, options) {
   const fused = r.manifest.enginesFused ?? [];
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
+  const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
   const ws = r.manifest.webSearch;
   const laneLine = ws?.supplied ? `  websearch: ${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}` : `  websearch: none supplied \u2014 pass your own hits with --web-results <f.json> for the strongest lane`;
   return {
@@ -19252,6 +19401,11 @@ function gatherReport(r, options) {
       ...fused.length ? [`  engines:  ${fused.join(", ")} (fused)`] : [],
       ...ignored.length ? [`  IGNORED:  ${ignored.join(", ")} \u2014 --backends bypasses the cascade, seed-domain and gap rounds`] : [],
       ...under.length ? [`  weak:     ${under.slice(0, 6).join(", ")} \u2014 enrich these before ${options.stdout ? "answering" : "writing"}`] : [],
+      // Named here as well as in DOSSIER.md: a 42-source dossier whose six arXiv
+      // papers are unrelated should not need reading end to end to find them.
+      ...offTopicIds.length ? [
+        `  offtopic: ${offTopicIds.slice(0, 8).join(", ")}${offTopicIds.length > 8 ? ", \u2026" : ""} \u2014 probably unrelated` + (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`)
+      ] : [],
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...options.stdout ? [
@@ -19440,10 +19594,10 @@ async function dispatch2(p) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join26(resolve4(runDir), "manifest.json");
-        if (!existsSync17(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
+        const mf = join27(resolve4(runDir), "manifest.json");
+        if (!existsSync18(mf)) fail(`no dossier at ${resolve4(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync18(mf, "utf8"));
+          manifest = JSON.parse(readFileSync19(mf, "utf8"));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -19566,7 +19720,7 @@ ${formatServices(rows)}
     case "merge": {
       const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve4(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync17(d)) fail(`run dir not found: ${d}`);
+      for (const d of runs) if (!existsSync18(d)) fail(`run dir not found: ${d}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
@@ -19744,7 +19898,7 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync17(resolve4(dir))) {
+        if (!existsSync18(resolve4(dir))) {
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve4(dir)}
 `);
           process.exit(2);
@@ -19772,7 +19926,7 @@ ${formatServices(rows)}
         for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join26(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join27(resolve4(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -19847,6 +20001,18 @@ ${formatServices(rows)}
         process.stdout.write(formatCheckReport(res, resolve4(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
+      return;
+    }
+    case "drop": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const where = p.values.where === void 0 ? void 0 : oneOf2("where", p.values.where, DROP_WHERE);
+      const ids = p.values.id ? parseList(p.values.id) : [];
+      if (!ids.length && !where) fail("drop: pass --id <S#,...> or --where wall|snippet|offtopic");
+      const r = dropSources(resolve4(dir), { ids, where, dryRun: p.bools.has("dry-run") });
+      if (p.bools.has("json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
+      else process.stdout.write(formatDropReport(r) + "\n");
+      if (r.missing.length) process.exitCode = 1;
       return;
     }
     case "relink": {
