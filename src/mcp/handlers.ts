@@ -440,6 +440,7 @@ function handleCheck(args: Record<string, unknown>, run: string): unknown {
     semantic: bool(args.semantic),
     requireVerify: bool(args.require_verify),
     strictNumerals: bool(args.strict_numerals),
+    failOnWall: bool(args.fail_on_wall),
     minSources: positive(args.min_sources, "min_sources"),
   });
   // ok:false is a verdict, not a failure: the tool did its job and the report

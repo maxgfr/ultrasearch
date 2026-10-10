@@ -13,12 +13,16 @@ function scratch(): string {
   return mkdtempSync(join(tmpdir(), "us-enrich-"));
 }
 
+// Enough prose for a page to count as a document: below 300 useful characters a
+// read is refused as a near-empty page (src/walls.ts).
+const PROSE = `<p>${"A page long enough to be read as a document and cited as one. ".repeat(6)}</p>`;
+
 describe("addSource", () => {
   it("records an HTML API reference page under its own URL", async () => {
     const dir = scratch();
     try {
       writeFixtureDossier(dir, 1);
-      installFetchMock(routes([["nodejs.org", { body: "<title>File system</title><p>fs.rename overwrites an existing destination file.</p>" }]]));
+      installFetchMock(routes([["nodejs.org", { body: `<title>File system</title><p>fs.rename overwrites an existing destination file.</p>${PROSE}` }]]));
       const url = "https://nodejs.org/api/fs.html";
       const result = await addSource(dir, url, { question: "fs.rename" });
       expect(result.added).toBe(true);
@@ -33,7 +37,7 @@ describe("addSource", () => {
   it("allocates the next S# id, writes the extract and appends to sources.json", async () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
-    installFetchMock(routes([["new.test", { body: "<title>New</title><p>fresh content about limits</p>" }]]));
+    installFetchMock(routes([["new.test", { body: `<title>New</title><p>fresh content about limits</p>${PROSE}` }]]));
     const r = await addSource(dir, "https://new.test/page", { question: "rate limiting" });
     expect(r).toMatchObject({ id: "S3", added: true });
     expect(existsSync(join(dir, "sources/S3.md"))).toBe(true);
@@ -48,7 +52,7 @@ describe("addSource", () => {
   it("dedupes a url already present, returning the existing id", async () => {
     const dir = scratch();
     writeFixtureDossier(dir, 1);
-    installFetchMock(routes([["dup.test", { body: "<p>x</p>" }]]));
+    installFetchMock(routes([["dup.test", { body: `<p>x</p>${PROSE}` }]]));
     const first = await addSource(dir, "https://dup.test/a", {});
     expect(first.added).toBe(true);
     const again = await addSource(dir, "https://dup.test/a/", {}); // same canonical url
@@ -104,6 +108,24 @@ describe("addSource — walls and API endpoints", () => {
     expect(r.note).toMatch(/anti-bot interstitial/);
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources).toHaveLength(1); // nothing added
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses PubMed's cookie wall and a near-empty page instead of banking them", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    installFetchMock(
+      routes([
+        ["cookies.test", { body: "<h1>Cookies must be enabled.</h1><p>Enable cookies for cookies.test and reload this page to continue.</p>" }],
+        ["empty.test", { body: "<title>Empty</title><p>Almost nothing here.</p>" }],
+      ]),
+    );
+    const walled = await addSource(dir, "https://cookies.test/article", {});
+    expect(walled).toMatchObject({ id: "", added: false });
+    expect(walled.note).toMatch(/extracted to a cookie wall, not content/);
+    const thin = await addSource(dir, "https://empty.test/article", {});
+    expect(thin.note).toMatch(/near-empty page \(\d+ useful characters\)/);
+    expect(JSON.parse(readFileSync(join(dir, "sources.json"), "utf8"))).toHaveLength(1);
     rmSync(dir, { recursive: true, force: true });
   });
 

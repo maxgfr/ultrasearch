@@ -459,7 +459,11 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
         s.backend,
         s.domain,
         `<span class="trust" title="trust score">trust ${s.trust}</span>`,
-        ...(s.fullText === false ? [`<span class="snippet-only" title="page fetch failed — snippet only">⚠ snippet only</span>`] : []),
+        ...(s.wall
+          ? [`<span class="snippet-only" title="the page was a consent/anti-bot wall — snippet only">⛔ wall</span>`]
+          : s.fullText === false
+            ? [`<span class="snippet-only" title="page fetch failed — snippet only">⚠ snippet only</span>`]
+            : []),
         ...(uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []),
       ].join(" · ");
       const cls = uncited ? ` class="s-uncited"` : "";
@@ -542,7 +546,7 @@ export function buildReportMarkdown(dirOrCtx: string | RenderContext): string {
     const cited = ctx.cited;
     const mark = cited.size > 0;
     for (const s of sources) {
-      const flag = s.fullText === false ? " · ⚠ snippet only" : "";
+      const flag = s.wall ? " · ⛔ wall" : s.fullText === false ? " · ⚠ snippet only" : "";
       const uncited = mark && !cited.has(s.id) ? " · uncited" : "";
       parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) — ${s.backend} · ${s.domain} · trust ${s.trust}${flag}${uncited}`);
     }

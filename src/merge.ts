@@ -32,6 +32,8 @@ function toRawSource(s: Source, text: string): RawSource {
     // deep-research report (written against the master) still sees it. Only when
     // false, so full-text sources keep a byte-identical merged sources.json.
     ...(s.fullText === false ? { fullText: false } : {}),
+    ...(s.wall ? { wall: true } : {}),
+    ...(s.offTopic ? { offTopic: true } : {}),
   };
 }
 

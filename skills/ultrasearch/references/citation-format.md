@@ -109,6 +109,14 @@ work around it:
 
 A claim's numeral that no cited extract contains caps its verdict at `partial`,
 and `check --strict-numerals` turns the default warning into a hard failure.
+Labels are not claims: the first column of a table is skipped when it is an
+index (headed `#`, `N°`, `Ref`, `Réf.`, or holding only short running numbers),
+and `<!-- ultrasearch:no-numerals -->` exempts the paragraph, list or table right
+after it — still checked for citations, never for figures.
+
+A cited source whose extract is a wall (cookie, consent, anti-bot page) fails
+`check` outright, however well the `[S#]` resolves; one holding only a snippet
+warns, and fails under `check --fail-on-wall`.
 
 A source's worst verdict tints its citations in the HTML, and a Verification
 section lists every claim's verdict. See `references/deep-research-playbook.md`.

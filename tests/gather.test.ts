@@ -153,7 +153,10 @@ describe("runGather (snippet-only from a failed page fetch — A5 end-to-end)", 
           }),
           contentType: "application/json",
         };
-      if (url.includes("full.test/p")) return { body: "<title>Full</title><h1>Full</h1><p>the full fetched body text about raft and paxos consensus</p>" };
+      if (url.includes("full.test/p"))
+        return {
+          body: `<title>Full</title><h1>Full</h1><p>the full fetched body text about raft and paxos consensus</p><p>${"Raft elects a leader and replicates a log; Paxos agrees on single values. ".repeat(5)}</p>`,
+        };
       return undefined; // thin.test/p → 404 → snippet-only
     });
     const r = await runGather(opts({ backends: ["searxng"], searxng: "http://localhost:8888", out: dir }));
@@ -161,8 +164,41 @@ describe("runGather (snippet-only from a failed page fetch — A5 end-to-end)", 
     const thin = r.sources.find((s) => s.url.includes("thin.test"))!;
     const full = r.sources.find((s) => s.url.includes("full.test"))!;
     expect(thin.fullText).toBe(false); // page fetch failed → snippet only
+    expect(thin.wall).toBeUndefined(); // a failed fetch is not a wall
     expect(full.fullText).not.toBe(false); // page fetched → full text
     expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toMatch(/snippet only/i);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // PubMed's cookie wall, which the engine's detector rates weak and lets through.
+  it("records a cookie wall as wall:true + snippet only, and a near-empty page as snippet only", async () => {
+    rmSync(dir, { recursive: true, force: true });
+    installFetchMock((url) => {
+      if (url.includes("format=json"))
+        return {
+          body: JSON.stringify({
+            results: [
+              { url: "https://walled.test/p", title: "Walled", content: "a snippet about distributed consensus" },
+              { url: "https://short.test/p", title: "Short", content: "a snippet about consensus protocols" },
+            ],
+          }),
+          contentType: "application/json",
+        };
+      if (url.includes("walled.test/p"))
+        return { body: "<h1>Cookies must be enabled.</h1><p>Enable cookies for walled.test and reload this page to continue.</p>" };
+      if (url.includes("short.test/p")) return { body: "<title>Short</title><p>Consensus, briefly.</p>" };
+      return undefined;
+    });
+    const r = await runGather(opts({ backends: ["searxng"], searxng: "http://localhost:8888", out: dir }));
+    const walled = r.sources.find((s) => s.url.includes("walled.test"))!;
+    const short = r.sources.find((s) => s.url.includes("short.test"))!;
+    expect(walled).toMatchObject({ fullText: false, wall: true });
+    expect(short.fullText).toBe(false);
+    expect(short.wall).toBeUndefined();
+    expect(readFileSync(join(dir, walled.extract), "utf8")).not.toMatch(/Cookies must be enabled/);
+    expect(r.manifest.notes.join("\n")).toMatch(/walled\.test\/p looks like a cookie wall — kept as snippet only/);
+    expect(r.manifest.notes.join("\n")).toMatch(/short\.test\/p looks like a near-empty page/);
+    expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toMatch(/⛔ wall/);
     rmSync(dir, { recursive: true, force: true });
   });
 });

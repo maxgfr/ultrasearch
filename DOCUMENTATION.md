@@ -147,7 +147,14 @@ extracts, so it costs no extra retrieval. See
   (`unitsOfFile` / `unitSourceTokens`) for `verify`, and the `--semantic` fold.
 - `claims.ts` — the shared claim parser (`check`, `verify` and `render` all import
   it, so they can never disagree on what a claim is). Masks code fences, HTML
-  comments, model-hint blockquotes and the trailing Sources appendix.
+  comments, model-hint blockquotes and the trailing Sources appendix; drops a
+  table's index column and marks blocks under `<!-- ultrasearch:no-numerals -->`
+  as exempt from the numeral pass.
+- `walls.ts` — `looksLikeWall`: the engine's junk detector plus the walls it
+  misses (PubMed's "Cookies must be enabled", short consent and JavaScript walls)
+  and a 300-character content floor. `gather` keeps a wall as snippet-only with
+  `wall: true`, `ingest`/`fetch` refuse it, `check` fails a report citing one.
+  `readPastCachedWall` re-reads live when the fetch cache serves a wall.
 - `locale.ts` — pure locale derivation (`Accept-Language`, DuckDuckGo `kl`).
 - `brainstorm.ts` — `runBrainstorm`: the clarity gate's shallow probe, ambiguity
   signals and candidate angles.
@@ -256,7 +263,8 @@ extractor with a note.
 ## Grounding model
 
 `sources.json` is the source of truth `check` validates against. The agent cites
-`[S#]`; any `[S#]` that doesn't resolve, or any unmarked unsourced prose claim in
-REPORT, fails the run. Background knowledge is allowed only when flagged
+`[S#]`; any `[S#]` that doesn't resolve, any unmarked unsourced prose claim in
+REPORT, or any cited source whose extract is a wall (flagged `wall: true`, or
+recognised from its wording), fails the run. Background knowledge is allowed only when flagged
 (`[M]` or `> [model-hint]`), which `check` tolerates and the HTML renders as a
 distinct "unverified" callout.

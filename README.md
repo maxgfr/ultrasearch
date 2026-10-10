@@ -300,6 +300,8 @@ that override silently voided.
 - `render --run <dir>` — render the report tiers to a self-contained `index.html`.
 - `check --run <dir>` — validate citation grounding (`--semantic` folds in the
   verify verdicts + contradictions; `--min-sources N` fails a too-thin dossier).
+  A cited source whose extract is a cookie / consent / anti-bot wall fails it;
+  `--fail-on-wall` fails a cited snippet-only source too.
 - `modes` — list modes and their backend profiles.
 - `brainstorm` — probe a vague ask and propose angles + clarifying questions
   before committing to a run.

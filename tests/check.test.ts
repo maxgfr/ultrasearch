@@ -298,14 +298,80 @@ describe("runCheck — Sources/References appendix mask", () => {
 // themselves are not documents. Both warn — they describe what is already on
 // disk, and a dossier gathered before these checks existed must stay checkable.
 describe("runCheck — source hygiene", () => {
-  it("warns when a cited source's extract is an anti-bot wall, not content", () => {
+  it("fails when a cited source's extract is an anti-bot wall, not content", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);
     writeFileSync(join(dir, "sources/S1.md"), "# S1\nChecking your browser before accessing pubmed.ncbi.nlm.nih.gov.\n");
     report(dir, GROUNDED);
     const r = runCheck(dir);
-    expect(r.ok).toBe(true); // advisory, never fatal
-    expect(r.warnings.join(" ")).toMatch(/S1 \(anti-bot interstitial\)/);
+    expect(r.ok).toBe(false); // every [S#] resolves, and the claim still rests on nothing
+    expect(r.errors.join(" ")).toMatch(/S1 \(anti-bot interstitial\)/);
+    expect(r.walledCited).toEqual([{ id: "S1", wall: "anti-bot interstitial" }]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // The incident: 38 PubMed notices whose whole text was this cookie wall, and a
+  // `check` that stayed green because each [S#] resolved.
+  it("fails on PubMed's cookie wall, which the engine's own detector misses", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    writeFileSync(
+      join(dir, "sources/S2.md"),
+      "# S2 — PubMed\n- url: https://pubmed.ncbi.nlm.nih.gov/34397876/\n- backend: claude\n# Cookies must be enabled.\nEnable cookies for pubmed.ncbi.nlm.nih.gov and reload this page to continue.\n",
+    );
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(false);
+    expect(r.walledCited?.[0]).toMatchObject({ id: "S2", wall: "cookie wall" });
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails on a source gather flagged as a wall, whatever its extract says", () => {
+    const dir = scratch();
+    const sources = writeFixtureDossier(dir, 2);
+    sources[0]!.wall = true;
+    sources[0]!.fullText = false;
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
+    report(dir, GROUNDED);
+    const r = runCheck(dir);
+    expect(r.ok).toBe(false);
+    expect(r.walledCited?.map((w) => w.id)).toEqual(["S1"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ignores a wall nobody cites", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 3);
+    writeFileSync(join(dir, "sources/S3.md"), "# S3\nCookies must be enabled. Enable cookies for example.test and reload this page to continue.\n");
+    report(dir, GROUNDED);
+    expect(runCheck(dir).ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("warns on a cited snippet-only source, and fails on it with --fail-on-wall", () => {
+    const dir = scratch();
+    const sources = writeFixtureDossier(dir, 2);
+    sources[1]!.fullText = false;
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
+    report(dir, GROUNDED);
+    const warned = runCheck(dir);
+    expect(warned.ok).toBe(true);
+    expect(warned.snippetCited).toContainEqual({ id: "S2", why: "snippet only — the page fetch failed" });
+    expect(warned.warnings.join(" ")).toMatch(/hold no readable page: .*S2 \(snippet only/);
+    const failed = runCheck(dir, { failOnWall: true });
+    expect(failed.ok).toBe(false);
+    expect(failed.errors.join(" ")).toMatch(/^--fail-on-wall: /);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not call a substantial extract near-empty", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    for (const id of ["S1", "S2"]) writeFileSync(join(dir, `sources/${id}.md`), `# ${id}\n${"Rate limiting caps request volume per client. ".repeat(10)}\n`);
+    report(dir, GROUNDED);
+    const r = runCheck(dir, { failOnWall: true });
+    expect(r.ok).toBe(true);
+    expect(r.snippetCited).toBeUndefined();
     rmSync(dir, { recursive: true, force: true });
   });
 

@@ -15,10 +15,11 @@ import type {
 } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
-import { bestExcerpt, looksLikeJunkExtraction, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
+import { bestExcerpt, rescueViaWayback, DEAD_LINK_STATUS, type ExtractResult } from "./backends/fetch.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
+import { isWordedWall, looksLikeWall, readPastCachedWall } from "./walls.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { writeDossier } from "./dossier.js";
@@ -453,7 +454,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const hydrate = (url: string, key: string) => {
     let p = hydrateCache.get(key);
     if (!p) {
-      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+      p = readPastCachedWall(url, extractOpts, !!options.cache).then((res) => {
         if (res.cached) cacheHits++;
         tallyExtractor(res, url);
         return res;
@@ -502,7 +503,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (res.note) hydrateNotes.push(res.note);
 
       let text = res.text?.trim() ? res.text : "";
-      let junk = text ? looksLikeJunkExtraction(text) : undefined;
+      let junk = text ? looksLikeWall(text) : undefined;
       // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA")
       // — drop it with the body so a rescued page isn't labelled by the wall.
       let title = junk ? undefined : res.title;
@@ -532,7 +533,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         for (const cand of [...new Set(candidates)]) {
           if (!cand || cand === it.url) continue;
           const alt = await hydrate(cand, canonicalizeUrl(cand));
-          if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+          if (alt.text?.trim() && !looksLikeWall(alt.text)) {
             text = alt.text;
             junk = undefined;
             title = title || alt.title;
@@ -585,7 +586,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       if (text && junk && res.extractor !== "firecrawl") {
         const wall = junk;
         const fc = await scrapeViaFirecrawl(it.url, { firecrawl: options.firecrawl });
-        if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+        if (fc.data?.markdown && !looksLikeWall(fc.data.markdown)) {
           text = fc.data.markdown;
           junk = undefined;
           title = title || fc.data.title;
@@ -611,7 +612,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         browserTried.add(key); // reserved before the await, so the cap holds under concurrency
         browserRescues++;
         const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
-        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
+        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeWall(rendered.text)) {
           text = rendered.text;
           junk = undefined;
           title = title || rendered.title;
@@ -641,6 +642,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} — kept as snippet only.`);
         it.text = it.snippet || "";
         it.fullText = false;
+        // A wall by its WORDING is recorded as one, so `check` can refuse a claim
+        // resting on it and `drop --where wall` can find it. A merely thin page
+        // is only snippet-only: it may be a real (short) document.
+        if (text && isWordedWall(junk)) it.wall = true;
       }
     });
 

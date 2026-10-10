@@ -189,6 +189,11 @@ export const TOOLS: ToolDecl[] = [
         semantic: { type: "boolean", description: "Also fold in recorded verify verdicts, failing on a refuted or unsupported claim." },
         require_verify: { type: "boolean", description: "Fail when no verdicts have been recorded yet." },
         strict_numerals: { type: "boolean", description: "Every number in the prose must appear in a cited source." },
+        fail_on_wall: {
+          type: "boolean",
+          description:
+            "Also fail when a cited source holds only a snippet or a near-empty extract. A cited wall (cookie/consent/anti-bot page) fails regardless.",
+        },
         min_sources: { type: "number", description: "Fail when the dossier holds fewer on-topic sources than this." },
       },
       required: ["run"],

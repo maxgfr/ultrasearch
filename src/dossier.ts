@@ -123,6 +123,10 @@ export function buildSource(rs: RawSource, id: string, builtAt: string, question
     // Only record the flag when we positively know the page fetch failed; absent
     // (the common case, incl. enrich/search callers) means full text on file.
     ...(rs.fullText === false ? { fullText: false } : {}),
+    // A wall is snippet-only by construction; the flag says WHY, which is what
+    // `check` and `drop --where wall` act on.
+    ...(rs.wall ? { wall: true } : {}),
+    ...(rs.offTopic ? { offTopic: true } : {}),
   };
 }
 
@@ -337,7 +341,11 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
-    const quality = s.fullText === false ? " · ⚠ snippet only (page fetch failed)" : "";
+    const quality = s.wall
+      ? " · ⛔ wall (the page was a consent/anti-bot wall — snippet only, do not cite)"
+      : s.fullText === false
+        ? " · ⚠ snippet only (page fetch failed)"
+        : "";
     // Under no-write `sources/S#.md` is a stream label, not a path on disk.
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} · backend: ${s.backend} · trust: ${s.trust} · ${where}${quality}`);

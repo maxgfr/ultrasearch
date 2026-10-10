@@ -36,11 +36,14 @@ export interface BuiltWorklist {
 // Flatten a hard file's claim units into individual claim strings: a text unit
 // is one claim; each list item is its own claim — the same granularity `check`
 // evaluates coverage at, so the worklist and the gate agree on what a claim is.
-function claimStrings(text: string): string[] {
-  const out: string[] = [];
+// Each claim carries whether its block is exempt from the numeral pass
+// (`<!-- ultrasearch:no-numerals -->`), so the worklist and `check` agree on it.
+function claimStrings(text: string): { claim: string; noNumerals: boolean }[] {
+  const out: { claim: string; noNumerals: boolean }[] = [];
   for (const u of unitsOfFile(text)) {
-    if (u.kind === "text") out.push(u.text);
-    else for (const it of u.items) out.push(it);
+    const noNumerals = u.noNumerals === true;
+    if (u.kind === "text") out.push({ claim: u.text, noNumerals });
+    else for (const it of u.items) out.push({ claim: it, noNumerals });
   }
   return out;
 }
@@ -118,12 +121,12 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
     const p = join(dir, file);
     if (!existsSync(p)) continue;
     const text = readFileSync(p, "utf8");
-    for (const claim of claimStrings(text)) {
+    for (const { claim, noNumerals } of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
       claimNo++;
       const claimId = `C${claimNo}`;
-      const nums = extractNumerals(claim);
+      const nums = noNumerals ? [] : extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id)!;
         pairs.push({

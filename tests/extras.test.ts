@@ -65,7 +65,16 @@ describe("extras follow the index on every path that rewrites it", () => {
     try {
       writeFixtureDossier(dir, 1, { mode: "research", extras: ["bibtex"] });
       expect(existsSync(join(dir, "refs.bib"))).toBe(false);
-      installFetchMock(routes([["paper.test", { body: "<title>A paper</title><p>rate limiting results</p>" }]]));
+      installFetchMock(
+        routes([
+          [
+            "paper.test",
+            {
+              body: `<title>A paper</title><p>rate limiting results</p><p>${"The paper measures rate limiting under load across several deployments. ".repeat(5)}</p>`,
+            },
+          ],
+        ]),
+      );
       const r = await addSource(dir, "https://paper.test/a", { question: "rate limiting" });
       expect(r.added).toBe(true);
       expect(existsSync(join(dir, "refs.bib"))).toBe(true);
@@ -106,7 +115,16 @@ describe("extras follow the index on every path that rewrites it", () => {
     const dir = scratch();
     try {
       writeFixtureDossier(dir, 1, DEALS_MANIFEST);
-      installFetchMock(routes([["deals.test", { body: "<title>Deals</title><p>Utilisez le code promo AUTOMNE15 pour 15% de remise chez Decathlon.</p>" }]]));
+      installFetchMock(
+        routes([
+          [
+            "deals.test",
+            {
+              body: `<title>Deals</title><p>Utilisez le code promo AUTOMNE15 pour 15% de remise chez Decathlon.</p><p>${"Les offres du moment chez Decathlon, rayon par rayon, avec les conditions. ".repeat(5)}</p>`,
+            },
+          ],
+        ]),
+      );
       const r = await addSource(dir, "https://deals.test/decathlon", {});
       expect(r.added).toBe(true);
       const codes = readCodes(dir);

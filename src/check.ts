@@ -13,10 +13,10 @@ import {
   SOURCE_RE,
 } from "./claims.js";
 import { readSourceText, sourceIdentityError } from "./dossier.js";
-import { looksLikeJunkExtraction } from "./backends/fetch.js";
 import { isApiEndpoint } from "./citable.js";
 import { bindToWorklist, reduceVerdicts } from "./verify.js";
 import { sourceTextWithoutPassageLabels } from "./passages.js";
+import { MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./walls.js";
 
 // The claim parser lives in claims.ts (shared with verify/render); re-export
 // the historical surface so existing importers keep working unchanged.
@@ -260,7 +260,10 @@ function readManifestSafe(dir: string): Manifest | undefined {
   }
 }
 
-export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?: boolean; minSources?: number; strictNumerals?: boolean } = {}): CheckResult {
+export function runCheck(
+  dir: string,
+  opts: { semantic?: boolean; requireVerify?: boolean; minSources?: number; strictNumerals?: boolean; failOnWall?: boolean } = {},
+): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -333,14 +336,19 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   }
 
   // Source hygiene, on the CITED sources only — an uncited dud costs the report
-  // nothing. Two failure modes the citation graph alone cannot see:
-  //   • the extract is a consent/anti-bot wall, so the claim rests on
-  //     boilerplate ("Checking your browser…") rather than on the document;
+  // nothing. Three failure modes the citation graph alone cannot see:
+  //   • the extract is a WALL (consent, cookie, anti-bot, JS shell), so the claim
+  //     rests on boilerplate ("Cookies must be enabled…") rather than on the
+  //     document. That is an ERROR: every [S#] resolves, and the report is still
+  //     grounded in nothing — the green check this gate exists to prevent. Read
+  //     from the source's `wall` flag, and re-detected from the extract's wording
+  //     for a dossier gathered before the flag existed;
+  //   • the source holds only a snippet (the page fetch failed) or a near-empty
+  //     extract — a warning, an error under `--fail-on-wall`: a snippet can carry
+  //     a claim, but nobody can check the claim against the page;
   //   • the URL is a machine endpoint, so a reader who clicks the citation gets
   //     JSON/XML instead of the page — the tell that a rescue path leaked its
-  //     fetch URL into the citation.
-  // Both warn rather than fail: they describe sources already on disk, and a
-  // dossier gathered before this check existed must still be checkable.
+  //     fetch URL into the citation. A warning: the text is still the document's.
   //
   // One read per cited extract, shared by the wall scan below and the numeral
   // pass further down — both want the same files, and an 80-source dossier
@@ -367,21 +375,44 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
     return t;
   };
 
-  const walled: string[] = [];
+  const walledCited: { id: string; wall: string }[] = [];
+  const snippetCited: { id: string; why: string }[] = [];
   const apiCited: string[] = [];
   for (const s of sources) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
     const text = textOf(s.id);
-    if (text === null) continue; // absent or unreadable extract is UNKNOWN, not a wall
-    const wall = looksLikeJunkExtraction(text);
-    if (wall) walled.push(`${s.id} (${wall})`);
+    const worded = text === null ? undefined : wallPattern(text);
+    if (s.wall || worded) {
+      walledCited.push({ id: s.id, wall: worded ?? "consent/anti-bot wall" });
+      continue;
+    }
+    if (s.fullText === false) {
+      snippetCited.push({ id: s.id, why: "snippet only — the page fetch failed" });
+      continue;
+    }
+    if (text === null) continue; // absent or unreadable extract is UNKNOWN, not thin
+    const n = usefulChars(sourceTextWithoutPassageLabels(text));
+    if (n < MIN_USEFUL_CHARS) snippetCited.push({ id: s.id, why: `near-empty extract (${n} useful characters)` });
   }
-  if (walled.length) {
-    warnings.push(
-      `${walled.length} cited source(s) extracted to a wall, not content: ${walled.slice(0, 5).join(", ")}. ` +
-        `Re-\`fetch --url\` them (the page may have been throttling) or drop the claims that rest on them.`,
+  if (walledCited.length) {
+    errors.push(
+      `${walledCited.length} cited source(s) are a wall, not content: ${walledCited
+        .slice(0, 5)
+        .map((w) => `${w.id} (${w.wall})`)
+        .join(", ")}${walledCited.length > 5 ? ", …" : ""}. ` +
+        `A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), or cite another source.`,
     );
+  }
+  if (snippetCited.length) {
+    const msg =
+      `${snippetCited.length} cited source(s) hold no readable page: ${snippetCited
+        .slice(0, 5)
+        .map((w) => `${w.id} (${w.why})`)
+        .join(", ")}${snippetCited.length > 5 ? ", …" : ""}. ` +
+      `Nobody can check a claim against them — re-\`fetch --url\` the page or cite a source that carries the text.`;
+    if (opts.failOnWall) errors.push(`--fail-on-wall: ${msg}`);
+    else warnings.push(msg);
   }
   if (apiCited.length) {
     warnings.push(
@@ -413,6 +444,9 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   for (const a of analyses) {
     if (!HARD_FILES.includes(a.file)) continue;
     for (const u of a.units) {
+      // `<!-- ultrasearch:no-numerals -->` exempts the block after it: its
+      // figures are labels (a reference table's numbers), not claims.
+      if (u.noNumerals) continue;
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -463,6 +497,8 @@ export function runCheck(dir: string, opts: { semantic?: boolean; requireVerify?
   const result: CheckResult = {
     ok: errors.length === 0,
     ...(numeralIssues.length ? { numeralIssues } : {}),
+    ...(walledCited.length ? { walledCited } : {}),
+    ...(snippetCited.length ? { snippetCited } : {}),
     filesChecked: present,
     sourceCitations,
     modelHints,
@@ -498,6 +534,7 @@ export function formatCheckReport(r: CheckResult, dir: string): string {
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
   lines.push(`  citations: ${r.sourceCitations} · model-hints: ${r.modelHints} · dangling: ${r.dangling.length} · unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  ✗ [${u.file}] unsourced: "${u.text}…"`);
+  for (const w of (r.walledCited ?? []).slice(0, 8)) lines.push(`  ✗ ${w.id} is a ${w.wall}, not content`);
   for (const n of (r.numeralIssues ?? []).slice(0, 5))
     lines.push(`  ⚠ [${n.file}] numeral "${n.numeral}" not in ${n.sourceIds.join("/")}: "${n.claim.slice(0, 80)}…"`);
   if (r.semantic) {

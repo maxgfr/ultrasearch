@@ -21,7 +21,7 @@ const readMock = vi.mocked(readSourceText);
 // and the numeral pass) can meet, each cited by a claim carrying a numeral so
 // BOTH consumers want the same file:
 //   S1 readable extract that carries the figure   -> read, no issue
-//   S2 anti-bot wall, figure absent               -> read, wall warning + issue
+//   S2 anti-bot wall, figure absent               -> read, wall ERROR + issue
 //   S3 extract file missing                       -> never read (UNKNOWN)
 //   S4 extract path is a directory (unreadable)   -> read attempt throws (UNKNOWN)
 //   S5 never cited                                -> never read
@@ -70,7 +70,9 @@ describe("runCheck — extract reads", () => {
     expect(r).toMatchInlineSnapshot(`
       {
         "dangling": [],
-        "errors": [],
+        "errors": [
+          "1 cited source(s) are a wall, not content: S2 (anti-bot interstitial). A claim resting on one rests on nothing — re-\`fetch --url\` the page (or its text endpoint), or cite another source.",
+        ],
         "filesChecked": [
           "REPORT.md",
         ],
@@ -85,16 +87,28 @@ describe("runCheck — extract reads", () => {
             ],
           },
         ],
-        "ok": true,
+        "ok": false,
+        "snippetCited": [
+          {
+            "id": "S1",
+            "why": "near-empty extract (52 useful characters)",
+          },
+        ],
         "sourceCitations": 4,
         "uncitedSources": [
           "S5",
         ],
         "unknownTokens": [],
         "unmarkedUnsourced": [],
+        "walledCited": [
+          {
+            "id": "S2",
+            "wall": "anti-bot interstitial",
+          },
+        ],
         "warnings": [
           "1 source(s) were never cited (informational).",
-          "1 cited source(s) extracted to a wall, not content: S2 (anti-bot interstitial). Re-\`fetch --url\` them (the page may have been throttling) or drop the claims that rest on them.",
+          "1 cited source(s) hold no readable page: S1 (near-empty extract (52 useful characters)). Nobody can check a claim against them — re-\`fetch --url\` the page or cite a source that carries the text.",
           "1 numeral(s) in cited claim(s) not found in any cited source extract (e.g. "4200" cited to S2). Verify the attribution, \`fetch --url\` the page that carries the figure, or flag it [M].",
         ],
       }

@@ -290,9 +290,9 @@ describe("gather hydration: two workers reaching for one URL fetch it once", () 
 // hit, while the DOI item (500 at doi.org — NOT a dead-link status, so it never
 // rescues itself) reaches for that very page as its `meta.absUrl` fallback. The
 // text it is handed is an archive recovery, and the dossier has to say so for
-// that source too. Short body on purpose: under `dedupeNearDuplicates`' 500-char
-// floor, so both sources survive and the DOI one can be asserted on.
-const ARCHIVED_ABSTRACT = `<html><head><title>Archived Cas9 abstract</title></head><body><article><p>Cas9 is a dual-RNA guided DNA endonuclease, and this archived copy of the abstract records how the guide RNA programs Cas9 to cleave a matching DNA target while the tracrRNA duplex meters that cleavage.</p></article></body></html>`;
+// that source too. Short body on purpose: over the 300-character content floor
+// (src/walls.ts) but under `dedupeNearDuplicates`' 500-char floor, so both sources survive and the DOI one can be asserted on.
+const ARCHIVED_ABSTRACT = `<html><head><title>Archived Cas9 abstract</title></head><body><article><p>Cas9 is a dual-RNA guided DNA endonuclease, and this archived copy of the abstract records how the guide RNA programs Cas9 to cleave a matching DNA target while the tracrRNA duplex meters that cleavage. The copy keeps the methods summary, the key result on target specificity and the conclusion on genome editing.</p></article></body></html>`;
 const WAYBACK_AVAIL_PUBMED = JSON.stringify({
   archived_snapshots: {
     closest: {

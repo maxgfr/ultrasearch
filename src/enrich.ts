@@ -5,7 +5,7 @@ import type { BackendKind, BrowserMode, Manifest, RawSource, Source, SourceMeta,
 import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { annotateExtras } from "./extras.js";
-import { bestExcerpt, rescueViaWayback, looksLikeJunkExtraction, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
+import { bestExcerpt, rescueViaWayback, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
 import { extractPdf } from "./backends/pdf.js";
 import { extractDocument, docFormatForUrl, DOC_EXTENSIONS } from "./backends/doc.js";
 import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
@@ -14,6 +14,7 @@ import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./brow
 import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, titleFromText } from "./util.js";
+import { looksLikeWall, readPastCachedWall } from "./walls.js";
 
 export interface EnrichResult {
   id: string;
@@ -352,13 +353,13 @@ async function prepareSource(
   const readUrl = supplied ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
-  const fetched = await cachedFetchAndExtract(readUrl, readOpts, !!opts.cache);
+  const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
   // Whether the text in hand was rendered by the browser rung — recorded on the
   // source, as gather's backends record theirs, so a dossier says which pages a
   // real browser read.
   let rendered = fetched.extractor === "browser";
-  let wall = text?.trim() ? looksLikeJunkExtraction(text) : undefined;
+  let wall = text?.trim() ? looksLikeWall(text) : undefined;
   // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA") —
   // drop it with the body, or a rescued source ends up labelled by the wall.
   if (wall) title = undefined;
@@ -377,8 +378,8 @@ async function prepareSource(
   // came back empty (a paywalled or image-only PDF).
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await cachedFetchAndExtract(fallbackUrl, readOpts, !!opts.cache);
-    if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+    const alt = await readPastCachedWall(fallbackUrl, readOpts, !!opts.cache);
+    if (alt.text?.trim() && !looksLikeWall(alt.text)) {
       text = alt.text;
       title = title || alt.title;
       wall = undefined;
@@ -393,7 +394,7 @@ async function prepareSource(
   // same wall.
   if (text?.trim() && wall && fetched.extractor !== "firecrawl") {
     const fc = await scrapeViaFirecrawl(readUrl, { firecrawl: opts.firecrawl });
-    if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+    if (fc.data?.markdown && !looksLikeWall(fc.data.markdown)) {
       text = fc.data.markdown;
       title = title || fc.data.title;
       wall = undefined;
@@ -411,7 +412,7 @@ async function prepareSource(
   if (!text?.trim() && rescuesEmptyRead(fetched.status, browser) && rescues.left > 0) {
     rescues.left--;
     const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
-    if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
+    if (page.extractor === "browser" && page.text?.trim() && !looksLikeWall(page.text)) {
       note = `Recovered ${readUrl} in a real browser — the built-in read was an empty HTTP ${fetched.status} answer.`;
       text = page.text;
       title = title || page.title;

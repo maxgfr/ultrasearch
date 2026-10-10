@@ -198,7 +198,7 @@ node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --mode <m> --de
 node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dir> --web-results <more.json>
 node <skill-dir>/scripts/ultrasearch.mjs fetch --url "<url>" --out <dir>
 node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>
-node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
 node <skill-dir>/scripts/ultrasearch.mjs relink --run <dir> [--id <S#> --url "<page>"]
 node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
 ```
@@ -212,7 +212,7 @@ node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather
 | `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
-| `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--min-sources <n>` · `--json` |
+| `check` | nothing; exit ≠ 0 ⇒ ungrounded | `--run` · `--semantic` · `--require-verify` · `--strict-numerals` · `--fail-on-wall` (a cited snippet-only source fails too) · `--min-sources <n>` · `--json`. A cited **wall** always fails. |
 | `modes` | nothing (prints) | `--json`. The live mode → backend-profile map. |
 | `doctor` | nothing (prints) | `--json`. Which optional helpers are live: the SearXNG / Firecrawl containers, the browser rung (which binary, which mode, why it is off) and the PDF ladder. They are skipped in SILENCE when absent, so this is how you learn a container is up but unused, or that a stronger PDF reader is missing. |
 | `searxng` · `firecrawl` | containers | `up` · `down` · `status`. Both are auto-detected on localhost, so a plain `gather` uses them with no flag once they are up. |
@@ -300,7 +300,9 @@ not hand control back mid-retrieval.
    `[S2]`, …), a snippet, and the path to its cleaned full text in `sources/S#.md`.
    Read the actual source text. It also flags what retrieval could not do —
    **⚠ Thin dossier**, **🔍 Under-covered** (named question terms barely present
-   in the sources: your enrichment worklist), and per-source **⚠ snippet only**.
+   in the sources: your enrichment worklist), per-source **⚠ snippet only**, and
+   per-source **⛔ wall** — the page was a cookie, consent or anti-bot wall. Never
+   cite a ⛔ source: `check` fails on it.
 
 4. **Top up the thin areas.** Your first sweep aimed at the question; the dossier
    now tells you where it fell short. Run **another WebSearch round** targeted at
@@ -335,15 +337,23 @@ not hand control back mid-retrieval.
    ```
    `render` writes both `index.html` and `index.md`. The mechanical `check` **is
    this route's exit gate**: it fails on a dangling `[S#]` and on an unmarked
-   unsourced claim in REPORT (SUMMARY and glossary are checked leniently). Fix
-   the citations, or `fetch` more sources, and re-run until it passes.
+   unsourced claim in REPORT (SUMMARY and glossary are checked leniently), and on
+   a **cited source whose extract is a wall** ("Cookies must be enabled…") —
+   every `[S#]` resolving proves nothing when the text behind one is boilerplate.
+   A cited snippet-only source warns (`--fail-on-wall` makes it fatal). Fix the
+   citations, or `fetch` more sources, and re-run until it passes.
+
+   A figure that is a label, not a claim — a reference table's numbers — is not
+   checked against the sources: a table's first column is skipped when it is an
+   index (headed `#`, `N°`, `Ref`, `Réf.`, or holding only short running
+   numbers), and `<!-- ultrasearch:no-numerals -->` exempts the block after it.
 
    **Do not add `--semantic` here.** It re-derives its verdict from `VERIFY.json`
    at check time and **fails closed** when that file is missing or unadjudicated,
    so on a route-S run it can only ever fail. Semantics are an all-or-nothing
    upgrade: promote the run to route D and take the whole exit gate, never half
-   of it. Two knobs that *do* tighten route S: `--strict-numerals` and
-   `--min-sources <n>`.
+   of it. Three knobs that *do* tighten route S: `--strict-numerals`,
+   `--fail-on-wall` and `--min-sources <n>`.
 
 7. **Present.** Give the user the SUMMARY, the run folder path, `index.html` and
    `index.md`, the source count, and any gaps or contradictions you found.

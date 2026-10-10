@@ -5303,19 +5303,19 @@ async function resolveEndpoint(opts = {}) {
     if (!await deps.discovery.isPortAlive(port, host)) throw new Error(`nothing answers DevTools on ${host}:${port}`);
     return { host, port, launchedByUs: false, profile, headless };
   }
-  const saved = readSession();
-  const usable = saved && (saved.launchedByUs ? opts.profile === void 0 || saved.profile === opts.profile : opts.profile === void 0 && !opts.ownOnly);
-  if (saved && usable) {
-    const host = saved.host ?? "127.0.0.1";
-    const same = saved.wsBrowserUrl ? await isSameBrowser(deps, saved.port, host, saved.wsBrowserUrl) : !saved.launchedByUs && await deps.discovery.isPortAlive(saved.port, host);
+  const saved2 = readSession();
+  const usable = saved2 && (saved2.launchedByUs ? opts.profile === void 0 || saved2.profile === opts.profile : opts.profile === void 0 && !opts.ownOnly);
+  if (saved2 && usable) {
+    const host = saved2.host ?? "127.0.0.1";
+    const same = saved2.wsBrowserUrl ? await isSameBrowser(deps, saved2.port, host, saved2.wsBrowserUrl) : !saved2.launchedByUs && await deps.discovery.isPortAlive(saved2.port, host);
     if (same) {
       return {
         host,
-        port: saved.port,
-        launchedByUs: saved.launchedByUs,
-        ...saved.pid !== void 0 ? { pid: saved.pid } : {},
-        profile: saved.profile,
-        headless: saved.headless
+        port: saved2.port,
+        launchedByUs: saved2.launchedByUs,
+        ...saved2.pid !== void 0 ? { pid: saved2.pid } : {},
+        profile: saved2.profile,
+        headless: saved2.headless
       };
     }
     clearSession();
@@ -5546,8 +5546,8 @@ function forget(targetIds, all) {
 async function openBrowserSession(opts = {}) {
   const deps = browserDeps(opts.deps);
   const endpoint = await resolveEndpoint({ ...opts, deps });
-  const saved = readSession();
-  const same = saved !== null && saved.port === endpoint.port && (saved.host ?? "127.0.0.1") === endpoint.host ? saved : null;
+  const saved2 = readSession();
+  const same = saved2 !== null && saved2.port === endpoint.port && (saved2.host ?? "127.0.0.1") === endpoint.host ? saved2 : null;
   const { webSocketDebuggerUrl } = await deps.discovery.getVersion(endpoint.port, endpoint.host);
   const cdp = await deps.connectCdp(loopbackSocketUrl(webSocketDebuggerUrl));
   let created;
@@ -9398,8 +9398,8 @@ async function closeBrowserReads(opts = {}) {
     if (!ours) return { closed: false };
     const deps = opts.deps ? browserDeps({ ...ours.deps, ...opts.deps }) : ours.deps;
     if (!await isSameBrowser(deps, ours.port, ours.host, ours.wsBrowserUrl)) return { closed: false };
-    const saved = readSession();
-    if (saved?.wsBrowserUrl && socketPath(saved.wsBrowserUrl) === socketPath(ours.wsBrowserUrl)) return { closed: false };
+    const saved2 = readSession();
+    if (saved2?.wsBrowserUrl && socketPath(saved2.wsBrowserUrl) === socketPath(ours.wsBrowserUrl)) return { closed: false };
     let cdp;
     try {
       cdp = await deps.connectCdp(loopbackSocketUrl(ours.wsBrowserUrl));
@@ -10214,6 +10214,12 @@ function ttlMs() {
   return envInt("CACHE_TTL_MS", fallback2);
 }
 var mode = { refresh: false, offline: false };
+function setCacheMode(next) {
+  mode = { ...mode, ...next };
+}
+function cacheMode() {
+  return { ...mode };
+}
 function isCacheFresh(entry, now = Date.now()) {
   return typeof entry.cachedAt === "number" && now - entry.cachedAt < ttlMs();
 }
@@ -11912,13 +11918,13 @@ import { homedir as homedir3 } from "os";
 import { join as join4 } from "path";
 function withStackCache(action) {
   const key = brand().envPrefix + "_CACHE_DIR";
-  const saved = process.env[key];
+  const saved2 = process.env[key];
   process.env[key] = process.env.ULTRA_STACK_CACHE_DIR || join4(homedir3(), ".cache", "skills");
   try {
     return action();
   } finally {
-    if (saved === void 0) delete process.env[key];
-    else process.env[key] = saved;
+    if (saved2 === void 0) delete process.env[key];
+    else process.env[key] = saved2;
   }
 }
 function sharedStackControl(service, action, deps = {}) {
@@ -14211,6 +14217,59 @@ async function runBackends(kinds, ctx) {
   return Promise.all(tasks);
 }
 
+// src/walls.ts
+var MIN_USEFUL_CHARS = 300;
+var LOCAL_WALLS = [
+  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
+  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
+  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
+  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
+  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
+  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
+  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
+];
+var WALL_MAX_CHARS = 2e3;
+function usefulChars(text) {
+  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
+}
+function wallPattern(text) {
+  const t = text.trim();
+  if (!t) return void 0;
+  const engine = looksLikeJunkExtraction(t);
+  if (engine) return engine;
+  if (t.length >= WALL_MAX_CHARS) return void 0;
+  const head = t.slice(0, 800);
+  return LOCAL_WALLS.find(([re]) => re.test(head))?.[1];
+}
+function looksLikeWall(text) {
+  const wall = wallPattern(text);
+  if (wall) return wall;
+  const n = usefulChars(text);
+  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
+}
+function isWordedWall(reason) {
+  return !!reason && !reason.startsWith("near-empty page");
+}
+var bypassing = 0;
+var saved;
+async function readPastCachedWall(url, opts, enabled) {
+  const res = await cachedFetchAndExtract(url, opts, enabled);
+  if (!res.cached || !res.text?.trim() || !looksLikeWall(res.text)) return res;
+  if (bypassing++ === 0) {
+    saved = cacheMode();
+    setCacheMode({ refresh: true });
+  }
+  try {
+    return await cachedFetchAndExtract(url, opts, enabled);
+  } finally {
+    if (--bypassing === 0 && saved) {
+      setCacheMode(saved);
+      saved = void 0;
+    }
+  }
+}
+
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
 import { join as join11 } from "path";
@@ -14457,7 +14516,11 @@ function buildSource(rs, id, builtAt, question) {
     meta: rs.meta,
     // Only record the flag when we positively know the page fetch failed; absent
     // (the common case, incl. enrich/search callers) means full text on file.
-    ...rs.fullText === false ? { fullText: false } : {}
+    ...rs.fullText === false ? { fullText: false } : {},
+    // A wall is snippet-only by construction; the flag says WHY, which is what
+    // `check` and `drop --where wall` act on.
+    ...rs.wall ? { wall: true } : {},
+    ...rs.offTopic ? { offTopic: true } : {}
   };
 }
 function renderSourceExtract(s, text, depth, question = "") {
@@ -14585,7 +14648,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   }
   for (const s of sources) {
     out.push(`### [${s.id}] ${s.title}`);
-    const quality = s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
+    const quality = s.wall ? " \xB7 \u26D4 wall (the page was a consent/anti-bot wall \u2014 snippet only, do not cite)" : s.fullText === false ? " \xB7 \u26A0 snippet only (page fetch failed)" : "";
     const where = noWrite ? `extract: streamed as \`${s.extract}\`` : `extract: \`${s.extract}\``;
     out.push(`url: ${s.url} \xB7 backend: ${s.backend} \xB7 trust: ${s.trust} \xB7 ${where}${quality}`);
     for (const sig of s.signals ?? []) out.push(`_${sig}_`);
@@ -14970,7 +15033,7 @@ async function runGather(options) {
   const hydrate = (url, key) => {
     let p = hydrateCache.get(key);
     if (!p) {
-      p = cachedFetchAndExtract(url, extractOpts, !!options.cache).then((res) => {
+      p = readPastCachedWall(url, extractOpts, !!options.cache).then((res) => {
         if (res.cached) cacheHits++;
         tallyExtractor(res, url);
         return res;
@@ -15004,7 +15067,7 @@ async function runGather(options) {
       if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
       let text = res.text?.trim() ? res.text : "";
-      let junk = text ? looksLikeJunkExtraction(text) : void 0;
+      let junk = text ? looksLikeWall(text) : void 0;
       let title = junk ? void 0 : res.title;
       if (fromCache && res.waybackSnapshot && it.meta?.waybackSnapshot !== res.waybackSnapshot) {
         it.meta = { ...it.meta, waybackSnapshot: res.waybackSnapshot };
@@ -15016,7 +15079,7 @@ async function runGather(options) {
         for (const cand of [...new Set(candidates2)]) {
           if (!cand || cand === it.url) continue;
           const alt = await hydrate(cand, canonicalizeUrl(cand));
-          if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+          if (alt.text?.trim() && !looksLikeWall(alt.text)) {
             text = alt.text;
             junk = void 0;
             title = title || alt.title;
@@ -15045,7 +15108,7 @@ async function runGather(options) {
       if (text && junk && res.extractor !== "firecrawl") {
         const wall = junk;
         const fc = await scrapeViaFirecrawl(it.url, { firecrawl: options.firecrawl });
-        if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+        if (fc.data?.markdown && !looksLikeWall(fc.data.markdown)) {
           text = fc.data.markdown;
           junk = void 0;
           title = title || fc.data.title;
@@ -15058,7 +15121,7 @@ async function runGather(options) {
         browserTried.add(key);
         browserRescues++;
         const rendered = await cachedFetchAndExtract(it.url, { ...extractOpts, browser: "always" }, !!options.cache);
-        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeJunkExtraction(rendered.text)) {
+        if (rendered.extractor === "browser" && rendered.text?.trim() && !looksLikeWall(rendered.text)) {
           text = rendered.text;
           junk = void 0;
           title = title || rendered.title;
@@ -15079,6 +15142,7 @@ async function runGather(options) {
         if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} \u2014 kept as snippet only.`);
         it.text = it.snippet || "";
         it.fullText = false;
+        if (text && isWordedWall(junk)) it.wall = true;
       }
     });
     let withContent = pool.filter((it) => it.text?.trim() || it.snippet.trim());
@@ -15436,10 +15500,10 @@ async function prepareSource(stateOf, url, opts) {
   const readUrl = supplied ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
-  const fetched = await cachedFetchAndExtract(readUrl, readOpts, !!opts.cache);
+  const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
   let rendered = fetched.extractor === "browser";
-  let wall = text?.trim() ? looksLikeJunkExtraction(text) : void 0;
+  let wall = text?.trim() ? looksLikeWall(text) : void 0;
   if (wall) title = void 0;
   const meta = {};
   let via;
@@ -15449,8 +15513,8 @@ async function prepareSource(stateOf, url, opts) {
   }
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await cachedFetchAndExtract(fallbackUrl, readOpts, !!opts.cache);
-    if (alt.text?.trim() && !looksLikeJunkExtraction(alt.text)) {
+    const alt = await readPastCachedWall(fallbackUrl, readOpts, !!opts.cache);
+    if (alt.text?.trim() && !looksLikeWall(alt.text)) {
       text = alt.text;
       title = title || alt.title;
       wall = void 0;
@@ -15462,7 +15526,7 @@ async function prepareSource(stateOf, url, opts) {
   }
   if (text?.trim() && wall && fetched.extractor !== "firecrawl") {
     const fc = await scrapeViaFirecrawl(readUrl, { firecrawl: opts.firecrawl });
-    if (fc.data?.markdown && !looksLikeJunkExtraction(fc.data.markdown)) {
+    if (fc.data?.markdown && !looksLikeWall(fc.data.markdown)) {
       text = fc.data.markdown;
       title = title || fc.data.title;
       wall = void 0;
@@ -15474,7 +15538,7 @@ async function prepareSource(stateOf, url, opts) {
   if (!text?.trim() && rescuesEmptyRead(fetched.status, browser) && rescues.left > 0) {
     rescues.left--;
     const page = await cachedFetchAndExtract(readUrl, { ...readOpts, browser: "always" }, !!opts.cache);
-    if (page.extractor === "browser" && page.text?.trim() && !looksLikeJunkExtraction(page.text)) {
+    if (page.extractor === "browser" && page.text?.trim() && !looksLikeWall(page.text)) {
       note = `Recovered ${readUrl} in a real browser \u2014 the built-in read was an empty HTTP ${fetched.status} answer.`;
       text = page.text;
       title = title || page.title;
@@ -15560,18 +15624,59 @@ function isTableSeparator(line) {
 function isTableRow(line) {
   return /\|/.test(line.trim()) && !isTableSeparator(line);
 }
-function tableCells(line) {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim()).join(" ");
+function cellsOf(line) {
+  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => c.trim());
+}
+function tableCells(line, dropFirst = false) {
+  return (dropFirst ? cellsOf(line).slice(1) : cellsOf(line)).join(" ");
+}
+var INDEX_HEADER = /^(#|n[°ºo]\.?|no\.|num(ber|éro|ero)?\.?|r[ée]f(s|\.|érence|erence)?\.?|id|item)$/i;
+var INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
+function indexColumnRows(lines, code) {
+  const out = lines.map(() => false);
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (code[i] || code[i + 1] || !isTableRow(lines[i]) || !isTableSeparator(lines[i + 1])) continue;
+    const rows = [];
+    for (let j = i + 2; j < lines.length && !code[j] && isTableRow(lines[j]); j++) rows.push(j);
+    if (cellsOf(lines[i]).length < 2) continue;
+    const header2 = cellsOf(lines[i])[0].replace(/[*_`]/g, "").trim();
+    const firsts = rows.map((j) => cellsOf(lines[j])[0].replace(/[*_`]/g, "").trim());
+    const index = INDEX_HEADER.test(header2) || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c));
+    if (index) for (const j of rows) out[j] = true;
+    i = rows.length ? rows[rows.length - 1] : i + 1;
+  }
+  return out;
+}
+var NO_NUMERALS_RE = /<!--\s*ultrasearch:no-numerals\s*-->/i;
+function noNumeralsMask(rawLines) {
+  const out = rawLines.map(() => false);
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (!NO_NUMERALS_RE.test(line)) continue;
+    let start = i;
+    if (!line.replace(NO_NUMERALS_RE, "").trim()) {
+      start = i + 1;
+      while (start < rawLines.length && !rawLines[start].trim()) start++;
+    } else {
+      while (start > 0 && rawLines[start - 1].trim()) start--;
+    }
+    for (let j = start; j < rawLines.length && rawLines[j].trim(); j++) out[j] = true;
+  }
+  return out;
 }
 function isListItem(line) {
   return /^\s*([-*+]|\d+\.)\s+\S/.test(line);
 }
-function extractUnits(lines, code, hint) {
+function extractUnits(lines, code, hint, noNumerals = []) {
   const units = [];
+  const indexRows = indexColumnRows(lines, code);
   let prose = [];
+  let proseExempt = false;
+  const flag = (u, exempt) => exempt ? { ...u, noNumerals: true } : u;
   const flush = () => {
-    if (prose.length) units.push({ kind: "text", text: prose.join(" ") });
+    if (prose.length) units.push(flag({ kind: "text", text: prose.join(" ") }, proseExempt));
     prose = [];
+    proseExempt = false;
   };
   let i = 0;
   while (i < lines.length) {
@@ -15590,13 +15695,14 @@ function extractUnits(lines, code, hint) {
     if (isTableRow(line)) {
       flush();
       const next = i + 1 < lines.length && !code[i + 1] ? stripInlineCode(lines[i + 1]) : "";
-      if (!isTableSeparator(next)) units.push({ kind: "text", text: tableCells(line) });
+      if (!isTableSeparator(next)) units.push(flag({ kind: "text", text: tableCells(line, indexRows[i]) }, !!noNumerals[i]));
       i++;
       continue;
     }
     if (/^\s*>/.test(line)) {
       flush();
       const quoted = [];
+      const exempt = !!noNumerals[i];
       while (i < lines.length && !code[i] && !hint[i]) {
         const ql = stripInlineCode(lines[i]);
         if (!/^\s*>/.test(ql)) break;
@@ -15604,12 +15710,13 @@ function extractUnits(lines, code, hint) {
         if (dq) quoted.push(dq);
         i++;
       }
-      if (quoted.length) units.push({ kind: "text", text: quoted.join(" ") });
+      if (quoted.length) units.push(flag({ kind: "text", text: quoted.join(" ") }, exempt));
       continue;
     }
     if (isListItem(line)) {
       flush();
       const items = [];
+      const exempt = !!noNumerals[i];
       while (i < lines.length && !code[i] && !hint[i]) {
         const l = stripInlineCode(lines[i]);
         const tt = l.trim();
@@ -15623,24 +15730,26 @@ function extractUnits(lines, code, hint) {
         }
         i++;
       }
-      units.push({ kind: "list", items });
+      units.push(flag({ kind: "list", items }, exempt));
       continue;
     }
     prose.push(line);
+    if (noNumerals[i]) proseExempt = true;
     i++;
   }
   flush();
   return units;
 }
 function maskedFile(text) {
+  const noNumerals = noNumeralsMask(text.split("\n"));
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
   const { mask: hint, regions } = hintMask(lines);
   const appendix = appendixMask(lines);
-  return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]) };
+  return { lines, code, regions, appendix, unclaimable: hint.map((h, i) => h || appendix[i]), noNumerals };
 }
 function unitsOfMasked(m) {
-  return extractUnits(m.lines, m.code, m.unclaimable);
+  return extractUnits(m.lines, m.code, m.unclaimable, m.noNumerals);
 }
 function unitsOfFile(text) {
   return unitsOfMasked(maskedFile(text));
@@ -15986,7 +16095,7 @@ function sourcesSection(sources, cited) {
       s.backend,
       s.domain,
       `<span class="trust" title="trust score">trust ${s.trust}</span>`,
-      ...s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : [],
+      ...s.wall ? [`<span class="snippet-only" title="the page was a consent/anti-bot wall \u2014 snippet only">\u26D4 wall</span>`] : s.fullText === false ? [`<span class="snippet-only" title="page fetch failed \u2014 snippet only">\u26A0 snippet only</span>`] : [],
       ...uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []
     ].join(" \xB7 ");
     const cls = uncited ? ` class="s-uncited"` : "";
@@ -16045,7 +16154,7 @@ function buildReportMarkdown(dirOrCtx) {
     const cited = ctx.cited;
     const mark = cited.size > 0;
     for (const s of sources) {
-      const flag = s.fullText === false ? " \xB7 \u26A0 snippet only" : "";
+      const flag = s.wall ? " \xB7 \u26D4 wall" : s.fullText === false ? " \xB7 \u26A0 snippet only" : "";
       const uncited = mark && !cited.has(s.id) ? " \xB7 uncited" : "";
       parts.push(`- **[${s.id}]** [${mdLinkText(s.title)}](${s.url}) \u2014 ${s.backend} \xB7 ${s.domain} \xB7 trust ${s.trust}${flag}${uncited}`);
     }
@@ -16078,8 +16187,9 @@ function pairFingerprint(claim, extract) {
 function claimStrings(text) {
   const out = [];
   for (const u of unitsOfFile(text)) {
-    if (u.kind === "text") out.push(u.text);
-    else for (const it of u.items) out.push(it);
+    const noNumerals = u.noNumerals === true;
+    if (u.kind === "text") out.push({ claim: u.text, noNumerals });
+    else for (const it of u.items) out.push({ claim: it, noNumerals });
   }
   return out;
 }
@@ -16112,12 +16222,12 @@ function buildWorklist(dir, opts = {}) {
     const p = join19(dir, file);
     if (!existsSync14(p)) continue;
     const text = readFileSync15(p, "utf8");
-    for (const claim of claimStrings(text)) {
+    for (const { claim, noNumerals } of claimStrings(text)) {
       const ids = unitSourceTokens(claim).filter((id) => byId.has(id));
       if (!ids.length) continue;
       claimNo++;
       const claimId = `C${claimNo}`;
-      const nums = extractNumerals(claim);
+      const nums = noNumerals ? [] : extractNumerals(claim);
       for (const id of ids) {
         const s = byId.get(id);
         pairs.push({
@@ -16234,7 +16344,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
     return { derivable: false, stale: [], unbound: [], bound: verdicts, expected: [] };
   }
   const byKey = new Map(expected.map((p) => [pairKey(p), p]));
-  const saved = /* @__PURE__ */ new Map();
+  const saved2 = /* @__PURE__ */ new Map();
   if (!opts.strict) {
     for (const name of readdirSync4(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
       try {
@@ -16243,9 +16353,9 @@ function bindToWorklist(dir, verdicts, opts = {}) {
         for (const p of todo.pairs) {
           if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
           const key = pairKey(p);
-          const fingerprints = saved.get(key) ?? /* @__PURE__ */ new Set();
+          const fingerprints = saved2.get(key) ?? /* @__PURE__ */ new Set();
           fingerprints.add(p.fingerprint);
-          saved.set(key, fingerprints);
+          saved2.set(key, fingerprints);
         }
       } catch {
       }
@@ -16267,7 +16377,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
       continue;
     }
     const contradicts = !!v.claim && v.claim.trim() !== exp.claim.trim() || !!v.extractPath && v.extractPath !== exp.extractPath || !!v.extractDigest && v.extractDigest !== exp.extractDigest;
-    const fingerprints = saved.get(key);
+    const fingerprints = saved2.get(key);
     if (contradicts || !opts.strict && fingerprints && !fingerprints.has(exp.fingerprint)) stale.push(key);
     else if (opts.strict || !fingerprints) {
       if (v.verdict) unbound.push(key);
@@ -16591,20 +16701,35 @@ function runCheck(dir, opts = {}) {
     }
     return t;
   };
-  const walled = [];
+  const walledCited = [];
+  const snippetCited = [];
   const apiCited = [];
   for (const s of sources) {
     if (!citedIds.has(s.id)) continue;
     if (isApiEndpoint(s.url)) apiCited.push(s.id);
     const text = textOf(s.id);
+    const worded = text === null ? void 0 : wallPattern(text);
+    if (s.wall || worded) {
+      walledCited.push({ id: s.id, wall: worded ?? "consent/anti-bot wall" });
+      continue;
+    }
+    if (s.fullText === false) {
+      snippetCited.push({ id: s.id, why: "snippet only \u2014 the page fetch failed" });
+      continue;
+    }
     if (text === null) continue;
-    const wall = looksLikeJunkExtraction(text);
-    if (wall) walled.push(`${s.id} (${wall})`);
+    const n = usefulChars(sourceTextWithoutPassageLabels(text));
+    if (n < MIN_USEFUL_CHARS) snippetCited.push({ id: s.id, why: `near-empty extract (${n} useful characters)` });
   }
-  if (walled.length) {
-    warnings.push(
-      `${walled.length} cited source(s) extracted to a wall, not content: ${walled.slice(0, 5).join(", ")}. Re-\`fetch --url\` them (the page may have been throttling) or drop the claims that rest on them.`
+  if (walledCited.length) {
+    errors.push(
+      `${walledCited.length} cited source(s) are a wall, not content: ${walledCited.slice(0, 5).map((w) => `${w.id} (${w.wall})`).join(", ")}${walledCited.length > 5 ? ", \u2026" : ""}. A claim resting on one rests on nothing \u2014 re-\`fetch --url\` the page (or its text endpoint), or cite another source.`
     );
+  }
+  if (snippetCited.length) {
+    const msg = `${snippetCited.length} cited source(s) hold no readable page: ${snippetCited.slice(0, 5).map((w) => `${w.id} (${w.why})`).join(", ")}${snippetCited.length > 5 ? ", \u2026" : ""}. Nobody can check a claim against them \u2014 re-\`fetch --url\` the page or cite a source that carries the text.`;
+    if (opts.failOnWall) errors.push(`--fail-on-wall: ${msg}`);
+    else warnings.push(msg);
   }
   if (apiCited.length) {
     warnings.push(
@@ -16625,6 +16750,7 @@ function runCheck(dir, opts = {}) {
   for (const a of analyses) {
     if (!HARD_FILES2.includes(a.file)) continue;
     for (const u of a.units) {
+      if (u.noNumerals) continue;
       for (const claim of u.kind === "text" ? [u.text] : u.items) {
         const cited = unitSourceTokens(claim).filter((id) => ids.has(id));
         if (!cited.length) continue;
@@ -16665,6 +16791,8 @@ function runCheck(dir, opts = {}) {
   const result = {
     ok: errors.length === 0,
     ...numeralIssues.length ? { numeralIssues } : {},
+    ...walledCited.length ? { walledCited } : {},
+    ...snippetCited.length ? { snippetCited } : {},
     filesChecked: present,
     sourceCitations,
     modelHints,
@@ -16698,6 +16826,7 @@ function formatCheckReport(r, dir) {
   lines.push(`  files: ${r.filesChecked.join(", ") || "none"}`);
   lines.push(`  citations: ${r.sourceCitations} \xB7 model-hints: ${r.modelHints} \xB7 dangling: ${r.dangling.length} \xB7 unsourced: ${r.unmarkedUnsourced.length}`);
   for (const u of r.unmarkedUnsourced.slice(0, 8)) lines.push(`  \u2717 [${u.file}] unsourced: "${u.text}\u2026"`);
+  for (const w of (r.walledCited ?? []).slice(0, 8)) lines.push(`  \u2717 ${w.id} is a ${w.wall}, not content`);
   for (const n of (r.numeralIssues ?? []).slice(0, 5))
     lines.push(`  \u26A0 [${n.file}] numeral "${n.numeral}" not in ${n.sourceIds.join("/")}: "${n.claim.slice(0, 80)}\u2026"`);
   if (r.semantic) {
@@ -16738,7 +16867,7 @@ function listIssuesFrom(sources, textOf) {
       });
       continue;
     }
-    const wall = text ? looksLikeJunkExtraction(text) : void 0;
+    const wall = s.wall ? "consent/anti-bot wall" : text ? wallPattern(text) : void 0;
     if (wall) {
       issues.push({
         id: s.id,
@@ -17348,7 +17477,9 @@ function toRawSource(s, text) {
     // Carry the snippet-only quality flag into the master dossier so the
     // deep-research report (written against the master) still sees it. Only when
     // false, so full-text sources keep a byte-identical merged sources.json.
-    ...s.fullText === false ? { fullText: false } : {}
+    ...s.fullText === false ? { fullText: false } : {},
+    ...s.wall ? { wall: true } : {},
+    ...s.offTopic ? { offTopic: true } : {}
   };
 }
 function runMerge(options) {
@@ -17911,6 +18042,7 @@ function handleCheck(args, run) {
     semantic: bool(args.semantic),
     requireVerify: bool(args.require_verify),
     strictNumerals: bool(args.strict_numerals),
+    failOnWall: bool(args.fail_on_wall),
     minSources: positive(args.min_sources, "min_sources")
   });
   return { run, ...res };
@@ -18139,6 +18271,10 @@ var TOOLS = [
         semantic: { type: "boolean", description: "Also fold in recorded verify verdicts, failing on a refuted or unsupported claim." },
         require_verify: { type: "boolean", description: "Fail when no verdicts have been recorded yet." },
         strict_numerals: { type: "boolean", description: "Every number in the prose must appear in a cited source." },
+        fail_on_wall: {
+          type: "boolean",
+          description: "Also fail when a cited source holds only a snippet or a near-empty extract. A cited wall (cookie/consent/anti-bot page) fails regardless."
+        },
         min_sources: { type: "number", description: "Fail when the dossier holds fewer on-topic sources than this." }
       },
       required: ["run"]
@@ -18518,7 +18654,7 @@ Usage:
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
@@ -18552,6 +18688,8 @@ Commands:
            also folds in the verify verdicts: fails on unsupported claims;
            --require-verify makes a missing/empty VERIFY.json a hard failure \u2014
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
+           A CITED source whose extract is a wall (cookie, consent, anti-bot)
+           always fails; one holding only a snippet warns (--fail-on-wall fails).
   relink   Repair source CITATIONS in place (no re-fetch, no network). Bare, it
            rewrites every source whose own text names where it lives (canonical
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
@@ -18671,6 +18809,9 @@ Options:
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
   --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
                        is absent from every cited source extract
+  --fail-on-wall       For 'check': also fail (not warn) when a cited source holds
+                       only a snippet or a near-empty extract \u2014 a cited WALL
+                       fails with or without this flag
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --stdout             Write NOTHING to disk; stream what would have been written
                        (env ULTRASEARCH_NO_WRITE=1 does the same globally). For a
@@ -18781,6 +18922,7 @@ var BOOL_FLAGS = /* @__PURE__ */ new Set([
   "semantic",
   "require-verify",
   "strict-numerals",
+  "fail-on-wall",
   "cache",
   "no-cache",
   "eco",
@@ -19535,6 +19677,7 @@ ${formatServices(rows)}
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
+        failOnWall: p.bools.has("fail-on-wall"),
         minSources
       });
       if (p.bools.has("json")) {

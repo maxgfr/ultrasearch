@@ -41,7 +41,7 @@ Usage:
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
-  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--min-sources <n>]
+  ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
@@ -75,6 +75,8 @@ Commands:
            also folds in the verify verdicts: fails on unsupported claims;
            --require-verify makes a missing/empty VERIFY.json a hard failure —
            the deep-tier exit gate; --min-sources <n> fails a too-thin dossier).
+           A CITED source whose extract is a wall (cookie, consent, anti-bot)
+           always fails; one holding only a snippet warns (--fail-on-wall fails).
   relink   Repair source CITATIONS in place (no re-fetch, no network). Bare, it
            rewrites every source whose own text names where it lives (canonical
            link, DOI, arXiv id, PMID) and then prints what it could not prove.
@@ -194,6 +196,9 @@ Options:
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
   --strict-numerals    For 'check': fail (not warn) when a cited claim's numeral
                        is absent from every cited source extract
+  --fail-on-wall       For 'check': also fail (not warn) when a cited source holds
+                       only a snippet or a near-empty extract — a cited WALL
+                       fails with or without this flag
   --min-sources <n>    For 'check': fail a dossier with fewer kept sources
   --stdout             Write NOTHING to disk; stream what would have been written
                        (env ULTRASEARCH_NO_WRITE=1 does the same globally). For a
@@ -305,6 +310,7 @@ export const BOOL_FLAGS = new Set([
   "semantic",
   "require-verify",
   "strict-numerals",
+  "fail-on-wall",
   "cache",
   "no-cache",
   "eco",
@@ -1254,6 +1260,7 @@ async function dispatch(p: Parsed): Promise<void> {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
+        failOnWall: p.bools.has("fail-on-wall"),
         minSources,
       });
       if (p.bools.has("json")) {

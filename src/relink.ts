@@ -1,9 +1,9 @@
 import type { Manifest, Source } from "./types.js";
 import { readDossier, readSourceText, writeSourceExtract, writeDossierIndex } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
-import { looksLikeJunkExtraction } from "./backends/fetch.js";
 import { deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, domainOf, titleFromText, trustScore } from "./util.js";
+import { wallPattern } from "./walls.js";
 
 // The repair pass, in three tiers of decreasing certainty.
 //
@@ -84,7 +84,9 @@ function listIssuesFrom(sources: Source[], textOf: (s: Source) => string): Relin
       });
       continue;
     }
-    const wall = text ? looksLikeJunkExtraction(text) : undefined;
+    // The recorded flag first (gather saw the page itself), then the wording of
+    // the extract — which is all a dossier built before the flag existed has.
+    const wall = s.wall ? "consent/anti-bot wall" : text ? wallPattern(text) : undefined;
     if (wall) {
       issues.push({
         id: s.id,

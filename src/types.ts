@@ -294,6 +294,8 @@ export interface RawSource {
   lang?: string;
   meta?: SourceMeta;
   fullText?: boolean; // false when only a search snippet was available (page fetch failed)
+  wall?: boolean; // the page read was a consent / anti-bot / cookie wall (implies fullText: false)
+  offTopic?: boolean; // gather judged it unrelated to the question (see Source.offTopic)
 }
 
 // A source as persisted in sources.json. `extract` is the relative path to the
@@ -316,6 +318,14 @@ export interface Source {
   // extract is the snippet, not the real page. Surfaced in DOSSIER.md / HTML so
   // a reader doesn't cite a source it only saw a snippet of. Absent ⇒ full text.
   fullText?: boolean;
+  // true ⇒ the page read was a WALL (consent, cookie, anti-bot, JS shell) and
+  // only the snippet is on file. `check` fails a report that cites one: a claim
+  // resting on "Cookies must be enabled" rests on nothing.
+  wall?: boolean;
+  // true ⇒ gather judged the source unrelated to the question (it matched few of
+  // the question's terms and scored low on content). Listed at the head of
+  // DOSSIER.md so `drop --where offtopic` can clear them in one call.
+  offTopic?: boolean;
   // Structural, corpus-relative authority signals (src/authority.ts): reference
   // diversity, self-declared identity, cross-backend corroboration. Rendered as
   // guidance for the reader — they never drop or re-rank a source, because the
@@ -499,6 +509,8 @@ export interface CheckResult {
   warnings: string[];
   numeralIssues?: { file: string; claim: string; numeral: string; sourceIds: string[] }[]; // claim numerals absent from every cited extract (advisory; --strict-numerals fails)
   semantic?: VerifyResult; // populated only by `check --semantic` (folds VERIFY.json)
+  walledCited?: { id: string; wall: string }[]; // cited sources whose extract is a wall — always an error
+  snippetCited?: { id: string; why: string }[]; // cited sources holding only a snippet / a near-empty extract (warn; --fail-on-wall fails)
 }
 
 // ---------------------------------------------------------------------------

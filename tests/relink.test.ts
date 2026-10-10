@@ -50,6 +50,21 @@ describe("relink --list", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("names PubMed's cookie wall and a source gather flagged as a wall", () => {
+    const dir = scratch();
+    const sources = writeFixtureDossier(dir, 3);
+    writeFileSync(join(dir, "sources/S1.md"), "# S1\nCookies must be enabled. Enable cookies for pubmed.ncbi.nlm.nih.gov and reload this page to continue.\n");
+    sources[2]!.wall = true;
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
+    const issues = listIssues(dir);
+    expect(issues.map((i) => [i.id, i.reason])).toEqual([
+      ["S1", "wall"],
+      ["S3", "wall"],
+    ]);
+    expect(issues[0]!.detail).toContain("cookie wall");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("says nothing about a healthy dossier", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 3);
