@@ -81,7 +81,7 @@ describe("gather hydration fallbacks (P0.4)", () => {
     expect(sources).toHaveLength(1);
     expect(sources[0]!.fullText).toBe(false); // consent wall rejected → snippet only
     const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
-    expect(manifest.notes.join(" ")).toMatch(/snippet only/i);
+    expect(manifest.notes.join(" ")).toMatch(/its search snippet stands in for the page/);
     // the abstract snippet survives as the source text
     expect(sources[0]!.snippet).toMatch(/token bucket/i);
     rmSync(dir, { recursive: true, force: true });
@@ -189,7 +189,7 @@ describe("Firecrawl junk rescue", () => {
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources[0]!.fullText).toBe(false);
     const notes = (JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest).notes;
-    expect(notes.join(" ")).toMatch(/snippet only/i);
+    expect(notes.join(" ")).toMatch(/its search snippet stands in for the page/);
     // The "not reachable" note is instance-level, so it appears exactly ONCE
     // however many pages the run hydrated.
     expect(notes.filter((n) => /not reachable/i.test(n))).toHaveLength(1);

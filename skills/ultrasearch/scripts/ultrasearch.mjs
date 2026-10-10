@@ -12759,12 +12759,30 @@ async function withBackoff(call, opts = {}) {
     waitedMs += wait;
   }
 }
+var HOST_GAP_MS = {
+  "eutils.ncbi.nlm.nih.gov": () => envInt("NCBI_INTERVAL_MS", 350, 0, 1e4)
+};
+var nextSlot = /* @__PURE__ */ new Map();
+async function paceHost(url, pause = sleep) {
+  let host;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return;
+  }
+  const gap = HOST_GAP_MS[host]?.() ?? 0;
+  if (gap <= 0) return;
+  const now = Date.now();
+  const slot = Math.max(now, nextSlot.get(host) ?? 0);
+  nextSlot.set(host, slot + gap);
+  if (slot > now) await pause(slot - now);
+}
 async function apiGet(url, opts = {}) {
   const accept = opts.accept ?? "application/json";
-  const out = await withBackoff(
-    () => httpGet(url, { accept, retries: 0, timeoutMs: opts.timeoutMs ?? 12e3, ...opts.userAgent ? { userAgent: opts.userAgent } : {} }),
-    opts
-  );
+  const out = await withBackoff(async () => {
+    await paceHost(url);
+    return httpGet(url, { accept, retries: 0, timeoutMs: opts.timeoutMs ?? 12e3, ...opts.userAgent ? { userAgent: opts.userAgent } : {} });
+  }, opts);
   const r = out.result;
   let data = r.body;
   if (opts.json !== false && r.body) {
@@ -12776,11 +12794,12 @@ async function apiGet(url, opts = {}) {
   }
   return { ok: r.ok, status: r.status, data, rateLimited: out.rateLimited, attempts: out.attempts, ...r.error ? { error: r.error } : {} };
 }
-function apiFailure(label, r) {
+function apiFailure(label, r, query) {
   if (r.rateLimited || r.status === 429 || r.status === 503) {
     return `${label} rate-limited (HTTP ${r.status}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}).`;
   }
-  return `${label} failed or empty (status ${r.status}).`;
+  if (r.status >= 200 && r.status < 300) return `${label} returned nothing${query ? ` for "${query}"` : ""}.`;
+  return `${label} failed (status ${r.status || "no response"}).`;
 }
 
 // src/backends/crossref.ts
@@ -12791,7 +12810,7 @@ var crossrefBackend = async (ctx) => {
   const r = await apiGet(url, { userAgent: contactUa() });
   const items0 = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
-    return { backend: "crossref", items: [], notes: [apiFailure("Crossref search", r)] };
+    return { backend: "crossref", items: [], notes: [apiFailure("Crossref search", r, ctx.question)] };
   }
   const items = items0.slice(0, n).map((w, i) => {
     const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
@@ -12832,7 +12851,7 @@ var openalexBackend = async (ctx) => {
   const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
-    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r)] };
+    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r, ctx.question)] };
   }
   const items = results.slice(0, n).map((w, i) => {
     const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";
@@ -12865,7 +12884,7 @@ var semanticscholarBackend = async (ctx) => {
   const r = await apiGet(url);
   const data = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {
-    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r)] };
+    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r, ctx.question)] };
   }
   const items = data.slice(0, n).map((p, i) => {
     const title = cleanInline(String(p.title ?? "Untitled")) || "Untitled";
@@ -12898,7 +12917,7 @@ var europepmcBackend = async (ctx) => {
   const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {
-    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r)] };
+    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r, ctx.question)] };
   }
   const items = results.slice(0, n).map((w, i) => {
     const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
@@ -12931,7 +12950,7 @@ var pubmedBackend = async (ctx) => {
   const sr = await apiGet(esearch2);
   const ids = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
-    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr)] };
+    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr, ctx.question)] };
   }
   const esummary2 = `${base2}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;
   const dr = await apiGet(esummary2);
@@ -13018,7 +13037,7 @@ var clinicaltrialsBackend = async (ctx) => {
   const r = await apiGet(url);
   const studies = r.ok && Array.isArray(r.data?.studies) ? r.data.studies : [];
   if (!r.ok || !studies.length) {
-    return { backend: "clinicaltrials", items: [], notes: [apiFailure("ClinicalTrials.gov search", r)] };
+    return { backend: "clinicaltrials", items: [], notes: [apiFailure("ClinicalTrials.gov search", r, ctx.question)] };
   }
   const items = [];
   studies.slice(0, n).forEach((study, i) => {
@@ -14528,7 +14547,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   out.push("");
   out.push(`**Question:** ${manifest.question}`);
   out.push(
-    `**Mode:** ${manifest.mode} \xB7 **depth:** ${manifest.depth} \xB7 **lang:** ${manifest.lang} \xB7 **sources:** ${sources.length} \xB7 **built:** ${manifest.builtAt}`
+    `**Mode:** ${manifest.mode}${manifest.template && manifest.template !== manifest.mode ? ` \xB7 **template:** ${manifest.template}` : ""} \xB7 **depth:** ${manifest.depth} \xB7 **lang:** ${manifest.lang} \xB7 **sources:** ${sources.length} \xB7 **built:** ${manifest.builtAt}`
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
   if (manifest.searchProfile) out.push(`**Search profile:** ${manifest.searchProfile}`);
@@ -14640,7 +14659,8 @@ var EXTRA_TEMPLATES = {
     template: [
       "## Verdict",
       "## Reference-by-reference table",
-      "### (# \xB7 resolved as \xB7 authors \xB7 title \xB7 journal \xB7 year \xB7 vol \xB7 issue \xB7 pages \xB7 DOI \xB7 source)",
+      "One row per reference: # \xB7 resolved as \xB7 authors \xB7 title \xB7 journal \xB7 year \xB7 vol \xB7 issue \xB7 pages \xB7 DOI \xB7 source.",
+      "A block quoting the checked document's own (wrong) figures goes under `<!-- ultrasearch:no-numerals -->`, so `check` does not ask a source for them.",
       "## Discrepancies",
       "## Claims checked against their sources",
       "## Not verifiable",
@@ -14680,14 +14700,24 @@ var WALL_MAX_CHARS = 2e3;
 function usefulChars(text) {
   return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
 }
+var ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
+var ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
+var IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
+function proseOutweighsWall(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(
+    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
+  );
+  if (lines.length < 3) return false;
+  const prose = lines.reduce((n, l) => n + l.length, 0);
+  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
+}
 function wallPattern(text) {
   const t = text.trim();
   if (!t) return void 0;
   const engine = looksLikeJunkExtraction(t);
-  if (engine) return engine;
-  if (t.length >= WALL_MAX_CHARS) return void 0;
-  const head = t.slice(0, 800);
-  return LOCAL_WALLS.find(([re]) => re.test(head))?.[1];
+  const local2 = engine || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
+  const wall = engine ?? local2;
+  return wall && !proseOutweighsWall(t) ? wall : void 0;
 }
 function looksLikeWall(text) {
   const wall = wallPattern(text);
@@ -14714,6 +14744,33 @@ async function readPastCachedWall(url, opts, enabled) {
       setCacheMode(saved);
       saved = void 0;
     }
+  }
+}
+
+// src/listing.ts
+var SEARCH_PARAMS = ["term", "q", "query", "search", "searchtext", "search_query", "keywords", "keyword", "text", "wd"];
+var SEARCH_PATH = /^\/(?:|search|scholar|results|find|pmc|pubmed|webhp|html|web|search\/[\w-]*|[\w-]*\/search)\/?$/i;
+function searchPageOf(url) {
+  let u;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return void 0;
+  }
+  if (!/^https?:$/.test(u.protocol)) return void 0;
+  const param = SEARCH_PARAMS.find((p) => (u.searchParams.get(p) ?? "").trim());
+  if (!param || !SEARCH_PATH.test(u.pathname)) return void 0;
+  return `${url} is a search results page (${param}=${u.searchParams.get(param)}), not a document \u2014 open the result you mean and pass its own URL.`;
+}
+function redirectedHome(requested, final) {
+  if (!final || final === requested) return false;
+  try {
+    const a = new URL(requested);
+    const b = new URL(final);
+    const home = (p) => p === "" || p === "/" || /^\/(index\.\w+|home|accueil|[a-z]{2}(-[a-z]{2})?)\/?$/i.test(p);
+    return !home(a.pathname) && home(b.pathname) && !b.search;
+  } catch {
+    return false;
   }
 }
 
@@ -14756,23 +14813,55 @@ function ncbiDocument(url) {
   }
   return void 0;
 }
+function europePmcRecordUrl(pmcid) {
+  return `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=PMCID:${pmcid.toUpperCase()}&resultType=core&format=json`;
+}
 async function readNcbiDocument(doc, opts = {}) {
   if (doc.kind === "pubmed") {
-    const res2 = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
-    const text2 = res2.text?.trim() ?? "";
-    if (!text2) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res2.status || "no response"})` };
-    const wall2 = looksLikeWall(text2);
-    if (wall2) return { ok: false, why: `E-utilities returned a ${wall2} for PMID ${doc.id}` };
-    return { ok: true, text: text2, via: doc.textUrl };
+    const out = await withBackoff(async () => {
+      await paceHost(doc.textUrl);
+      const r = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
+      return { ...r, status: r.status ?? 0 };
+    });
+    const res2 = out.result;
+    if (out.rateLimited) {
+      return {
+        ok: false,
+        why: `E-utilities rate-limited the read of PMID ${doc.id} (HTTP ${res2.status}${out.attempts > 1 ? ` after ${out.attempts} attempts` : ""})`
+      };
+    }
+    const text = res2.text?.trim() ?? "";
+    if (!text || res2.status >= 400) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res2.status || "no response"})` };
+    const wall = wallPattern(text);
+    if (wall) return { ok: false, why: `E-utilities returned a ${wall} for PMID ${doc.id}` };
+    return { ok: true, text, via: doc.textUrl, ...usefulChars(text) < MIN_USEFUL_CHARS ? { thin: true } : {} };
   }
   const res = await httpGet(doc.textUrl, { accept: "application/xml, text/xml;q=0.9, */*;q=0.1" });
+  let why;
   if (!res.ok || !/<article\b/i.test(res.body)) {
-    return { ok: false, why: `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})` };
+    why = `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})`;
+  } else {
+    const { text, title } = jatsToText(res.body);
+    const wall = looksLikeWall(text);
+    if (!wall) return { ok: true, text, ...title ? { title } : {}, via: doc.textUrl };
+    why = `Europe PMC's full text for ${doc.id} is a ${wall}`;
   }
-  const { text, title } = jatsToText(res.body);
-  const wall = looksLikeWall(text);
-  if (wall) return { ok: false, why: `Europe PMC's full text for ${doc.id} is a ${wall}` };
-  return { ok: true, text, ...title ? { title } : {}, via: doc.textUrl };
+  const record = await readEuropePmcRecord(doc.id);
+  return record ?? { ok: false, why };
+}
+async function readEuropePmcRecord(pmcid) {
+  const url = europePmcRecordUrl(pmcid);
+  const r = await apiGet(url);
+  const hit = r.ok ? r.data?.resultList?.result?.[0] : void 0;
+  if (!hit || String(hit.pmcid ?? "").toUpperCase() !== pmcid.toUpperCase()) return void 0;
+  const title = hit.title ? clean3(String(hit.title)) : void 0;
+  const abstract = hit.abstractText ? clean3(String(hit.abstractText)) : "";
+  if (!title && !abstract) return void 0;
+  const text = [title ? `# ${title}` : "", abstract ? `## Abstract
+
+${abstract}` : ""].filter(Boolean).join("\n\n");
+  if (wallPattern(text)) return void 0;
+  return { ok: true, text, ...title ? { title } : {}, via: url, ...usefulChars(text) < MIN_USEFUL_CHARS ? { thin: true } : {} };
 }
 var DROP = ["table-wrap", "table", "disp-formula", "inline-formula", "mml:math", "supplementary-material", "ref-list", "ack", "fn-group", "alternatives"];
 function inner(xml, tag2) {
@@ -14808,6 +14897,37 @@ function jatsToText(xml) {
   const body = inner(xml, "body");
   if (body) parts.push(...blocks(body));
   return { text: parts.join("\n\n"), ...title ? { title } : {} };
+}
+
+// src/identity.ts
+var DOI_IN_URL = /(?:doi\.org|\/doi(?:\/(?:abs|full|pdf|epdf|reader))?)\/(10\.\d{4,9}\/[^?#\s]+)/i;
+function doiKey(doi) {
+  let d = doi.trim();
+  try {
+    d = decodeURIComponent(d);
+  } catch {
+  }
+  return `doi:${d.replace(/[.,;)\]]+$/, "").toLowerCase()}`;
+}
+function identityKeys(url, meta, ncbiText) {
+  const keys = /* @__PURE__ */ new Set();
+  const inUrl = url.match(DOI_IN_URL);
+  if (inUrl) keys.add(doiKey(inUrl[1]));
+  const doc = ncbiDocument(url);
+  if (doc) keys.add(doc.kind === "pubmed" ? `pmid:${doc.id}` : `pmcid:${doc.id}`);
+  if (typeof meta?.doi === "string" && meta.doi.trim()) keys.add(doiKey(meta.doi));
+  if (ncbiText) {
+    const doi = ncbiText.match(/^\s*DOI:\s*(10\.\d{4,9}\/\S+)/im);
+    if (doi) keys.add(doiKey(doi[1]));
+    const pmid = ncbiText.match(/^\s*PMID:\s*(\d{4,9})\b/im);
+    if (pmid) keys.add(`pmid:${pmid[1]}`);
+    const pmcid = ncbiText.match(/\bPMCID:\s*(PMC\d+)\b/i);
+    if (pmcid) keys.add(`pmcid:${pmcid[1].toUpperCase()}`);
+  }
+  return [...keys];
+}
+function readFromEutils(via) {
+  return typeof via === "string" && /eutils\.ncbi\.nlm\.nih\.gov/i.test(via);
 }
 
 // src/services.ts
@@ -14972,10 +15092,62 @@ function describeWebSearchLane(manifest) {
 }
 
 // src/gather.ts
+var NO_ABSTRACT_RE = /\(no abstract provided by [^)]*\)/gi;
+function atNcbiPage(it) {
+  const doc = ncbiDocument(it.url);
+  return doc && doc.citeUrl !== it.url ? { ...it, url: doc.citeUrl } : it;
+}
+function mergeSameRecord(items) {
+  const owner = /* @__PURE__ */ new Map();
+  const keysOf = /* @__PURE__ */ new Map();
+  const out = [];
+  const better = (a, b) => a.fullText !== false !== (b.fullText !== false) ? a.fullText !== false : (a.text?.length ?? 0) > (b.text?.length ?? 0);
+  let merged = 0;
+  for (const it of items) {
+    const keys = identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : void 0);
+    const prior = keys.map((k) => owner.get(k)).find(Boolean);
+    if (!prior) {
+      out.push(it);
+      keysOf.set(it, keys);
+      for (const k of keys) owner.set(k, it);
+      continue;
+    }
+    merged++;
+    const [win, lose] = better(it, prior) ? [it, prior] : [prior, it];
+    const also = [.../* @__PURE__ */ new Set([...win.meta?.alsoAt ?? [], lose.url, ...lose.meta?.alsoAt ?? []])];
+    win.meta = { ...lose.meta, ...win.meta, alsoAt: also };
+    if (win !== prior) out[out.indexOf(prior)] = win;
+    const all = [.../* @__PURE__ */ new Set([...keysOf.get(prior) ?? [], ...keys])];
+    keysOf.set(win, all);
+    for (const k of all) owner.set(k, win);
+  }
+  return { kept: out, merged };
+}
+var ABSTRACT_BACKENDS = /* @__PURE__ */ new Set(["crossref", "europepmc", "semanticscholar", "openalex", "dblp"]);
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
 var OFF_TOPIC_TERM_SHARE = 1 / 3;
 var OFF_TOPIC_CONTENT = 0.2;
+var NAMED_MISS_FACTOR = 0.75;
+var QUESTION_OPENERS = new Set(
+  "what how why when where which who whom whose is are was were does do did can could should would will the a an in on for of to and or quels quelles quel quelle comment pourquoi quand o\xF9 est sont les la le des une un en dans pour".split(
+    " "
+  )
+);
+function namedTerms(question) {
+  const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
+  const titleCased = words.filter((w) => new RegExp("^\\p{Lu}", "u").test(w)).length > words.length / 2;
+  const out = /* @__PURE__ */ new Set();
+  words.forEach((w, i) => {
+    const bare = w.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
+    if (bare.length < 2) return;
+    const acronym = new RegExp("^\\p{Lu}[\\p{Lu}\\d]+$", "u").test(bare);
+    const proper = !titleCased && new RegExp("^\\p{Lu}\\p{Ll}{2,}", "u").test(bare) && i > 0 && !QUESTION_OPENERS.has(bare.toLowerCase());
+    if (!acronym && !proper) return;
+    for (const t of bm25Tokenize(bare)) out.add(t);
+  });
+  return [...out];
+}
 function round4(n) {
   return Number(n.toFixed(4));
 }
@@ -15199,15 +15371,25 @@ async function runGather(options) {
     return p;
   };
   async function assemble(rawLists) {
-    let merged2 = fuse(rawLists);
+    const hydrateNotes = [];
+    let merged2 = fuse(rawLists.map((l) => l.map(atNcbiPage)));
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
     if (options.excludeDomains.length) merged2 = merged2.filter(excluded);
+    const searchPages = merged2.filter((it) => searchPageOf(it.url));
+    if (searchPages.length) {
+      merged2 = merged2.filter((it) => !searchPageOf(it.url));
+      hydrateNotes.push(`Dropped ${searchPages.length} search results page(s) \u2014 not documents: ${searchPages.map((it) => it.url).join(", ")}.`);
+    }
     const overshoot = OVERSHOOT[options.depth] ?? 10;
     const budget = options.maxSources === void 0 ? merged2.length : Math.min(merged2.length, options.maxSources + overshoot);
     const pool = merged2.slice(0, budget);
     const notFetched = merged2.length - pool.length;
-    const hydrateNotes = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
+      let thinBackend = "";
+      if (it.text?.trim() && ABSTRACT_BACKENDS.has(it.backend) && usefulChars(it.text.replace(NO_ABSTRACT_RE, "")) < MIN_USEFUL_CHARS) {
+        thinBackend = it.text.replace(NO_ABSTRACT_RE, "").trim();
+        it.text = "";
+      }
       if (it.text?.trim()) {
         it.fullText = true;
         const key2 = canonicalizeUrl(it.url);
@@ -15223,7 +15405,7 @@ async function runGather(options) {
         const got = await readNcbi(ncbi);
         if (got.ok) {
           it.text = got.text;
-          it.fullText = true;
+          it.fullText = !got.thin;
           it.meta = { ...it.meta, textVia: got.via };
           if (!it.snippet) it.snippet = bestExcerpt(got.text, options.question);
           if ((!it.title || it.title === it.url) && got.title) it.title = got.title;
@@ -15233,9 +15415,14 @@ async function runGather(options) {
       }
       const fromCache = hydrateCache.has(key);
       const res = await hydrate(it.url, key);
-      if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
+      const home = redirectedHome(it.url, res.finalUrl) ? res.finalUrl : void 0;
+      if (home)
+        hydrateNotes.push(
+          `${it.url} redirected to the site's home page (${home}) \u2014 the document is gone; its search snippet stands in for it unless the archive has a copy.`
+        );
+      else if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
-      let text = res.text?.trim() ? res.text : "";
+      let text = res.text?.trim() && !home ? res.text : "";
       let junk = text ? looksLikeWall(text) : void 0;
       let title = junk ? void 0 : res.title;
       if (fromCache && res.waybackSnapshot && it.meta?.waybackSnapshot !== res.waybackSnapshot) {
@@ -15273,7 +15460,7 @@ async function runGather(options) {
           }
         }
       }
-      if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+      if (!text && (DEAD_LINK_STATUS.has(res.status) || home) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
         waybackUsed++;
         const wb = await rescueViaWayback(it.url, extractOpts);
         if (wb) {
@@ -15319,14 +15506,17 @@ async function runGather(options) {
         if (!it.snippet) it.snippet = bestExcerpt(text, options.question);
         if ((!it.title || it.title === it.url) && title) it.title = title;
       } else {
-        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} \u2014 kept as snippet only.`);
-        it.text = it.snippet || "";
+        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} \u2014 its search snippet stands in for the page.`);
+        it.text = thinBackend || it.snippet || "";
         it.fullText = false;
-        if (text && isWordedWall(junk)) it.wall = true;
+        if (text && isWordedWall(junk) && !thinBackend) it.wall = true;
       }
     });
     let withContent = pool.filter((it) => it.text?.trim() || it.snippet.trim());
     if (options.excludeDomains.length) withContent = withContent.filter(excluded);
+    const sameRecord = mergeSameRecord(withContent);
+    withContent = sameRecord.kept;
+    if (sameRecord.merged) hydrateNotes.push(`Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID or PMCID).`);
     const docs = withContent.map((it) => ({
       id: it.url,
       title: it.title || "",
@@ -15335,6 +15525,8 @@ async function runGather(options) {
     }));
     const bm25 = buildBm25Index(options.question, docs);
     const rawContent = docs.map((d) => bm25Score(bm25, d));
+    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
+    const named = namedTerms(options.question);
     const contentMax = Math.max(1e-9, ...rawContent);
     const rrfMax = Math.max(1e-9, ...withContent.map((it) => it.score));
     const years = withContent.map((it) => it.meta?.year).filter((y) => typeof y === "number");
@@ -15349,11 +15541,20 @@ async function runGather(options) {
       const rrfN = it.score / rrfMax;
       const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
-      it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
-      it.meta = { ...it.meta, rank: { rrf: round4(rrfN), content: round4(content), trust: round4(trust), recency: round4(recency) } };
+      const missesNamed = named.length > 0 && !(matchedByUrl.get(it.url) ?? []).some((t) => named.includes(t));
+      it.score = Number(((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency) * (missesNamed ? NAMED_MISS_FACTOR : 1)).toFixed(6));
+      it.meta = {
+        ...it.meta,
+        rank: {
+          rrf: round4(rrfN),
+          content: round4(content),
+          trust: round4(trust),
+          recency: round4(recency),
+          ...missesNamed ? { namedMiss: NAMED_MISS_FACTOR } : {}
+        }
+      };
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
     const isDisambiguation = (it) => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
     const floor2 = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
@@ -15539,16 +15740,51 @@ function loadState(dir) {
   const { sources, manifest } = readDossier(dir);
   const byCanon = /* @__PURE__ */ new Map();
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+  const byIdentity = /* @__PURE__ */ new Map();
+  for (const s of sources) for (const k of sourceKeys(dir, s)) if (!byIdentity.has(k)) byIdentity.set(k, s);
+  return { dir, sources, manifest, byCanon, byIdentity, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+}
+function sourceKeys(dir, s) {
+  let text;
+  if (readFromEutils(s.meta?.textVia)) {
+    try {
+      text = readSourceText(dir, s);
+    } catch {
+      text = void 0;
+    }
+  }
+  return identityKeys(s.url, s.meta, text);
+}
+function remember(state, s, text) {
+  for (const k of identityKeys(s.url, s.meta, readFromEutils(s.meta?.textVia) ? text : void 0)) if (!state.byIdentity.has(k)) state.byIdentity.set(k, s);
 }
 function commit(dir, state, p) {
+  if (p.replaces) return repair(dir, state, p, p.replaces);
   const id = `S${++state.maxId}`;
   const s = annotateExtras(p.text, buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
+  remember(state, s, p.text);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
   return { id, added: true, ...p.note ? { note: p.note } : {} };
+}
+function repair(dir, state, p, old) {
+  const raw = {
+    ...p.raw,
+    url: old.url,
+    backend: old.backend,
+    score: old.score,
+    title: p.raw.title && p.raw.title !== p.raw.url ? p.raw.title : old.title
+  };
+  const s = annotateExtras(p.text, buildSource(raw, old.id, (/* @__PURE__ */ new Date()).toISOString(), p.question), state.manifest);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
+  const i = state.sources.findIndex((x) => x.id === old.id);
+  state.sources[i] = s;
+  state.byCanon.set(s.canonicalUrl, s);
+  for (const [k, v] of state.byIdentity) if (v === old) state.byIdentity.set(k, s);
+  remember(state, s, p.text);
+  return { id: old.id, added: false, repaired: true, ...p.note ? { note: p.note } : {} };
 }
 function flushIndex(dir, state) {
   writeDossierIndex(dir, state.sources, state.manifest, state.template);
@@ -15576,10 +15812,15 @@ async function addSources(dir, hits, opts = {}) {
   } finally {
     if (state && committed > 0) flushIndex(dir, state);
   }
+  return tally(results);
+}
+function tally(results) {
+  const repaired = results.filter((r) => r.repaired).length;
   return {
     results,
     added: results.filter((r) => r.added).length,
-    skipped: results.filter((r) => !r.added).length
+    skipped: results.filter((r) => !r.added && !r.repaired).length,
+    ...repaired ? { repaired } : {}
   };
 }
 var TEXT_FILE_RE = /\.(txt|md|markdown|rst|adoc|org|html?|xml|json|ya?ml|tsv|log)$/i;
@@ -15605,11 +15846,7 @@ async function addFiles(dir, paths, opts = {}) {
   } finally {
     if (state && committed > 0) flushIndex(dir, state);
   }
-  return {
-    results,
-    added: results.filter((r) => r.added).length,
-    skipped: results.filter((r) => !r.added).length
-  };
+  return tally(results);
 }
 async function prepareFile(stateOf, abs, opts) {
   const url = pathToFileURL(abs).href;
@@ -15678,6 +15915,8 @@ async function prepareSource(stateOf, url, opts) {
   if (addressed > 1) {
     return { ok: false, result: { id: "", added: false, note: `${url} addresses ${addressed} records \u2014 a source is ONE document. Fetch them one at a time.` } };
   }
+  const search = searchPageOf(url) ?? (opts.citeUrl ? searchPageOf(opts.citeUrl) : void 0);
+  if (search) return { ok: false, result: { id: "", added: false, note: search } };
   const supplied = opts.citeUrl?.trim();
   if (supplied && !isCitableUrl(supplied)) {
     return { ok: false, result: { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open \u2014 pass the document's own page.` } };
@@ -15685,12 +15924,59 @@ async function prepareSource(stateOf, url, opts) {
   const provider = resolveProvider(url);
   if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
   const ncbi = ncbiDocument(url);
-  let citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
+  const citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
   const canon = canonicalizeUrl(citeUrl);
-  const existing = state.byCanon.get(canon);
-  if (existing) {
+  const existing = state.byCanon.get(canon) ?? identityKeys(citeUrl).map((k) => state.byIdentity.get(k)).find(Boolean);
+  const weak = existing ? weakness(state.dir, existing) : void 0;
+  if (existing && !weak) {
     return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
+  let p = await readSource(state, url, citeUrl, supplied, provider, ncbi, question, { ...opts, repairs: existing?.id });
+  if (p.ok && !existing) {
+    const keys = identityKeys(p.raw.url, p.raw.meta, readFromEutils(p.raw.meta?.textVia) ? p.text : void 0);
+    const twin = keys.map((k) => state.byIdentity.get(k)).find(Boolean);
+    if (twin) {
+      const twinWeak = weakness(state.dir, twin);
+      if (!twinWeak) return { ok: false, result: { id: twin.id, added: false, note: `already in dossier as ${twin.id} (the same paper: ${keys.join(", ")})` } };
+      p = {
+        ...p,
+        replaces: twin,
+        note: `repaired ${twin.id}: it was ${twinWeak}, it now holds the text${p.raw.meta?.textVia ? ` read from ${p.raw.meta.textVia}` : ""}.`
+      };
+    }
+  }
+  if (!existing || !weak) return p;
+  if (!p.ok) {
+    return {
+      ok: false,
+      result: { id: existing.id, added: false, note: `already in dossier as ${existing.id} (${weak}) \u2014 re-read it, still no text: ${p.result.note}` }
+    };
+  }
+  return {
+    ...p,
+    replaces: existing,
+    note: `repaired ${existing.id}: it was ${weak}, it now holds the text${p.raw.meta?.textVia ? ` read from ${p.raw.meta.textVia}` : ""}.`
+  };
+}
+function givenTitle(t) {
+  const v = t?.trim();
+  if (!v || /^[a-z][\w+.-]*:\/\//i.test(v) || /^(www\.)?[\w-]+(\.[\w-]+)+\/?$/i.test(v)) return void 0;
+  return v;
+}
+function weakness(dir, s) {
+  if (s.wall) return "a wall";
+  if (s.fullText === false) return "snippet-only";
+  let text = "";
+  try {
+    text = readSourceText(dir, s);
+  } catch {
+    return void 0;
+  }
+  const worded = wallPattern(text);
+  return worded ? `a ${worded}` : void 0;
+}
+async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, question, opts) {
+  let citeUrl = citeUrlIn;
   let ncbiMiss;
   if (ncbi) {
     const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
@@ -15698,14 +15984,18 @@ async function prepareSource(stateOf, url, opts) {
       const backend2 = opts.backend ?? "claude";
       const raw2 = {
         url: citeUrl,
-        title: opts.title || got.title || titleFromText(got.text) || citeUrl,
+        title: givenTitle(opts.title) || got.title || titleFromText(got.text) || citeUrl,
         backend: backend2,
         score: 0,
         snippet: bestExcerpt(got.text, question),
         text: got.text,
-        meta: { textVia: got.via }
+        meta: { textVia: got.via },
+        // A real record with no abstract: kept, as what it is — its citation,
+        // nothing a claim can rest on.
+        ...got.thin ? { fullText: false } : {}
       };
-      return { ok: true, raw: raw2, backend: backend2, text: got.text, question };
+      const note2 = got.thin ? `${ncbi.kind === "pmc" ? ncbi.id : `PMID ${ncbi.id}`} has no abstract \u2014 kept as a snippet-only record (citation and title only).` : void 0;
+      return { ok: true, raw: raw2, backend: backend2, text: got.text, question, ...note2 ? { note: note2 } : {} };
     }
     ncbiMiss = got.why;
   }
@@ -15716,6 +16006,11 @@ async function prepareSource(stateOf, url, opts) {
   const readOpts = { firecrawl: opts.firecrawl, browser };
   const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
+  const home = redirectedHome(readUrl, fetched.finalUrl) ? fetched.finalUrl : void 0;
+  if (home) {
+    text = "";
+    title = void 0;
+  }
   let rendered = fetched.extractor === "browser";
   let wall = text?.trim() ? looksLikeWall(text) : void 0;
   if (wall) title = void 0;
@@ -15760,7 +16055,7 @@ async function prepareSource(stateOf, url, opts) {
       rendered = true;
     }
   }
-  if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
+  if (!text?.trim() && (DEAD_LINK_STATUS.has(fetched.status) || home)) {
     const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
@@ -15781,7 +16076,7 @@ async function prepareSource(stateOf, url, opts) {
     };
   }
   if (!text?.trim()) {
-    const why = fetched.note ?? `no readable content at ${readUrl}`;
+    const why = home ? `${readUrl} redirected to the site's home page (${home}) \u2014 the document is gone, and the archive has no copy; not added` : fetched.note ?? `no readable content at ${readUrl}`;
     return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
   }
   if (supplied && supplied !== url) {
@@ -15803,7 +16098,7 @@ async function prepareSource(stateOf, url, opts) {
     via = citeUrl;
     citeUrl = derived;
     const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
-    if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
+    if (dup && dup.id !== opts.repairs) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
   if (rendered) meta.extractor = "browser";
   const backend = opts.backend ?? "claude";
@@ -15811,7 +16106,7 @@ async function prepareSource(stateOf, url, opts) {
     url: citeUrl,
     // Never fall back to the URL as a title when the text came from an API
     // endpoint — a bare endpoint string is unreadable in a source list.
-    title: opts.title || title || (via ? titleFromText(text) : citeUrl),
+    title: givenTitle(opts.title) || title || (via ? titleFromText(text) : citeUrl),
     backend,
     score: 0,
     snippet: bestExcerpt(text, question),
@@ -15856,18 +16151,20 @@ function indexColumnRows(lines, code) {
     if (cellsOf(lines[i]).length < 2) continue;
     const header2 = cellsOf(lines[i])[0].replace(/[*_`]/g, "").trim();
     const firsts = rows.map((j) => cellsOf(lines[j])[0].replace(/[*_`]/g, "").trim());
-    const index = INDEX_HEADER.test(header2) || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c));
+    const values = firsts.map((c) => Number(c.replace(/[^\d]/g, "")));
+    const runs = values.every((v, k) => k === 0 || v > values[k - 1]);
+    const index = INDEX_HEADER.test(header2) || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs;
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1] : i + 1;
   }
   return out;
 }
 var NO_NUMERALS_RE = /<!--\s*ultrasearch:no-numerals\s*-->/i;
-function noNumeralsMask(rawLines) {
+function noNumeralsMask(rawLines, code = codeMask(rawLines)) {
   const out = rawLines.map(() => false);
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
-    if (!NO_NUMERALS_RE.test(line)) continue;
+    if (code[i] || !NO_NUMERALS_RE.test(line)) continue;
     let start = i;
     if (!line.replace(NO_NUMERALS_RE, "").trim()) {
       start = i + 1;
@@ -17190,6 +17487,9 @@ function refreshed(manifest, sources) {
 // src/drop.ts
 import { existsSync as existsSync16, readFileSync as readFileSync17, rmSync as rmSync3 } from "fs";
 import { join as join21 } from "path";
+function stripExtractHeader(text) {
+  return text.split("\n").filter((l) => !/^# S\d+ — /.test(l) && !/^- (url|backend|doi|via|text via|wayback|authors|venue|year):/i.test(l)).join("\n");
+}
 var DROP_WHERE = ["wall", "snippet", "offtopic"];
 var TIERS2 = ["REPORT.md", "SUMMARY.md", "glossary.md"];
 function safeText2(dir, s) {
@@ -17201,7 +17501,11 @@ function safeText2(dir, s) {
 }
 function selects(dir, s, where) {
   if (where === "offtopic") return s.offTopic ? "probably off-topic" : void 0;
-  if (where === "snippet") return s.fullText === false ? s.wall ? "a wall (snippet only)" : "snippet only" : void 0;
+  if (where === "snippet") {
+    if (s.fullText === false) return s.wall ? "a wall (snippet only)" : "snippet only";
+    const text = safeText2(dir, s);
+    return /\(no abstract provided by [^)]*\)/i.test(text) && usefulChars(stripExtractHeader(text).replace(/\(no abstract provided by [^)]*\)/gi, "")) < MIN_USEFUL_CHARS ? "no abstract (snippet only)" : void 0;
+  }
   if (s.wall) return "a wall";
   const worded = wallPattern(safeText2(dir, s));
   return worded ? `a ${worded}` : void 0;
@@ -17246,7 +17550,7 @@ function dropSources(dir, sel) {
     const droppedIds = [.../* @__PURE__ */ new Set([...manifest.droppedIds ?? [], ...ids])].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
     writeDossierIndex(dir, remaining, { ...manifest, sourceCount: remaining.length, droppedIds }, template);
   }
-  return { run: dir, dryRun, dropped, missing, citedBy, remaining: dryRun ? sources.length : remaining.length };
+  return { run: dir, dryRun, dropped, missing, citedBy, remaining: remaining.length };
 }
 function formatDropReport(r) {
   const lines = [];
@@ -18308,7 +18612,7 @@ function analyseCiting(text, refNumbers) {
       found.forEach((c, k) => {
         let claim = sentence.slice(from, c.index);
         if (k === found.length - 1) claim += ` ${sentence.slice(c.index + c.length)}`;
-        claim = claim.replace(/^[\s,;:.]+|[\s,;:]+$/g, "");
+        claim = claim.replace(/\s+([.,;:!?)\]])/g, "$1").replace(/\s{2,}/g, " ").replace(/^[\s,;:.]+|[\s,;:]+$/g, "");
         if (!hasWords(claim) && !extractNumerals(claim).length) claim = previous;
         const bare = claim.replace(BRACKET, " ").replace(SUPERSCRIPT, " ");
         calls.push({ numbers: c.numbers, token: c.token, sentence: sentence.trim(), claim: claim.trim(), numerals: extractNumerals(bare, 12), paragraph: pi });
@@ -18343,13 +18647,135 @@ function analyseCiting(text, refNumbers) {
   };
 }
 function numeralIn(numeral, text) {
-  const hay = normalizeNumeralText(text);
   const esc = numeral.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![\\d.])${esc}(?![\\d]|\\.\\d)`).test(hay);
+  const re = new RegExp(`(?<![\\d.])${esc}(?![\\d]|\\.\\d)`);
+  if (re.test(normalizeNumeralText(text))) return true;
+  const spelled = spelledToDigits(text);
+  return spelled !== text && re.test(normalizeNumeralText(spelled));
+}
+var EN_UNITS = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19
+};
+var EN_TENS = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+var FR_UNITS = {
+  z\u00E9ro: 0,
+  un: 1,
+  une: 1,
+  deux: 2,
+  trois: 3,
+  quatre: 4,
+  cinq: 5,
+  six: 6,
+  sept: 7,
+  huit: 8,
+  neuf: 9,
+  dix: 10,
+  onze: 11,
+  douze: 12,
+  treize: 13,
+  quatorze: 14,
+  quinze: 15,
+  seize: 16
+};
+var FR_TENS = { vingt: 20, vingts: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60 };
+var SCALE = { hundred: 100, thousand: 1e3, cent: 100, cents: 100, mille: 1e3 };
+var JOINERS = /* @__PURE__ */ new Set(["and", "et"]);
+function wordValue(w) {
+  const k = w.toLowerCase();
+  if (k in EN_UNITS) return { kind: "unit", value: EN_UNITS[k] };
+  if (k in FR_UNITS) return { kind: "unit", value: FR_UNITS[k] };
+  if (k in EN_TENS) return { kind: "tens", value: EN_TENS[k] };
+  if (k in FR_TENS) return { kind: "tens", value: FR_TENS[k] };
+  if (k in SCALE) return { kind: "scale", value: SCALE[k] };
+  return void 0;
+}
+function spelledToDigits(text) {
+  return text.replace(new RegExp("\\p{L}+(?:(?:[\\s-]+)\\p{L}+)*", "gu"), (run) => {
+    const words = run.split(/([\s-]+)/);
+    let out = "";
+    let i = 0;
+    while (i < words.length) {
+      if (/^[\s-]+$/.test(words[i])) {
+        out += words[i];
+        i++;
+        continue;
+      }
+      let total = 0;
+      let current2 = 0;
+      let used = 0;
+      let j = i;
+      let lastWasNumber = false;
+      let seen = 0;
+      while (j < words.length) {
+        const w = words[j];
+        if (/^[\s-]+$/.test(w)) {
+          j++;
+          continue;
+        }
+        const v = wordValue(w);
+        if (!v) {
+          if (lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length && wordValue(words[j + 2])) {
+            j++;
+            continue;
+          }
+          break;
+        }
+        if (v.kind === "scale") {
+          if (!lastWasNumber && v.value === 100) current2 = 1;
+          current2 = (current2 || 1) * v.value;
+          if (v.value >= 1e3) {
+            total += current2;
+            current2 = 0;
+          }
+        } else if (v.kind === "tens" && v.value === 20 && current2 === 4) {
+          current2 = 80;
+        } else {
+          current2 += v.value;
+        }
+        lastWasNumber = true;
+        seen++;
+        used = j + 1;
+        j++;
+      }
+      if (!seen) {
+        out += words[i];
+        i++;
+        continue;
+      }
+      const span = words.slice(i, used).join("");
+      const lone = seen === 1 && /^(one|un|une)$/i.test(span);
+      out += lone ? span : String(total + current2);
+      i = used;
+    }
+    return out;
+  });
 }
 
 // src/refcheck/diff.ts
 var FIELDS = ["authors", "title", "journal", "year", "volume", "issue", "pages", "doi"];
+var MINOR_TITLE = 0.9;
+function articleNumbered(pages) {
+  return !!pages && /^[A-Za-z]{0,2}\d{4,}$/.test(pages.trim());
+}
 var VANCOUVER_AUTHORS = 6;
 var norm2 = (s) => deaccent(s.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 function titleSimilarity(a, b) {
@@ -18388,8 +18814,13 @@ function diffAuthors(ref, rec) {
     }
     const x = splitName(a);
     const y = splitName(want);
+    const alt = rec.authorAlternates?.[i] ? splitName(rec.authorAlternates[i]) : void 0;
     if (x.family !== y.family) problems.push(`author ${i + 1}: "${a}" \u2014 record has "${want}"`);
-    else if (x.initials && y.initials && x.initials !== y.initials) problems.push(`author ${i + 1}: initials "${x.initials}" \u2014 record has "${y.initials}"`);
+    else if (x.initials && y.initials && x.initials !== y.initials && x.initials !== alt?.initials) {
+      problems.push(
+        `author ${i + 1}: initials "${x.initials}" \u2014 record has "${y.initials}"${alt && alt.initials !== y.initials ? ` (or "${alt.initials}")` : ""}`
+      );
+    }
   });
   if (!ref.etAl && ref.authors.length < rec.authors.length) {
     problems.push(`${ref.authors.length} of ${rec.authors.length} authors listed and no "et al."`);
@@ -18406,7 +18837,11 @@ function simple(field, cited, expected, same) {
 function diffReference(ref, rec) {
   const out = [diffAuthors(ref, rec)];
   const title = simple("title", ref.title?.replace(/[.]$/, ""), rec.title.replace(/[.]$/, ""), (a, b) => norm2(a) === norm2(b));
-  if (title?.status === "mismatch") title.note = `${Math.round(titleSimilarity(title.cited, title.expected) * 100)}% of words in common`;
+  if (title?.status === "mismatch") {
+    const sim = titleSimilarity(title.cited, title.expected);
+    title.note = `${Math.round(sim * 100)}% of words in common`;
+    if (sim >= MINOR_TITLE) title.status = "minor";
+  }
   const journal = simple("journal", ref.journal, rec.journal, (a, b) => norm2(a) === norm2(b) || !!rec.journalFull && norm2(a) === norm2(rec.journalFull));
   if (journal && rec.via === "crossref") journal.note = "Crossref short title \u2014 not necessarily the NLM abbreviation";
   else if (journal?.status === "mismatch") journal.note = "the NLM abbreviation is the PubMed one";
@@ -18415,7 +18850,9 @@ function diffReference(ref, rec) {
     journal,
     simple("year", ref.year, rec.year, (a, b) => a.trim() === b.trim()),
     simple("volume", ref.volume, rec.volume, (a, b) => norm2(a) === norm2(b)),
-    simple("issue", ref.issue, rec.issue, (a, b) => norm2(a) === norm2(b)),
+    // An article-number journal (Sci Rep: "2020;10:12345") is cited without
+    // its issue by convention; the record's "(1)" is not missing information.
+    articleNumbered(ref.pages ?? rec.pages) && !ref.issue ? void 0 : simple("issue", ref.issue, rec.issue, (a, b) => norm2(a) === norm2(b)),
     simple("pages", ref.pages, rec.pages, (a, b) => expandPages(a).toLowerCase() === expandPages(b).toLowerCase()),
     simple("doi", ref.doi, rec.doi, (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase())
   ];
@@ -18493,7 +18930,10 @@ async function esummary(pmids) {
   }
   return out;
 }
-async function efetchAbstracts(pmids) {
+function initialsOf(foreName) {
+  return foreName.split(/[\s.-]+/).filter(Boolean).map((w) => w[0].toUpperCase()).join("");
+}
+async function efetchArticles(pmids) {
   const out = /* @__PURE__ */ new Map();
   for (let i = 0; i < pmids.length; i += BATCH) {
     const ids = pmids.slice(i, i + BATCH);
@@ -18512,7 +18952,15 @@ async function efetchAbstracts(pmids) {
         const body = decodeEntities(m[2].replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
         if (body) parts.push(label ? `${label}: ${body}` : body);
       }
-      if (parts.length) out.set(pmid, parts.join("\n\n"));
+      const authors = [];
+      for (const m of art.matchAll(/<Author\b[^>]*>([\s\S]*?)<\/Author>/g)) {
+        const last = /<LastName>([\s\S]*?)<\/LastName>/.exec(m[1])?.[1];
+        if (!last) continue;
+        const fore = /<ForeName>([\s\S]*?)<\/ForeName>/.exec(m[1])?.[1] ?? "";
+        const initials = initialsOf(decodeEntities(fore)) || (/<Initials>([\s\S]*?)<\/Initials>/.exec(m[1])?.[1] ?? "");
+        authors.push(`${decodeEntities(last).trim()}${initials ? ` ${initials}` : ""}`);
+      }
+      out.set(pmid, { ...parts.length ? { abstract: parts.join("\n\n") } : {}, authors });
     }
   }
   return out;
@@ -18527,7 +18975,9 @@ function crossrefRecord(w, how) {
     how,
     doi: String(w.DOI),
     authors,
-    title: cleanInline(String(first(w.title) ?? "")),
+    // "MapReduce" alone is not the title the paper is cited by: Crossref keeps
+    // the part after the colon in `subtitle`.
+    title: cleanInline([first(w.title), first(w.subtitle)].filter((x) => x && String(x).trim()).join(": ")),
     journal: first(w["short-container-title"]) ?? first(w["container-title"]),
     journalFull: first(w["container-title"]),
     year: parts?.[0] ? String(parts[0]) : void 0,
@@ -18545,15 +18995,34 @@ async function crossrefByDoi(doi) {
   await polite();
   return r.ok ? crossrefRecord(r.data?.message, "doi") : void 0;
 }
+var PUBLISHED_TYPES = /* @__PURE__ */ new Set(["journal-article", "proceedings-article", "book-chapter", "book", "report", "monograph"]);
+function bibliographicScore(ref, w, rec) {
+  if (!ref.title) return void 0;
+  const sim = titleSimilarity(ref.title, rec.title);
+  if (sim < 0.85) return void 0;
+  const year = ref.year && rec.year ? Math.abs(Number(ref.year) - Number(rec.year)) : void 0;
+  if (year !== void 0 && year > 1) return void 0;
+  if (w?.type === "posted-content" && year !== void 0 && year !== 0) return void 0;
+  let score = sim;
+  if (year === 0) score += 0.5;
+  const fam = (a) => a ? deaccent(a.toLowerCase()).replace(new RegExp("\\s+\\p{Lu}{1,4}$", "u"), "").replace(/[^\p{L}]+/gu, "") : "";
+  if (ref.authors[0] && rec.authors[0] && fam(ref.authors[0]) === fam(rec.authors[0])) score += 0.5;
+  const j = (x) => x ? deaccent(x.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, "") : "";
+  if (ref.journal && (j(ref.journal) === j(rec.journal) || j(ref.journal) === j(rec.journalFull))) score += 0.3;
+  if (PUBLISHED_TYPES.has(String(w?.type ?? ""))) score += 0.3;
+  return score;
+}
 async function crossrefBibliographic(ref) {
-  const r = await apiGet(`https://api.crossref.org/works?rows=2&query.bibliographic=${encodeURIComponent(ref.raw)}`, { userAgent: contactUa() });
+  const r = await apiGet(`https://api.crossref.org/works?rows=5&query.bibliographic=${encodeURIComponent(ref.raw)}`, { userAgent: contactUa() });
   await polite();
   const items = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
+  let best;
   for (const w of items) {
     const rec = crossrefRecord(w, "bibliographic");
-    if (rec && ref.title && titleSimilarity(ref.title, rec.title) >= 0.85) return rec;
+    const score = rec ? bibliographicScore(ref, w, rec) : void 0;
+    if (rec && score !== void 0 && (!best || score > best.score)) best = { rec, score };
   }
-  return void 0;
+  return best?.rec;
 }
 async function checkDoi(doi) {
   const r = await apiGet(`https://doi.org/api/handles/${encodeURIComponent(doi)}`);
@@ -18589,14 +19058,16 @@ async function resolveReferences(refs) {
   }
   const pmids = [...new Set([...pmidOf.values()].map((v) => v.pmid))];
   const summaries = pmids.length ? await esummary(pmids) : /* @__PURE__ */ new Map();
-  const abstracts = pmids.length ? await efetchAbstracts(pmids) : /* @__PURE__ */ new Map();
+  const articles = pmids.length ? await efetchArticles(pmids) : /* @__PURE__ */ new Map();
   const records = /* @__PURE__ */ new Map();
   for (const r of refs) {
     const hit = pmidOf.get(r.n);
     const rec = hit ? summaries.get(hit.pmid) : void 0;
     if (rec && (hit.how !== "title" || !r.title || titleSimilarity(r.title, rec.title) >= 0.8)) {
-      const abs = abstracts.get(rec.pmid);
-      records.set(r.n, { ...rec, how: hit.how, ...abs ? { abstract: abs } : {} });
+      const art = articles.get(rec.pmid);
+      const abs = art?.abstract;
+      const alternates = art && art.authors.length === rec.authors.length && art.authors.some((a, i) => a !== rec.authors[i]) ? art.authors : void 0;
+      records.set(r.n, { ...rec, how: hit.how, ...abs ? { abstract: abs } : {}, ...alternates ? { authorAlternates: alternates } : {} });
       continue;
     }
     const viaCrossref = (r.doi ? await crossrefByDoi(r.doi) : void 0) ?? (r.title ? await crossrefBibliographic(r) : void 0);
@@ -18654,6 +19125,7 @@ function summarise(entries, citing) {
     withDiscrepancies: entries.filter((e) => e.status === "discrepancies").length,
     fieldMismatches: fields.filter((f) => f.status === "mismatch").length,
     fieldsMissing: fields.filter((f) => f.status === "missing").length,
+    fieldsMinor: fields.filter((f) => f.status === "minor").length,
     doisCited: entries.filter((e) => e.cited.doi).length,
     doisBroken: entries.filter((e) => e.doi?.resolves === false).length,
     uncited: citing?.uncited.length ?? 0,
@@ -18694,6 +19166,13 @@ async function runRefcheck(opts) {
   if (existsSync17(join26(dir, "sources.json")) && !existsSync17(join26(dir, "refcheck.json"))) {
     throw new Error(`${dir} already holds a dossier that refcheck did not write \u2014 pass another --out`);
   }
+  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync17(join26(dir, f)));
+  if (stale.length && !opts.force) {
+    throw new Error(
+      `${dir} already holds ${stale.join(", ")} from an earlier run \u2014 pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`
+    );
+  }
+  if (stale.length) notes.push(`${stale.join(", ")} predate this run \u2014 re-read them against the new REFCHECK.md, then render and check again.`);
   const entries = refs.map((ref) => {
     const rec = resolved?.records.get(ref.n);
     const fields = rec ? diffReference(ref, rec) : [];
@@ -18704,14 +19183,17 @@ async function runRefcheck(opts) {
       else if (!d) fields.push({ field: "doi", status: "mismatch", cited: ref.doi, note: "does not resolve on doi.org" });
     }
     const own = citing?.calls.filter((c) => c.numbers.includes(ref.n)) ?? [];
+    const abstractOf = (n) => resolved?.records.get(n)?.abstract;
     const claims = own.filter((c) => c.numerals.length).map((c) => ({
       claim: c.claim,
-      numerals: c.numerals.map((value) => ({
-        value,
-        status: !rec?.abstract ? "no-abstract" : numeralIn(value, rec.abstract) ? "found" : "absent"
-      }))
+      numerals: c.numerals.map((value) => {
+        if (rec?.abstract && numeralIn(value, rec.abstract)) return { value, status: "found" };
+        const others = c.numbers.filter((n) => n !== ref.n && abstractOf(n) && numeralIn(value, abstractOf(n)));
+        if (others.length) return { value, status: "found", in: others };
+        return { value, status: !rec?.abstract ? "no-abstract" : "absent" };
+      })
     }));
-    const bad = fields.some((f) => f.status !== "match");
+    const bad = fields.some((f) => f.status === "mismatch" || f.status === "missing");
     const status = !resolved ? "not-checked" : !rec ? "unresolved" : bad || doi?.resolves === false ? "discrepancies" : "ok";
     const { abstract, ...meta } = rec ?? {};
     return {
@@ -18798,7 +19280,7 @@ async function runRefcheck(opts) {
   return result;
 }
 var cell2 = (s) => (s ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
-var MARK = { match: "\u2713", mismatch: "\u2717", missing: "\u2205" };
+var MARK = { match: "\u2713", minor: "\u2248", mismatch: "\u2717", missing: "\u2205" };
 function fieldMark(e, field) {
   const f = e.fields.find((x) => x.field === field);
   return f ? MARK[f.status] : "\u2014";
@@ -18806,14 +19288,17 @@ function fieldMark(e, field) {
 function renderRefcheckMarkdown(r) {
   const s = r.summary;
   const out = [`# Reference check \u2014 ${basename3(r.refsFile)}`, ""];
-  out.push(`_Generated by ultrasearch ${r.version} on ${r.builtAt}. \u2713 match \xB7 \u2717 mismatch \xB7 \u2205 missing from the citation \xB7 \u2014 not judged._`, "");
+  out.push(
+    `_Generated by ultrasearch ${r.version} on ${r.builtAt}. \u2713 match \xB7 \u2248 minor (a word or two) \xB7 \u2717 mismatch \xB7 \u2205 missing from the citation \xB7 \u2014 not judged._`,
+    ""
+  );
   out.push("## Verdict", "");
   if (r.offline) {
     out.push(`- ${s.references} reference(s) parsed. **Offline run**: nothing was looked up \u2014 metadata, DOIs and figures are unchecked.`);
   } else {
     out.push(
       `- ${s.references} reference(s): ${s.resolved} resolved (${s.viaPubmed} PubMed, ${s.viaCrossref} Crossref only), ${s.unresolved} unresolved.`,
-      `- ${s.withDiscrepancies} reference(s) with a discrepancy: ${s.fieldMismatches} field mismatch(es), ${s.fieldsMissing} field(s) missing from the citation.`,
+      `- ${s.withDiscrepancies} reference(s) with a discrepancy: ${s.fieldMismatches} field mismatch(es), ${s.fieldsMissing} field(s) missing from the citation${s.fieldsMinor ? `; ${s.fieldsMinor} minor wording difference(s)` : ""}.`,
       `- DOIs: ${s.doisCited} cited, ${s.doisBroken} not resolving on doi.org.`
     );
   }
@@ -18843,7 +19328,7 @@ function renderRefcheckMarkdown(r) {
     out.push(`### [${e.n}] ${cell2(e.cited.title ?? e.raw).slice(0, 140)}${e.sourceId ? ` [${e.sourceId}]` : ""}`, "");
     for (const f of e.fields) {
       if (f.status === "match" && !f.note?.startsWith("style:")) continue;
-      const what = f.status === "missing" ? `missing \u2014 the record has \`${cell2(f.expected)}\`` : f.status === "mismatch" ? `cited \`${cell2(f.cited)}\`${f.expected ? ` \u2014 record has \`${cell2(f.expected)}\`` : ""}` : "matches";
+      const what = f.status === "missing" ? `missing \u2014 the record has \`${cell2(f.expected)}\`` : f.status === "mismatch" || f.status === "minor" ? `${f.status === "minor" ? "minor \u2014 " : ""}cited \`${cell2(f.cited)}\`${f.expected ? ` \u2014 record has \`${cell2(f.expected)}\`` : ""}` : "matches";
       out.push(`- **${f.field}**: ${what}${f.note ? ` (${f.note})` : ""}`);
     }
     out.push("");
@@ -18859,7 +19344,16 @@ function renderRefcheckMarkdown(r) {
     if (!r.citing.uncited.length && !r.citing.unknown.length && !r.citing.outOfOrder.length) {
       out.push("- Every reference is cited, every call has a reference, and first citations run in order.");
     }
-    const rows = r.references.flatMap((e) => e.claims.flatMap((c) => c.numerals.map((nu) => ({ e, claim: c.claim, value: nu.value, status: nu.status }))));
+    const rows = r.references.flatMap(
+      (e) => e.claims.flatMap(
+        (c) => c.numerals.map((nu) => ({
+          e,
+          claim: c.claim,
+          value: nu.value,
+          status: nu.in ? `${nu.status} (in ${nu.in.map((n) => `[${n}]`).join(", ")}, co-cited)` : nu.status
+        }))
+      )
+    );
     if (rows.length) {
       out.push("", "| Ref | Figure | In the abstract | Citing passage |", "|---|---|---|---|");
       for (const x of rows) {
@@ -19185,7 +19679,7 @@ async function handleRefcheck(args) {
   if (citing && !existsSync18(citing)) throw new ToolError(`no file at ${citing}`);
   let res;
   try {
-    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline) });
+    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline), force: bool(args.force) });
   } catch (e) {
     throw new ToolError(e.message);
   }
@@ -19609,7 +20103,11 @@ var TOOLS = [
         },
         citing: { type: "string", description: "Absolute path to the text that cites them (.md/.txt/.docx/.pdf). Defaults to the body of `refs`." },
         out: { type: "string", description: "Absolute output directory (default: a timestamped dir under the temp root)." },
-        offline: { type: "boolean", description: "Parse and read the citing text only \u2014 no PubMed, Crossref or doi.org." }
+        offline: { type: "boolean", description: "Parse and read the citing text only \u2014 no PubMed, Crossref or doi.org." },
+        force: {
+          type: "boolean",
+          description: "Write into an `out` that already holds a REPORT.md/SUMMARY.md from an earlier run (they are kept, and must be re-checked)."
+        }
       },
       required: ["refs"]
     }
@@ -19902,7 +20400,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--template <t>] [--json]
-  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--json]
+  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--force] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -20062,6 +20560,8 @@ Options:
   --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
   --offline            For 'refcheck': parse and read the citing text only \u2014 no
                        PubMed, Crossref or doi.org lookup
+  --force              For 'refcheck': write into an --out that already holds a
+                       REPORT.md/SUMMARY.md from an earlier run (kept \u2014 re-check it)
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -20224,7 +20724,8 @@ var BOOL_FLAGS = /* @__PURE__ */ new Set([
   "list",
   "dry-run",
   "allow-remote",
-  "offline"
+  "offline",
+  "force"
 ]);
 function fail(message) {
   process.stderr.write(`ultrasearch: ${message}
@@ -20811,32 +21312,41 @@ ${formatServices(rows)}
       };
       const web = hits.length ? await addSources(resolve8(dir), hits, enrichOpts) : void 0;
       const local2 = files.length ? await addFiles(resolve8(dir), files, enrichOpts) : void 0;
+      const repaired = web?.repaired ?? 0;
       const r = {
         results: [...web?.results ?? [], ...local2?.results ?? []],
         added: (web?.added ?? 0) + (local2?.added ?? 0),
-        skipped: (web?.skipped ?? 0) + (local2?.skipped ?? 0)
+        skipped: (web?.skipped ?? 0) + (local2?.skipped ?? 0),
+        ...repaired ? { repaired } : {}
       };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else {
         for (const o of r.results) {
-          process.stdout.write(o.added ? `${o.id}	${o.url}
+          process.stdout.write(o.added || o.repaired ? `${o.id}	${o.url}${o.repaired ? "	repaired" : ""}
 ` : `-	${o.url}	${o.note ?? "not added"}
 `);
-          if (o.added && o.note) process.stderr.write(`ultrasearch: ${o.note}
+          if ((o.added || o.repaired) && o.note) process.stderr.write(`ultrasearch: ${o.note}
 `);
         }
         const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve8(dir)}
+        const fixed = repaired ? `, repaired ${repaired} in place` : "";
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve8(dir)}
 `);
       }
-      if (!r.added) await exitClosed(1);
+      if (!r.added && !repaired) await exitClosed(1);
       return;
     }
     case "refcheck": {
       const refs = p.values.refs;
       if (!refs) fail("missing --refs <list.txt|.docx|.pdf|.bib>");
-      const r = await runRefcheck({ refs, citing: p.values.citing, out: p.values.out ?? p.values.run, offline: p.bools.has("offline") });
+      const r = await runRefcheck({
+        refs,
+        citing: p.values.citing,
+        out: p.values.out ?? p.values.run,
+        offline: p.bools.has("offline"),
+        force: p.bools.has("force")
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
         return;

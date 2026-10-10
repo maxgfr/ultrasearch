@@ -41,6 +41,8 @@ export interface RefcheckOptions {
   out?: string;
   /** Parse and analyse only — no PubMed, Crossref or doi.org. */
   offline?: boolean;
+  /** Write into an `out` that already holds a report written against an earlier run. */
+  force?: boolean;
 }
 
 export type NumeralStatus = "found" | "absent" | "no-abstract";
@@ -57,7 +59,8 @@ export interface RefcheckEntry {
   /** How many times the citing text calls it. */
   calls: number;
   /** What each citing passage states, figure by figure, against the abstract. */
-  claims: { claim: string; numerals: { value: string; status: NumeralStatus }[] }[];
+  /** `in`: the co-cited references whose abstract holds the figure, when it was found in another's. */
+  claims: { claim: string; numerals: { value: string; status: NumeralStatus; in?: number[] }[] }[];
 }
 
 export interface RefcheckSummary {
@@ -69,6 +72,8 @@ export interface RefcheckSummary {
   withDiscrepancies: number;
   fieldMismatches: number;
   fieldsMissing: number;
+  /** Fields right in substance, worded a little differently (`≈`). */
+  fieldsMinor: number;
   doisCited: number;
   doisBroken: number;
   uncited: number;
@@ -139,6 +144,7 @@ function summarise(entries: RefcheckEntry[], citing: CitingAnalysis | undefined)
     withDiscrepancies: entries.filter((e) => e.status === "discrepancies").length,
     fieldMismatches: fields.filter((f) => f.status === "mismatch").length,
     fieldsMissing: fields.filter((f) => f.status === "missing").length,
+    fieldsMinor: fields.filter((f) => f.status === "minor").length,
     doisCited: entries.filter((e) => e.cited.doi).length,
     doisBroken: entries.filter((e) => e.doi?.resolves === false).length,
     uncited: citing?.uncited.length ?? 0,
@@ -185,6 +191,16 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
   if (existsSync(join(dir, "sources.json")) && !existsSync(join(dir, "refcheck.json"))) {
     throw new Error(`${dir} already holds a dossier that refcheck did not write — pass another --out`);
   }
+  // A report written against an earlier run would be `check`ed against this
+  // run's sources as if it were about them. Refused unless asked for; kept,
+  // and flagged, when it is.
+  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync(join(dir, f)));
+  if (stale.length && !opts.force) {
+    throw new Error(
+      `${dir} already holds ${stale.join(", ")} from an earlier run — pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`,
+    );
+  }
+  if (stale.length) notes.push(`${stale.join(", ")} predate this run — re-read them against the new REFCHECK.md, then render and check again.`);
 
   const entries: RefcheckEntry[] = refs.map((ref) => {
     const rec = resolved?.records.get(ref.n);
@@ -196,16 +212,21 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
       else if (!d) fields.push({ field: "doi", status: "mismatch", cited: ref.doi, note: "does not resolve on doi.org" });
     }
     const own = citing?.calls.filter((c) => c.numbers.includes(ref.n)) ?? [];
+    // A call citing several references ("[26,27]") vouches for its figures
+    // jointly: one found in ANY co-cited abstract is found for the sentence.
+    const abstractOf = (n: number) => resolved?.records.get(n)?.abstract;
     const claims = own
       .filter((c) => c.numerals.length)
       .map((c) => ({
         claim: c.claim,
-        numerals: c.numerals.map((value) => ({
-          value,
-          status: (!rec?.abstract ? "no-abstract" : numeralIn(value, rec.abstract) ? "found" : "absent") as NumeralStatus,
-        })),
+        numerals: c.numerals.map((value) => {
+          if (rec?.abstract && numeralIn(value, rec.abstract)) return { value, status: "found" as NumeralStatus };
+          const others = c.numbers.filter((n) => n !== ref.n && abstractOf(n) && numeralIn(value, abstractOf(n)!));
+          if (others.length) return { value, status: "found" as NumeralStatus, in: others };
+          return { value, status: (!rec?.abstract ? "no-abstract" : "absent") as NumeralStatus };
+        }),
       }));
-    const bad = fields.some((f) => f.status !== "match");
+    const bad = fields.some((f) => f.status === "mismatch" || f.status === "missing");
     const status: RefcheckEntry["status"] = !resolved ? "not-checked" : !rec ? "unresolved" : bad || doi?.resolves === false ? "discrepancies" : "ok";
     const { abstract, ...meta } = rec ?? ({} as ResolvedRecord);
     return {
@@ -298,7 +319,7 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
 // --- REFCHECK.md --------------------------------------------------------------
 
 const cell = (s: string | undefined) => (s ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
-const MARK: Record<FieldDiff["status"], string> = { match: "✓", mismatch: "✗", missing: "∅" };
+const MARK: Record<FieldDiff["status"], string> = { match: "✓", minor: "≈", mismatch: "✗", missing: "∅" };
 
 function fieldMark(e: RefcheckEntry, field: (typeof FIELDS)[number]): string {
   const f = e.fields.find((x) => x.field === field);
@@ -309,7 +330,10 @@ function fieldMark(e: RefcheckEntry, field: (typeof FIELDS)[number]): string {
 export function renderRefcheckMarkdown(r: RefcheckResult): string {
   const s = r.summary;
   const out: string[] = [`# Reference check — ${basename(r.refsFile)}`, ""];
-  out.push(`_Generated by ultrasearch ${r.version} on ${r.builtAt}. ✓ match · ✗ mismatch · ∅ missing from the citation · — not judged._`, "");
+  out.push(
+    `_Generated by ultrasearch ${r.version} on ${r.builtAt}. ✓ match · ≈ minor (a word or two) · ✗ mismatch · ∅ missing from the citation · — not judged._`,
+    "",
+  );
 
   out.push("## Verdict", "");
   if (r.offline) {
@@ -317,7 +341,7 @@ export function renderRefcheckMarkdown(r: RefcheckResult): string {
   } else {
     out.push(
       `- ${s.references} reference(s): ${s.resolved} resolved (${s.viaPubmed} PubMed, ${s.viaCrossref} Crossref only), ${s.unresolved} unresolved.`,
-      `- ${s.withDiscrepancies} reference(s) with a discrepancy: ${s.fieldMismatches} field mismatch(es), ${s.fieldsMissing} field(s) missing from the citation.`,
+      `- ${s.withDiscrepancies} reference(s) with a discrepancy: ${s.fieldMismatches} field mismatch(es), ${s.fieldsMissing} field(s) missing from the citation${s.fieldsMinor ? `; ${s.fieldsMinor} minor wording difference(s)` : ""}.`,
       `- DOIs: ${s.doisCited} cited, ${s.doisBroken} not resolving on doi.org.`,
     );
   }
@@ -352,8 +376,8 @@ export function renderRefcheckMarkdown(r: RefcheckResult): string {
       const what =
         f.status === "missing"
           ? `missing — the record has \`${cell(f.expected)}\``
-          : f.status === "mismatch"
-            ? `cited \`${cell(f.cited)}\`${f.expected ? ` — record has \`${cell(f.expected)}\`` : ""}`
+          : f.status === "mismatch" || f.status === "minor"
+            ? `${f.status === "minor" ? "minor — " : ""}cited \`${cell(f.cited)}\`${f.expected ? ` — record has \`${cell(f.expected)}\`` : ""}`
             : "matches";
       out.push(`- **${f.field}**: ${what}${f.note ? ` (${f.note})` : ""}`);
     }
@@ -371,7 +395,16 @@ export function renderRefcheckMarkdown(r: RefcheckResult): string {
     if (!r.citing.uncited.length && !r.citing.unknown.length && !r.citing.outOfOrder.length) {
       out.push("- Every reference is cited, every call has a reference, and first citations run in order.");
     }
-    const rows = r.references.flatMap((e) => e.claims.flatMap((c) => c.numerals.map((nu) => ({ e, claim: c.claim, value: nu.value, status: nu.status }))));
+    const rows = r.references.flatMap((e) =>
+      e.claims.flatMap((c) =>
+        c.numerals.map((nu) => ({
+          e,
+          claim: c.claim,
+          value: nu.value,
+          status: nu.in ? `${nu.status} (in ${nu.in.map((n) => `[${n}]`).join(", ")}, co-cited)` : nu.status,
+        })),
+      ),
+    );
     if (rows.length) {
       out.push("", "| Ref | Figure | In the abstract | Citing passage |", "|---|---|---|---|");
       for (const x of rows) {

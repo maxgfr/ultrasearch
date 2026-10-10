@@ -45,20 +45,48 @@ export function usefulChars(text: string): number {
     .trim().length;
 }
 
+// A wall talks TO the reader — "you", "your browser", "accept", "enable",
+// "reload" — while the prose of a document talks about its subject. Lines of
+// the second kind are what a wall verdict has to outweigh.
+const ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
+const ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
+const IMPERATIVE =
+  /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
+
+/**
+ * True when the text is mostly a document's own prose: three lines or more of
+ * 60+ characters that neither address the reader nor are a known wall phrase,
+ * carrying at least 60 % of the text. A cookie banner or a "please enable
+ * JavaScript" line above three real paragraphs does not make the page a wall —
+ * nor does an article that discusses cookie walls, which the engine's own rule
+ * (two pattern hits are a wall, whatever surrounds them) calls one.
+ */
+export function proseOutweighsWall(text: string): boolean {
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(
+      (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l)),
+    );
+  if (lines.length < 3) return false;
+  const prose = lines.reduce((n, l) => n + l.length, 0);
+  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
+}
+
 /**
  * The wall a text IS, by its wording: the engine's verdict first, then the
- * local patterns. No length rule — this is what `check` re-runs on a dossier
- * gathered before the floor existed, where a short extract may legitimately be
- * a snippet.
+ * local patterns — either one overruled when the text is mostly real prose
+ * (`proseOutweighsWall`). No length rule — this is what `check` re-runs on a
+ * dossier gathered before the floor existed, where a short extract may
+ * legitimately be a snippet.
  */
 export function wallPattern(text: string): string | undefined {
   const t = text.trim();
   if (!t) return undefined;
   const engine = looksLikeJunkExtraction(t);
-  if (engine) return engine;
-  if (t.length >= WALL_MAX_CHARS) return undefined;
-  const head = t.slice(0, 800);
-  return LOCAL_WALLS.find(([re]) => re.test(head))?.[1];
+  const local = engine || t.length >= WALL_MAX_CHARS ? undefined : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
+  const wall = engine ?? local;
+  return wall && !proseOutweighsWall(t) ? wall : undefined;
 }
 
 /**

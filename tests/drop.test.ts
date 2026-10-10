@@ -112,12 +112,27 @@ describe("dropSources", () => {
     expect(dropSources(dossier(), { where: "offtopic", dryRun: true }).dropped.map((d) => d.id)).toEqual(["S5"]);
   });
 
+  it("finds a no-abstract record of an older dossier under --where snippet", () => {
+    const dir = dossier();
+    writeFileSync(
+      join(dir, "sources/S1.md"),
+      "# S1 — Carlevale lens: a case series\n- url: https://doi.org/10.1/x\n- backend: crossref · fetched: 2026-10-10\n\nCarlevale lens: a case series\n\n(no abstract provided by Crossref)\n",
+    );
+    const r = dropSources(dir, { where: "snippet", dryRun: true });
+    expect(r.dropped.map((d) => [d.id, d.reason])).toEqual([
+      ["S1", "no abstract (snippet only)"],
+      ["S2", "a wall (snippet only)"],
+      ["S4", "snippet only"],
+    ]);
+  });
+
   it("changes nothing on a dry run, or when nothing matches", () => {
     const dir = dossier();
     const before = readFileSync(join(dir, "sources.json"), "utf8");
     const dry = dropSources(dir, { ids: ["S1"], dryRun: true });
-    expect(dry).toMatchObject({ dryRun: true, remaining: 5 });
-    expect(formatDropReport(dry)).toMatch(/would drop 1 source/);
+    // What WOULD be left — the audit caught it saying the untouched count.
+    expect(dry).toMatchObject({ dryRun: true, remaining: 4 });
+    expect(formatDropReport(dry)).toMatch(/would drop 1 source\(s\) → 4 left/);
     const none = dropSources(dir, { ids: ["S99"] });
     expect(none.missing).toEqual(["S99"]);
     expect(formatDropReport(none)).toMatch(/nothing matched[\s\S]*not in this dossier: S99/);

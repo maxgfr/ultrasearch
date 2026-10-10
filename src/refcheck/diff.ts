@@ -12,10 +12,19 @@ export const FIELDS: readonly FieldName[] = ["authors", "title", "journal", "yea
 
 export interface FieldDiff {
   field: FieldName;
-  status: "match" | "mismatch" | "missing";
+  /** `minor`: right in substance, worded a little differently (a title with ≥ 90 % of its words). */
+  status: "match" | "minor" | "mismatch" | "missing";
   cited?: string;
   expected?: string;
   note?: string;
+}
+
+/** Above this share of common words, a title that differs is `minor`. */
+export const MINOR_TITLE = 0.9;
+
+/** "12345", "e0234567" — an article number, not a page range. */
+export function articleNumbered(pages: string | undefined): boolean {
+  return !!pages && /^[A-Za-z]{0,2}\d{4,}$/.test(pages.trim());
 }
 
 /** How many authors Vancouver lists before "et al." (ICMJE / NLM). */
@@ -69,8 +78,13 @@ function diffAuthors(ref: CitedReference, rec: ResolvedRecord): FieldDiff {
     }
     const x = splitName(a);
     const y = splitName(want);
+    const alt = rec.authorAlternates?.[i] ? splitName(rec.authorAlternates[i]!) : undefined;
     if (x.family !== y.family) problems.push(`author ${i + 1}: "${a}" — record has "${want}"`);
-    else if (x.initials && y.initials && x.initials !== y.initials) problems.push(`author ${i + 1}: initials "${x.initials}" — record has "${y.initials}"`);
+    else if (x.initials && y.initials && x.initials !== y.initials && x.initials !== alt?.initials) {
+      problems.push(
+        `author ${i + 1}: initials "${x.initials}" — record has "${y.initials}"${alt && alt.initials !== y.initials ? ` (or "${alt.initials}")` : ""}`,
+      );
+    }
   });
   if (!ref.etAl && ref.authors.length < rec.authors.length) {
     problems.push(`${ref.authors.length} of ${rec.authors.length} authors listed and no "et al."`);
@@ -96,7 +110,13 @@ function simple(field: FieldName, cited: string | undefined, expected: string | 
 export function diffReference(ref: CitedReference, rec: ResolvedRecord): FieldDiff[] {
   const out: FieldDiff[] = [diffAuthors(ref, rec)];
   const title = simple("title", ref.title?.replace(/[.]$/, ""), rec.title.replace(/[.]$/, ""), (a, b) => norm(a) === norm(b));
-  if (title?.status === "mismatch") title.note = `${Math.round(titleSimilarity(title.cited!, title.expected!) * 100)}% of words in common`;
+  if (title?.status === "mismatch") {
+    const sim = titleSimilarity(title.cited!, title.expected!);
+    title.note = `${Math.round(sim * 100)}% of words in common`;
+    // A word changed or dropped in a long title is a typo to fix, not the
+    // wrong paper: said as such.
+    if (sim >= MINOR_TITLE) title.status = "minor";
+  }
   const journal = simple("journal", ref.journal, rec.journal, (a, b) => norm(a) === norm(b) || (!!rec.journalFull && norm(a) === norm(rec.journalFull)));
   if (journal && rec.via === "crossref") journal.note = "Crossref short title — not necessarily the NLM abbreviation";
   else if (journal?.status === "mismatch") journal.note = "the NLM abbreviation is the PubMed one";
@@ -105,7 +125,9 @@ export function diffReference(ref: CitedReference, rec: ResolvedRecord): FieldDi
     journal,
     simple("year", ref.year, rec.year, (a, b) => a.trim() === b.trim()),
     simple("volume", ref.volume, rec.volume, (a, b) => norm(a) === norm(b)),
-    simple("issue", ref.issue, rec.issue, (a, b) => norm(a) === norm(b)),
+    // An article-number journal (Sci Rep: "2020;10:12345") is cited without
+    // its issue by convention; the record's "(1)" is not missing information.
+    articleNumbered(ref.pages ?? rec.pages) && !ref.issue ? undefined : simple("issue", ref.issue, rec.issue, (a, b) => norm(a) === norm(b)),
     simple("pages", ref.pages, rec.pages, (a, b) => expandPages(a).toLowerCase() === expandPages(b).toLowerCase()),
     simple("doi", ref.doi, rec.doi, (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase()),
   ];

@@ -343,6 +343,10 @@ export const TOOLS: ToolDecl[] = [
         citing: { type: "string", description: "Absolute path to the text that cites them (.md/.txt/.docx/.pdf). Defaults to the body of `refs`." },
         out: { type: "string", description: "Absolute output directory (default: a timestamped dir under the temp root)." },
         offline: { type: "boolean", description: "Parse and read the citing text only — no PubMed, Crossref or doi.org." },
+        force: {
+          type: "boolean",
+          description: "Write into an `out` that already holds a REPORT.md/SUMMARY.md from an earlier run (they are kept, and must be re-checked).",
+        },
       },
       required: ["refs"],
     },

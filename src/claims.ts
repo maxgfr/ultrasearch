@@ -62,7 +62,7 @@ const INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
  * Data rows of a table whose FIRST column is an index — the row numbers of a
  * reference table, not figures anybody asserts. A column counts as an index when
  * its header says so, or when every data row (two at least) holds a short
- * integer there. Four-digit values (years) never qualify on their own: a year
+ * integer there and those integers strictly increase. Four-digit values (years) never qualify on their own: a year
  * column carries claims.
  *
  * Measured on a real thesis review: 16 "numeral not in S#" warnings, every one of
@@ -77,7 +77,11 @@ export function indexColumnRows(lines: string[], code: boolean[]): boolean[] {
     if (cellsOf(lines[i]!).length < 2) continue;
     const header = cellsOf(lines[i]!)[0]!.replace(/[*_`]/g, "").trim();
     const firsts = rows.map((j) => cellsOf(lines[j]!)[0]!.replace(/[*_`]/g, "").trim());
-    const index = INDEX_HEADER.test(header) || (rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)));
+    // Without a header saying so, small integers are an index only when they
+    // RUN — strictly increasing, row after row. "| Eyes | 41 | 39 |" is data.
+    const values = firsts.map((c) => Number(c.replace(/[^\d]/g, "")));
+    const runs = values.every((v, k) => k === 0 || v > values[k - 1]!);
+    const index = INDEX_HEADER.test(header) || (rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs);
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1]! : i + 1;
   }
@@ -91,13 +95,15 @@ export const NO_NUMERALS_RE = /<!--\s*ultrasearch:no-numerals\s*-->/i;
  * Lines covered by `<!-- ultrasearch:no-numerals -->`: the block (paragraph,
  * list or table — a run of non-blank lines) right after the comment, or the
  * block the comment sits in when it shares a line with text. Read from the RAW
- * text: comments are blanked before anything else sees the file.
+ * text: comments are blanked before anything else sees the file. Never inside
+ * a code fence.
  */
-export function noNumeralsMask(rawLines: string[]): boolean[] {
+export function noNumeralsMask(rawLines: string[], code: boolean[] = codeMask(rawLines)): boolean[] {
   const out = rawLines.map(() => false);
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i]!;
-    if (!NO_NUMERALS_RE.test(line)) continue;
+    // An annotation inside a code fence is an example of one, not one.
+    if (code[i] || !NO_NUMERALS_RE.test(line)) continue;
     let start = i;
     if (!line.replace(NO_NUMERALS_RE, "").trim()) {
       start = i + 1;

@@ -236,7 +236,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   out.push("");
   out.push(`**Question:** ${manifest.question}`);
   out.push(
-    `**Mode:** ${manifest.mode} · **depth:** ${manifest.depth} · **lang:** ${manifest.lang} · ` +
+    `**Mode:** ${manifest.mode}${manifest.template && manifest.template !== manifest.mode ? ` · **template:** ${manifest.template}` : ""} · **depth:** ${manifest.depth} · **lang:** ${manifest.lang} · ` +
       `**sources:** ${sources.length} · **built:** ${manifest.builtAt}`,
   );
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);

@@ -14,7 +14,7 @@ decision surface; this is the operations manual.
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
 | `drop` | 1 | An `--id` that is not in the dossier (the others were still dropped). |
 | `refcheck` | 1 | No `--refs`, an unreadable file, no reference found in it, or `--out` holding a dossier `refcheck` did not write. Discrepancies are findings, not failures: they never change the exit code. |
-| `merge` · `fetch` · `relink` · `drop` · `verify` · `orchestrate` · `refcheck` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
+| `merge` · `fetch` · `ingest` · `relink` · `drop` · `verify` · `orchestrate` · `refcheck` | 2 | Run under `--stdout` / `ULTRASEARCH_NO_WRITE=1`. Each exists to leave files behind for a later process, so it refuses rather than return something nobody can act on. |
 | `render` | 2 | `--stdout --no-md` — that combination leaves nothing to emit, because `--stdout` never produces HTML. |
 
 Anything non-zero means *stop and fix*, never *present anyway*.
@@ -109,6 +109,7 @@ more than saving ten seconds.
 | `ULTRASEARCH_POLITE_DELAY_MS` | 400 | Pause between a scholarly API's per-variant calls, and between `refcheck`'s lookups. |
 | `ULTRASEARCH_BACKOFF_MS` | 1000 | First wait of the scholarly APIs' 429/503 back-off (doubles once). |
 | `ULTRASEARCH_BACKOFF_CAP_MS` | 30000 | Longest `Retry-After` the scholarly APIs wait out; a longer one ends the attempt. |
+| `ULTRASEARCH_NCBI_INTERVAL_MS` | 350 | Least gap between two E-utilities calls, across the run (NCBI: 3 requests/s without a key); `0` disables the pacing. |
 
 > **The last six are politeness, not performance.** They exist so tests and CI
 > can run fast offline. Zeroing them against the live web hammers free services
@@ -152,13 +153,17 @@ node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <thesis.docx|refs.txt|r
 | Step | What it does |
 |---|---|
 | Parse | A numbered list (`1.`, `1)`, `[1]`) under the document's last References / Références / Bibliographie heading — or the whole file when there is none; one paragraph per reference when the numbering was not text (Word's automatic lists). Vancouver fields: authors (with `et al.`), title, journal, year, volume, issue, pages, DOI, PMID, PMCID. Or a `.bib`. `.docx`/`.odt` are read by the engine's built-in reader, `.pdf` by the PDF ladder. |
-| Resolve | Its own PMID → `ecitmatch` (journal\|year\|volume\|first page\|first author, batched) → its DOI as `[aid]` → a PubMed title search (kept only when the titles agree) → Crossref by DOI → Crossref `query.bibliographic` (kept only at ≥ 85 % title overlap). `esummary` and `efetch` are batched (100 ids per call). |
+| Resolve | Its own PMID → `ecitmatch` (journal\|year\|volume\|first page\|first author, batched) → its DOI as `[aid]` → a PubMed title search (kept only when the titles agree) → Crossref by DOI → Crossref `query.bibliographic` (5 candidates; one needs ≥ 85 % title overlap and a year within one, a reprint (`posted-content`) of another year never qualifies; the first author, the journal and a published record type rank the rest — none fits: unresolved). A Crossref title keeps its subtitle. `esummary` and `efetch` are batched (100 ids per call). |
 | DOI | Every cited DOI is asked of doi.org's handle API: `resolves: false` is a broken DOI, `undefined` means doi.org could not be asked. |
-| Diff | Per field `match` / `mismatch` (with the record's value) / `missing` (the record has it, the citation does not). Pages compare expanded (`157-62` = `157-162`); the journal is compared with the NLM abbreviation (PubMed `source`). Authors: names and initials in order; a shorter list with `et al.` is a style note, not an error (Vancouver lists 6). |
-| Citing text | `[n]`, `[n,m]`, `[n–m]`, `(n)` (only when no bracket call exists and every number is a reference) and superscripts (`¹²`, `<sup>`, `^n^`). Orphans, unknown numbers, and first-citation order. Each call's claim is the text since the previous call in its sentence; its figures are looked up in the cited abstract as whole numbers (`found` / `absent` / `no-abstract`). |
+| Diff | Per field `match` / `≈ minor` (a title with ≥ 90 % of its words) / `mismatch` (with the record's value) / `missing` (the record has it, the citation does not). Pages compare expanded (`157-62` = `157-162`); an article-number journal (`Sci Rep. 2020;10:12345`) is not asked for its issue. The journal is compared with the NLM abbreviation (PubMed `source`). Authors: names and initials in order — the initials of esummary or the ones the record's ForeName spells out (`Schranz MKJ` for "Matthias K J"); a shorter list with `et al.` is a style note, not an error (Vancouver lists 6). |
+| Citing text | `[n]`, `[n,m]`, `[n–m]`, `(n)` (only when no bracket call exists and every number is a reference) and superscripts (`¹²`, `<sup>`, `^n^`). Orphans, unknown numbers, and first-citation order. Each call's claim is the text since the previous call in its sentence; its figures are looked up in the cited abstract as whole numbers, written in digits or spelled out in English or French (`found` / `absent` / `no-abstract`). A call citing several references (`[26,27]`) vouches for its figures jointly: one found in any co-cited abstract is `found (in [27], co-cited)`. |
 | Outputs | `refcheck.json` (everything), `REFCHECK.md` (the `verification` template) and, unless `--offline` or nothing resolved, a dossier in the same dir: source `S<n>` is reference `n` (its record and abstract), `refs.bib` regenerated from the records. Write `REPORT.md` from it and run `check` as usual. |
 
-`refcheck` never fails on a finding: discrepancies are its output. An absent
+`refcheck` never fails on a finding: discrepancies are its output. It never
+opens a browser (`--browser` is accepted and ignored). An `--out` that already
+holds a `REPORT.md`/`SUMMARY.md` from an earlier run is refused unless
+`--force`: the report would be checked against sources it was not written from
+(with `--force` it is kept, and the run's notes say to re-check it). An absent
 figure is a lead (the number may be in the full text); `fetch --url` the
 article before calling the citation wrong. The same run under MCP is
 `ultrasearch_refcheck`.
@@ -299,9 +304,12 @@ around them:
 | `index.md` isn't next to `index.html` | `render --run X --out Y` moves only the HTML | Copy it, or render without `--out`. |
 | A cited figure isn't in the source | Numeral asserted but absent from the extract | `fetch` the page that carries it, re-cite, or flag it `[M]`. `check --strict-numerals` makes this fatal. |
 | `numeral not in S#` on a table's first column, or on page/reference labels | The figure is an index or a label, not a claim | A first column headed `#`, `N°`, `No.`, `Ref`, `Réf.` — or holding only short running numbers — is skipped automatically. For anything else, put `<!-- ultrasearch:no-numerals -->` on the line before the block: it is still checked for citations, never for figures. |
-| `check` fails: "cited source(s) are a wall, not content" | A source's extract is a cookie / consent / anti-bot page (flagged `⛔ wall` in `DOSSIER.md`, or recognised from its wording in an older dossier) | Do not cite it. Re-`fetch --url` the page or its text endpoint, cite another source, or `drop --where wall`. |
+| `check` fails: "cited source(s) are a wall, not content" | A source's extract is a cookie / consent / anti-bot page (flagged `⛔ wall` in `DOSSIER.md`, or recognised from its wording in an older dossier) | Do not cite it. Re-`fetch --url` the page or its text endpoint — a re-read that finds the text **repairs the source in place, same `[S#]`** — cite another source, or `drop --where wall`. |
 | `fetch --url` refuses: "extracted to a … wall" | The host is throttling you (some serve a consent wall or a reCAPTCHA page as HTTP **200**) | Working as intended — a wall is not content. Retry later, pace the run, or pass an endpoint that carries the same document: the text comes from there, a **page** is still what gets cited. |
 | `fetch --url` refuses: "batches N ids" / "is a … query" | One URL listing many ids, or a search, is not one document | Pass the ids one at a time — one `S#` per document is what citation checking rests on. |
 | `fetch --url` refuses: "names no document" | An endpoint whose payload carries no canonical link, DOI, arXiv id or PMID | Nothing citable can be derived from it — reconstruct it. Search for the record's title, then re-run with `--cite-url "<page>"`: the text still comes from the endpoint. |
 | `check` warns: cited source points at an API endpoint | A raw endpoint got pinned as a source (a dossier gathered before this gate) | Run `relink --run <dir>`: it repairs every source whose stored text names its own document, and prints the rest. Then find each remaining page and `relink --id S# --url "<page>"`. |
-| `check` warns: cited source extracted to a wall | The host was throttling when it was fetched | `relink` lists these too but cannot fix them — the text is missing, not just the link. Re-`fetch --url` them, or drop the claims resting on them. |
+| `check` warns: cited source extracted to a wall | The host was throttling when it was fetched | `relink` lists these too but cannot fix them — the text is missing, not just the link. Re-`fetch --url` them (a good read replaces the wall under the same id), or drop the claims resting on them. |
+| `fetch` / `ingest` refuse: "is a search results page" | The URL is a search engine's or a database's results list (`pubmed.ncbi.nlm.nih.gov/?term=…`, `google.com/search?q=…`) — `gather` drops these too, and says so | Open the result you mean and pass its own URL. |
+| `fetch` refuses: "redirected to the site's home page" | A dead deep link the site answers with its home page (HTTP 200). The archive was asked first | Find the document's current address; `gather` keeps such a hit snippet-only. |
+| `fetch` answers "already in dossier as S7 (the same paper: doi:…)" | The paper is already a source under another address — its DOI, its PubMed page, its PMC page | Cite `[S7]`. `gather` merges these itself and lists the other addresses as `alsoAt`. |

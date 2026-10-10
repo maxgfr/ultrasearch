@@ -280,10 +280,11 @@ export interface SourceMeta {
   waybackSnapshot?: string; // timestamp of the Wayback snapshot a dead link was recovered from
   textVia?: string; // API endpoint the text was hydrated from when the landing page was walled (the source url stays the page)
   foundBy?: number; // independent backend lists that surfaced this source (cross-engine corroboration)
+  alsoAt?: string[]; // other addresses of the same paper (same DOI / PMID / PMCID), merged into this source
   // The score's components, kept so a re-weighting can be replayed exactly
   // against a dossier already on disk instead of re-running retrieval (two runs
   // never return the same pool, which made the question unanswerable).
-  rank?: { rrf: number; content: number; trust: number; recency: number };
+  rank?: { rrf: number; content: number; trust: number; recency: number; namedMiss?: number };
   provenance?: Provenance[]; // which sub-question(s) surfaced this source (set by `merge`)
   published?: string; // ISO timestamp the item was posted (feeds, forum threads)
   subreddit?: string; // reddit: the community a thread was posted in

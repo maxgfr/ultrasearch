@@ -307,7 +307,7 @@ describe("research backends — failure & empty branches", () => {
     expect(r.notes?.[0]).toMatch(/rate-limited/i);
     failWith(404);
     r = await europepmcBackend(makeCtx("x"));
-    expect(r.notes?.[0]).toMatch(/failed or empty/i);
+    expect(r.notes?.[0]).toMatch(/failed \(status 404\)/i);
     installFetchMock(jsonRoute("ebi.ac.uk/europepmc", { resultList: { result: [] } }));
     r = await europepmcBackend(makeCtx("x"));
     expect(r.items).toHaveLength(0);

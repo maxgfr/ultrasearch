@@ -2,7 +2,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BackendKind, BrowserMode, Manifest, RawSource, Source, SourceMeta, WebSearchHit } from "./types.js";
-import { readDossier, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
+import { readDossier, readSourceText, buildSource, writeSourceExtract, writeDossierIndex, maxSourceId } from "./dossier.js";
 import { templateFor } from "./templates.js";
 import { annotateExtras } from "./extras.js";
 import { bestExcerpt, rescueViaWayback, looksLikePdfUrl, extractMainHtml, htmlToText, DEAD_LINK_STATUS } from "./backends/fetch.js";
@@ -14,12 +14,16 @@ import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./brow
 import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
 import { canonicalizeUrl, titleFromText } from "./util.js";
-import { looksLikeWall, readPastCachedWall } from "./walls.js";
+import { looksLikeWall, readPastCachedWall, wallPattern } from "./walls.js";
 import { ncbiDocument, readNcbiDocument } from "./providers/ncbi.js";
+import { redirectedHome, searchPageOf } from "./listing.js";
+import { identityKeys, readFromEutils } from "./identity.js";
 
 export interface EnrichResult {
   id: string;
   added: boolean;
+  /** An existing wall or snippet-only source got its text, under its own id. */
+  repaired?: true;
   note?: string;
 }
 
@@ -31,6 +35,8 @@ export interface IngestResult {
   results: IngestOutcome[];
   added: number;
   skipped: number;
+  /** Sources repaired in place (present only when some were). */
+  repaired?: number;
 }
 
 // The dossier an ingest is appending to, held in memory for the whole batch.
@@ -42,9 +48,13 @@ export interface IngestResult {
 // the two `sources.find` scans did, at O(1); `maxId` is the same [S#] the
 // serial `nextSourceId` handed out, kept as a counter instead of re-derived.
 interface IngestState {
+  /** The dossier directory, for the extracts a repair has to read. */
+  dir: string;
   sources: Source[];
   manifest: Manifest;
   byCanon: Map<string, Source>;
+  /** The same dedupe by identifier: `doi:…`, `pmid:…`, `pmcid:…` (src/identity.ts). */
+  byIdentity: Map<string, Source>;
   maxId: number;
   // Resolved with the dossier, not at flush time: an unknown `manifest.mode`
   // throws while the batch has written nothing, instead of after every extract
@@ -62,6 +72,8 @@ interface Prepared {
   question: string;
   /** Said on success too: how the text was had, when that is worth knowing (a browser rescue). */
   note?: string;
+  /** The weak source (a wall, a snippet) this read repairs, in place, under its own id. */
+  replaces?: Source;
 }
 type PrepareResult = Prepared | { ok: false; result: EnrichResult };
 
@@ -72,7 +84,27 @@ function loadState(dir: string): IngestState {
   // dossier that somehow holds two sources on one canonical url has to keep
   // reporting the earlier [S#], or a re-ingest silently re-points at the other.
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
-  return { sources, manifest, byCanon, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+  const byIdentity = new Map<string, Source>();
+  for (const s of sources) for (const k of sourceKeys(dir, s)) if (!byIdentity.has(k)) byIdentity.set(k, s);
+  return { dir, sources, manifest, byCanon, byIdentity, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+}
+
+// A banked source's identifier keys. Its extract is only read when its text
+// came from E-utilities — the one text whose labelled ids can be trusted.
+function sourceKeys(dir: string, s: Source): string[] {
+  let text: string | undefined;
+  if (readFromEutils(s.meta?.textVia)) {
+    try {
+      text = readSourceText(dir, s);
+    } catch {
+      text = undefined;
+    }
+  }
+  return identityKeys(s.url, s.meta, text);
+}
+
+function remember(state: IngestState, s: Source, text: string): void {
+  for (const k of identityKeys(s.url, s.meta, readFromEutils(s.meta?.textVia) ? text : undefined)) if (!state.byIdentity.has(k)) state.byIdentity.set(k, s);
 }
 
 // Bank a prepared source into the in-memory dossier. Synchronous and total: it
@@ -82,6 +114,7 @@ function loadState(dir: string): IngestState {
 // The extract stays a PER-SOURCE write on purpose — it is what makes a crashed
 // batch recoverable, and it is not the cost the batching removed.
 function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
+  if (p.replaces) return repair(dir, state, p, p.replaces);
   const id = `S${++state.maxId}`; // shares the S<n> scheme the grounding contract depends on
   // Annotated now, while the full page text is in hand: the extract on disk is
   // capped, and the extras (src/extras.ts) re-aggregate from meta at flush.
@@ -89,8 +122,29 @@ function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
   state.byCanon.set(s.canonicalUrl, s);
+  remember(state, s, p.text);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [...new Set([...state.manifest.backendsUsed, p.backend])] };
   return { id, added: true, ...(p.note ? { note: p.note } : {}) };
+}
+
+// Replace a weak source with the text a re-read found, keeping its id, url,
+// backend and score: the citation is the same document, only its text is new.
+function repair(dir: string, state: IngestState, p: Prepared, old: Source): EnrichResult {
+  const raw: RawSource = {
+    ...p.raw,
+    url: old.url,
+    backend: old.backend,
+    score: old.score,
+    title: p.raw.title && p.raw.title !== p.raw.url ? p.raw.title : old.title,
+  };
+  const s = annotateExtras(p.text, buildSource(raw, old.id, new Date().toISOString(), p.question), state.manifest);
+  writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
+  const i = state.sources.findIndex((x) => x.id === old.id);
+  state.sources[i] = s;
+  state.byCanon.set(s.canonicalUrl, s);
+  for (const [k, v] of state.byIdentity) if (v === old) state.byIdentity.set(k, s);
+  remember(state, s, p.text);
+  return { id: old.id, added: false, repaired: true, ...(p.note ? { note: p.note } : {}) };
 }
 
 // Persist the three index files — sources.json, manifest.json, DOSSIER.md —
@@ -152,10 +206,16 @@ export async function addSources(
     // lookup moved to `loadState`, leaving only the index write itself.
     if (state && committed > 0) flushIndex(dir, state);
   }
+  return tally(results);
+}
+
+function tally(results: IngestOutcome[]): IngestResult {
+  const repaired = results.filter((r) => r.repaired).length;
   return {
     results,
     added: results.filter((r) => r.added).length,
-    skipped: results.filter((r) => !r.added).length,
+    skipped: results.filter((r) => !r.added && !r.repaired).length,
+    ...(repaired ? { repaired } : {}),
   };
 }
 
@@ -198,11 +258,7 @@ export async function addFiles(dir: string, paths: string[], opts: { question?: 
     // would replace whatever error was already on its way out.
     if (state && committed > 0) flushIndex(dir, state);
   }
-  return {
-    results,
-    added: results.filter((r) => r.added).length,
-    skipped: results.filter((r) => !r.added).length,
-  };
+  return tally(results);
 }
 
 // Everything a local file needs settled before it can be committed: readable,
@@ -330,6 +386,8 @@ async function prepareSource(
   // legitimate thing to cite. When you already know the page — you searched for
   // it, or reconstructed it from the record — hand it over and the engine reads
   // the text from `url` while recording yours.
+  const search = searchPageOf(url) ?? (opts.citeUrl ? searchPageOf(opts.citeUrl) : undefined);
+  if (search) return { ok: false, result: { id: "", added: false, note: search } };
   const supplied = opts.citeUrl?.trim();
   if (supplied && !isCitableUrl(supplied)) {
     return { ok: false, result: { id: "", added: false, note: `citeUrl ${supplied} is not a page a reader can open — pass the document's own page.` } };
@@ -339,18 +397,97 @@ async function prepareSource(
   // PubMed and PMC have a native reader (src/providers/ncbi.ts): their pages are
   // walls to anything but a browser, their text endpoints are not.
   const ncbi = ncbiDocument(url);
-  let citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
+  const citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
 
   // Dedupe on the CITE url so the same paper can't enter twice — once as its
   // page and once as the endpoint that carries its text. Against the batch's
   // in-memory index, so a URL repeated INSIDE one batch is caught by the id the
   // earlier occurrence just took.
   const canon = canonicalizeUrl(citeUrl);
-  const existing = state.byCanon.get(canon);
-  if (existing) {
+  const existing =
+    state.byCanon.get(canon) ??
+    identityKeys(citeUrl)
+      .map((k) => state.byIdentity.get(k))
+      .find(Boolean);
+  // A source already on file is left alone — unless it never held its text (a
+  // wall, a snippet): then this read is the repair `check` asks for ("re-fetch
+  // the page"), and a good text replaces the weak one under the SAME id, so
+  // every [S#] already written keeps pointing at the same document.
+  const weak = existing ? weakness(state.dir, existing) : undefined;
+  if (existing && !weak) {
     return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   }
+  let p = await readSource(state, url, citeUrl, supplied, provider, ncbi, question, { ...opts, repairs: existing?.id });
+  // The text read may name the paper (an E-utilities record's DOI and PMID):
+  // the same paper banked under another address is the same source.
+  if (p.ok && !existing) {
+    const keys = identityKeys(p.raw.url, p.raw.meta, readFromEutils(p.raw.meta?.textVia) ? p.text : undefined);
+    const twin = keys.map((k) => state.byIdentity.get(k)).find(Boolean);
+    if (twin) {
+      const twinWeak = weakness(state.dir, twin);
+      if (!twinWeak) return { ok: false, result: { id: twin.id, added: false, note: `already in dossier as ${twin.id} (the same paper: ${keys.join(", ")})` } };
+      p = {
+        ...p,
+        replaces: twin,
+        note: `repaired ${twin.id}: it was ${twinWeak}, it now holds the text${p.raw.meta?.textVia ? ` read from ${p.raw.meta.textVia}` : ""}.`,
+      };
+    }
+  }
+  if (!existing || !weak) return p;
+  if (!p.ok) {
+    return {
+      ok: false,
+      result: { id: existing.id, added: false, note: `already in dossier as ${existing.id} (${weak}) — re-read it, still no text: ${p.result.note}` },
+    };
+  }
+  return {
+    ...p,
+    replaces: existing,
+    note: `repaired ${existing.id}: it was ${weak}, it now holds the text${p.raw.meta?.textVia ? ` read from ${p.raw.meta.textVia}` : ""}.`,
+  };
+}
 
+/**
+ * A caller's title, unless it is no title at all: empty, a URL, or a bare host
+ * name ("pmc.ncbi.nlm.nih.gov" — what a WebSearch hit often carries). Then the
+ * page's own title is better.
+ */
+function givenTitle(t: string | undefined): string | undefined {
+  const v = t?.trim();
+  if (!v || /^[a-z][\w+.-]*:\/\//i.test(v) || /^(www\.)?[\w-]+(\.[\w-]+)+\/?$/i.test(v)) return undefined;
+  return v;
+}
+
+/** Why a source on file holds no text worth citing, or undefined when it does. */
+function weakness(dir: string, s: Source): string | undefined {
+  if (s.wall) return "a wall";
+  if (s.fullText === false) return "snippet-only";
+  // A dossier built before the wall flag existed: the extract's own wording.
+  let text = "";
+  try {
+    text = readSourceText(dir, s);
+  } catch {
+    return undefined;
+  }
+  const worded = wallPattern(text);
+  return worded ? `a ${worded}` : undefined;
+}
+
+// Read a source's text, wherever it is: the NCBI endpoint, the page, the
+// provider's text URL, then the rescue ladder. `repairs` names the source this
+// read would replace, so the cite URL it derives is not refused as a duplicate
+// of the very source being repaired.
+async function readSource(
+  state: IngestState,
+  url: string,
+  citeUrlIn: string,
+  supplied: string | undefined,
+  provider: ReturnType<typeof resolveProvider>,
+  ncbi: ReturnType<typeof ncbiDocument>,
+  question: string,
+  opts: { title?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode; rescues?: { left: number }; repairs?: string },
+): Promise<PrepareResult> {
+  let citeUrl = citeUrlIn;
   // The endpoint first, for PubMed and PMC: E-utilities for an abstract, Europe
   // PMC's full-text XML for a PMC article. The landing page is only read when the
   // endpoint has nothing — and never read back OVER text the endpoint returned,
@@ -362,14 +499,20 @@ async function prepareSource(
       const backend: BackendKind = opts.backend ?? "claude";
       const raw: RawSource = {
         url: citeUrl,
-        title: opts.title || got.title || titleFromText(got.text) || citeUrl,
+        title: givenTitle(opts.title) || got.title || titleFromText(got.text) || citeUrl,
         backend,
         score: 0,
         snippet: bestExcerpt(got.text, question),
         text: got.text,
         meta: { textVia: got.via },
+        // A real record with no abstract: kept, as what it is — its citation,
+        // nothing a claim can rest on.
+        ...(got.thin ? { fullText: false } : {}),
       };
-      return { ok: true, raw, backend, text: got.text, question };
+      const note = got.thin
+        ? `${ncbi.kind === "pmc" ? ncbi.id : `PMID ${ncbi.id}`} has no abstract — kept as a snippet-only record (citation and title only).`
+        : undefined;
+      return { ok: true, raw, backend, text: got.text, question, ...(note ? { note } : {}) };
     }
     ncbiMiss = got.why;
   }
@@ -388,6 +531,14 @@ async function prepareSource(
   const readOpts = { firecrawl: opts.firecrawl, browser };
   const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
   let { text, title } = fetched;
+  // A deep link answered by the site's home page: a dead link that said 200.
+  // Its text is the home page's, never the document's — treated as gone, so the
+  // archive is still asked for the page that was there.
+  const home = redirectedHome(readUrl, fetched.finalUrl) ? fetched.finalUrl : undefined;
+  if (home) {
+    text = "";
+    title = undefined;
+  }
   // Whether the text in hand was rendered by the browser rung — recorded on the
   // source, as gather's backends record theirs, so a dossier says which pages a
   // real browser read.
@@ -456,7 +607,7 @@ async function prepareSource(
   // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
   // before giving up, so an agent's own WebSearch hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
-  if (!text?.trim() && DEAD_LINK_STATUS.has(fetched.status)) {
+  if (!text?.trim() && (DEAD_LINK_STATUS.has(fetched.status) || home)) {
     const wb = await rescueViaWayback(readUrl, readOpts);
     if (wb) {
       text = wb.text;
@@ -479,7 +630,9 @@ async function prepareSource(
     };
   }
   if (!text?.trim()) {
-    const why = fetched.note ?? `no readable content at ${readUrl}`;
+    const why = home
+      ? `${readUrl} redirected to the site's home page (${home}) — the document is gone, and the archive has no copy; not added`
+      : (fetched.note ?? `no readable content at ${readUrl}`);
     return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
   }
 
@@ -509,7 +662,7 @@ async function prepareSource(
     via = citeUrl;
     citeUrl = derived;
     const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
-    if (dup) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
+    if (dup && dup.id !== opts.repairs) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
 
   if (rendered) meta.extractor = "browser";
@@ -518,7 +671,7 @@ async function prepareSource(
     url: citeUrl,
     // Never fall back to the URL as a title when the text came from an API
     // endpoint — a bare endpoint string is unreadable in a source list.
-    title: opts.title || title || (via ? titleFromText(text) : citeUrl),
+    title: givenTitle(opts.title) || title || (via ? titleFromText(text) : citeUrl),
     backend,
     score: 0,
     snippet: bestExcerpt(text, question),

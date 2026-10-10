@@ -445,7 +445,7 @@ async function handleRefcheck(args: Record<string, unknown>): Promise<unknown> {
   if (citing && !existsSync(citing)) throw new ToolError(`no file at ${citing}`);
   let res: Awaited<ReturnType<typeof runRefcheck>>;
   try {
-    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline) });
+    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline), force: bool(args.force) });
   } catch (e) {
     throw new ToolError((e as Error).message);
   }

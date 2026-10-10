@@ -71,7 +71,7 @@ describe("clinicaltrials backend", () => {
 
   it("reports an empty result and a rate limit honestly", async () => {
     installFetchMock(routes([["clinicaltrials.gov", { body: JSON.stringify({ studies: [] }), contentType: "application/json" }]]));
-    expect((await clinicaltrialsBackend(makeCtx("x"))).notes[0]).toMatch(/failed or empty/);
+    expect((await clinicaltrialsBackend(makeCtx("x"))).notes[0]).toBe('ClinicalTrials.gov search returned nothing for "x".');
     installFetchMock(() => ({ status: 429, body: "" }));
     expect((await clinicaltrialsBackend(makeCtx("x"))).notes[0]).toMatch(/rate-limited \(HTTP 429 after 3 attempts\)/);
   });
@@ -128,7 +128,10 @@ describe("withBackoff", () => {
   it("treats a 403 the engine flagged as rate-limited as throttled, and a 404 as final", () => {
     expect(isThrottled({ status: 403, rateLimited: true })).toBe(true);
     expect(isThrottled({ status: 404 })).toBe(false);
-    expect(apiFailure("X", { status: 404, rateLimited: false, attempts: 1 })).toBe("X failed or empty (status 404).");
+    expect(apiFailure("X", { status: 404, rateLimited: false, attempts: 1 })).toBe("X failed (status 404).");
+    // An answer that came back fine but empty is not a failure.
+    expect(apiFailure("X", { status: 200, rateLimited: false, attempts: 1 }, "carlevale")).toBe('X returned nothing for "carlevale".');
+    expect(apiFailure("X", { status: 0, rateLimited: false, attempts: 1 })).toBe("X failed (status no response).");
     expect(apiFailure("X", { status: 429, rateLimited: true, attempts: 1 })).toBe("X rate-limited (HTTP 429).");
   });
 

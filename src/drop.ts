@@ -5,7 +5,16 @@ import { readDossier, readSourceText, writeDossierIndex } from "./dossier.js";
 import { getMode } from "./modes/registry.js";
 import { citedSourceIds } from "./claims.js";
 import { isNoWrite } from "./no-write.js";
-import { wallPattern } from "./walls.js";
+import { MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./walls.js";
+
+// The extract's own header (title line, `- url:` / `- backend:` bullets) is not
+// the source's text.
+function stripExtractHeader(text: string): string {
+  return text
+    .split("\n")
+    .filter((l) => !/^# S\d+ — /.test(l) && !/^- (url|backend|doi|via|text via|wayback|authors|venue|year):/i.test(l))
+    .join("\n");
+}
 
 // Removing sources from a dossier — the one edit no other command could make.
 //
@@ -41,7 +50,7 @@ export interface DropResult {
   missing: string[];
   /** Report tiers that cite a dropped id — `check` will call those citations dangling. */
   citedBy: { file: string; ids: string[] }[];
-  /** Sources left in the dossier. */
+  /** Sources left in the dossier — or, under dryRun, that would be left. */
   remaining: number;
 }
 
@@ -58,7 +67,16 @@ function safeText(dir: string, s: Source): string {
 /** Why `where` selects this source, or undefined when it does not. */
 function selects(dir: string, s: Source, where: DropWhere): string | undefined {
   if (where === "offtopic") return s.offTopic ? "probably off-topic" : undefined;
-  if (where === "snippet") return s.fullText === false ? (s.wall ? "a wall (snippet only)" : "snippet only") : undefined;
+  if (where === "snippet") {
+    if (s.fullText === false) return s.wall ? "a wall (snippet only)" : "snippet only";
+    // A dossier gathered before thin backend text was flagged: a record whose
+    // "text" is its title and "(no abstract provided by …)".
+    const text = safeText(dir, s);
+    return /\(no abstract provided by [^)]*\)/i.test(text) &&
+      usefulChars(stripExtractHeader(text).replace(/\(no abstract provided by [^)]*\)/gi, "")) < MIN_USEFUL_CHARS
+      ? "no abstract (snippet only)"
+      : undefined;
+  }
   if (s.wall) return "a wall";
   // A dossier built before the flag existed: the extract's own wording.
   const worded = wallPattern(safeText(dir, s));
@@ -120,7 +138,7 @@ export function dropSources(dir: string, sel: { ids?: string[]; where?: DropWher
     const droppedIds = [...new Set([...(manifest.droppedIds ?? []), ...ids])].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
     writeDossierIndex(dir, remaining, { ...manifest, sourceCount: remaining.length, droppedIds }, template);
   }
-  return { run: dir, dryRun, dropped, missing, citedBy, remaining: dryRun ? sources.length : remaining.length };
+  return { run: dir, dryRun, dropped, missing, citedBy, remaining: remaining.length };
 }
 
 /** The CLI's account of a drop, one line per source and per warning. */

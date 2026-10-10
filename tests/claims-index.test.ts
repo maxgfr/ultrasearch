@@ -54,6 +54,14 @@ describe("index columns", () => {
     expect(unitsOfFile(lone).map((u) => (u.kind === "text" ? u.text : ""))[0]).toBe("3 three things [S1]");
   });
 
+  // Audit: any small-integer first column was dropped — a data column too.
+  it("keeps a first column of small data values that do not run", () => {
+    const md = ["| Eyes | Outcome |", "|---|---|", "| 41 | operated with two pockets [S1] |", "| 39 | followed four years [S1] |"].join("\n");
+    expect(unitsOfFile(md).map((u) => (u.kind === "text" ? u.text : ""))).toEqual(["41 operated with two pockets [S1]", "39 followed four years [S1]"]);
+    const header = ["| # | Outcome |", "|---|---|", "| 4 | first [S1] |", "| 2 | second [S1] |"].join("\n");
+    expect(unitsOfFile(header).map((u) => (u.kind === "text" ? u.text : ""))).toEqual(["first [S1]", "second [S1]"]);
+  });
+
   it("no longer reports the index column as unattributed numerals", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 1);
@@ -69,6 +77,13 @@ describe("index columns", () => {
 });
 
 describe("<!-- ultrasearch:no-numerals -->", () => {
+  it("ignores the annotation inside a code fence", () => {
+    const raw = ["```markdown", "<!-- ultrasearch:no-numerals -->", "```", "", "The cohort had 7777 eyes [S1]."];
+    expect(noNumeralsMask(raw)).toEqual([false, false, false, false, false]);
+    const units = unitsOfFile(raw.join("\n"));
+    expect(units.find((u) => u.kind === "text" && u.text.includes("7777"))?.noNumerals).toBeUndefined();
+  });
+
   it("masks the block after the comment, or the block it sits in", () => {
     const raw = ["Intro line.", "", "<!-- ultrasearch:no-numerals -->", "", "| a | b |", "|---|---|", "| 1999 | x |", "", "Last 42 line."];
     expect(noNumeralsMask(raw)).toEqual([false, false, false, false, true, true, true, false, false]);

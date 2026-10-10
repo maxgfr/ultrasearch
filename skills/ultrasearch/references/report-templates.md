@@ -143,6 +143,11 @@ cites `[S12]`. "Not verifiable" is where an unresolved reference, a record with
 no abstract, or a figure only the full text could confirm goes — never silently
 dropped.
 
+The report quotes the checked document's own figures — the wrong page range,
+the misquoted sample size — and no source holds those. Put such a block under
+`<!-- ultrasearch:no-numerals -->`: it stays a claim for citation coverage, and
+`check` stops asking a source for its numbers.
+
 The `## Sources` section is rendered automatically from `sources.json` into the
 HTML appendix — you don't need to hand-list URLs there, but you may add notable
 ones. Cite inline with `[S#]` throughout.

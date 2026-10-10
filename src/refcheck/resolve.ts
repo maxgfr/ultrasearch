@@ -9,6 +9,7 @@
 // politely where it does not.
 
 import { cleanInline, decodeEntities, politeDelayMs, sleep } from "../backends/fetch.js";
+import { deaccent } from "../engine.js";
 import { contactUa } from "../backends/fetch.js";
 import { apiGet } from "../backends/backoff.js";
 import type { CitedReference } from "./parse.js";
@@ -28,6 +29,12 @@ export interface ResolvedRecord {
   doi?: string;
   /** "Surname Initials", every author in order. */
   authors: string[];
+  /**
+   * The same authors with the initials PubMed's ForeName spells out, where
+   * they differ: esummary gives "Schranz MK", the record's ForeName "Matthias
+   * K J" — a citation reading "Schranz MKJ" is right.
+   */
+  authorAlternates?: string[];
   title: string;
   /** NLM abbreviation (PubMed) or Crossref's short title. */
   journal?: string;
@@ -134,9 +141,32 @@ export async function esummary(pmids: string[]): Promise<Map<string, ResolvedRec
   return out;
 }
 
+/** One PubMed article as efetch's XML has it: the abstract, and each author's initials as ForeName spells them. */
+export interface EfetchArticle {
+  abstract?: string;
+  /** "Surname INITIALS" built from LastName + ForeName (every given name's first letter). */
+  authors: string[];
+}
+
+/** "Matthias K J" → "MKJ"; "Jean-Pierre" → "JP"; "" → "". */
+export function initialsOf(foreName: string): string {
+  return foreName
+    .split(/[\s.-]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+}
+
 /** efetch XML for many PMIDs → their abstracts (structured abstracts keep their section labels). */
 export async function efetchAbstracts(pmids: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+  for (const [pmid, a] of await efetchArticles(pmids)) if (a.abstract) out.set(pmid, a.abstract);
+  return out;
+}
+
+/** efetch XML for many PMIDs → each article's abstract and ForeName-based author list. */
+export async function efetchArticles(pmids: string[]): Promise<Map<string, EfetchArticle>> {
+  const out = new Map<string, EfetchArticle>();
   for (let i = 0; i < pmids.length; i += BATCH) {
     const ids = pmids.slice(i, i + BATCH);
     const r = await apiGet(`${EUTILS}/efetch.fcgi?db=pubmed&retmode=xml&rettype=abstract&tool=ultrasearch&id=${ids.join(",")}`, {
@@ -156,7 +186,15 @@ export async function efetchAbstracts(pmids: string[]): Promise<Map<string, stri
           .trim();
         if (body) parts.push(label ? `${label}: ${body}` : body);
       }
-      if (parts.length) out.set(pmid, parts.join("\n\n"));
+      const authors: string[] = [];
+      for (const m of art.matchAll(/<Author\b[^>]*>([\s\S]*?)<\/Author>/g)) {
+        const last = /<LastName>([\s\S]*?)<\/LastName>/.exec(m[1]!)?.[1];
+        if (!last) continue;
+        const fore = /<ForeName>([\s\S]*?)<\/ForeName>/.exec(m[1]!)?.[1] ?? "";
+        const initials = initialsOf(decodeEntities(fore)) || (/<Initials>([\s\S]*?)<\/Initials>/.exec(m[1]!)?.[1] ?? "");
+        authors.push(`${decodeEntities(last).trim()}${initials ? ` ${initials}` : ""}`);
+      }
+      out.set(pmid, { ...(parts.length ? { abstract: parts.join("\n\n") } : {}), authors });
     }
   }
   return out;
@@ -164,7 +202,7 @@ export async function efetchAbstracts(pmids: string[]): Promise<Map<string, stri
 
 // --- Crossref ---------------------------------------------------------------
 
-function crossrefRecord(w: any, how: ResolvedRecord["how"]): ResolvedRecord | undefined {
+export function crossrefRecord(w: any, how: ResolvedRecord["how"]): ResolvedRecord | undefined {
   if (!w?.DOI) return undefined;
   const parts = w.issued?.["date-parts"]?.[0] ?? w["published-print"]?.["date-parts"]?.[0] ?? w["published-online"]?.["date-parts"]?.[0];
   const authors = (Array.isArray(w.author) ? w.author : [])
@@ -176,7 +214,9 @@ function crossrefRecord(w: any, how: ResolvedRecord["how"]): ResolvedRecord | un
     how,
     doi: String(w.DOI),
     authors,
-    title: cleanInline(String(first(w.title) ?? "")),
+    // "MapReduce" alone is not the title the paper is cited by: Crossref keeps
+    // the part after the colon in `subtitle`.
+    title: cleanInline([first(w.title), first(w.subtitle)].filter((x) => x && String(x).trim()).join(": ")),
     journal: first(w["short-container-title"]) ?? first(w["container-title"]),
     journalFull: first(w["container-title"]),
     year: parts?.[0] ? String(parts[0]) : undefined,
@@ -200,17 +240,49 @@ export async function crossrefByDoi(doi: string): Promise<ResolvedRecord | undef
   return r.ok ? crossrefRecord(r.data?.message, "doi") : undefined;
 }
 
+const PUBLISHED_TYPES = new Set(["journal-article", "proceedings-article", "book-chapter", "book", "report", "monograph"]);
+
+/**
+ * How well a Crossref candidate fits a cited reference, or undefined when it
+ * cannot be the one. A bibliographic query always returns SOMETHING — for
+ * "Vaswani … Attention is all you need … 2017" its first hit was a 2025
+ * posted-content reprint — so the title must agree (≥ 0.85 of words), the year
+ * may differ by one at most, and the first author, the journal and the record
+ * type add to the score.
+ */
+export function bibliographicScore(ref: CitedReference, w: any, rec: ResolvedRecord): number | undefined {
+  if (!ref.title) return undefined;
+  const sim = titleSimilarity(ref.title, rec.title);
+  if (sim < 0.85) return undefined;
+  const year = ref.year && rec.year ? Math.abs(Number(ref.year) - Number(rec.year)) : undefined;
+  if (year !== undefined && year > 1) return undefined;
+  if (w?.type === "posted-content" && year !== undefined && year !== 0) return undefined;
+  let score = sim;
+  if (year === 0) score += 0.5;
+  const fam = (a: string | undefined) =>
+    a
+      ? deaccent(a.toLowerCase())
+          .replace(/\s+\p{Lu}{1,4}$/u, "")
+          .replace(/[^\p{L}]+/gu, "")
+      : "";
+  if (ref.authors[0] && rec.authors[0] && fam(ref.authors[0]) === fam(rec.authors[0])) score += 0.5;
+  const j = (x: string | undefined) => (x ? deaccent(x.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, "") : "");
+  if (ref.journal && (j(ref.journal) === j(rec.journal) || j(ref.journal) === j(rec.journalFull))) score += 0.3;
+  if (PUBLISHED_TYPES.has(String(w?.type ?? ""))) score += 0.3;
+  return score;
+}
+
 export async function crossrefBibliographic(ref: CitedReference): Promise<ResolvedRecord | undefined> {
-  const r = await apiGet(`https://api.crossref.org/works?rows=2&query.bibliographic=${encodeURIComponent(ref.raw)}`, { userAgent: contactUa() });
+  const r = await apiGet(`https://api.crossref.org/works?rows=5&query.bibliographic=${encodeURIComponent(ref.raw)}`, { userAgent: contactUa() });
   await polite();
   const items: any[] = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
+  let best: { rec: ResolvedRecord; score: number } | undefined;
   for (const w of items) {
     const rec = crossrefRecord(w, "bibliographic");
-    // A bibliographic query always returns SOMETHING: keep it only when the
-    // title is unmistakably the cited one.
-    if (rec && ref.title && titleSimilarity(ref.title, rec.title) >= 0.85) return rec;
+    const score = rec ? bibliographicScore(ref, w, rec) : undefined;
+    if (rec && score !== undefined && (!best || score > best.score)) best = { rec, score };
   }
-  return undefined;
+  return best?.rec;
 }
 
 // --- doi.org ----------------------------------------------------------------
@@ -265,7 +337,7 @@ export async function resolveReferences(refs: CitedReference[]): Promise<Resolve
 
   const pmids = [...new Set([...pmidOf.values()].map((v) => v.pmid))];
   const summaries = pmids.length ? await esummary(pmids) : new Map<string, ResolvedRecord>();
-  const abstracts = pmids.length ? await efetchAbstracts(pmids) : new Map<string, string>();
+  const articles = pmids.length ? await efetchArticles(pmids) : new Map<string, EfetchArticle>();
 
   const records = new Map<number, ResolvedRecord>();
   for (const r of refs) {
@@ -273,8 +345,10 @@ export async function resolveReferences(refs: CitedReference[]): Promise<Resolve
     const rec = hit ? summaries.get(hit.pmid) : undefined;
     // A title search can land on the wrong paper: only keep it when the title agrees.
     if (rec && (hit!.how !== "title" || !r.title || titleSimilarity(r.title, rec.title) >= 0.8)) {
-      const abs = abstracts.get(rec.pmid!);
-      records.set(r.n, { ...rec, how: hit!.how, ...(abs ? { abstract: abs } : {}) });
+      const art = articles.get(rec.pmid!);
+      const abs = art?.abstract;
+      const alternates = art && art.authors.length === rec.authors.length && art.authors.some((a, i) => a !== rec.authors[i]) ? art.authors : undefined;
+      records.set(r.n, { ...rec, how: hit!.how, ...(abs ? { abstract: abs } : {}), ...(alternates ? { authorAlternates: alternates } : {}) });
       continue;
     }
     const viaCrossref = (r.doi ? await crossrefByDoi(r.doi) : undefined) ?? (r.title ? await crossrefBibliographic(r) : undefined);

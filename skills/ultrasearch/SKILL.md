@@ -66,7 +66,8 @@ instead of restating them.
   `ULTRASEARCH_NO_WRITE=1`): the engine writes **nothing** and streams what it
   would have written instead — `gather` gives you `DOSSIER.md` followed by every
   source's full extract, `brainstorm` gives `BRAINSTORM.md`, `plan` its JSON,
-  `render` `index.md`. `merge`, `fetch`, `relink`, `verify` and `orchestrate` exit **2**:
+  `render` `index.md`. `merge`, `fetch`, `ingest`, `relink`, `drop`, `verify`,
+  `refcheck` and `orchestrate` exit **2**:
   they exist to leave files behind for a later process. **There is no `check`
   gate in this mode** — the mechanical grounding check needs a `REPORT.md` on
   disk, so I1 and I2 rest entirely on you. Cite `[S#]` inline from the streamed
@@ -119,10 +120,12 @@ the mode's angles to cover, and the planner's starting points. Then:
 3. **Hand it to the engine** with `--web-results <RUN>/websearch.json`.
 
 Your hits get **no special trust** — every page is fetched, cleaned and
-wall-checked like any other, and a weak domain stays weak. But nothing is
-thrown away either: **every page fetched and found on-topic is kept**.
-`--max-sources` bounds how many candidates get FETCHED, not how many survive,
-so a page you deliberately chose is never dropped to make room.
+wall-checked like any other, and a weak domain stays weak. What leaves the pool
+leaves for a reason the run reports: duplicates (the same URL, or the same paper
+under another address — same DOI, PMID or PMCID), near-duplicates, search
+results pages, and pages under the relevance floor. "23 hits → 8 kept" is that
+accounting, not a cap: `--max-sources` bounds how many candidates get FETCHED,
+never how many survive, so a page you chose is never dropped to make room.
 
 Under `--stdout` you have no disk: pass the array on **stdin** with
 `--web-results -`.
@@ -212,9 +215,9 @@ node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <list.txt|thesis.docx|r
 |---|---|---|
 | `queries` | nothing (prints) | `--q` · `--mode` · `--depth` · `--lang` · `--json`. Your WebSearch worklist: how many distinct queries to run, and the angles to cover. Start every route here (I0). |
 | `gather` | the dossier (`--stdout`: streams it, writes nothing) | **`--web-results <f.json\|->` (your WebSearch hits — the primary lane, I0)** · `--search auto\|light\|full\|max` (how wide discovery casts) · `--q` · `--mode` · `--depth` · `--out` · `--queries "a\|b\|c"` (your phrasings replace the planner) · `--lang`/`--region` (I3) · `--seed-domains a,b,c` (≤3 authoritative hosts, one targeted `site:` search each — needs `--search full`) · `--since` · `--exclude-domains` · `--no-cache` · `--concurrency <n>` · `--max-sources`/`--per-source` · `--pages`/`--web-breadth` · `--rounds 2` (needs `--search full`) · `--web-engine` · `--searxng <url>` · `--firecrawl <url>` · `--browser fallback\|always\|off` (the browser rung, Tuning) · `--template <t>` (write to another template than the mode's — e.g. `verification`) · `--backends` (⚠ Tuning) |
-| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` (a hit may carry `citeUrl`: read its `url`, cite that page) · `--urls a,b,c` · `--q` (excerpt hint) · `--browser` · `--template <t>` (switch the report template; alone, that is all it does) · `--json`. PubMed / PMC pages and efetch URLs are read through E-utilities / Europe PMC, never through their walls. **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
+| `ingest` | many new `S#` in an existing dossier — exit 2 under `--stdout` | `--run` · `--web-results <f.json\|->` (a hit may carry `citeUrl`: read its `url`, cite that page) · `--urls a,b,c` · `--q` (excerpt hint) · `--browser` · `--template <t>` (switch the report template; alone, that is all it does) · `--json`. PubMed / PMC pages and efetch URLs are read through E-utilities / Europe PMC, never through their walls (a PubMed record without an abstract is kept snippet-only; a PMC article outside the open-access subset falls back to its Europe PMC abstract). A paper already in the dossier under another address (same DOI, PMID or PMCID) is not added twice; a weak source is repaired in place (`S7	url	repaired`). **The batch form of `fetch`** — a second WebSearch that found ten good pages costs ONE process, not ten. Reports an outcome per URL, refusals included. |
 | `search` | nothing (prints) | `--backend <kind>` · `--q` · `--json`. One backend, ranked results — the zero-cost probe before committing to a run. |
-| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL and a search query. |
+| `fetch` (alias `add-source`) | one new `S#` in an existing dossier — exit 2 under `--stdout` | `--url` · `--out` · `--q` (excerpt hint) · `--title` · `--browser` · `--cite-url <page>` (read the text from `--url`, cite this instead). One URL; use `ingest` for several. Records a **page**, never the endpoint it read; refuses a wall, a batch URL, a search results page and a deep link that redirected to the site's home page. Fetching a ⛔ or snippet-only source again repairs it in place, same `S#`. |
 | `relink` | source urls in an existing dossier — exit 2 under `--stdout` | `--run` alone repairs every source whose own text names where it lives, then prints what it couldn't prove · `--list` (dry run) · `--id <S#> --url <page>` (your answer) · `--title` · `--json`. |
 | `drop` | removes sources from an existing dossier — exit 2 under `--stdout` | `--run` · `--id S43,S44` · `--where wall\|snippet\|offtopic` · `--dry-run` · `--json`. Deletes the extracts and rewrites the index. Ids are stable: the gaps stay and a dropped id is never reused, so a report still citing one fails `check` as dangling — it says which tier cites what. |
 | `render` | `index.html` + `index.md` in the run dir (`--stdout`: `index.md` only, to stdout) | `--run` · `--no-html` · `--no-md` · `--out` (⚠ moves the HTML only) |
@@ -227,7 +230,7 @@ node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <list.txt|thesis.docx|r
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
 | `verify` | `VERIFY.todo.json` → `VERIFY.json` — exit 2 under `--stdout` | `--run` · `--max-verify <n>` · `--shards <n> --shard <i>` · `--apply <file\|dir\|a,b>` (the fail-closed fold) |
-| `refcheck` | `refcheck.json` + `REFCHECK.md` + a dossier where `S<n>` is reference `n` — exit 2 under `--stdout` | `--refs <file>` (numbered Vancouver list, or a .docx/.pdf with a References heading, or .bib) · `--citing <file>` (defaults to the body of `--refs`) · `--out` · `--offline` (no lookup) · `--json`. See [Checking a bibliography](#checking-a-bibliography--refcheck). |
+| `refcheck` | `refcheck.json` + `REFCHECK.md` + a dossier where `S<n>` is reference `n` — exit 2 under `--stdout` | `--refs <file>` (numbered Vancouver list, or a .docx/.pdf with a References heading, or .bib) · `--citing <file>` (defaults to the body of `--refs`) · `--out` · `--offline` (no lookup) · `--force` (write over an earlier report's dir) · `--json`. See [Checking a bibliography](#checking-a-bibliography--refcheck). |
 | `orchestrate` | `<RUN>/orchestration/` — exit 2 under `--stdout` | `--run` · `--phase` · `--eco` · `--list` · `--browser` (carried into the gatherers' commands) |
 
 ## The standard route (route S)
@@ -311,7 +314,8 @@ not hand control back mid-retrieval.
    per-source **⛔ wall** — the page was a cookie, consent or anti-bot wall. Never
    cite a ⛔ source: `check` fails on it. **🗑 Probably off-topic** lists the
    sources that match few of the question's terms (gather prints them on its
-   `offtopic:` line too). Skim them, then clear walls and off-topic sources in
+   `offtopic:` line too); a source that names none of the question's proper
+   nouns or acronyms ("Carlevale", "IOL") is ranked lower, never dropped. Skim them, then clear walls and off-topic sources in
    one call each — `drop --run <dir> --where wall`, `drop --run <dir> --where
    offtopic` (`--dry-run` first if in doubt) — before reading the rest.
 
@@ -352,7 +356,10 @@ not hand control back mid-retrieval.
    a **cited source whose extract is a wall** ("Cookies must be enabled…") —
    every `[S#]` resolving proves nothing when the text behind one is boilerplate.
    A cited snippet-only source warns (`--fail-on-wall` makes it fatal). Fix the
-   citations, or `fetch` more sources, and re-run until it passes.
+   citations, or `fetch` more sources, and re-run until it passes. To repair a
+   ⛔ or snippet-only source, `fetch` (or `ingest`) its page again: when the
+   re-read finds the text, it **replaces the weak one under the same `[S#]`**
+   ("repaired S7"); when it does not, the id comes back with why.
 
    A figure that is a label, not a claim — a reference table's numbers — is not
    checked against the sources: a table's first column is skipped when it is an
@@ -419,8 +426,17 @@ reference `n`** (its record + abstract), written to the `verification`
 template: write your `REPORT.md` from it, citing `[S#]`, and `check` it like any
 report. A figure missing from an abstract is a lead, not a verdict — it may sit
 in the full text: `fetch --url` the article's full text before calling it
-wrong. `--offline` parses and checks the citing
-text without any lookup.
+wrong. A figure the abstract spells out ("Two hundred thirty-four eyes") counts
+as found, and so does one found in the abstract of a reference cited in the
+same call (`[26,27]`). A title that differs by a word or two is `≈ minor`, not
+a mismatch. `--offline` parses and checks the citing text without any lookup;
+`refcheck` never opens a browser (`--browser` is accepted and ignored). Into an
+`--out` that already holds a `REPORT.md`/`SUMMARY.md` it refuses unless
+`--force` — the old report would be checked against the new sources.
+
+A verification report quotes the checked document's own figures, which no
+source contains: put such a block under `<!-- ultrasearch:no-numerals -->` so
+`check` does not ask a source for them.
 
 ## Orchestration — route by harness
 

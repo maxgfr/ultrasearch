@@ -100,7 +100,14 @@ extracts, so it costs no extra retrieval. See
   rejection, arXiv/Wayback fallbacks) → write dossier (+ refs.bib for research).
   A kept source matching under a third of the question's word terms with a low
   content score (or none at all) is flagged `offTopic` — never dropped — and
-  listed at the head of `DOSSIER.md` and on gather's `offtopic:` line.
+  listed at the head of `DOSSIER.md` and on gather's `offtopic:` line. A source
+  naming none of the question's proper nouns or acronyms (`namedTerms`) keeps
+  0.75 of its score (`rank.namedMiss`). Search results pages are dropped before
+  hydration; a deep link answered by its site's home page is treated as dead
+  (Wayback, else snippet-only). A scholarly backend's thin text (title + "no
+  abstract") is not full text: the page is read, the record is the fallback.
+  After hydration, items sharing a DOI, PMID or PMCID (`identity.ts`) merge into
+  the best-read one, the others' URLs kept as `meta.alsoAt`.
 - `cache.ts` — the on-disk fetch cache (on by default, `--no-cache` disables it):
   keyed by canonical URL **+ Accept-Language + extractor identity** so neither a
   locale nor an extractor is ever served the other's body, TTL-bounded,
@@ -135,6 +142,10 @@ extracts, so it costs no extra retrieval. See
   claim the same id and leave a citation resolving to the wrong page. Stable ids
   are what the grounding contract rests on; the saving `ingest` delivers is the
   N process spawns and N agent round-trips, which is where the cost actually was.
+  A URL whose source is already on file but weak (a wall, snippet-only) is
+  re-read, and a good text REPAIRS it in place under its id (`repaired: true`).
+  Dedupe runs on the cite URL and on identifiers (`identity.ts`); search results
+  pages (`listing.ts`) are refused, and so is a deep link that redirected home.
 - `backends/websearch.ts` — the harness WebSearch lane (backend kind `claude`).
   `parseWebResults` is the forgiving seam between a model's output and the
   engine — object arrays, bare URL arrays, `{results:[…]}` wrappers, newline
@@ -157,7 +168,10 @@ extracts, so it costs no extra retrieval. See
   as exempt from the numeral pass.
 - `walls.ts` — `looksLikeWall`: the engine's junk detector plus the walls it
   misses (PubMed's "Cookies must be enabled", short consent and JavaScript walls)
-  and a 300-character content floor. `gather` keeps a wall as snippet-only with
+  and a 300-character content floor. Either verdict yields to
+  `proseOutweighsWall`: three or more 60-character lines that neither address
+  the reader nor are wall phrases, carrying 60 % of the text, make a document
+  with a banner on it (or an article ABOUT cookie walls), not a wall. `gather` keeps a wall as snippet-only with
   `wall: true`, `ingest`/`fetch` refuse it, `check` fails a report citing one.
   `readPastCachedWall` re-reads live when the fetch cache serves a wall.
 - `drop.ts` — `dropSources`: remove sources by id or kind (wall / snippet /
@@ -168,8 +182,15 @@ extracts, so it costs no extra retrieval. See
   PubMed page, a PMC article page (current or legacy host), a single-record
   efetch or a Europe PMC URL to its citable page + text endpoint;
   `readNcbiDocument` reads E-utilities (abstract) or Europe PMC `fullTextXML`
-  (converted by `jatsToText`). `gather` and `ingest`/`fetch` read it BEFORE the
-  page, and `gather`'s fallback ladder uses it for PubMed/PMC candidates.
+  (converted by `jatsToText`), else a PMC article's Europe PMC abstract.
+  E-utilities is paced (`paceHost`, 350 ms) and backed off; a record without an
+  abstract comes back `thin` and is kept snippet-only. `gather` and
+  `ingest`/`fetch` read it BEFORE the page, and `gather`'s fallback ladder uses
+  it for PubMed/PMC candidates.
+- `identity.ts` — `identityKeys`: a source's DOI / PMID / PMCID from its URL,
+  its backend's DOI and (for E-utilities text only) the record's labelled ids.
+- `listing.ts` — `searchPageOf` (a results page, not a document) and
+  `redirectedHome` (a dead deep link answered by the site's home page).
 - `locale.ts` — pure locale derivation (`Accept-Language`, DuckDuckGo `kl`).
 - `brainstorm.ts` — `runBrainstorm`: the clarity gate's shallow probe, ambiguity
   signals and candidate angles.
@@ -230,7 +251,8 @@ extracts, so it costs no extra retrieval. See
   styles, orphans, Vancouver first-citation order, each call's claim and its
   figures), `resolve.ts` (PMID → ecitmatch → DOI `[aid]` → title search on
   PubMed, then Crossref; batched `esummary`/`efetch`; doi.org handle API),
-  `diff.ts` (field-by-field `match`/`mismatch`/`missing`), `index.ts`
+  `diff.ts` (field-by-field `match`/`minor`/`mismatch`/`missing`; ForeName
+  initials accepted; no issue asked of an article-number citation), `index.ts`
   (`runRefcheck`: `refcheck.json`, `REFCHECK.md`, and a dossier where `S<n>` is
   reference `n`).
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
@@ -240,8 +262,9 @@ extracts, so it costs no extra retrieval. See
 - `backends/backoff.ts` — `withBackoff` / `apiGet`: the scholarly APIs' 429/503
   handling (3 attempts, `Retry-After` ≤ 30 s honoured, else exponential from
   `ULTRASEARCH_BACKOFF_MS`), with the engine's own retry switched off underneath
-  so the two loops never stack. `apiFailure` labels a throttled backend
-  `rate-limited`, never `failed`.
+  so the two loops never stack, and `paceHost` (per-host spacing for rate-capped
+  APIs: E-utilities at 3 requests/s). `apiFailure` labels a throttled backend
+  `rate-limited`, never `failed`, and an empty 2xx `returned nothing`.
 - `backends/clinicaltrials.ts` — ClinicalTrials.gov API v2 (`studyText` turns a
   study record into the cited text; the page cited is `/study/<NCT id>`).
 - `backends/reddit.ts` — the keyless `search.rss` feed: one request, never

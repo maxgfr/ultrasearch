@@ -4,9 +4,17 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { parseAuthorList, parseBibtex, parseReferences, parseVancouver, splitDocument, splitEntries, vancouverName } from "../src/refcheck/parse.js";
-import { analyseCiting, detectStyle, expandCallList, numeralIn } from "../src/refcheck/citing.js";
-import { diffReference, expandPages, titleSimilarity, vancouverAuthors } from "../src/refcheck/diff.js";
-import { checkDoi, crossrefBibliographic, resolveReferences } from "../src/refcheck/resolve.js";
+import { analyseCiting, detectStyle, expandCallList, numeralIn, spelledToDigits } from "../src/refcheck/citing.js";
+import { articleNumbered, diffReference, expandPages, titleSimilarity, vancouverAuthors } from "../src/refcheck/diff.js";
+import {
+  checkDoi,
+  crossrefBibliographic,
+  crossrefRecord,
+  efetchArticles,
+  initialsOf,
+  resolveReferences,
+  type ResolvedRecord,
+} from "../src/refcheck/resolve.js";
 import { readDocumentText, renderRefcheckMarkdown, runRefcheck } from "../src/refcheck/index.js";
 import { runCheck } from "../src/check.js";
 import { main } from "../src/cli.js";
@@ -386,8 +394,15 @@ describe("refcheck — the whole run", () => {
         "## Verdict\n\nThe registry study reports 2.8 million procedures in its abstract [S2].\n\n## Open questions\n\n- The full text was not read [M].\n",
       );
       expect(runCheck(out).ok).toBe(true);
-      // Re-running into the same dir is allowed; into another dossier is not.
-      await runRefcheck({ refs: doc, out, offline: true });
+      // Re-running over a report already written is refused — the report would
+      // be checked against sources it was not written from — unless forced,
+      // and then the report is kept and flagged. Into another dossier: never.
+      await expect(runRefcheck({ refs: doc, out, offline: true })).rejects.toThrow(
+        /already holds REPORT\.md from an earlier run — pass another --out, or --force/,
+      );
+      const forced = await runRefcheck({ refs: doc, out, offline: true, force: true });
+      expect(forced.notes.join("\n")).toMatch(/REPORT\.md predate this run/);
+      expect(existsSync(join(out, "REPORT.md"))).toBe(true);
       writeFileSync(join(dir, "sources.json"), "[]");
       await expect(runRefcheck({ refs: doc, out: dir, offline: true })).rejects.toThrow(/already holds a dossier/);
     } finally {
@@ -550,5 +565,125 @@ describe("refcheck — CLI and MCP", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// Found by an audit of a real thesis run (39 references, LAGARDE).
+describe("refcheck — audit regressions", () => {
+  it("keeps Crossref's subtitle in the title", () => {
+    const rec = crossrefRecord({ DOI: "10.1145/1327452.1327492", title: ["MapReduce"], subtitle: ["simplified data processing on large clusters"] }, "doi")!;
+    expect(rec.title).toBe("MapReduce: simplified data processing on large clusters");
+  });
+
+  it("picks the bibliographic hit that fits, and refuses a reprint of another year", async () => {
+    const ref = parseVancouver("Vaswani A, Shazeer N. Attention is all you need. Adv Neural Inf Process Syst. 2017;30:5998-6008.", 1);
+    installFetchMock((url) =>
+      url.includes("query.bibliographic")
+        ? json({
+            message: {
+              items: [
+                {
+                  DOI: "10.1/reprint",
+                  type: "posted-content",
+                  title: ["Attention is all you need"],
+                  author: [{ family: "Vaswani", given: "A" }],
+                  issued: { "date-parts": [[2025]] },
+                },
+                {
+                  DOI: "10.1/paper",
+                  type: "proceedings-article",
+                  title: ["Attention is all you need"],
+                  author: [{ family: "Vaswani", given: "Ashish" }],
+                  issued: { "date-parts": [[2017]] },
+                },
+              ],
+            },
+          })
+        : undefined,
+    );
+    expect((await crossrefBibliographic(ref))?.doi).toBe("10.1/paper");
+    installFetchMock((url) =>
+      url.includes("query.bibliographic")
+        ? json({
+            message: { items: [{ DOI: "10.1/reprint", type: "posted-content", title: ["Attention is all you need"], issued: { "date-parts": [[2025]] } }] },
+          })
+        : undefined,
+    );
+    expect(await crossrefBibliographic(ref)).toBeUndefined();
+  });
+
+  it("finds a figure an abstract spells out", () => {
+    expect(spelledToDigits("Two hundred thirty-four eyes of 198 patients")).toBe("234 eyes of 198 patients");
+    expect(spelledToDigits("one hundred and twelve; forty-one; a hundred")).toBe("112; 41; a 100");
+    expect(spelledToDigits("quatre-vingt-dix yeux, soixante-dix, quarante et un, deux cent trente-quatre")).toBe("90 yeux, 70, 41, 234");
+    expect(spelledToDigits("one patient, un patient, une patiente")).toBe("one patient, un patient, une patiente");
+    expect(numeralIn("234", "Two hundred thirty-four eyes were included.")).toBe(true);
+    expect(numeralIn("23", "Two hundred thirty-four eyes were included.")).toBe(false);
+  });
+
+  it("counts a figure found in a co-cited abstract as found, saying where", async () => {
+    const refs = REFS.slice(0, 2);
+    const dir = mkdtempSync(join(tmpdir(), "us-refcheck-cocited-"));
+    const file = join(dir, "thesis.md");
+    writeFileSync(file, ["# Body", "Ruptures concerned 1.1% of procedures [1,2].", "", "# References", ...refs].join("\n"));
+    network();
+    const r = await runRefcheck({ refs: file, out: join(dir, "out") });
+    const one = r.references.find((e) => e.n === 1)!;
+    expect(one.claims[0]!.numerals).toEqual([{ value: "1.1", status: "found", in: [2] }]);
+    expect(r.summary.numeralsAbsent).toBe(0);
+    expect(readFileSync(join(dir, "out", "REFCHECK.md"), "utf8")).toMatch(/found \(in \[2\], co-cited\)/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("accepts the initials PubMed's ForeName spells out", async () => {
+    installFetchMock(() => ({
+      contentType: "application/xml",
+      body: `<PubmedArticleSet><PubmedArticle><MedlineCitation><PMID Version="1">1</PMID><Article><AuthorList>
+        <Author ValidYN="Y"><LastName>Schranz</LastName><ForeName>Matthias K J</ForeName><Initials>MK</Initials></Author>
+        <Author ValidYN="Y"><LastName>Dupont</LastName><ForeName>Jean-Pierre</ForeName><Initials>JP</Initials></Author>
+        <Author><CollectiveName>The Study Group</CollectiveName></Author>
+      </AuthorList></Article></MedlineCitation></PubmedArticle></PubmedArticleSet>`,
+    }));
+    expect((await efetchArticles(["1"])).get("1")).toEqual({ authors: ["Schranz MKJ", "Dupont JP"] });
+    expect(initialsOf("Matthias K J")).toBe("MKJ");
+    const rec: ResolvedRecord = {
+      via: "pubmed",
+      how: "pmid",
+      authors: ["Schranz MK", "Dupont JP"],
+      authorAlternates: ["Schranz MKJ", "Dupont JP"],
+      title: "T",
+      url: "u",
+    };
+    const ref = parseVancouver("Schranz MKJ, Dupont JP. T. J. 2020;1:1-2.", 1);
+    expect(diffReference(ref, rec).find((f) => f.field === "authors")!.status).toBe("match");
+    const wrong = parseVancouver("Schranz MX, Dupont JP. T. J. 2020;1:1-2.", 1);
+    expect(diffReference(wrong, rec).find((f) => f.field === "authors")!.note).toMatch(/initials "MX" — record has "MK" \(or "MKJ"\)/);
+  });
+
+  it("calls a title with ≥ 90 % of its words minor, and does not ask an article-number citation for its issue", () => {
+    const rec: ResolvedRecord = {
+      via: "pubmed",
+      how: "pmid",
+      authors: ["Doe J"],
+      title: "Long-term outcomes of the sutureless scleral fixation of an intraocular lens in adult eyes",
+      journal: "Sci Rep",
+      year: "2020",
+      volume: "10",
+      issue: "1",
+      pages: "12345",
+      url: "u",
+    };
+    const ref = parseVancouver("Doe J. Long-term outcomes of sutureless scleral fixation of an intraocular lens in adult eyes. Sci Rep. 2020;10:12345.", 1);
+    const fields = diffReference(ref, rec);
+    expect(fields.find((f) => f.field === "title")!.status).toBe("minor");
+    expect(fields.find((f) => f.field === "issue")).toBeUndefined();
+    expect(articleNumbered("12345")).toBe(true);
+    expect(articleNumbered("e0234567")).toBe(true);
+    expect(articleNumbered("157-62")).toBe(false);
+  });
+
+  it("leaves no space before punctuation where a call was removed", () => {
+    const a = analyseCiting("Exteriorisation was frequent [1]. Coverage persisted in most eyes [2] .", [1, 2]);
+    expect(a.calls.map((c) => c.claim)).toEqual(["Exteriorisation was frequent.", "Coverage persisted in most eyes."]);
   });
 });

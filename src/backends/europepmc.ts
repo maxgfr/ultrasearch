@@ -12,7 +12,7 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
   const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {
-    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r)] };
+    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r, ctx.question)] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     // Europe PMC titles/abstracts carry escaped JATS markup (&lt;i&gt;…&lt;/i&gt;).

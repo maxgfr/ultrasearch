@@ -8,7 +8,11 @@ The scholarly APIs (`pubmed`, `europepmc`, `clinicaltrials`, `crossref`,
 `openalex`, `semanticscholar`) also back off on a 429/503: 3 attempts, a
 `Retry-After` ≤ 30 s honoured as sent, else exponential from
 `ULTRASEARCH_BACKOFF_MS` (default 1000 → 1 s, 2 s). One still throttled after
-that is noted as `rate-limited (HTTP 429 after 3 attempts)`, never as `failed`.
+that is noted as `rate-limited (HTTP 429 after 3 attempts)`, never as `failed`;
+one that answered fine with nothing says `returned nothing for "<query>"`.
+E-utilities is also **paced**: one call every 350 ms at most (NCBI allows
+3 requests/s without a key), across every reader in the run —
+`ULTRASEARCH_NCBI_INTERVAL_MS` changes the gap, `0` turns it off.
 
 | Backend | Endpoint | Notes / limits |
 |---------|----------|----------------|
@@ -201,9 +205,16 @@ enabled", PMC's anti-bot interstitial. For these, the endpoint is read
 | `pubmed.ncbi.nlm.nih.gov/<pmid>/` (or `ncbi.nlm.nih.gov/pubmed/<pmid>`, or a single-id `efetch.fcgi?db=pubmed`) | E-utilities `efetch … rettype=abstract&retmode=text` |
 | `pmc.ncbi.nlm.nih.gov/articles/PMC<n>/` (or the legacy `ncbi.nlm.nih.gov/pmc/articles/`, or `efetch.fcgi?db=pmc`) | Europe PMC `…/rest/PMC<n>/fullTextXML`, converted to title + abstract + section headings + paragraphs (tables, formulas and the reference list dropped) |
 
-When the endpoint has nothing (an article outside the open-access subset), the
-ordinary ladder runs — landing page, Firecrawl, Wayback, the browser rung — and
-a refusal names what the endpoint answered.
+A PubMed record with no abstract (an editorial, a letter) is kept — it is a
+real record — but **snippet-only**: its citation is not a text to rest a claim
+on. A PMC article outside the open-access subset (no full-text XML) falls back
+to its title and abstract from Europe PMC's search
+(`…/rest/search?query=PMCID:PMC<n>&resultType=core`) — never to the PMC page,
+which is an interstitial or a navigation menu. Only when both have nothing does
+the ordinary ladder run — landing page, Firecrawl, Wayback, the browser rung —
+and a refusal names what the endpoints answered. A 429 from E-utilities is
+waited out (above), never taken as "no record": the PubMed page it would fall
+back to is the cookie wall.
 
 Two things need the URL's shape *before* a request is spent, and those are the
 only per-provider entries — a short, optional table (an unlisted URL just falls

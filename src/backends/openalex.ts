@@ -21,7 +21,7 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
-    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r)] };
+    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r, ctx.question)] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";

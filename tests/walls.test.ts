@@ -31,6 +31,43 @@ describe("wallPattern", () => {
     expect(wallPattern(essay)).toBeUndefined();
   });
 
+  // Audit: a banner or a Disqus line above real paragraphs threw the page away.
+  const PARAS = [
+    "Scleral fixation restores useful vision when the capsular bag can no longer hold a posterior chamber lens.",
+    "Forty-one eyes were followed for four years after Carlevale implantation with two scleral pockets.",
+    "Exteriorised haptics remained covered by conjunctiva in most eyes, and no endophthalmitis was recorded.",
+  ].join("\n");
+  it("lets real prose outweigh a banner, a JavaScript line or a cookie notice above it", () => {
+    expect(wallPattern(`We value your privacy. Accept all cookies or manage your settings.\n${PARAS}`)).toBeUndefined();
+    expect(wallPattern(`Please enable JavaScript to view the comments powered by Disqus.\n${PARAS}`)).toBeUndefined();
+    expect(wallPattern(`Cookies must be enabled to post a comment.\n${PARAS}`)).toBeUndefined();
+    expect(looksLikeWall(`Please enable JavaScript to view the comments powered by Disqus.\n${PARAS}`)).toBeUndefined();
+  });
+
+  it("does not take an article about cookie walls for one", () => {
+    const article = [
+      "Publishers across Europe now greet readers with a banner that says we use cookies and offers to accept all cookies.",
+      "Regulators in France ruled that such banners must make refusing as easy as accepting, with a reject button on the first layer.",
+      "A 2023 survey of 1,000 news sites found that most banners still nudged readers towards the accept button by colour and size.",
+      "Researchers measured consent rates falling from 90 % to 50 % once the reject option was shown with equal weight beside it.",
+      "The study concludes that design, not reader preference, drove the high consent rates recorded before the ruling took effect.",
+    ].join("\n\n");
+    expect(article.length).toBeLessThan(2000);
+    expect(looksLikeWall(article)).toBeUndefined();
+  });
+
+  it("still catches walls whose long lines address the reader", () => {
+    const tcf = [
+      "We value your privacy",
+      "We and our 842 partners store and access information on your device, such as cookies, and process personal data such as unique identifiers.",
+      "With your permission we and our partners may use precise geolocation data and identification through device scanning.",
+      "You can click to consent to our processing as described above, or access more detailed information and change your preferences.",
+      "Accept all",
+      "Manage options",
+    ].join("\n");
+    expect(wallPattern(tcf)).toBe("cookie/consent wall");
+  });
+
   it("is silent on empty text and on real prose", () => {
     expect(wallPattern("   ")).toBeUndefined();
     expect(wallPattern(ARTICLE)).toBeUndefined();

@@ -54,7 +54,7 @@ Usage:
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
   ultrasearch ingest --run <dossier-dir> [--web-results <f.json|->] [--urls <u,...>] [--files <p,...>] [--template <t>] [--json]
-  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--json]
+  ultrasearch refcheck --refs <list.txt|.docx|.pdf|.bib> [--citing <text.md|.docx>] [--out <dir>] [--offline] [--force] [--json]
   ultrasearch render --run <dossier-dir> [--no-html] [--no-md]
   ultrasearch check  --run <dossier-dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
   ultrasearch relink --run <dossier-dir> [--list] [--id <S#> --url <page>] [--title <s>]
@@ -214,6 +214,8 @@ Options:
   --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
   --offline            For 'refcheck': parse and read the citing text only — no
                        PubMed, Crossref or doi.org lookup
+  --force              For 'refcheck': write into an --out that already holds a
+                       REPORT.md/SUMMARY.md from an earlier run (kept — re-check it)
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -378,6 +380,7 @@ export const BOOL_FLAGS = new Set([
   "dry-run",
   "allow-remote",
   "offline",
+  "force",
 ]);
 
 function fail(message: string): never {
@@ -1138,10 +1141,12 @@ async function dispatch(p: Parsed): Promise<void> {
       // both allocate [S#] ids by read-then-write.
       const web = hits.length ? await addSources(resolve(dir), hits, enrichOpts) : undefined;
       const local = files.length ? await addFiles(resolve(dir), files, enrichOpts) : undefined;
+      const repaired = web?.repaired ?? 0;
       const r: IngestResult = {
         results: [...(web?.results ?? []), ...(local?.results ?? [])],
         added: (web?.added ?? 0) + (local?.added ?? 0),
         skipped: (web?.skipped ?? 0) + (local?.skipped ?? 0),
+        ...(repaired ? { repaired } : {}),
       };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
@@ -1149,22 +1154,30 @@ async function dispatch(p: Parsed): Promise<void> {
         // One line per URL, refusals included: an ingest that silently dropped
         // half its input would be worse than one that failed outright.
         for (const o of r.results) {
-          process.stdout.write(o.added ? `${o.id}\t${o.url}\n` : `-\t${o.url}\t${o.note ?? "not added"}\n`);
-          // How an ADDED page was had, when that is news (a browser rescue).
-          if (o.added && o.note) process.stderr.write(`ultrasearch: ${o.note}\n`);
+          process.stdout.write(o.added || o.repaired ? `${o.id}\t${o.url}${o.repaired ? "\trepaired" : ""}\n` : `-\t${o.url}\t${o.note ?? "not added"}\n`);
+          // How an ADDED page was had, when that is news (a browser rescue) —
+          // and what a repair replaced.
+          if ((o.added || o.repaired) && o.note) process.stderr.write(`ultrasearch: ${o.note}\n`);
         }
         const what = files.length ? (hits.length ? "input(s)" : "file(s)") : "URL(s)";
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s), skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
+        const fixed = repaired ? `, repaired ${repaired} in place` : "";
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
       }
-      // Nothing added at all is a failed acquisition, not a quiet success.
-      if (!r.added) await exitClosed(1);
+      // Nothing added (or repaired) at all is a failed acquisition, not a quiet success.
+      if (!r.added && !repaired) await exitClosed(1);
       return;
     }
 
     case "refcheck": {
       const refs = p.values.refs;
       if (!refs) fail("missing --refs <list.txt|.docx|.pdf|.bib>");
-      const r = await runRefcheck({ refs, citing: p.values.citing, out: p.values.out ?? p.values.run, offline: p.bools.has("offline") });
+      const r = await runRefcheck({
+        refs,
+        citing: p.values.citing,
+        out: p.values.out ?? p.values.run,
+        offline: p.bools.has("offline"),
+        force: p.bools.has("force"),
+      });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
         return;

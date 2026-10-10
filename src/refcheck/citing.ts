@@ -133,7 +133,11 @@ export function analyseCiting(text: string, refNumbers: number[]): CitingAnalysi
         // The words after the LAST call of a sentence still belong to it
         // ("…improved [3] in 40 patients.").
         if (k === found.length - 1) claim += ` ${sentence.slice(c.index + c.length)}`;
-        claim = claim.replace(/^[\s,;:.]+|[\s,;:]+$/g, "");
+        // Removing the call leaves its gap: "…in 40 patients ." → "…in 40 patients.".
+        claim = claim
+          .replace(/\s+([.,;:!?)\]])/g, "$1")
+          .replace(/\s{2,}/g, " ")
+          .replace(/^[\s,;:.]+|[\s,;:]+$/g, "");
         // Nothing of its own ("…dix. [28].") → the sentence before. A bare
         // figure (", 72 [22]") is its own claim.
         if (!hasWords(claim) && !extractNumerals(claim).length) claim = previous;
@@ -172,9 +176,138 @@ export function analyseCiting(text: string, refNumbers: number[]): CitingAnalysi
   };
 }
 
-/** Whether a normalized numeral appears in a text as a whole number (13 must not match 130 or 1.3). */
+/** Whether a normalized numeral appears in a text as a whole number (13 must not match 130 or 1.3) — in digits or spelled out. */
 export function numeralIn(numeral: string, text: string): boolean {
-  const hay = normalizeNumeralText(text);
   const esc = numeral.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![\\d.])${esc}(?![\\d]|\\.\\d)`).test(hay);
+  const re = new RegExp(`(?<![\\d.])${esc}(?![\\d]|\\.\\d)`);
+  if (re.test(normalizeNumeralText(text))) return true;
+  // "Two hundred thirty-four eyes" is 234 eyes: abstracts spell out the
+  // number that opens a sentence.
+  const spelled = spelledToDigits(text);
+  return spelled !== text && re.test(normalizeNumeralText(spelled));
+}
+
+const EN_UNITS: Record<string, number> = {
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+};
+const EN_TENS: Record<string, number> = { twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90 };
+const FR_UNITS: Record<string, number> = {
+  zéro: 0,
+  un: 1,
+  une: 1,
+  deux: 2,
+  trois: 3,
+  quatre: 4,
+  cinq: 5,
+  six: 6,
+  sept: 7,
+  huit: 8,
+  neuf: 9,
+  dix: 10,
+  onze: 11,
+  douze: 12,
+  treize: 13,
+  quatorze: 14,
+  quinze: 15,
+  seize: 16,
+};
+const FR_TENS: Record<string, number> = { vingt: 20, vingts: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60 };
+const SCALE: Record<string, number> = { hundred: 100, thousand: 1000, cent: 100, cents: 100, mille: 1000 };
+const JOINERS = new Set(["and", "et"]);
+
+function wordValue(w: string): { kind: "unit" | "tens" | "scale"; value: number } | undefined {
+  const k = w.toLowerCase();
+  if (k in EN_UNITS) return { kind: "unit", value: EN_UNITS[k]! };
+  if (k in FR_UNITS) return { kind: "unit", value: FR_UNITS[k]! };
+  if (k in EN_TENS) return { kind: "tens", value: EN_TENS[k]! };
+  if (k in FR_TENS) return { kind: "tens", value: FR_TENS[k]! };
+  if (k in SCALE) return { kind: "scale", value: SCALE[k]! };
+  return undefined;
+}
+
+/**
+ * Spelled-out cardinals → digits, in English and French ("two hundred
+ * thirty-four" → 234, "quatre-vingt-dix" → 90, "quarante et un" → 41). A lone
+ * "one", "un" or "une" is left alone: it is an article as often as a number.
+ */
+export function spelledToDigits(text: string): string {
+  return text.replace(/\p{L}+(?:(?:[\s-]+)\p{L}+)*/gu, (run) => {
+    const words = run.split(/([\s-]+)/);
+    let out = "";
+    let i = 0;
+    while (i < words.length) {
+      if (/^[\s-]+$/.test(words[i]!)) {
+        out += words[i]!;
+        i++;
+        continue;
+      }
+      // Collect the longest number starting at word i (separators at odd indexes).
+      let total = 0;
+      let current = 0;
+      let used = 0;
+      let j = i;
+      let lastWasNumber = false;
+      let seen = 0;
+      while (j < words.length) {
+        const w = words[j]!;
+        if (/^[\s-]+$/.test(w)) {
+          j++;
+          continue;
+        }
+        const v = wordValue(w);
+        if (!v) {
+          if (lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length && wordValue(words[j + 2]!)) {
+            j++;
+            continue;
+          }
+          break;
+        }
+        if (v.kind === "scale") {
+          if (!lastWasNumber && v.value === 100) current = 1; // "cent" alone is 100
+          current = (current || 1) * v.value;
+          if (v.value >= 1000) {
+            total += current;
+            current = 0;
+          }
+        } else if (v.kind === "tens" && v.value === 20 && current === 4) {
+          current = 80; // quatre-vingt(s)
+        } else {
+          current += v.value;
+        }
+        lastWasNumber = true;
+        seen++;
+        used = j + 1;
+        j++;
+      }
+      if (!seen) {
+        out += words[i]!;
+        i++;
+        continue;
+      }
+      const span = words.slice(i, used).join("");
+      const lone = seen === 1 && /^(one|un|une)$/i.test(span);
+      out += lone ? span : String(total + current);
+      i = used;
+    }
+    return out;
+  });
 }

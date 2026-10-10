@@ -75,6 +75,35 @@ export async function withBackoff<T extends BackoffAttempt>(call: () => Promise<
   }
 }
 
+// Hosts that publish a request-rate ceiling, and the gap kept between two calls
+// to each. NCBI allows 3 requests/s without an API key and answers a burst with
+// 429s: a `gather` hydrating 18 PubMed hits six at a time used to lose a third
+// of them that way — and a lost efetch fell back to the PubMed page, which is a
+// cookie wall. Back-off cures a 429 after the fact; pacing keeps it from
+// happening. ULTRASEARCH_NCBI_INTERVAL_MS overrides the gap (0 turns it off).
+const HOST_GAP_MS: Record<string, () => number> = {
+  "eutils.ncbi.nlm.nih.gov": () => envInt("NCBI_INTERVAL_MS", 350, 0, 10_000),
+};
+// The earliest moment each paced host may be called again. Reserved
+// synchronously, before any await, so concurrent callers queue instead of racing.
+const nextSlot = new Map<string, number>();
+
+/** Wait until `url`'s host may be called again (immediate for an unpaced host). */
+export async function paceHost(url: string, pause: (ms: number) => Promise<void> = sleep): Promise<void> {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return;
+  }
+  const gap = HOST_GAP_MS[host]?.() ?? 0;
+  if (gap <= 0) return;
+  const now = Date.now();
+  const slot = Math.max(now, nextSlot.get(host) ?? 0);
+  nextSlot.set(host, slot + gap);
+  if (slot > now) await pause(slot - now);
+}
+
 /** One JSON GET as the scholarly backends see it. */
 export interface ApiJson {
   ok: boolean;
@@ -97,10 +126,10 @@ export async function apiGet(
   opts: { timeoutMs?: number; userAgent?: string; accept?: string; json?: boolean } & BackoffOptions = {},
 ): Promise<ApiJson> {
   const accept = opts.accept ?? "application/json";
-  const out = await withBackoff(
-    () => httpGet(url, { accept, retries: 0, timeoutMs: opts.timeoutMs ?? 12000, ...(opts.userAgent ? { userAgent: opts.userAgent } : {}) }),
-    opts,
-  );
+  const out = await withBackoff(async () => {
+    await paceHost(url);
+    return httpGet(url, { accept, retries: 0, timeoutMs: opts.timeoutMs ?? 12000, ...(opts.userAgent ? { userAgent: opts.userAgent } : {}) });
+  }, opts);
   const r = out.result;
   let data: any = r.body;
   if (opts.json !== false && r.body) {
@@ -113,10 +142,15 @@ export async function apiGet(
   return { ok: r.ok, status: r.status, data, rateLimited: out.rateLimited, attempts: out.attempts, ...(r.error ? { error: r.error } : {}) };
 }
 
-/** The backend note for a failed or empty call: rate-limited reads as such, never as "failed". */
-export function apiFailure(label: string, r: Pick<ApiJson, "status" | "rateLimited" | "attempts">): string {
+/**
+ * The backend note for a failed or empty call: rate-limited reads as such,
+ * never as "failed" — and an answer that came back fine but empty says so,
+ * instead of "failed or empty (status 200)".
+ */
+export function apiFailure(label: string, r: Pick<ApiJson, "status" | "rateLimited" | "attempts">, query?: string): string {
   if (r.rateLimited || r.status === 429 || r.status === 503) {
     return `${label} rate-limited (HTTP ${r.status}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}).`;
   }
-  return `${label} failed or empty (status ${r.status}).`;
+  if (r.status >= 200 && r.status < 300) return `${label} returned nothing${query ? ` for "${query}"` : ""}.`;
+  return `${label} failed (status ${r.status || "no response"}).`;
 }

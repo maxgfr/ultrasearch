@@ -12,7 +12,7 @@ export const crossrefBackend: Backend = async (ctx): Promise<BackendResult> => {
   const r = await apiGet(url, { userAgent: contactUa() });
   const items0: any[] = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
-    return { backend: "crossref", items: [], notes: [apiFailure("Crossref search", r)] };
+    return { backend: "crossref", items: [], notes: [apiFailure("Crossref search", r, ctx.question)] };
   }
   const items: RawSource[] = items0.slice(0, n).map((w: any, i: number): RawSource => {
     // Crossref titles carry HTML entities (R&amp;D) and JATS tags (<i>, <sub>).

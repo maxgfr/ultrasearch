@@ -1,6 +1,7 @@
 import { decodeEntities, httpGet } from "../backends/fetch.js";
 import { pubmedAbstractUrl } from "../providers.js";
-import { looksLikeWall, readPastCachedWall } from "../walls.js";
+import { apiGet, paceHost, withBackoff } from "../backends/backoff.js";
+import { looksLikeWall, MIN_USEFUL_CHARS, readPastCachedWall, usefulChars, wallPattern } from "../walls.js";
 
 // PubMed and PMC, read where their text actually is.
 //
@@ -74,31 +75,80 @@ export function ncbiDocument(url: string): NcbiDocument | undefined {
   return undefined;
 }
 
-/** What reading an NCBI document produced: its text, or why there is none. */
-export type NcbiRead = { ok: true; text: string; title?: string; via: string } | { ok: false; why: string };
+/**
+ * What reading an NCBI document produced: its text, or why there is none.
+ * `thin` marks a genuine record that carries no abstract (an editorial, a
+ * letter): its citation and title are real, but there is nothing to check a
+ * claim against — the caller keeps it as snippet-only rather than refusing it.
+ */
+export type NcbiRead = { ok: true; text: string; title?: string; via: string; thin?: true } | { ok: false; why: string };
+
+/** Europe PMC's search, asked for one PMCID's core record (title + abstract). */
+export function europePmcRecordUrl(pmcid: string): string {
+  return `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=PMCID:${pmcid.toUpperCase()}&resultType=core&format=json`;
+}
 
 /**
  * Read an NCBI document's text from its endpoint. Never throws; a failure says
  * why, so the caller can fall back to the ordinary ladder (landing page,
  * Firecrawl, Wayback, the browser rung) knowing what was already tried.
+ *
+ * Only a WALL by its wording is refused here. The near-empty floor that
+ * guards a landing page does not apply: an endpoint that answered 200 with a
+ * short record is telling the truth about a record with no abstract, and
+ * refusing it ("retry later") sent the reader to the PubMed page — the wall.
  */
 export async function readNcbiDocument(doc: NcbiDocument, opts: { cache?: boolean } = {}): Promise<NcbiRead> {
   if (doc.kind === "pubmed") {
-    const res = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
+    // Paced (3 requests/s) and backed off: a 429 from E-utilities is a reason
+    // to wait, never a verdict on the record.
+    const out = await withBackoff(async () => {
+      await paceHost(doc.textUrl);
+      const r = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
+      return { ...r, status: r.status ?? 0 };
+    });
+    const res = out.result;
+    if (out.rateLimited) {
+      return {
+        ok: false,
+        why: `E-utilities rate-limited the read of PMID ${doc.id} (HTTP ${res.status}${out.attempts > 1 ? ` after ${out.attempts} attempts` : ""})`,
+      };
+    }
     const text = res.text?.trim() ?? "";
-    if (!text) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res.status || "no response"})` };
-    const wall = looksLikeWall(text);
+    if (!text || res.status >= 400) return { ok: false, why: `E-utilities returned nothing for PMID ${doc.id} (HTTP ${res.status || "no response"})` };
+    const wall = wallPattern(text);
     if (wall) return { ok: false, why: `E-utilities returned a ${wall} for PMID ${doc.id}` };
-    return { ok: true, text, via: doc.textUrl };
+    return { ok: true, text, via: doc.textUrl, ...(usefulChars(text) < MIN_USEFUL_CHARS ? { thin: true as const } : {}) };
   }
   const res = await httpGet(doc.textUrl, { accept: "application/xml, text/xml;q=0.9, */*;q=0.1" });
+  let why: string;
   if (!res.ok || !/<article\b/i.test(res.body)) {
-    return { ok: false, why: `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})` };
+    why = `Europe PMC has no full text for ${doc.id} (HTTP ${res.status || "no response"})`;
+  } else {
+    const { text, title } = jatsToText(res.body);
+    const wall = looksLikeWall(text);
+    if (!wall) return { ok: true, text, ...(title ? { title } : {}), via: doc.textUrl };
+    why = `Europe PMC's full text for ${doc.id} is a ${wall}`;
   }
-  const { text, title } = jatsToText(res.body);
-  const wall = looksLikeWall(text);
-  if (wall) return { ok: false, why: `Europe PMC's full text for ${doc.id} is a ${wall}` };
-  return { ok: true, text, ...(title ? { title } : {}), via: doc.textUrl };
+  // No usable full text — not every PMC article is in the open-access subset.
+  // Its abstract still is, in Europe PMC's record, and is worth far more than
+  // the PMC page: an interstitial, or a navigation menu that reads as prose.
+  const record = await readEuropePmcRecord(doc.id);
+  return record ?? { ok: false, why };
+}
+
+/** The PMCID's title and abstract from Europe PMC's search, or undefined when it has no record. */
+async function readEuropePmcRecord(pmcid: string): Promise<NcbiRead | undefined> {
+  const url = europePmcRecordUrl(pmcid);
+  const r = await apiGet(url);
+  const hit = r.ok ? r.data?.resultList?.result?.[0] : undefined;
+  if (!hit || String(hit.pmcid ?? "").toUpperCase() !== pmcid.toUpperCase()) return undefined;
+  const title = hit.title ? clean(String(hit.title)) : undefined;
+  const abstract = hit.abstractText ? clean(String(hit.abstractText)) : "";
+  if (!title && !abstract) return undefined;
+  const text = [title ? `# ${title}` : "", abstract ? `## Abstract\n\n${abstract}` : ""].filter(Boolean).join("\n\n");
+  if (wallPattern(text)) return undefined;
+  return { ok: true, text, ...(title ? { title } : {}), via: url, ...(usefulChars(text) < MIN_USEFUL_CHARS ? { thin: true as const } : {}) };
 }
 
 // Elements whose content is not running text: tables are unreadable flattened,

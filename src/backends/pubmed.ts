@@ -14,7 +14,7 @@ export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
   const sr = await apiGet(esearch);
   const ids: string[] = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
-    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr)] };
+    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr, ctx.question)] };
   }
 
   const esummary = `${base}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;

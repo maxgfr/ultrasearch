@@ -20,7 +20,54 @@ import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { templateFor } from "./templates.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
-import { isWordedWall, looksLikeWall, readPastCachedWall } from "./walls.js";
+import { isWordedWall, looksLikeWall, MIN_USEFUL_CHARS, readPastCachedWall, usefulChars } from "./walls.js";
+import { redirectedHome, searchPageOf } from "./listing.js";
+import { identityKeys, readFromEutils } from "./identity.js";
+
+// The placeholder the scholarly backends write where an abstract would be.
+const NO_ABSTRACT_RE = /\(no abstract provided by [^)]*\)/gi;
+// One PubMed record or PMC article has several addresses (the legacy
+// www.ncbi.nlm.nih.gov/pmc/articles/… host, an efetch, a Europe PMC XML URL);
+// fused under its page's one address, two hits on it are one source.
+function atNcbiPage(it: RawSource): RawSource {
+  const doc = ncbiDocument(it.url);
+  return doc && doc.citeUrl !== it.url ? { ...it, url: doc.citeUrl } : it;
+}
+
+// Fold items that share a DOI, PMID or PMCID into one: the copy holding real
+// text wins over a snippet, then the longer text, then the earlier (better-
+// fused) item; the losers' URLs are kept on the winner as `alsoAt`.
+function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: number } {
+  const owner = new Map<string, RawSource>();
+  const keysOf = new Map<RawSource, string[]>();
+  const out: RawSource[] = [];
+  const better = (a: RawSource, b: RawSource): boolean =>
+    (a.fullText !== false) !== (b.fullText !== false) ? a.fullText !== false : (a.text?.length ?? 0) > (b.text?.length ?? 0);
+  let merged = 0;
+  for (const it of items) {
+    const keys = identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : undefined);
+    const prior = keys.map((k) => owner.get(k)).find(Boolean);
+    if (!prior) {
+      out.push(it);
+      keysOf.set(it, keys);
+      for (const k of keys) owner.set(k, it);
+      continue;
+    }
+    merged++;
+    const [win, lose] = better(it, prior) ? [it, prior] : [prior, it];
+    const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])];
+    win.meta = { ...lose.meta, ...win.meta, alsoAt: also };
+    if (win !== prior) out[out.indexOf(prior)] = win;
+    const all = [...new Set([...(keysOf.get(prior) ?? []), ...keys])];
+    keysOf.set(win, all);
+    for (const k of all) owner.set(k, win);
+  }
+  return { kept: out, merged };
+}
+
+// The backends whose `text` is a record's title + abstract, not a page read:
+// their text is only as good as the abstract they had.
+const ABSTRACT_BACKENDS = new Set<string>(["crossref", "europepmc", "semanticscholar", "openalex", "dblp"]);
 import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from "./providers/ncbi.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
@@ -60,6 +107,33 @@ const HYDRATE_CONCURRENCY = 6;
 // single repeated term, is left alone.
 const OFF_TOPIC_TERM_SHARE = 1 / 3;
 const OFF_TOPIC_CONTENT = 0.2;
+// A source that names none of the question's proper nouns or acronyms keeps
+// this share of its score: it moves down, it is not dropped or flagged.
+const NAMED_MISS_FACTOR = 0.75;
+// Words that are capitalised in a title-cased question without naming anything.
+const QUESTION_OPENERS = new Set(
+  "what how why when where which who whom whose is are was were does do did can could should would will the a an in on for of to and or quels quelles quel quelle comment pourquoi quand où est sont les la le des une un en dans pour".split(
+    " ",
+  ),
+);
+
+/** The question's named terms, tokenised as BM25 tokenises them: capitalised words past the first (and not mere function words), acronyms anywhere. */
+export function namedTerms(question: string): string[] {
+  const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
+  // A Title-Cased Question capitalises every word: then only acronyms name.
+  const titleCased = words.filter((w) => /^\p{Lu}/u.test(w)).length > words.length / 2;
+  const out = new Set<string>();
+  words.forEach((w, i) => {
+    const bare = w.replace(/^[^\p{L}\d]+|[^\p{L}\d]+$/gu, "");
+    if (bare.length < 2) return;
+    const acronym = /^\p{Lu}[\p{Lu}\d]+$/u.test(bare);
+    // Past the first word only: a capital there is the sentence's, not a name's.
+    const proper = !titleCased && /^\p{Lu}\p{Ll}{2,}/u.test(bare) && i > 0 && !QUESTION_OPENERS.has(bare.toLowerCase());
+    if (!acronym && !proper) return;
+    for (const t of bm25Tokenize(bare)) out.add(t);
+  });
+  return [...out];
+}
 
 // Round a 0..1 score component for on-disk storage: enough precision to replay
 // a re-weighting exactly, short enough not to bloat sources.json.
@@ -492,9 +566,17 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // pool-relative recency) → collapse near-duplicate CONTENT → cap. Shared by
   // the main pass and the gap round so both score identically.
   async function assemble(rawLists: RawSource[][]) {
-    let merged = fuse(rawLists);
+    const hydrateNotes: string[] = [];
+    let merged = fuse(rawLists.map((l) => l.map(atNcbiPage)));
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged.length;
     if (options.excludeDomains.length) merged = merged.filter(excluded);
+    // A results page is not a document: a WebSearch hit pointing at PubMed's
+    // own search, say, would bank PubMed's interface as a source.
+    const searchPages = merged.filter((it) => searchPageOf(it.url));
+    if (searchPages.length) {
+      merged = merged.filter((it) => !searchPageOf(it.url));
+      hydrateNotes.push(`Dropped ${searchPages.length} search results page(s) — not documents: ${searchPages.map((it) => it.url).join(", ")}.`);
+    }
 
     const overshoot = OVERSHOOT[options.depth] ?? 10;
     // No budget ⇒ fetch everything discovery found. `--max-sources` is opt-in:
@@ -508,8 +590,17 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // web offered or all the budget allowed.
     const notFetched = merged.length - pool.length;
 
-    const hydrateNotes: string[] = [];
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
+      // A scholarly backend hands over "title + abstract" — or, with no
+      // abstract, "title + (no abstract provided by Crossref)": a hundred
+      // characters that used to be filed as the source's full text. Text that
+      // thin is not a document; the page is read instead, and the backend's own
+      // text survives only as the fallback snippet.
+      let thinBackend = "";
+      if (it.text?.trim() && ABSTRACT_BACKENDS.has(it.backend) && usefulChars(it.text.replace(NO_ABSTRACT_RE, "")) < MIN_USEFUL_CHARS) {
+        thinBackend = it.text.replace(NO_ABSTRACT_RE, "").trim();
+        it.text = "";
+      }
       if (it.text?.trim()) {
         it.fullText = true; // a content backend already carried the real text
         const key = canonicalizeUrl(it.url);
@@ -530,7 +621,8 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const got = await readNcbi(ncbi);
         if (got.ok) {
           it.text = got.text;
-          it.fullText = true;
+          // A record without an abstract is real, and still not a text to cite.
+          it.fullText = !got.thin;
           it.meta = { ...it.meta, textVia: got.via };
           if (!it.snippet) it.snippet = bestExcerpt(got.text, options.question);
           if ((!it.title || it.title === it.url) && got.title) it.title = got.title;
@@ -540,10 +632,17 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       }
       const fromCache = hydrateCache.has(key); // asked BEFORE hydrate() fills it
       const res = await hydrate(it.url, key);
-      if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
+      // A deep link answered by the site's home page is a dead link that
+      // returned 200: the home page is not the document, and is never cited.
+      const home = redirectedHome(it.url, res.finalUrl) ? res.finalUrl : undefined;
+      if (home)
+        hydrateNotes.push(
+          `${it.url} redirected to the site's home page (${home}) — the document is gone; its search snippet stands in for it unless the archive has a copy.`,
+        );
+      else if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
       if (res.note) hydrateNotes.push(res.note);
 
-      let text = res.text?.trim() ? res.text : "";
+      let text = res.text?.trim() && !home ? res.text : "";
       let junk = text ? looksLikeWall(text) : undefined;
       // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA")
       // — drop it with the body so a rescued page isn't labelled by the wall.
@@ -614,7 +713,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // Dead-link rescue: the origin is gone/blocked (404/410/451/403) and we
       // got nothing — try the Wayback Machine's closest snapshot before dropping
       // to the snippet. Capped per run; the ORIGINAL url stays the source url.
-      if (!text && DEAD_LINK_STATUS.has(res.status) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+      if (!text && (DEAD_LINK_STATUS.has(res.status) || home) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
         waybackUsed++; // reserve the slot synchronously (before any await) so the cap holds under concurrency
         const wb = await rescueViaWayback(it.url, extractOpts);
         if (wb) {
@@ -694,13 +793,17 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         // back to the search snippet so boilerplate can't masquerade as real
         // content. A snippet-only source has only a short body, so the BM25
         // content score already down-ranks it; the flag makes it visible.
-        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} — kept as snippet only.`);
-        it.text = it.snippet || "";
+        // Said as what happened to the TEXT: whether the item itself survives
+        // the relevance floor and the near-duplicate pass is decided later.
+        if (junk && text) hydrateNotes.push(`Extraction from ${it.url} looks like a ${junk} — its search snippet stands in for the page.`);
+        it.text = thinBackend || it.snippet || "";
         it.fullText = false;
         // A wall by its WORDING is recorded as one, so `check` can refuse a claim
         // resting on it and `drop --where wall` can find it. A merely thin page
-        // is only snippet-only: it may be a real (short) document.
-        if (text && isWordedWall(junk)) it.wall = true;
+        // is only snippet-only: it may be a real (short) document. Nor is an
+        // item whose backend already gave its abstract: the wall was the page,
+        // and the snippet it falls back to is that abstract, not the wall.
+        if (text && isWordedWall(junk) && !thinBackend) it.wall = true;
       }
     });
 
@@ -708,6 +811,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // Re-apply --exclude-domains AFTER hydration: a followed redirect can land a
     // kept source on an excluded host the pre-fetch URL didn't reveal.
     if (options.excludeDomains.length) withContent = withContent.filter(excluded);
+    // One paper, several addresses: its DOI, its PubMed page, the publisher's
+    // page. Hydration has now read every one of them, so the identifiers each
+    // carries (URL, the backend's DOI, the labelled ids of an E-utilities
+    // record) say which are the same record — and the best-read copy stays.
+    const sameRecord = mergeSameRecord(withContent);
+    withContent = sameRecord.kept;
+    if (sameRecord.merged) hydrateNotes.push(`Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID or PMCID).`);
 
     const docs: Bm25Doc[] = withContent.map((it) => ({
       id: it.url,
@@ -717,6 +827,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     }));
     const bm25 = buildBm25Index(options.question, docs);
     const rawContent = docs.map((d) => bm25Score(bm25, d));
+    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
+    // The question's NAMED terms — "Carlevale", "IOL": a source that mentions
+    // none of them is about the general topic at best. Seen on a thesis run: a
+    // review of lens implantation in infants ranked with the Carlevale papers
+    // because it shared "intraocular", "lens", "outcomes" and "complications".
+    const named = namedTerms(options.question);
     const contentMax = Math.max(1e-9, ...rawContent);
     const rrfMax = Math.max(1e-9, ...withContent.map((it) => it.score));
     const years = withContent.map((it) => it.meta?.year).filter((y): y is number => typeof y === "number");
@@ -734,12 +850,22 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // judgment from someone who can read, unlike anything the engine has.
       const trust = Math.max(trustScore(it.url, it.backend), isSeedDomain(it.url) ? 0.95 : 0);
       const recency = recencyScore(it.meta, minYear, maxYear);
-      it.score = Number((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency).toFixed(6));
+      const missesNamed = named.length > 0 && !(matchedByUrl.get(it.url) ?? []).some((t) => named.includes(t));
+      it.score = Number(((0.45 * rrfN + 0.35 * content + 0.15 * trust + 0.05 * recency) * (missesNamed ? NAMED_MISS_FACTOR : 1)).toFixed(6));
       // Keep the COMPONENTS, not just the blend. Without them a weighting can
       // only be evaluated by re-running, and two runs never return the same
       // pool — so "is 0.15 the right weight for trust?" was unanswerable. With
       // them, any blend replays exactly against a dossier already on disk.
-      it.meta = { ...it.meta, rank: { rrf: round4(rrfN), content: round4(content), trust: round4(trust), recency: round4(recency) } };
+      it.meta = {
+        ...it.meta,
+        rank: {
+          rrf: round4(rrfN),
+          content: round4(content),
+          trust: round4(trust),
+          recency: round4(recency),
+          ...(missesNamed ? { namedMiss: NAMED_MISS_FACTOR } : {}),
+        },
+      };
     });
     withContent.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
 
@@ -749,7 +875,6 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // disambiguation stub ("… may refer to:"). Forced into the off-topic bucket
     // by returning no matched terms — the floor's safety valve keeps a thin pool
     // from emptying itself.
-    const matchedByUrl = new Map(docs.map((d) => [d.id, bm25MatchedTerms(bm25, d)]));
     const isDisambiguation = (it: RawSource): boolean => /^.{0,80}?\bmay (also )?refer to\b/i.test((it.text || "").trim());
     const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => (isDisambiguation(it) ? [] : (matchedByUrl.get(it.url) ?? [])), bm25.queryTerms, floor);

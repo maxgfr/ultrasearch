@@ -77,7 +77,7 @@ export const clinicaltrialsBackend: Backend = async (ctx): Promise<BackendResult
   const r = await apiGet(url);
   const studies: any[] = r.ok && Array.isArray(r.data?.studies) ? r.data.studies : [];
   if (!r.ok || !studies.length) {
-    return { backend: "clinicaltrials", items: [], notes: [apiFailure("ClinicalTrials.gov search", r)] };
+    return { backend: "clinicaltrials", items: [], notes: [apiFailure("ClinicalTrials.gov search", r, ctx.question)] };
   }
   const items: RawSource[] = [];
   studies.slice(0, n).forEach((study, i) => {

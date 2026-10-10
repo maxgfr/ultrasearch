@@ -196,7 +196,7 @@ describe("runGather (snippet-only from a failed page fetch — A5 end-to-end)", 
     expect(short.fullText).toBe(false);
     expect(short.wall).toBeUndefined();
     expect(readFileSync(join(dir, walled.extract), "utf8")).not.toMatch(/Cookies must be enabled/);
-    expect(r.manifest.notes.join("\n")).toMatch(/walled\.test\/p looks like a cookie wall — kept as snippet only/);
+    expect(r.manifest.notes.join("\n")).toMatch(/walled\.test\/p looks like a cookie wall — its search snippet stands in for the page/);
     expect(r.manifest.notes.join("\n")).toMatch(/short\.test\/p looks like a near-empty page/);
     expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toMatch(/⛔ wall/);
     rmSync(dir, { recursive: true, force: true });

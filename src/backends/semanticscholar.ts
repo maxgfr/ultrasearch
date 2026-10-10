@@ -11,7 +11,7 @@ export const semanticscholarBackend: Backend = async (ctx): Promise<BackendResul
   const r = await apiGet(url);
   const data: any[] = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {
-    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r)] };
+    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r, ctx.question)] };
   }
   const items: RawSource[] = data.slice(0, n).map((p: any, i: number): RawSource => {
     const title = cleanInline(String(p.title ?? "Untitled")) || "Untitled";

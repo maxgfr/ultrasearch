@@ -12,7 +12,8 @@ export const EXTRA_TEMPLATES: Record<Exclude<TemplateName, Manifest["mode"]>, { 
     template: [
       "## Verdict",
       "## Reference-by-reference table",
-      "### (# · resolved as · authors · title · journal · year · vol · issue · pages · DOI · source)",
+      "One row per reference: # · resolved as · authors · title · journal · year · vol · issue · pages · DOI · source.",
+      "A block quoting the checked document's own (wrong) figures goes under `<!-- ultrasearch:no-numerals -->`, so `check` does not ask a source for them.",
       "## Discrepancies",
       "## Claims checked against their sources",
       "## Not verifiable",

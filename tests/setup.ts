@@ -57,3 +57,6 @@ process.env.ULTRASEARCH_BROWSER_FETCH = "off";
 // for nothing, so the exponential base is 0 for the whole suite; the back-off
 // tests themselves inject their own sleep and assert the waits it was asked for.
 process.env.ULTRASEARCH_BACKOFF_MS = "0";
+// Same for the per-host pacing of rate-capped APIs (NCBI: 3 requests/s): the
+// pacing test sets its own gap.
+process.env.ULTRASEARCH_NCBI_INTERVAL_MS = "0";
