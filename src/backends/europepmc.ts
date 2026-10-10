@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, decodeEntities, cleanInline } from "./fetch.js";
+import { decodeEntities, cleanInline } from "./fetch.js";
+import { apiFailure, apiGet } from "./backoff.js";
 
 // Europe PMC via its keyless REST API — biomedical & life-sciences literature,
 // the single largest corpus the physics/CS-leaning scholarly backends miss.
@@ -8,11 +9,10 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url =
     `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}` + `&format=json&resultType=core&pageSize=${n}`;
-  const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
+  const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed or empty (status ${r.status})`;
-    return { backend: "europepmc", items: [], notes: [`Europe PMC search ${why}.`] };
+    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r)] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     // Europe PMC titles/abstracts carry escaped JATS markup (&lt;i&gt;…&lt;/i&gt;).

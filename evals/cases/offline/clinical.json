@@ -1,0 +1,8 @@
+{
+  "id": "clinical-fixture",
+  "question": "platelet-rich plasma for knee osteoarthritis",
+  "mode": "clinical",
+  "backends": ["fixture"],
+  "minSources": 3,
+  "expectFile": "refs.bib"
+}

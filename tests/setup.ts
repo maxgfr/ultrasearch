@@ -51,3 +51,9 @@ process.env.ULTRASEARCH_OCR_MAX = "0";
 // the machine has, and touch the network. Force it off for the whole suite;
 // the tests of the rung itself inject detection and stub the engine's reads.
 process.env.ULTRASEARCH_BROWSER_FETCH = "off";
+
+// The scholarly APIs back off on a 429/503 (src/backends/backoff.ts): 1 s, then
+// 2 s, between three attempts. Every failure-path test would pay those seconds
+// for nothing, so the exponential base is 0 for the whole suite; the back-off
+// tests themselves inject their own sleep and assert the waits it was asked for.
+process.env.ULTRASEARCH_BACKOFF_MS = "0";

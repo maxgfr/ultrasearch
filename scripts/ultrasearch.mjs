@@ -24,6 +24,7 @@ var ALL_BACKENDS = [
   "semanticscholar",
   "europepmc",
   "pubmed",
+  "clinicaltrials",
   "dblp",
   "standards",
   "reddit",
@@ -32,7 +33,7 @@ var ALL_BACKENDS = [
   "fixture",
   "claude"
 ];
-var ALL_MODES = ["topic", "bug", "research", "learn", "startup", "deals"];
+var ALL_MODES = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
 var ALL_DEPTHS = ["summary", "standard", "deep"];
 var DEPTH_CAPS = {
   summary: { maxSources: 10, perSource: 4, deepOnly: false },
@@ -265,6 +266,40 @@ var researchMode = {
   ].join("\n")
 };
 
+// src/modes/clinical.ts
+var clinicalMode = {
+  name: "clinical",
+  description: "Clinical / biomedical evidence review \u2014 PubMed (E-utilities), Europe PMC, ClinicalTrials.gov, Crossref; no arXiv (+OpenAlex/Semantic Scholar/web guidelines at deep) + refs.bib.",
+  backends: ["pubmed", "europepmc", "clinicaltrials", "crossref"],
+  deepOnly: ["openalex", "semanticscholar", "duckduckgo"],
+  extras: ["bibtex"],
+  searchAngles: [
+    "the condition + the intervention + 'randomized controlled trial'",
+    "'systematic review' OR 'meta-analysis' + the condition and the intervention",
+    "clinical practice guidelines and consensus statements (national agencies, learned societies) on the topic",
+    "the MeSH terms for the condition and the intervention, as PubMed spells them",
+    "cohort, registry or case-series outcomes + the topic",
+    "adverse events, complications and safety signals of the intervention",
+    "registered and ongoing trials (ClinicalTrials.gov, EU CTR) for the condition",
+    "the comparator: standard of care, placebo or the alternative intervention",
+    "long-term follow-up: survival, recurrence, revision or relapse",
+    "cost-effectiveness and health-economic evaluations"
+  ],
+  template: [
+    "## TL;DR (clinical bottom line)",
+    "## Clinical question (PICO)",
+    "## Evidence base (trials, systematic reviews, cohorts)",
+    "## Efficacy outcomes",
+    "## Safety & adverse events",
+    "## Guidelines & recommendations",
+    "## Certainty of evidence & limitations",
+    "## Ongoing & registered trials",
+    "## Gaps & open questions",
+    "## References (see refs.bib)",
+    "## Sources"
+  ].join("\n")
+};
+
 // src/modes/learn.ts
 var learnMode = {
   name: "learn",
@@ -367,6 +402,7 @@ var MODES = {
   topic: topicMode,
   bug: bugMode,
   research: researchMode,
+  clinical: clinicalMode,
   learn: learnMode,
   startup: startupMode,
   deals: dealsMode
@@ -11914,6 +11950,7 @@ var BACKEND_TRUST = {
   semanticscholar: 0.9,
   europepmc: 0.9,
   pubmed: 0.9,
+  clinicaltrials: 0.9,
   dblp: 0.9,
   standards: 0.9,
   wikipedia: 0.85,
@@ -12686,15 +12723,62 @@ var arxivBackend = async (ctx) => {
   };
 };
 
+// src/backends/backoff.ts
+function isThrottled(a) {
+  return a.status === 429 || a.status === 503 || a.rateLimited === true;
+}
+async function withBackoff(call, opts = {}) {
+  const attempts = Math.max(1, Math.floor(opts.attempts ?? 3));
+  const baseMs = opts.baseMs ?? envInt("BACKOFF_MS", 1e3, 0, 6e4);
+  const capMs = opts.capMs ?? envInt("BACKOFF_CAP_MS", 3e4, 0, 3e5);
+  const pause = opts.sleepFn ?? sleep;
+  let waitedMs = 0;
+  for (let i = 1; ; i++) {
+    const result = await call();
+    if (!isThrottled(result)) return { result, attempts: i, waitedMs, rateLimited: false };
+    if (i >= attempts) return { result, attempts: i, waitedMs, rateLimited: true };
+    const asked = result.retryAfterMs;
+    if (asked !== void 0 && asked > capMs) {
+      return { result, attempts: i, waitedMs, rateLimited: true, gaveUpOnRetryAfterMs: asked };
+    }
+    const wait = asked ?? baseMs * 2 ** (i - 1);
+    if (wait > 0) await pause(wait);
+    waitedMs += wait;
+  }
+}
+async function apiGet(url, opts = {}) {
+  const accept = opts.accept ?? "application/json";
+  const out = await withBackoff(
+    () => httpGet(url, { accept, retries: 0, timeoutMs: opts.timeoutMs ?? 12e3, ...opts.userAgent ? { userAgent: opts.userAgent } : {} }),
+    opts
+  );
+  const r = out.result;
+  let data = r.body;
+  if (opts.json !== false && r.body) {
+    try {
+      data = JSON.parse(r.body);
+    } catch {
+      data = r.body;
+    }
+  }
+  return { ok: r.ok, status: r.status, data, rateLimited: out.rateLimited, attempts: out.attempts, ...r.error ? { error: r.error } : {} };
+}
+function apiFailure(label, r) {
+  if (r.rateLimited || r.status === 429 || r.status === 503) {
+    return `${label} rate-limited (HTTP ${r.status}${r.attempts > 1 ? ` after ${r.attempts} attempts` : ""}).`;
+  }
+  return `${label} failed or empty (status ${r.status}).`;
+}
+
 // src/backends/crossref.ts
 var crossrefBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.crossref.org/works?query=${encodeURIComponent(ctx.question)}&rows=${n}` + (since ? `&filter=from-pub-date:${since}` : "");
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3, userAgent: contactUa() });
+  const r = await apiGet(url, { userAgent: contactUa() });
   const items0 = r.ok && Array.isArray(r.data?.message?.items) ? r.data.message.items : [];
   if (!r.ok || !items0.length) {
-    return { backend: "crossref", items: [], notes: [`Crossref search failed or empty (status ${r.status}).`] };
+    return { backend: "crossref", items: [], notes: [apiFailure("Crossref search", r)] };
   }
   const items = items0.slice(0, n).map((w, i) => {
     const title = cleanInline(Array.isArray(w.title) ? w.title.join(" ") : String(w.title ?? "Untitled")) || "Untitled";
@@ -12732,10 +12816,10 @@ var openalexBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` + (since ? `&filter=from_publication_date:${since}` : "");
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
-    return { backend: "openalex", items: [], notes: [`OpenAlex search failed or empty (status ${r.status}).`] };
+    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r)] };
   }
   const items = results.slice(0, n).map((w, i) => {
     const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";
@@ -12765,10 +12849,10 @@ var semanticscholarBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const fields = "title,abstract,url,year,authors,externalIds,venue";
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}`;
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const r = await apiGet(url);
   const data = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {
-    return { backend: "semanticscholar", items: [], notes: [`Semantic Scholar search failed or empty (status ${r.status}).`] };
+    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r)] };
   }
   const items = data.slice(0, n).map((p, i) => {
     const title = cleanInline(String(p.title ?? "Untitled")) || "Untitled";
@@ -12798,11 +12882,10 @@ ${abstract || "(no abstract provided by Semantic Scholar)"}`,
 var europepmcBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}&format=json&resultType=core&pageSize=${n}`;
-  const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {
-    const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed or empty (status ${r.status})`;
-    return { backend: "europepmc", items: [], notes: [`Europe PMC search ${why}.`] };
+    return { backend: "europepmc", items: [], notes: [apiFailure("Europe PMC search", r)] };
   }
   const items = results.slice(0, n).map((w, i) => {
     const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
@@ -12832,17 +12915,16 @@ var pubmedBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base2 = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
   const esearch = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
-  const sr = await httpJson("GET", esearch, void 0, { timeoutMs: 12e3 });
+  const sr = await apiGet(esearch);
   const ids = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
-    const why = sr.status === 429 || sr.status === 503 ? `rate-limited (HTTP ${sr.status})` : `failed or empty (status ${sr.status})`;
-    return { backend: "pubmed", items: [], notes: [`PubMed esearch ${why}.`] };
+    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr)] };
   }
   const esummary = `${base2}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;
-  const dr = await httpJson("GET", esummary, void 0, { timeoutMs: 12e3 });
+  const dr = await apiGet(esummary);
   const result = dr.ok ? dr.data?.result : void 0;
   if (!result) {
-    return { backend: "pubmed", items: [], notes: [`PubMed esummary failed (status ${dr.status}).`] };
+    return { backend: "pubmed", items: [], notes: [dr.rateLimited ? apiFailure("PubMed esummary", dr) : `PubMed esummary failed (status ${dr.status}).`] };
   }
   const items = ids.slice(0, n).map((uid, i) => {
     const d = result[uid] ?? {};
@@ -12866,6 +12948,82 @@ var pubmedBackend = async (ctx) => {
     };
   });
   return { backend: "pubmed", items, notes: [`PubMed returned ${items.length} record(s).`] };
+};
+
+// src/backends/clinicaltrials.ts
+var API = "https://clinicaltrials.gov/api/v2/studies";
+var titleCase = (s) => s.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+function studyText(study) {
+  const p = study?.protocolSection ?? {};
+  const id = p.identificationModule ?? {};
+  const status = p.statusModule ?? {};
+  const design = p.designModule ?? {};
+  const desc = p.descriptionModule ?? {};
+  const nctId = typeof id.nctId === "string" ? id.nctId : void 0;
+  const title = cleanInline(String(id.briefTitle ?? id.officialTitle ?? nctId ?? "Untitled")) || "Untitled";
+  const start = status.startDateStruct?.date;
+  const year = start ? Number(String(start).slice(0, 4)) || void 0 : void 0;
+  const sponsor = p.sponsorCollaboratorsModule?.leadSponsor?.name;
+  const phases = Array.isArray(design.phases) ? design.phases.filter((x) => x && x !== "NA") : [];
+  const lines = [`# ${title}`, ""];
+  const facts = [
+    ["Registry id", nctId],
+    ["Official title", id.officialTitle && id.officialTitle !== id.briefTitle ? cleanInline(String(id.officialTitle)) : void 0],
+    ["Status", status.overallStatus ? titleCase(String(status.overallStatus)) + (status.whyStopped ? ` \u2014 ${status.whyStopped}` : "") : void 0],
+    ["Study type", design.studyType ? titleCase(String(design.studyType)) : void 0],
+    ["Phase", phases.length ? phases.map((x) => x.replace(/^PHASE/, "Phase ")).join(", ") : void 0],
+    ["Allocation", design.designInfo?.allocation ? titleCase(String(design.designInfo.allocation)) : void 0],
+    ["Masking", design.designInfo?.maskingInfo?.masking ? titleCase(String(design.designInfo.maskingInfo.masking)) : void 0],
+    [
+      "Enrollment",
+      design.enrollmentInfo?.count !== void 0 ? `${design.enrollmentInfo.count}${design.enrollmentInfo.type ? ` (${String(design.enrollmentInfo.type).toLowerCase()})` : ""}` : void 0
+    ],
+    ["Conditions", Array.isArray(p.conditionsModule?.conditions) ? p.conditionsModule.conditions.join("; ") : void 0],
+    [
+      "Interventions",
+      Array.isArray(p.armsInterventionsModule?.interventions) ? p.armsInterventionsModule.interventions.map((i) => [i?.type ? titleCase(String(i.type)) : "", i?.name].filter(Boolean).join(": ")).join("; ") : void 0
+    ],
+    ["Lead sponsor", sponsor],
+    ["Start", start],
+    ["Primary completion", status.primaryCompletionDateStruct?.date],
+    ["Results posted", study?.hasResults === true ? "yes" : study?.hasResults === false ? "no" : void 0]
+  ];
+  for (const [k, v] of facts) if (v) lines.push(`- ${k}: ${v}`);
+  const primary = Array.isArray(p.outcomesModule?.primaryOutcomes) ? p.outcomesModule.primaryOutcomes : [];
+  if (primary.length) {
+    lines.push("", "## Primary outcomes");
+    for (const o of primary) lines.push(`- ${cleanInline(String(o?.measure ?? ""))}${o?.timeFrame ? ` (${o.timeFrame})` : ""}`);
+  }
+  if (desc.briefSummary) lines.push("", "## Brief summary", "", String(desc.briefSummary).trim());
+  if (desc.detailedDescription) lines.push("", "## Detailed description", "", String(desc.detailedDescription).trim());
+  return { title, text: lines.join("\n"), nctId, year, sponsor };
+}
+var clinicaltrialsBackend = async (ctx) => {
+  const n = Math.max(3, Math.min(15, ctx.options.perSource));
+  const since = sinceDate(ctx.options.since);
+  const url = `${API}?query.term=${encodeURIComponent(ctx.question)}&pageSize=${n}&format=json` + (since ? `&filter.advanced=${encodeURIComponent(`AREA[StartDate]RANGE[${since},MAX]`)}` : "");
+  const r = await apiGet(url);
+  const studies = r.ok && Array.isArray(r.data?.studies) ? r.data.studies : [];
+  if (!r.ok || !studies.length) {
+    return { backend: "clinicaltrials", items: [], notes: [apiFailure("ClinicalTrials.gov search", r)] };
+  }
+  const items = [];
+  studies.slice(0, n).forEach((study, i) => {
+    const s = studyText(study);
+    if (!s.nctId) return;
+    const summary = String(study?.protocolSection?.descriptionModule?.briefSummary ?? "");
+    items.push({
+      url: `https://clinicaltrials.gov/study/${s.nctId}`,
+      title: s.title,
+      backend: "clinicaltrials",
+      score: n - i,
+      snippet: (summary || s.title).replace(/\s+/g, " ").slice(0, 360),
+      text: s.text,
+      // The sponsor is not an author: kept apart so refs.bib does not invent one.
+      meta: { nctId: s.nctId, year: s.year, ...s.sponsor ? { sponsor: s.sponsor } : {}, venue: "ClinicalTrials.gov" }
+    });
+  });
+  return { backend: "clinicaltrials", items, notes: [`ClinicalTrials.gov returned ${items.length} study record(s).`] };
 };
 
 // src/backends/dblp.ts
@@ -13980,6 +14138,7 @@ var HANDLERS = {
   semanticscholar: semanticscholarBackend,
   europepmc: europepmcBackend,
   pubmed: pubmedBackend,
+  clinicaltrials: clinicaltrialsBackend,
   dblp: dblpBackend,
   standards: standardsBackend,
   reddit: redditBackend,
@@ -13997,7 +14156,7 @@ var SINGLE_QUERY = /* @__PURE__ */ new Set([
   "reddit",
   "pepper"
 ]);
-var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "dblp"]);
+var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp"]);
 async function fanOutVariants(handler, ctx, variants, polite) {
   if (!polite) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
   const out = [];
@@ -16860,6 +17019,50 @@ var FACET_PATTERNS = [
     ask: (s) => `Which ${s} codes are reported expired, fake or not working?`,
     angle: "which codes are reported expired, fake or not working",
     terms: ["code not working", "expired"]
+  },
+  // clinical — last, so they only ever claim headings nothing above matched;
+  // the clinical "Gaps & open questions" heading is left to the gaps facet.
+  {
+    re: /pico|clinical question/i,
+    ask: (s) => `Which patients, intervention, comparator and outcomes define the clinical question on ${s}?`,
+    angle: "which patients, intervention, comparator and outcomes define the clinical question",
+    terms: ["population", "intervention"]
+  },
+  {
+    re: /evidence base|systematic review|randomi[sz]ed/i,
+    ask: (s) => `Which trials, systematic reviews and cohort studies have evaluated ${s}?`,
+    angle: "which trials, systematic reviews and cohort studies have evaluated it",
+    terms: ["randomized controlled trial", "systematic review"]
+  },
+  {
+    re: /efficacy|effectiveness/i,
+    ask: (s) => `How effective is ${s} on its main clinical outcomes?`,
+    angle: "how effective is it on the main clinical outcomes",
+    terms: ["efficacy", "outcomes"]
+  },
+  {
+    re: /safety|adverse|complication/i,
+    ask: (s) => `What adverse events and complications are reported for ${s}?`,
+    angle: "what adverse events and complications are reported",
+    terms: ["adverse events", "complications"]
+  },
+  {
+    re: /guideline|recommendation/i,
+    ask: (s) => `What do clinical guidelines recommend about ${s}?`,
+    angle: "what do clinical guidelines recommend",
+    terms: ["guideline", "recommendation"]
+  },
+  {
+    re: /certainty|risk of bias|level of evidence/i,
+    ask: (s) => `How certain is the evidence on ${s}, and what limits it?`,
+    angle: "how certain is the evidence, and what limits it",
+    terms: ["risk of bias", "GRADE"]
+  },
+  {
+    re: /ongoing|registered trial/i,
+    ask: (s) => `Which trials on ${s} are registered or still ongoing?`,
+    angle: "which trials are registered or still ongoing",
+    terms: ["ongoing trial", "ClinicalTrials.gov"]
   }
 ];
 var CLAUSE_VERB = /\b(is|are|was|were|be|been|being|do|does|did|has|have|had|can|could|should|would|will|shall|may|might|must|compares?|compared|works?|worked|deploys?|deployed|builds?|creates?|uses?|implements?|runs?|configures?|installs?|handles?|manages?|scales?|optimi[sz]es?|chooses?|migrates?|fix(?:es)?|debugs?|prevents?|avoids?|improves?|reduces?|increases?|affects?|causes?|differs?|relates?|applies|integrates?|connects?|stores?|processes?|generates?|renders?|parses?|validates?|measures?|monitors?)\b/i;
@@ -17804,7 +18007,7 @@ var questionProp = { type: "string", description: "The topic or question, in nat
 var modeProp = {
   type: "string",
   enum: MODE_ENUM,
-  description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant \u2014 pair with lang + region for the country; writes codes.json). Default: topic."
+  description: "Which research profile to use: topic (general), bug (an error \u2014 StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), clinical (PubMed, Europe PMC, ClinicalTrials.gov \u2014 a clinical or biomedical question; no arXiv; BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant \u2014 pair with lang + region for the country; writes codes.json). Default: topic."
 };
 var langProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
 var webResultsProp = {

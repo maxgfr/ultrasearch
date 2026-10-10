@@ -151,7 +151,9 @@ A facet is independent when you would search it with genuinely different queries
 gatherer is strictly worse than gathering it yourself.
 
 **`--mode` comes from the SUBJECT, independently of the route:** an error text or
-stack trace ⇒ `bug` · papers, prior art, state of the art ⇒ `research` · "teach
+stack trace ⇒ `bug` · papers, prior art, state of the art ⇒ `research` ·
+a clinical or biomedical question (a treatment, a diagnosis, outcomes, harms) ⇒
+`clinical` (PubMed, Europe PMC, ClinicalTrials.gov — no arXiv) · "teach
 me", "from scratch" ⇒ `learn` · market, competitors, pricing ⇒ `startup` ·
 a shop's coupons, promo or discount codes ⇒ `deals` (with `--lang` + `--region`
 for the country — see [Deals](#deals--discount-codes-for-a-merchant)) ·

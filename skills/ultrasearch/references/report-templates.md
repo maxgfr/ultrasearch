@@ -46,6 +46,27 @@ The exact skeleton for the active mode is echoed in the run's `DOSSIER.md`.
 ## Sources
 ```
 
+## clinical  (also writes refs.bib)
+```
+## TL;DR (clinical bottom line)
+## Clinical question (PICO)
+## Evidence base (trials, systematic reviews, cohorts)
+## Efficacy outcomes
+## Safety & adverse events
+## Guidelines & recommendations
+## Certainty of evidence & limitations
+## Ongoing & registered trials
+## Gaps & open questions
+## References (see refs.bib)
+## Sources
+```
+
+State the design and size of each study you lean on (RCT, n = …; cohort;
+case series) next to its `[S#]`: a figure from a 12-patient series and one from
+a 600-patient trial are not the same claim. A registered trial
+(`clinicaltrials.gov/study/NCT…`) is evidence that a study exists and what it
+measures, never of its result unless the record says "Results posted: yes".
+
 ## learn  (also writes glossary.md; richest HTML)
 ```
 ## Learning objectives

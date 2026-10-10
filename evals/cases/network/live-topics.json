@@ -12,6 +12,7 @@
   { "id": "openalex", "question": "rate limiting algorithms", "mode": "research", "backends": ["openalex"] },
   { "id": "semanticscholar", "question": "attention is all you need", "mode": "research", "backends": ["semanticscholar"] },
   { "id": "europepmc", "question": "crispr gene editing", "mode": "research", "backends": ["europepmc"] },
+  { "id": "clinicaltrials", "question": "platelet-rich plasma knee osteoarthritis", "mode": "clinical", "backends": ["clinicaltrials"] },
   { "id": "pubmed", "question": "crispr gene editing", "mode": "research", "backends": ["pubmed"] },
   { "id": "standards", "question": "what does RFC 6585 define about HTTP 429", "mode": "topic", "backends": ["standards"] },
   { "id": "pepper", "question": "code promo decathlon.fr", "mode": "deals", "backends": ["pepper"], "lang": "fr", "region": "fr" },

@@ -10,6 +10,7 @@ modes`.
 | `topic` | wikipedia, searxng, duckduckgo, standards | — | — |
 | `bug` | stackexchange, github, duckduckgo, hackernews, standards | searxng, reddit | — |
 | `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, duckduckgo, wikipedia | `bibtex` (refs.bib) |
+| `clinical` | pubmed, europepmc, clinicaltrials, crossref | openalex, semanticscholar, duckduckgo | `bibtex` (refs.bib) |
 | `learn` | wikipedia, duckduckgo, searxng | standards | `glossary`, `exercises` |
 | `startup` | duckduckgo, searxng, hackernews | wikipedia, reddit | — |
 | `deals` | pepper, reddit, duckduckgo, searxng | — | `codes` (codes.json) |
@@ -24,7 +25,23 @@ Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers,
 computer-science bibliography — so research mode spans physics/CS, biomed and
 clinical literature.
 
-All six modes compose with the **deep research tier** (`plan` / `merge` /
+For a **clinical or biomedical question** use `clinical`, not `research`: it
+leads with `pubmed` (E-utilities, MeSH-indexed), `europepmc` and
+`clinicaltrials` (ClinicalTrials.gov API v2 — the registry of record, so ongoing
+and unpublished trials show up), plus `crossref` for the DOI metadata, and it
+never queries arXiv. Its search angles are clinical (RCTs, systematic reviews,
+guidelines, cohorts, adverse events, registered trials) and its template asks
+for PICO, efficacy, harms, guidelines and certainty of evidence. For checking a
+bibliography rather than researching a question, see `refcheck` in
+`references/operations.md`.
+
+The scholarly APIs (PubMed, Europe PMC, ClinicalTrials.gov, Crossref, OpenAlex,
+Semantic Scholar) answer a 429/503 with back-off rather than giving up: up to 3
+attempts, a `Retry-After` of up to 30 s honoured as sent, else 1 s then 2 s
+(`ULTRASEARCH_BACKOFF_MS` sets the base). A backend still throttled after that
+says `rate-limited` in the run's notes — never `failed`.
+
+All seven modes compose with the **deep research tier** (`plan` / `merge` /
 `verify`): `plan` derives its sub-question facets from the mode's report
 template, so the decomposition is mode-aware. See
 `references/deep-research-playbook.md`.

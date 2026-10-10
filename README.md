@@ -48,7 +48,7 @@ A run writes an output folder:
   DOSSIER.md      model-facing digest + the template + citation rules
   SUMMARY.md      TL;DR tier            ┐ written by the agent, cited [S#]
   REPORT.md       complete report tier  ┘
-  glossary.md     (learn mode)   refs.bib (research mode)
+  glossary.md     (learn mode)   refs.bib (research/clinical)
   index.html      self-contained HTML report (embedded CSS + TOC), easy to read
   index.md        consolidated markdown report (all tiers + sources), portable
 ```
@@ -83,6 +83,7 @@ Each mode is a **report template** + a **backend-priority profile**:
 | `topic` *(default)* | a general briefing on any subject | Wikipedia + general web |
 | `bug` | debugging an error / symptom | Stack Overflow, GitHub issues, Hacker News, changelogs |
 | `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed, dblp (+ `refs.bib`) |
+| `clinical` | a clinical / biomedical evidence review | PubMed, Europe PMC, ClinicalTrials.gov, Crossref — no arXiv (+ `refs.bib`) |
 | `learn` | learning a topic from scratch | general web + docs → glossary, lesson, exercises, rich HTML |
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
 | `deals` | coupons & discount codes for a merchant, by country | Dealabs/hotukdeals/mydealz…, Reddit, general web → ranked, UNVERIFIED candidates (+ `codes.json`) |

@@ -111,6 +111,7 @@ const BACKEND_TRUST: Partial<Record<BackendKind, number>> = {
   semanticscholar: 0.9,
   europepmc: 0.9,
   pubmed: 0.9,
+  clinicaltrials: 0.9,
   dblp: 0.9,
   standards: 0.9,
   wikipedia: 0.85,

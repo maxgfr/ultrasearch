@@ -21,7 +21,7 @@ const modeProp: JsonSchemaProp = {
   type: "string",
   enum: MODE_ENUM,
   description:
-    "Which research profile to use: topic (general), bug (an error — StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant — pair with lang + region for the country; writes codes.json). Default: topic.",
+    "Which research profile to use: topic (general), bug (an error — StackOverflow/GitHub/HN), research (scholarly APIs + BibTeX), clinical (PubMed, Europe PMC, ClinicalTrials.gov — a clinical or biomedical question; no arXiv; BibTeX), learn (a lesson), startup (market and competitors), deals (coupons and discount codes for a merchant — pair with lang + region for the country; writes codes.json). Default: topic.",
 };
 const langProp: JsonSchemaProp = { type: "string", description: "Search language, e.g. 'fr'. Default: en." };
 

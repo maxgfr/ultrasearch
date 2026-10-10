@@ -27,6 +27,9 @@ export type BackendKind =
   | "semanticscholar"
   | "europepmc"
   | "pubmed"
+  // The trial registry of record (ClinicalTrials.gov API v2): a content
+  // backend, each study record carries its own text.
+  | "clinicaltrials"
   | "dblp"
   | "standards"
   // Community content backends: keyless public feeds/pages that already carry
@@ -58,6 +61,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "semanticscholar",
   "europepmc",
   "pubmed",
+  "clinicaltrials",
   "dblp",
   "standards",
   "reddit",
@@ -67,10 +71,10 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "claude",
 ];
 
-// The six report shapes. Each maps to a ModeProfile (backend priority +
+// The seven report shapes. Each maps to a ModeProfile (backend priority +
 // template + extras) in src/modes.
-export type ModeName = "topic" | "bug" | "research" | "learn" | "startup" | "deals";
-export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "learn", "startup", "deals"];
+export type ModeName = "topic" | "bug" | "research" | "clinical" | "learn" | "startup" | "deals";
+export const ALL_MODES: readonly ModeName[] = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
 
 // How far a run fans out. `summary` is a quick survey, `deep` runs every
 // backend (including deep-only ones) and keeps the most sources. Tiers

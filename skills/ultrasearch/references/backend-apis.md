@@ -4,6 +4,12 @@ Every backend is keyless and free. All requests go through one HTTP layer with
 a timeout, a UA string, and a body cap; a backend never throws — failures become
 honest notes in the dossier.
 
+The scholarly APIs (`pubmed`, `europepmc`, `clinicaltrials`, `crossref`,
+`openalex`, `semanticscholar`) also back off on a 429/503: 3 attempts, a
+`Retry-After` ≤ 30 s honoured as sent, else exponential from
+`ULTRASEARCH_BACKOFF_MS` (default 1000 → 1 s, 2 s). One still throttled after
+that is noted as `rate-limited (HTTP 429 after 3 attempts)`, never as `failed`.
+
 | Backend | Endpoint | Notes / limits |
 |---------|----------|----------------|
 | `searxng` | `GET {base}/search?q=…&format=json` | base = `--searxng` / `ULTRASEARCH_SEARXNG` / `http://localhost:8888`. **Public instances usually disable `format=json`** (returns 403/HTML) — run your own (`ultrasearch searxng up`; no clone needed — the compose file ships inside the engine). Skips silently when unreachable. |
@@ -21,7 +27,8 @@ honest notes in the dossier.
 | `openalex` | `GET https://api.openalex.org/works?search=…` | Abstract is an inverted index → reconstructed to text. |
 | `semanticscholar` | `GET https://api.semanticscholar.org/graph/v1/paper/search` | Unauthenticated; can rate-limit. Carries DOI + arXiv id in `externalIds`. |
 | `europepmc` | `GET https://www.ebi.ac.uk/europepmc/webservices/rest/search?format=json&resultType=core` | Biomedical/life-sciences. `resultType=core` returns the abstract inline (content backend). Carries DOI + journal + year. |
-| `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract, falling back to `efetch.fcgi` when that page walls (see below). |
+| `pubmed` | `esearch.fcgi` → idlist, then `esummary.fcgi` (db=pubmed, `tool=ultrasearch`, no email/PII) | MeSH-indexed/clinical (clinical standard, research deep). esummary is metadata-only → the gatherer hydrates the DOI/PubMed landing page for the abstract, falling back to `efetch.fcgi` when that page walls (see below). |
+| `clinicaltrials` | `GET https://clinicaltrials.gov/api/v2/studies?query.term=…&format=json` (`--since` → `filter.advanced=AREA[StartDate]RANGE[…,MAX]`) | The trial registry of record (clinical mode). Content backend: each study's status, design, phase, enrollment, conditions, interventions, primary outcomes and summaries become the text. Cites `clinicaltrials.gov/study/<NCT id>`, never the API; the sponsor is kept apart from the authors. |
 | `dblp` | `GET https://dblp.org/search/publ/api?q=…&format=json` | Computer-science bibliography (research deep). Metadata-only → the gatherer hydrates the `ee`/DOI landing page; DOI/author metadata dedupes it against Crossref/OpenAlex and feeds `refs.bib`. |
 | `reddit` | `GET https://www.reddit.com/search.rss?q=…&sort=relevance&t=<window>` | Keyless Atom feed (`search.json` is a 403). `t` comes from `--since` (day/week/month/year, else all). **One request per run, never retried** — a second rapid request is a 429. At `--depth deep` it also reads the top 3 threads' comment feeds (`<thread>/.rss`) one at a time and stops at the first refusal: 4 requests at most. Communities in the results are skipped; failures become a note suggesting `site:reddit.com` in your WebSearch. Thread posting date feeds the recency score. |
 | `pepper` | `GET https://<host>/search?q=<merchant>`; deep: `GET https://<host>/<vouchers>/<slug>` | The Pepper deal network, picked by `--region` (else the `--lang` region subtag, else the language) — see the table below. Thread cards carry the voucher code as a JSON field (`data-vue3`), read structurally, with a regex window as fallback; the voucher page's Next.js payload lists active and expired codes with terms and end dates. Threads about other merchants are dropped. Cites the thread page — **never** the `/visit/` affiliate links. A region outside the table makes no request. One search + one voucher page per run. |

@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, cleanInline } from "./fetch.js";
+import { cleanInline } from "./fetch.js";
+import { apiFailure, apiGet } from "./backoff.js";
 
 // Semantic Scholar via the keyless Graph API. Returns paper abstracts +
 // metadata (DOI / arXiv id / venue / year) for the report and BibTeX.
@@ -7,10 +8,10 @@ export const semanticscholarBackend: Backend = async (ctx): Promise<BackendResul
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const fields = "title,abstract,url,year,authors,externalIds,venue";
   const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}`;
-  const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
+  const r = await apiGet(url);
   const data: any[] = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {
-    return { backend: "semanticscholar", items: [], notes: [`Semantic Scholar search failed or empty (status ${r.status}).`] };
+    return { backend: "semanticscholar", items: [], notes: [apiFailure("Semantic Scholar search", r)] };
   }
   const items: RawSource[] = data.slice(0, n).map((p: any, i: number): RawSource => {
     const title = cleanInline(String(p.title ?? "Untitled")) || "Untitled";

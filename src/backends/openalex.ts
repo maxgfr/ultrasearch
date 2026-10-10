@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, cleanInline } from "./fetch.js";
+import { cleanInline } from "./fetch.js";
+import { apiFailure, apiGet } from "./backoff.js";
 import { sinceDate } from "../util.js";
 
 // Reconstruct an abstract from OpenAlex's inverted index {word: [positions]}.
@@ -17,10 +18,10 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const since = sinceDate(ctx.options.since);
   const url =
     `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` + (since ? `&filter=from_publication_date:${since}` : "");
-  const r = await httpJson("GET", url, undefined, { timeoutMs: 12000 });
+  const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
-    return { backend: "openalex", items: [], notes: [`OpenAlex search failed or empty (status ${r.status}).`] };
+    return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r)] };
   }
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     const title = cleanInline(String(w.title ?? w.display_name ?? "Untitled")) || "Untitled";

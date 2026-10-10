@@ -161,7 +161,7 @@ extracts, so it costs no extra retrieval. See
   `reduceVerdicts` (the semantic gate).
 - `render.ts` — the zero-dependency markdown→HTML renderer + page assembly
   (verdict badges + sub-question tree in deep mode).
-- `bibtex.ts` — `toBibtex` for research mode's `refs.bib`.
+- `bibtex.ts` — `toBibtex` for research and clinical mode's `refs.bib`.
 - `browser.ts` — the browser rung as ultrasearch decides it: `resolveBrowserRung`
   (`--browser` > `ULTRASEARCH_BROWSER_FETCH` > `fallback` when a browser is
   detected and a window can be shown, else `off`; `off` by default under
@@ -198,11 +198,18 @@ extracts, so it costs no extra retrieval. See
   and a wrong answer is worse than none. The refusal is the feature — a `.docx`
   is a ZIP, so the fall-through this replaced put kilobytes of U+FFFD into
   dossiers as citable evidence, silently.
-- `modes/` — the six `ModeProfile`s + their registry.
+- `modes/` — the seven `ModeProfile`s + their registry.
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the
   polite-sequential fan-out), and one file per backend (web discovery, scholarly
-  incl. `dblp`, community).
+  incl. `dblp` and `clinicaltrials`, community).
+- `backends/backoff.ts` — `withBackoff` / `apiGet`: the scholarly APIs' 429/503
+  handling (3 attempts, `Retry-After` ≤ 30 s honoured, else exponential from
+  `ULTRASEARCH_BACKOFF_MS`), with the engine's own retry switched off underneath
+  so the two loops never stack. `apiFailure` labels a throttled backend
+  `rate-limited`, never `failed`.
+- `backends/clinicaltrials.ts` — ClinicalTrials.gov API v2 (`studyText` turns a
+  study record into the cited text; the page cited is `/study/<NCT id>`).
 - `backends/reddit.ts` — the keyless `search.rss` feed: one request, never
   retried, deep-only comment feeds read sequentially up to the first refusal.
 - `backends/pepper.ts` — the Pepper deal network (`PEPPER_SITES`, region →

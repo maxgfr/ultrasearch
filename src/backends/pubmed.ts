@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, cleanInline } from "./fetch.js";
+import { cleanInline } from "./fetch.js";
+import { apiFailure, apiGet } from "./backoff.js";
 
 // PubMed via the keyless NCBI E-utilities: esearch → idlist, then esummary →
 // metadata (two-call pattern, like wikipedia). esummary has no abstract, so we
@@ -10,18 +11,17 @@ export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
   const esearch = `${base}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
-  const sr = await httpJson("GET", esearch, undefined, { timeoutMs: 12000 });
+  const sr = await apiGet(esearch);
   const ids: string[] = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
-    const why = sr.status === 429 || sr.status === 503 ? `rate-limited (HTTP ${sr.status})` : `failed or empty (status ${sr.status})`;
-    return { backend: "pubmed", items: [], notes: [`PubMed esearch ${why}.`] };
+    return { backend: "pubmed", items: [], notes: [apiFailure("PubMed esearch", sr)] };
   }
 
   const esummary = `${base}/esummary.fcgi?db=pubmed&retmode=json&tool=ultrasearch&id=${ids.join(",")}`;
-  const dr = await httpJson("GET", esummary, undefined, { timeoutMs: 12000 });
+  const dr = await apiGet(esummary);
   const result = dr.ok ? dr.data?.result : undefined;
   if (!result) {
-    return { backend: "pubmed", items: [], notes: [`PubMed esummary failed (status ${dr.status}).`] };
+    return { backend: "pubmed", items: [], notes: [dr.rateLimited ? apiFailure("PubMed esummary", dr) : `PubMed esummary failed (status ${dr.status}).`] };
   }
 
   const items: RawSource[] = ids.slice(0, n).map((uid, i): RawSource => {

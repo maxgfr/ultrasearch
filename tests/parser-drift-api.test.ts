@@ -11,6 +11,7 @@ import { wikipediaBackend } from "../src/backends/wikipedia.js";
 import { dblpBackend } from "../src/backends/dblp.js";
 import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
+import { clinicaltrialsBackend } from "../src/backends/clinicaltrials.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
 import { hackernewsBackend } from "../src/backends/hackernews.js";
 import { redditBackend } from "../src/backends/reddit.js";
@@ -66,6 +67,8 @@ const CANARIES: Canary[] = [
   { name: "dblp (single hit)", backend: dblpBackend, fixtures: [["dblp.org/search/publ", "dblp-single.json"]], min: 1 },
   { name: "semanticscholar", backend: semanticscholarBackend, fixtures: [["api.semanticscholar.org", "semanticscholar.json"]], min: 2 },
   { name: "europepmc", backend: europepmcBackend, fixtures: [["ebi.ac.uk/europepmc", "europepmc.json"]], min: 2 },
+  // Saved 2026-10-10 from the ClinicalTrials.gov API v2 (three PRP / knee OA studies).
+  { name: "clinicaltrials", backend: clinicaltrialsBackend, fixtures: [["clinicaltrials.gov/api/v2", "clinicaltrials.json"]], min: 3 },
   { name: "hackernews", backend: hackernewsBackend, fixtures: [["hn.algolia.com", "hackernews.json"]], min: 2 },
   { name: "reddit", backend: redditBackend, fixtures: [["reddit.com/search.rss", "reddit-search.atom"]], min: 3 },
   {

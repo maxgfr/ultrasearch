@@ -211,6 +211,50 @@ const FACET_PATTERNS: { re: RegExp; ask: (s: string) => string; angle: string; t
     angle: "which codes are reported expired, fake or not working",
     terms: ["code not working", "expired"],
   },
+  // clinical — last, so they only ever claim headings nothing above matched;
+  // the clinical "Gaps & open questions" heading is left to the gaps facet.
+  {
+    re: /pico|clinical question/i,
+    ask: (s) => `Which patients, intervention, comparator and outcomes define the clinical question on ${s}?`,
+    angle: "which patients, intervention, comparator and outcomes define the clinical question",
+    terms: ["population", "intervention"],
+  },
+  {
+    re: /evidence base|systematic review|randomi[sz]ed/i,
+    ask: (s) => `Which trials, systematic reviews and cohort studies have evaluated ${s}?`,
+    angle: "which trials, systematic reviews and cohort studies have evaluated it",
+    terms: ["randomized controlled trial", "systematic review"],
+  },
+  {
+    re: /efficacy|effectiveness/i,
+    ask: (s) => `How effective is ${s} on its main clinical outcomes?`,
+    angle: "how effective is it on the main clinical outcomes",
+    terms: ["efficacy", "outcomes"],
+  },
+  {
+    re: /safety|adverse|complication/i,
+    ask: (s) => `What adverse events and complications are reported for ${s}?`,
+    angle: "what adverse events and complications are reported",
+    terms: ["adverse events", "complications"],
+  },
+  {
+    re: /guideline|recommendation/i,
+    ask: (s) => `What do clinical guidelines recommend about ${s}?`,
+    angle: "what do clinical guidelines recommend",
+    terms: ["guideline", "recommendation"],
+  },
+  {
+    re: /certainty|risk of bias|level of evidence/i,
+    ask: (s) => `How certain is the evidence on ${s}, and what limits it?`,
+    angle: "how certain is the evidence, and what limits it",
+    terms: ["risk of bias", "GRADE"],
+  },
+  {
+    re: /ongoing|registered trial/i,
+    ask: (s) => `Which trials on ${s} are registered or still ongoing?`,
+    angle: "which trials are registered or still ongoing",
+    terms: ["ongoing trial", "ClinicalTrials.gov"],
+  },
 ];
 
 // Verbs that, surviving into a subjectOf residue, mark it as a CLAUSE rather

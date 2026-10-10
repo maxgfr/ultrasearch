@@ -11,6 +11,7 @@ verified loop see `references/deep-research-playbook.md`.
 | a neutral briefing on a subject | `topic` |
 | to fix an error / understand a failure | `bug` |
 | a survey of the academic literature | `research` |
+| a clinical / biomedical question (treatment, diagnosis, outcomes, harms) | `clinical` |
 | to learn the topic from scratch | `learn` |
 | market/competitor/pricing research | `startup` |
 | coupons / promo / discount codes for a shop | `deals` (+ `--lang`, `--region`) |

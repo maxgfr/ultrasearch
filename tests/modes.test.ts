@@ -14,8 +14,8 @@ describe("modes registry", () => {
     }
   });
 
-  it("lists all six modes", () => {
-    expect(listModes()).toHaveLength(6);
+  it("lists all seven modes", () => {
+    expect(listModes()).toHaveLength(7);
     expect(Object.keys(MODES).sort()).toEqual([...ALL_MODES].sort());
   });
 
@@ -60,5 +60,32 @@ describe("deals mode", () => {
     expect(getMode("startup").deepOnly).toContain("reddit");
     expect(getMode("bug").deepOnly).toContain("reddit");
     expect([...getMode("topic").backends, ...getMode("topic").deepOnly]).not.toContain("reddit");
+  });
+});
+
+describe("clinical mode", () => {
+  const clinical = getMode("clinical");
+  it("searches the biomedical indexes and the trial registry, never arXiv", () => {
+    expect(clinical.backends).toEqual(["pubmed", "europepmc", "clinicaltrials", "crossref"]);
+    for (const depth of ["summary", "standard", "deep"] as const) {
+      const opts = makeCtx("x", { mode: "clinical", depth }).options;
+      expect(resolveBackends(opts, clinical), depth).not.toContain("arxiv");
+    }
+    expect(resolveBackends(makeCtx("x", { mode: "clinical", depth: "deep" }).options, clinical)).toEqual(
+      expect.arrayContaining(["pubmed", "europepmc", "clinicaltrials", "crossref", "openalex", "semanticscholar"]),
+    );
+  });
+  it("keeps every API backend under --search light", () => {
+    const opts = makeCtx("x", { mode: "clinical", search: "light" }).options;
+    expect(resolveBackends(opts, clinical)).toEqual(expect.arrayContaining(["pubmed", "europepmc", "clinicaltrials", "crossref"]));
+  });
+  it("asks for the clinician's report and writes refs.bib", () => {
+    expect(clinical.extras).toEqual(["bibtex"]);
+    for (const h of ["Clinical question (PICO)", "Safety & adverse events", "Guidelines & recommendations", "Ongoing & registered trials"]) {
+      expect(clinical.template).toContain(`## ${h}`);
+    }
+    expect(clinical.searchAngles.join(" ")).toMatch(/randomized controlled trial/);
+    expect(clinical.searchAngles.join(" ")).toMatch(/systematic review/);
+    expect(clinical.searchAngles.join(" ")).toMatch(/guideline/);
   });
 });
