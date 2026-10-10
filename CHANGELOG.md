@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.40.0](https://github.com/maxgfr/ultrasearch/compare/v1.39.2...v1.40.0) (2026-10-10)
+
+
+### Features
+
+* **cli:** drop sources from a dossier ([18d9ac6](https://github.com/maxgfr/ultrasearch/commit/18d9ac628e4bf18d8ffe2c9131bffdf849da3fe7))
+
 ## [1.39.2](https://github.com/maxgfr/ultrasearch/compare/v1.39.1...v1.39.2) (2026-10-10)
 
 
