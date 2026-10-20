@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.42.0](https://github.com/maxgfr/ultrasearch/compare/v1.41.1...v1.42.0) (2026-10-20)
+
+
+### Features
+
+* rename the claude web engine to host and make hints agent-neutral ([#48](https://github.com/maxgfr/ultrasearch/issues/48)) ([d7095fd](https://github.com/maxgfr/ultrasearch/commit/d7095fd1a81f1fd46c5f8d83e039c5ba76ac8615))
+
 ## [1.41.1](https://github.com/maxgfr/ultrasearch/compare/v1.41.0...v1.41.1) (2026-10-10)
 
 
