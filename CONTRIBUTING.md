@@ -18,6 +18,10 @@ pnpm run check:build    # the composite gate: rebuild + mirror + both bundles
 pnpm run eval           # offline eval suite (gates CI)
 ```
 
+To try the in-repo skill with your agent, `npx skills add .` installs it from
+`skills/ultrasearch/` (add `-a <agent>` to target one). The install output
+(`.agents/skills/`, `.claude/skills/`, `skills-lock.json`) is gitignored — never commit it.
+
 `check:build` is the one to run before pushing: it rebuilds, re-mirrors, fails if
 either committed bundle differs, and then runs `verify:bundle` (install shape +
 the doc↔CLI drift gate).
