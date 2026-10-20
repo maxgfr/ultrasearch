@@ -4,7 +4,6 @@ description: Research a web topic, brainstorm research angles, and produce an ev
 license: MIT
 metadata:
   version: 1.41.1
-  opencode/autoinvoke: 'true'
 ---
 
 # ultrasearch — recap the web, grounded not guessed
