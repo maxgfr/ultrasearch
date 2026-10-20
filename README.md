@@ -454,11 +454,13 @@ The agent calls it when you ask, not on its own. Use `$ultrasearch` in Codex,
 `/ultrasearch` in Claude Code or OpenCode, or ask the agent for web research in plain words.
 
 Making it explicit-only, so that only the command starts it, is one setting per
-host, applied to the **installed** copy of the skill:
+host, applied to the **installed** copy of the skill (OpenCode: to `opencode.json`):
 
 | Host | Shipped, on request | Explicit-only |
 | --- | --- | --- |
-| Claude Code, OpenCode | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
+| Claude Code | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
+| Codex | no `agents/openai.yaml` beside `SKILL.md` (implicit invocation allowed) | add `agents/openai.yaml` with `policy:` / `allow_implicit_invocation: false` |
+| OpenCode | no `skill` rule under `permission` in `opencode.json` | add `"permission": { "skill": { "ultrasearch": "deny" } }` to `opencode.json` |
 
 Claude Code can do it without touching the file:
 `"skillOverrides": { "ultrasearch": "user-invocable-only" }` in `settings.json`
