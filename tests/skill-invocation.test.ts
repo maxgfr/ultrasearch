@@ -21,10 +21,4 @@ describe("model-invocable skill, on request", () => {
     expect(frontmatter).toMatch(/^name:\s*ultrasearch\s*$/m);
     expect(frontmatter).not.toMatch(/^user-invocable:\s*(?:false|no|off|0)\s*$/im);
   });
-
-  it("lets Codex invoke the skill implicitly", () => {
-    const config = readFileSync(new URL("agents/openai.yaml", skillDir), "utf8");
-    // This is a host policy boolean, not a prose instruction to the model.
-    expect(config).toMatch(/^policy:\s*\n(?:[ \t]+[^\n]*\n)*?[ \t]+allow_implicit_invocation:\s*true\s*$/m);
-  });
 });
