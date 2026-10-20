@@ -11,7 +11,7 @@ import { sinceEpochSeconds } from "../util.js";
 // retried, and at --depth deep it reads at most three threads' comment feeds,
 // one after another, stopping at the first refusal. That caps a run at four
 // requests to reddit.com. Anything it cannot read becomes a note pointing at the
-// agent's own WebSearch (`site:reddit.com …`), which reaches the same threads
+// agent's own web search (`site:reddit.com …`), which reaches the same threads
 // without spending this IP's patience.
 //
 // Generic on purpose — customer complaints for `startup`, workarounds for `bug`,
@@ -65,7 +65,7 @@ function postText(summary: string | undefined): string {
 }
 
 function fallback(q: string): string {
-  return `Search it with your own WebSearch instead — \`site:reddit.com ${q}\` — and ingest the threads that matter.`;
+  return `Search it with your own web search instead — \`site:reddit.com ${q}\` — and ingest the threads that matter.`;
 }
 
 export const redditBackend: Backend = async (ctx): Promise<BackendResult> => {

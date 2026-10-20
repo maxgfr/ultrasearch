@@ -70,7 +70,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 const lane = (browser: "fallback" | "always" | "off", urls = ["https://news.test/article"]) =>
   makeCtx("rate limiting", {
-    backends: ["claude"],
+    backends: ["host"],
     webResults: urls.map((url) => ({ url, title: "Rate limiting explained", snippet: "Rate limiting, in short." })),
     out: dir,
     browser,

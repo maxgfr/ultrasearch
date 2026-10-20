@@ -137,7 +137,9 @@ describe("readPastCachedWall", () => {
   });
 
   it("serves a good cached copy without a second read", async () => {
-    const spy = installFetchMock(() => ({ body: `<article><p>${ARTICLE}</p></article>` }));
+    // The heading as HTML, not markdown inside a <p>: since webindex 1.33.2 a
+    // paragraph is read whole, so a "# " line would swallow the paragraph.
+    const spy = installFetchMock(() => ({ body: `<article><h1>Scleral fixation</h1><p>${ARTICLE.replace(/^# .*\n\n/, "")}</p></article>` }));
     await readPastCachedWall("https://ok.test/a", {}, true);
     const again = await readPastCachedWall("https://ok.test/a", {}, true);
     expect(again.cached).toBe(true);

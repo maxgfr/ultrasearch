@@ -41,11 +41,11 @@ async function run(argv: string[]): Promise<{ out: string; err: string; exit?: n
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("main() — queries (the WebSearch worklist)", () => {
+describe("main() — queries (the web search worklist)", () => {
   it("prints the sweep size, the angles and the follow-up command", async () => {
     const r = await run(["queries", "--q", "what is rate limiting", "--mode", "topic", "--depth", "standard"]);
     expect(r.exit).toBeUndefined();
-    expect(r.out).toMatch(/Run 4 DISTINCT WebSearch queries/);
+    expect(r.out).toMatch(/Run 4 DISTINCT web search queries/);
     expect(r.out).toMatch(/gather --q "what is rate limiting"/);
     expect(r.out).toMatch(/--web-results/);
   });
@@ -62,7 +62,7 @@ describe("main() — queries (the WebSearch worklist)", () => {
   it("writes nothing, so it is safe in a read-only phase", async () => {
     const r = await run(["queries", "--q", "anything", "--stdout"]);
     expect(r.exit).toBeUndefined();
-    expect(r.out).toMatch(/DISTINCT WebSearch queries/);
+    expect(r.out).toMatch(/DISTINCT web search queries/);
   });
 
   it("refuses a missing question and an unknown mode", async () => {
@@ -72,7 +72,7 @@ describe("main() — queries (the WebSearch worklist)", () => {
 });
 
 describe("main() — doctor", () => {
-  it("names the WebSearch lane as the primary engine, unprobeable from here", async () => {
+  it("names the web-search lane as the primary engine, unprobeable from here", async () => {
     const r = await run(["doctor", "--json", "--searxng", "off", "--firecrawl", "off"]);
     const rows = JSON.parse(r.out) as { name: string; detail: string }[];
     expect(rows[0]!.name).toBe("websearch");

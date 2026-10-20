@@ -14,6 +14,8 @@ var __export = (target, all) => {
 };
 
 // src/brand.ts
+import { tmpdir } from "os";
+import { join } from "path";
 function configure(next) {
   if (!next.envPrefix || !/^[A-Z][A-Z0-9_]*$/.test(next.envPrefix)) {
     throw new Error(`webindex: envPrefix must be UPPER_SNAKE, got ${JSON.stringify(next.envPrefix)}`);
@@ -25,6 +27,10 @@ function configure(next) {
 }
 function brand() {
   return current;
+}
+function userTmpDir(...segments) {
+  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
+  return join(tmpdir(), uid === void 0 ? current.name : `${current.name}-${uid}`, ...segments);
 }
 function resetBrand() {
   current = { ...DEFAULT_BRAND };
@@ -59,7 +65,7 @@ function envInt(suffix, def, min = 0, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isFinite(n)) return def;
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
-var DEFAULT_BRAND, current;
+var DEFAULT_BRAND, current, MAX_TIMER_MS;
 var init_brand = __esm({
   "src/brand.ts"() {
     "use strict";
@@ -70,6 +76,7 @@ var init_brand = __esm({
       contactUrl: "https://github.com/maxgfr/webindex"
     };
     current = { ...DEFAULT_BRAND };
+    MAX_TIMER_MS = 2 ** 31 - 1;
   }
 });
 
@@ -446,12 +453,12 @@ function scanShape(t) {
 function assessPdfText(text) {
   return assessExtractedText(text, NO_TEXT_LAYER);
 }
-function assessExtractedText(text, emptyReason) {
+function assessExtractedText(text, emptyReason, undecodable = "undecodable PDF stream") {
   const t = text.trim();
   if (!t) return { ok: false, reason: emptyReason };
   const shape = scanShape(t);
   if (shape.control > CONTROL_RATIO_MAX) {
-    return { ok: false, reason: "binary/control characters in the text (undecodable PDF stream)" };
+    return { ok: false, reason: `binary/control characters in the text (${undecodable})` };
   }
   if (shape.replacement > REPLACEMENT_RATIO_MAX) {
     return { ok: false, reason: "replacement characters throughout (wrong character map)" };
@@ -567,7 +574,7 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let child;
     try {
       const bin = binaryName(cmd);
@@ -576,7 +583,7 @@ function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
       const common = { stdio: ["pipe", "pipe", "pipe"], ...opts.env ? { env: opts.env } : {} };
       child = viaShell ? spawn2([bin, ...args].map(quote).join(" "), { ...common, shell: true, windowsHide: true }) : spawn2(bin, args, common);
     } catch (e) {
-      resolve8({ ok: false, stdout: "", error: e.message });
+      resolve9({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -595,12 +602,15 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve8(r);
+      resolve9(r);
     };
-    const timer = setTimeout(() => {
-      killTree(child);
-      done(withStderr({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` }));
-    }, timeoutMs);
+    const timer = setTimeout(
+      () => {
+        killTree(child);
+        done(withStderr({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` }));
+      },
+      Math.min(timeoutMs, MAX_TIMER_MS)
+    );
     child.stdout?.on("data", (d) => {
       if (size >= MAX_STDOUT_BYTES) return;
       size += d.length;
@@ -635,6 +645,7 @@ var PDF_INSPECTOR_SPEC, ANYDOC_SPEC, MAX_STDOUT_BYTES, STDERR_END_CHARS;
 var init_exec = __esm({
   "src/pdf/exec.ts"() {
     "use strict";
+    init_brand();
     init_process_tree();
     PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
     ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
@@ -645,8 +656,8 @@ var init_exec = __esm({
 
 // src/pdf/ocr.ts
 import { mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { join as join2 } from "path";
+import { tmpdir as tmpdir2 } from "os";
 function resetOcrBudget() {
   spent = 0;
 }
@@ -676,10 +687,10 @@ async function ocrAttempt(bytes) {
   if (!copyablePdf || !tesseract) return { declined: "tools" };
   if (ocrBudgetLeft() <= 0) return { declined: "budget" };
   spent++;
-  const dir = mkdtempSync(join(tmpdir(), `${brand().name}-ocr-`));
+  const dir = mkdtempSync(join2(tmpdir2(), `${brand().name}-ocr-`));
   try {
-    const input = join(dir, "in.pdf");
-    const output = join(dir, "out.pdf");
+    const input = join2(dir, "in.pdf");
+    const output = join2(dir, "out.pdf");
     writeFileSync(input, bytes);
     const lang = env("OCR_LANG") || DEFAULT_LANG;
     const r = await runWithInput("copyable-pdf", ["-o", output, "-m", "-l", lang, input], Buffer.alloc(0), envInt("OCR_TIMEOUT_MS", DEFAULT_TIMEOUT_MS));
@@ -1392,6 +1403,7 @@ function sheetRows(xml, shared, styles, budget) {
   const table = { rows: [] };
   let row;
   let col = 0;
+  let nextCol = 0;
   let type;
   let style = 0;
   let value;
@@ -1399,9 +1411,12 @@ function sheetRows(xml, shared, styles, budget) {
   walkXml(xml, {
     open(name, attrs) {
       const n = local(name);
-      if (n === "row") row = [];
-      else if (n === "c" && row) {
-        col = columnOf(attr(attrs, "r")) ?? row.length;
+      if (n === "row") {
+        row = [];
+        nextCol = 0;
+      } else if (n === "c" && row) {
+        col = columnOf(attr(attrs, "r")) ?? nextCol;
+        nextCol = col + 1;
         type = attr(attrs, "t");
         style = Number(attr(attrs, "s") ?? 0);
         value = "";
@@ -1413,7 +1428,7 @@ function sheetRows(xml, shared, styles, budget) {
       else if (n === "c" && row && value !== void 0) {
         let shown = value;
         const kind = styles.temporal[style];
-        if (type === "s") shown = shared[Number(value)] ?? "";
+        if (type === "s") shown = value.trim() ? shared[Number(value)] ?? "" : "";
         else if (type === "b") shown = value === "1" ? "TRUE" : "FALSE";
         else if (kind && (type === void 0 || type === "n") && value.trim()) shown = serialDate(Number(value), kind, styles.date1904) ?? value;
         if (col < MAX_COLUMNS && shown && budget.take(shown.length)) {
@@ -1857,7 +1872,7 @@ async function extractDocument(bytes, fmt, opts = {}) {
       if (got.failure) failures.push(got.failure);
       continue;
     }
-    const verdict = assessExtractedText(got.text, "the converter produced no text");
+    const verdict = assessExtractedText(got.text, "the converter produced no text", "the converter returned the file's bytes, not its text");
     if (verdict.ok) return { text: got.text.trim(), via: id };
     lastReason = verdict.reason;
   }
@@ -1889,6 +1904,18 @@ var init_doc = __esm({
   }
 });
 
+// src/trim.ts
+function trimTrailing(s, ch) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === ch) end--;
+  return s.slice(0, end);
+}
+var init_trim = __esm({
+  "src/trim.ts"() {
+    "use strict";
+  }
+});
+
 // src/url.ts
 function canonicalizeUrl(raw) {
   try {
@@ -1897,7 +1924,7 @@ function canonicalizeUrl(raw) {
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
     let port = u.port;
     if (proto === "http:" && port === "80" || proto === "https:" && port === "443") port = "";
-    const path = u.pathname.replace(/\/+$/, "");
+    const path = trimTrailing(u.pathname, "/");
     const keep = [];
     const shareSi = SHARE_SI_HOSTS.test(host);
     for (const [k, v] of u.searchParams) {
@@ -1953,6 +1980,7 @@ var TRACKING_PARAMS, SHARE_SI_HOSTS, LOCAL_FILE_DOMAIN, FNV_OFFSET_HI, FNV_OFFSE
 var init_url = __esm({
   "src/url.ts"() {
     "use strict";
+    init_trim();
     TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|gclsrc$|dclid$|msclkid$|yclid$|twclid$|ttclid$|li_fat_id$|mkt_tok$|_gl$|mc_|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$|igsh$)/i;
     SHARE_SI_HOSTS = /(^|\.)(youtube\.com|youtu\.be|spotify\.com)$/;
     LOCAL_FILE_DOMAIN = "local file";
@@ -2157,9 +2185,9 @@ function sh(cmd, args, opts = {}) {
   return toResult(r.status, String(r.stdout ?? ""), String(r.stderr ?? ""), r.error);
 }
 function shAsync(cmd, args, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs();
+  const timeoutMs = Math.min(opts.timeoutMs ?? defaultTimeoutMs(), MAX_TIMER_MS);
   if (opts.signal?.aborted) return Promise.resolve({ ok: false, status: 130, stdout: "", stderr: "aborted" });
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     let settled = false;
     let timer;
     let onAbort;
@@ -2168,7 +2196,7 @@ function shAsync(cmd, args, opts = {}) {
       settled = true;
       clearTimeout(timer);
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-      resolve8(r);
+      resolve9(r);
     };
     let child;
     try {
@@ -2209,15 +2237,15 @@ var init_exec2 = __esm({
     init_brand();
     init_process_tree();
     STDOUT_CAP = 24 * 1024 * 1024;
-    defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3);
+    defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3, MAX_TIMER_MS);
     havePresence = /* @__PURE__ */ new Map();
   }
 });
 
 // src/video/ytdlp.ts
 import { mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
-import { tmpdir as tmpdir2 } from "os";
-import { join as join2 } from "path";
+import { tmpdir as tmpdir3 } from "os";
+import { join as join3 } from "path";
 function ytdlpExtraArgs() {
   return (env("YTDLP_ARGS") ?? "").split(/\s+/).filter(Boolean);
 }
@@ -2311,7 +2339,7 @@ function classifyYtdlpError(stderr) {
   return `yt-dlp failed: ${(line ?? s.trim().split("\n")[0] ?? "").replace(/^ERROR:\s*/, "").slice(0, 200) || "no output"}`;
 }
 async function withTempDir(label, fn) {
-  const dir = mkdtempSync2(join2(tmpdir2(), `${brand().name}-${label}-`));
+  const dir = mkdtempSync2(join3(tmpdir3(), `${brand().name}-${label}-`));
   try {
     return await fn(dir);
   } finally {
@@ -2320,7 +2348,7 @@ async function withTempDir(label, fn) {
 }
 async function downloadSubtitle(info, lang, auto, run = defaultVideoRunner, signal, knownOnly = false) {
   return withTempDir("subs", async (dir) => {
-    const infoPath = join2(dir, "info.json");
+    const infoPath = join3(dir, "info.json");
     writeFileSync2(infoPath, info);
     const r = await runYtdlp(
       [
@@ -2334,12 +2362,12 @@ async function downloadSubtitle(info, lang, auto, run = defaultVideoRunner, sign
         "--sub-format",
         "vtt/srt",
         "-o",
-        join2(dir, "sub.%(ext)s")
+        join3(dir, "sub.%(ext)s")
       ],
       { run, timeoutMs: SUBTITLE_TIMEOUT_MS, signal, knownOnly }
     );
     const file = readdirSync2(dir).find((f) => f.endsWith(".vtt")) ?? readdirSync2(dir).find((f) => f.endsWith(".srt"));
-    if (file) return { vtt: readFileSync3(join2(dir, file), "utf8") };
+    if (file) return { vtt: readFileSync3(join3(dir, file), "utf8") };
     if (signal?.aborted) return { error: "cancelled" };
     return { error: r.ok ? `yt-dlp wrote no ${lang} track` : classifyYtdlpError(r.stderr) };
   });
@@ -2357,7 +2385,7 @@ async function downloadMedia(args, dir, stem, opts) {
   let stderr = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     const timeoutMs = typeof opts.timeoutMs === "function" ? opts.timeoutMs() : opts.timeoutMs;
-    const r = await runYtdlp([...args, "--no-warnings", "-o", join2(dir, `${stem}.%(ext)s`)], {
+    const r = await runYtdlp([...args, "--no-warnings", "-o", join3(dir, `${stem}.%(ext)s`)], {
       run: opts.run,
       url: opts.url,
       timeoutMs,
@@ -2445,26 +2473,39 @@ function mergeSegments(cues, breaks = []) {
     cur = void 0;
   };
   const crossesBreak = (from, to) => breaks.some((b) => b > from + BREAK_SLACK_S && b <= to + BREAK_SLACK_S);
+  let sentences = 0;
+  let spaceRuns = 0;
+  let endsInSpace = false;
   for (const cue of cues) {
     if (cur && (cue.start - cur.end > PAUSE_S || cue.end - cur.start > MAX_SEGMENT_S || crossesBreak(cur.start, cue.start))) flush();
-    cur = cur ? { start: cur.start, end: Math.max(cur.end, cue.end), text: `${cur.text} ${cue.text}` } : { ...cue };
-    const sentences = cur.text.match(SENTENCE_END)?.length ?? 0;
-    const endsSentence = /[.!?…]+["'”’)\]]*$/.test(cur.text);
-    const words = cur.text.split(/\s+/).length;
-    if (sentences >= MAX_SENTENCES || endsSentence && words >= WORDS_TO_CLOSE) flush();
+    const found = cue.text.match(SENTENCE_END)?.length ?? 0;
+    const runs = cue.text.match(/\s+/g)?.length ?? 0;
+    if (cur) {
+      sentences += found;
+      spaceRuns += runs + 1 - Number(endsInSpace) - Number(/^\s/.test(cue.text));
+      endsInSpace = cue.text === "" || /\s$/.test(cue.text);
+      cur = { start: cur.start, end: Math.max(cur.end, cue.end), text: `${cur.text} ${cue.text}` };
+    } else {
+      sentences = found;
+      spaceRuns = runs;
+      endsInSpace = /\s$/.test(cue.text);
+      cur = { ...cue };
+    }
+    if (sentences >= MAX_SENTENCES || ENDS_SENTENCE.test(cue.text) && spaceRuns + 1 >= WORDS_TO_CLOSE) flush();
   }
   flush();
   return out;
 }
-var TIMING, MIN_CUE_S, ENTITIES2, clean, SENTENCE_END, MAX_SEGMENT_S, MAX_SENTENCES, PAUSE_S, WORDS_TO_CLOSE, BREAK_SLACK_S;
+var TIMING, MIN_CUE_S, ENTITIES2, clean, SENTENCE_END, ENDS_SENTENCE, MAX_SEGMENT_S, MAX_SENTENCES, PAUSE_S, WORDS_TO_CLOSE, BREAK_SLACK_S;
 var init_vtt = __esm({
   "src/video/vtt.ts"() {
     "use strict";
     TIMING = /^((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/;
     MIN_CUE_S = 0.05;
     ENTITIES2 = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", lrm: "", rlm: "" };
-    clean = (line) => decode(line.replace(/<[^>]*>/g, "").replace(/\{\\[^}]*\}/g, "")).replace(/\s+/g, " ").trim();
-    SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s|$)/g;
+    clean = (line) => decode(line.replace(/<[^<>]*>/g, "").replace(/\{\\[^{}]*\}/g, "")).replace(/\s+/g, " ").trim();
+    SENTENCE_END = /(?<![.!?…])[.!?…]+["'”’)\]]*(?=\s|$)/g;
+    ENDS_SENTENCE = /(?<![.!?…])[.!?…]+["'”’)\]]*$/;
     MAX_SEGMENT_S = 30;
     MAX_SENTENCES = 3;
     PAUSE_S = 5;
@@ -2475,7 +2516,7 @@ var init_vtt = __esm({
 
 // src/video/whisper.ts
 import { existsSync as existsSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "fs";
-import { join as join3 } from "path";
+import { join as join4 } from "path";
 function resetWhisperBudget() {
   spent2 = 0;
 }
@@ -2513,15 +2554,15 @@ async function whisperTranscribe(info, language, run, signal, knownOnly = false)
   const left = () => Math.max(1e3, deadline - Date.now());
   const timedOut = { failed: `whisper: timed out after ${Math.round(budgetMs / 6e4)} min (${envName("WHISPER_TIMEOUT_MS")})` };
   return withTempDir("whisper", async (dir) => {
-    const infoPath = join3(dir, "info.json");
+    const infoPath = join4(dir, "info.json");
     writeFileSync3(infoPath, info);
     const dl = await downloadMedia(["--load-info-json", infoPath, "-f", AUDIO_FORMAT], dir, "audio", { run, timeoutMs: left, signal, knownOnly });
     if (signal?.aborted) return refund({ failed: "whisper: cancelled" });
     if ("timedOut" in dl) return timedOut;
     if ("error" in dl) return refund({ failed: `whisper: the audio download failed (${dl.error})` });
     const audio = dl.file;
-    const wav = join3(dir, "speech.wav");
-    const ff = await run("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", join3(dir, audio), "-ar", "16000", "-ac", "1", wav], {
+    const wav = join4(dir, "speech.wav");
+    const ff = await run("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", join4(dir, audio), "-ar", "16000", "-ac", "1", wav], {
       timeoutMs: left(),
       signal
     });
@@ -2536,7 +2577,7 @@ async function whisperTranscribe(info, language, run, signal, knownOnly = false)
     if (w.missing) return refund({ failed: "whisper needs uvx", unavailable: true });
     if (signal?.aborted) return { failed: "whisper: cancelled" };
     if (w.status === 124) return timedOut;
-    const out = join3(dir, "speech.json");
+    const out = join4(dir, "speech.json");
     if (!w.ok || !existsSync2(out)) return { failed: `whisper: ${w.stderr.trim().split("\n").pop() || "failed"}` };
     return { segments: whisperSegments(readFileSync4(out, "utf8")) };
   });
@@ -3306,11 +3347,6 @@ function rrf(lists, keyOf, k = 60) {
   }
   return score;
 }
-function trimTrailing(s, ch) {
-  let end = s.length;
-  while (end > 0 && s[end - 1] === ch) end--;
-  return s.slice(0, end);
-}
 function arxivIdFromUrl(url) {
   let host;
   let path;
@@ -3591,7 +3627,7 @@ function popcount32(n) {
   return Math.imul(x + (x >>> 4) & 252645135, 16843009) >>> 24;
 }
 function hammingDistance(a, b) {
-  let x = a ^ b;
+  let x = unsigned64(a) ^ unsigned64(b);
   let count = popcount32(Number(x & MASK32)) + popcount32(Number(x >> 32n & MASK32));
   x >>= 64n;
   while (x) {
@@ -3748,12 +3784,13 @@ function externalHosts(url, text) {
   }
   return out;
 }
-var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, MASK32, PAIR_CACHE_MAX, URL_IN_TEXT;
+var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT;
 var init_rank = __esm({
   "src/rank.ts"() {
     "use strict";
     init_brand();
     init_text();
+    init_trim();
     init_url();
     byCodeUnit = (a, b) => a < b ? -1 : a > b ? 1 : 0;
     indexTokenCache = /* @__PURE__ */ new WeakMap();
@@ -3769,6 +3806,7 @@ var init_rank = __esm({
     subtermCache = /* @__PURE__ */ new Map();
     subtermExtras = { list: void 0, length: 0 };
     MASK32 = 0xffffffffn;
+    unsigned64 = (v) => v < 0n ? BigInt.asUintN(64, v) : v;
     PAIR_CACHE_MAX = 2048;
     URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
   }
@@ -3776,10 +3814,9 @@ var init_rank = __esm({
 
 // src/video/run.ts
 import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, statSync } from "fs";
-import { tmpdir as tmpdir3 } from "os";
-import { join as join4, resolve } from "path";
+import { join as join5, resolve } from "path";
 function videoRoot(out) {
-  return resolve(out ?? env("VIDEO_DIR") ?? join4(tmpdir3(), brand().name, "video"));
+  return resolve(out ?? env("VIDEO_DIR") ?? userTmpDir("video"));
 }
 function servesLang(meta, lang) {
   if (!lang) return true;
@@ -3787,8 +3824,8 @@ function servesLang(meta, lang) {
   return read3 !== void 0 && baseLang2(read3) === baseLang2(lang);
 }
 function readVideoRun(dir) {
-  const meta = readJson(join4(dir, "meta.json"));
-  const segments = readJson(join4(dir, "segments.json"));
+  const meta = readJson(join5(dir, "meta.json"));
+  const segments = readJson(join5(dir, "segments.json"));
   if (!meta?.id || !Array.isArray(segments)) return void 0;
   return { meta, segments };
 }
@@ -3796,10 +3833,10 @@ async function fetchVideoRun(url, root, opts = {}) {
   const source2 = videoSource(url, { anySite: !opts.knownHostsOnly });
   if (!source2) return { ok: false, reason: `not a video URL${opts.knownHostsOnly ? " on a known video host" : ""}: ${url}` };
   const kept = (key) => {
-    const dir2 = join4(root, key);
+    const dir2 = join5(root, key);
     const run = opts.refresh ? void 0 : readVideoRun(dir2);
-    if (!run || !existsSync3(join4(dir2, "TRANSCRIPT.md")) || !servesLang(run.meta, opts.lang)) return void 0;
-    return { ok: true, id: key, dir: dir2, transcript: join4(dir2, "TRANSCRIPT.md"), reused: true, meta: run.meta, segments: run.segments.length };
+    if (!run || !existsSync3(join5(dir2, "TRANSCRIPT.md")) || !servesLang(run.meta, opts.lang)) return void 0;
+    return { ok: true, id: key, dir: dir2, transcript: join5(dir2, "TRANSCRIPT.md"), reused: true, meta: run.meta, segments: run.segments.length };
   };
   if (source2.key) {
     const reused = kept(source2.key);
@@ -3816,8 +3853,8 @@ async function fetchVideoRun(url, root, opts = {}) {
   const t = await transcribeVideo(url, { ...opts, ...probed3 ? { probed: probed3 } : {} });
   const id = source2.key ?? t.meta?.key ?? t.meta?.id;
   if (!t.via || !t.meta || !id) return { ok: false, ...id ? { id } : {}, reason: t.reason ?? "no transcript" };
-  const dir = join4(root, id);
-  const transcriptPath = join4(dir, "TRANSCRIPT.md");
+  const dir = join5(root, id);
+  const transcriptPath = join5(dir, "TRANSCRIPT.md");
   const meta = {
     ...t.meta,
     via: t.via,
@@ -3830,10 +3867,10 @@ async function fetchVideoRun(url, root, opts = {}) {
   if (isNoWrite()) return { ...done, markdown };
   try {
     ensureDir(dir);
-    writeArtifact(join4(dir, "segments.json"), `${JSON.stringify(t.segments, null, 1)}
+    writeArtifact(join5(dir, "segments.json"), `${JSON.stringify(t.segments, null, 1)}
 `);
     writeArtifact(transcriptPath, markdown);
-    writeArtifact(join4(dir, "meta.json"), `${JSON.stringify(meta, null, 2)}
+    writeArtifact(join5(dir, "meta.json"), `${JSON.stringify(meta, null, 2)}
 `);
   } catch (e) {
     return { ok: false, id, reason: `cannot write the run in ${dir}: ${e.message}` };
@@ -3867,7 +3904,7 @@ function listVideoRuns(dir) {
     return [];
   }
   return names.flatMap((name) => {
-    const child = join4(dir, name);
+    const child = join5(dir, name);
     try {
       if (!statSync(child).isDirectory()) return [];
     } catch {
@@ -3878,7 +3915,7 @@ function listVideoRuns(dir) {
   });
 }
 function corpusLabels(dir) {
-  const c = readJson(join4(dir, "corpus.json"));
+  const c = readJson(join5(dir, "corpus.json"));
   const out = /* @__PURE__ */ new Map();
   for (const v of c?.videos ?? []) if (typeof v.id === "string" && typeof v.label === "string") out.set(v.id, v.label);
   return out;
@@ -3943,6 +3980,30 @@ var init_run = __esm({
     };
     PASSAGE_S = 45;
     chapterAt = (chapters, t) => [...chapters].reverse().find((c) => c.start <= t + 0.5)?.title;
+  }
+});
+
+// src/run-lock.ts
+function withRunLock(slug, fn) {
+  const prev = chains.get(slug) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.then(noop, noop);
+  chains.set(slug, tail);
+  tail.then(() => {
+    if (chains.get(slug) === tail) chains.delete(slug);
+  }, noop);
+  return next;
+}
+function noop() {
+}
+function resetRunLocks() {
+  chains.clear();
+}
+var chains;
+var init_run_lock = __esm({
+  "src/run-lock.ts"() {
+    "use strict";
+    chains = /* @__PURE__ */ new Map();
   }
 });
 
@@ -4016,8 +4077,9 @@ var init_dhash = __esm({
 });
 
 // src/video/frames.ts
+import { randomUUID } from "crypto";
 import { copyFileSync, cpSync, existsSync as existsSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync4, readFileSync as readFileSync6, renameSync as renameSync2, rmSync as rmSync3 } from "fs";
-import { join as join5 } from "path";
+import { join as join6, resolve as resolve2 } from "path";
 function parseShowinfo(stderr) {
   const out = [];
   for (const m of stderr.matchAll(/\bn:\s*(\d+)\s+pts:\s*-?\d+\s+pts_time:(-?[\d.]+)/g)) out[Number(m[1])] = Number(m[2]);
@@ -4053,7 +4115,7 @@ async function extractFrames(runDir, opts = {}) {
   const source2 = videoSource(opts.url ?? meta.webpageUrl, { anySite: !opts.knownHostsOnly });
   if (!source2) return { ok: false, reason: `the run in ${runDir} names no page this may download the video from` };
   const duration = meta.duration ?? 0;
-  return withTempDir("frames", async (tmp) => {
+  const extract = async (tmp) => {
     const dl = await downloadMedia(["-f", VIDEO_FORMAT, "--no-playlist"], tmp, "video", {
       run: deps.run,
       url: source2.url,
@@ -4064,27 +4126,29 @@ async function extractFrames(runDir, opts = {}) {
     if (opts.signal?.aborted) return { ok: false, reason: "cancelled" };
     if ("error" in dl) return { ok: false, reason: `the video download failed: ${dl.error}` };
     const video = dl.file;
-    const input = join5(tmp, video);
+    const input = join6(tmp, video);
     const ffmpeg = (args) => deps.run("ffmpeg", ["-nostdin", "-hide_banner", ...args], { timeoutMs: FRAMES_TIMEOUT_MS, signal: opts.signal });
-    const sceneDir = join5(tmp, "scene");
+    const sceneDir = join6(tmp, "scene");
     mkdirSync2(sceneDir);
-    const scenes = await ffmpeg([
+    const sceneArgs = (sync) => [
       "-i",
       input,
       "-vf",
       `select='gt(scene,${SCENE_THRESHOLD})',showinfo,${JPEG_FILTER}`,
-      "-fps_mode",
-      "vfr",
+      ...sync,
       "-q:v",
       "3",
-      join5(sceneDir, "%04d.jpg")
-    ]);
+      join6(sceneDir, "%04d.jpg")
+    ];
+    let scenes = await ffmpeg(sceneArgs(["-fps_mode", "vfr"]));
+    if (!scenes.ok && /Unrecognized option 'fps_mode'/.test(scenes.stderr) && !opts.signal?.aborted) scenes = await ffmpeg(sceneArgs(["-vsync", "vfr"]));
     if (opts.signal?.aborted) return { ok: false, reason: "cancelled" };
+    const lastLine = (stderr) => stderr.trim().split("\n").pop();
     const times = parseShowinfo(scenes.stderr);
     const sceneFiles = readdirSync4(sceneDir).sort();
-    const candidates2 = sceneFiles.slice(0, times.length).map((f, i) => ({ path: join5(sceneDir, f), time: times[i], kind: "scene" }));
+    const candidates2 = sceneFiles.slice(0, times.length).map((f, i) => ({ path: join6(sceneDir, f), time: times[i], kind: "scene" }));
     const single = async (time, kind) => {
-      const path = join5(tmp, `${kind}-${candidates2.length}.jpg`);
+      const path = join6(tmp, `${kind}-${candidates2.length}.jpg`);
       await ffmpeg(["-loglevel", "error", "-ss", time.toFixed(2), "-i", input, "-frames:v", "1", "-vf", JPEG_FILTER, "-q:v", "3", "-y", path]);
       if (existsSync4(path)) candidates2.push({ path, time, kind });
     };
@@ -4095,14 +4159,13 @@ async function extractFrames(runDir, opts = {}) {
       for (let i = 0; i < n; i++) await single(duration * (i + 0.5) / n, "interval");
     }
     if (opts.signal?.aborted) return { ok: false, reason: "cancelled" };
-    if (!candidates2.length)
-      return { ok: false, reason: `ffmpeg took no frame from the video${scenes.ok ? "" : ` (${scenes.stderr.trim().split("\n").pop()})`}` };
+    if (!candidates2.length) return { ok: false, reason: `ffmpeg took no frame from the video${scenes.ok ? "" : ` (${lastLine(scenes.stderr)})`}` };
     candidates2.sort((a, b) => a.time - b.time);
-    const candDir = join5(tmp, "cand");
+    const candDir = join6(tmp, "cand");
     mkdirSync2(candDir);
-    candidates2.forEach((c, i) => copyFileSync(c.path, join5(candDir, `${String(i + 1).padStart(4, "0")}.jpg`)));
-    const raw = join5(tmp, "hash.raw");
-    await ffmpeg(["-loglevel", "error", "-i", join5(candDir, "%04d.jpg"), "-vf", "scale=9:8,format=gray", "-f", "rawvideo", "-y", raw]);
+    candidates2.forEach((c, i) => copyFileSync(c.path, join6(candDir, `${String(i + 1).padStart(4, "0")}.jpg`)));
+    const raw = join6(tmp, "hash.raw");
+    await ffmpeg(["-loglevel", "error", "-i", join6(candDir, "%04d.jpg"), "-vf", "scale=9:8,format=gray", "-f", "rawvideo", "-y", raw]);
     const hashes = existsSync4(raw) ? dhashStream(readFileSync6(raw)) : [];
     const kept = [];
     for (const [i, c] of candidates2.entries()) {
@@ -4111,36 +4174,40 @@ async function extractFrames(runDir, opts = {}) {
       kept.push({ ...c, ...hash !== void 0 ? { hash } : {} });
     }
     const chosen = capFrames(kept, FRAME_EFFORT[effort]);
-    const staged = join5(tmp, "frames");
+    const staged = join6(tmp, "frames");
     mkdirSync2(staged);
     const placed = chosen.map((c, i) => {
       const file = `frames/${String(i + 1).padStart(4, "0")}_${fileStamp(c.time)}.jpg`;
-      copyFileSync(c.path, join5(tmp, file));
+      copyFileSync(c.path, join6(tmp, file));
       return { file, time: c.time, kind: c.kind };
     });
     const frames = alignFrames(placed, segments, meta.chapters ?? []);
     const dropped = candidates2.length - kept.length;
-    const note = `${plural(frames.length, "frame")} (effort ${effort}: at most ${FRAME_EFFORT[effort]}) from ${plural(candidates2.length, "candidate")} \u2014 scene changes above ${SCENE_THRESHOLD}, one per chapter start, ${plural(dropped, "near-duplicate")} dropped`;
-    const framesDir = join5(runDir, "frames");
+    const sceneNote = scenes.ok ? "" : `; scene detection failed (${lastLine(scenes.stderr)})`;
+    const note = `${plural(frames.length, "frame")} (effort ${effort}: at most ${FRAME_EFFORT[effort]}) from ${plural(candidates2.length, "candidate")} \u2014 scene changes above ${SCENE_THRESHOLD}, one per chapter start, ${plural(dropped, "near-duplicate")} dropped${sceneNote}`;
+    const framesDir = join6(runDir, "frames");
+    const incoming = `${framesDir}.${process.pid}.${randomUUID()}.new`;
     try {
-      const incoming = `${framesDir}.${process.pid}.${Date.now()}.new`;
       cpSync(staged, incoming, { recursive: true });
       rmSync3(framesDir, { recursive: true, force: true });
       renameSync2(incoming, framesDir);
-      writeArtifact(join5(runDir, "frames.json"), `${JSON.stringify(frames, null, 2)}
+      writeArtifact(join6(runDir, "frames.json"), `${JSON.stringify(frames, null, 2)}
 `);
-      const markdown = writeArtifact(join5(runDir, "FRAMES.md"), framesMarkdown(meta, frames, note));
-      return { ok: true, dir: framesDir, markdown, frames, candidates: candidates2.length, duplicates: dropped, effort };
+      const markdown = writeArtifact(join6(runDir, "FRAMES.md"), framesMarkdown(meta, frames, note));
+      return { ok: true, dir: framesDir, markdown, frames, candidates: candidates2.length, duplicates: dropped, effort, note };
     } catch (e) {
+      rmSync3(incoming, { recursive: true, force: true });
       return { ok: false, reason: `cannot write the frames in ${runDir}: ${e.message}` };
     }
-  });
+  };
+  return withRunLock(`frames:${resolve2(runDir)}`, () => withTempDir("frames", extract));
 }
 var FRAME_EFFORT, SCENE_THRESHOLD, VIDEO_FORMAT, FRAMES_TIMEOUT_MS, MIN_FRAMES, INTERVAL_FRAMES, JPEG_FILTER, plural, fileStamp;
 var init_frames = __esm({
   "src/video/frames.ts"() {
     "use strict";
     init_no_write();
+    init_run_lock();
     init_align();
     init_dhash();
     init_ladder3();
@@ -4192,7 +4259,7 @@ var init_pool = __esm({
 });
 
 // src/video/list.ts
-import { join as join6 } from "path";
+import { join as join7 } from "path";
 function listingUrl(url) {
   const u = new URL(url);
   if (youtubeListKind(url) === "channel" && /^\/(?:@[^/]+|(?:channel|c|user)\/[^/]+)\/?$/.test(u.pathname)) {
@@ -4284,9 +4351,9 @@ async function fetchVideoCorpus(url, root, opts = {}) {
   let path;
   try {
     ensureDir(root);
-    writeArtifact(join6(root, "corpus.json"), `${JSON.stringify(corpus, null, 2)}
+    writeArtifact(join7(root, "corpus.json"), `${JSON.stringify(corpus, null, 2)}
 `);
-    path = writeArtifact(join6(root, "CORPUS.md"), corpusMarkdown(corpus, root));
+    path = writeArtifact(join7(root, "CORPUS.md"), corpusMarkdown(corpus, root));
   } catch (e) {
     return { ok: false, reason: `cannot write the corpus in ${root}: ${e.message}` };
   }
@@ -4331,6 +4398,8 @@ function parseArgs(argv, spec) {
   const commands = new Set(spec.commands);
   const valueFlags = new Set(spec.valueFlags);
   const boolFlags = new Set(spec.boolFlags);
+  const scoped = spec.commandFlags?.[argv[0] ?? ""];
+  const takes = scoped === void 0 ? void 0 : new Set(scoped);
   if (argv.length === 0) return { kind: "help" };
   if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
   if (isVersionWord(argv[0])) return { kind: "version" };
@@ -4348,14 +4417,22 @@ function parseArgs(argv, spec) {
       break;
     }
     if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
+      if (arg.length > 1 && arg[0] === "-" && !/^-\.?\d/.test(arg)) {
+        throw new UsageError(`unknown flag "${arg}" \u2014 flags here are long (--name); put -- before a word that starts with a dash`);
+      }
       positional.push(arg);
       continue;
     }
     const eq = arg.indexOf("=");
     const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-    if (!boolFlags.has(key) && !valueFlags.has(key)) {
+    const declared = boolFlags.has(key) || valueFlags.has(key);
+    const own = declared && (takes === void 0 || takes.has(key));
+    if (!own) {
       if (isHelpWord(arg)) return { kind: "help", command: command2 };
       if (isVersionWord(arg)) return { kind: "version" };
+    }
+    if (declared && !own) {
+      throw new UsageError(`--${key} does not apply to ${command2} \u2014 run \`${command2} --help\` for its options`);
     }
     if (boolFlags.has(key)) {
       if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
@@ -4487,7 +4564,7 @@ function unmask(payload, key) {
 }
 async function connectWebSocket(url, opts = {}) {
   const { request } = await import("http");
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     let u;
     try {
       u = new URL(url);
@@ -4522,7 +4599,7 @@ async function connectWebSocket(url, opts = {}) {
         socket.destroy();
         return settle(() => reject(new Error("WebSocket handshake failed: bad Accept")));
       }
-      settle(() => resolve8(new WsClient(socket, opts, head)));
+      settle(() => resolve9(new WsClient(socket, opts, head)));
     });
     req.on("response", (res) => {
       res.resume();
@@ -4547,13 +4624,17 @@ var init_ws = __esm({
       code;
     };
     FrameParser = class {
-      buf = Buffer.alloc(0);
+      chunks = [];
+      bytes = 0;
       max;
       constructor(opts = {}) {
         this.max = opts.maxMessageSize ?? DEFAULT_MAX_MESSAGE;
       }
       push(chunk) {
-        this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk]);
+        if (chunk.length) {
+          this.chunks.push(chunk);
+          this.bytes += chunk.length;
+        }
         const frames = [];
         for (; ; ) {
           const frame = this.next();
@@ -4561,8 +4642,36 @@ var init_ws = __esm({
           frames.push(frame);
         }
       }
+      /** Remove the next `n` buffered bytes, joined into one buffer of their own. */
+      take(n) {
+        const pieces = [];
+        for (let left = n; left > 0; ) {
+          const c = this.chunks[0];
+          if (c.length <= left) {
+            pieces.push(c);
+            this.chunks.shift();
+            left -= c.length;
+          } else {
+            pieces.push(c.subarray(0, left));
+            this.chunks[0] = c.subarray(left);
+            left = 0;
+          }
+        }
+        this.bytes -= n;
+        return Buffer.concat(pieces, n);
+      }
+      /** The first chunk, grown to hold at least the first `n` buffered bytes (a header split across chunks). */
+      peek(n) {
+        if (this.chunks[0].length < n) {
+          const head = this.take(n);
+          this.chunks.unshift(head);
+          this.bytes += n;
+        }
+        return this.chunks[0];
+      }
       next() {
-        const b = this.buf;
+        if (this.bytes < 2) return void 0;
+        const b = this.peek(Math.min(this.bytes, 14));
         if (b.length < 2) return void 0;
         const masked = (b[1] & 128) !== 0;
         let len = b[1] & 127;
@@ -4580,10 +4689,14 @@ var init_ws = __esm({
         }
         if (len > this.max) throw new WsProtocolError("message too large", 1009);
         const total = off + (masked ? 4 : 0) + len;
-        if (b.length < total) return void 0;
-        const payload = masked ? unmask(b.subarray(off + 4, total), b.subarray(off, off + 4)) : Buffer.from(b.subarray(off, total));
-        this.buf = b.subarray(total);
-        return { fin: (b[0] & 128) !== 0, opcode: b[0] & 15, payload };
+        if (this.bytes < total) return void 0;
+        const fin = (b[0] & 128) !== 0;
+        const opcode = b[0] & 15;
+        const key = masked ? Buffer.from(b.subarray(off, off + 4)) : void 0;
+        this.take(off + (masked ? 4 : 0));
+        const payload = this.take(len);
+        if (key) for (let i = 0; i < payload.length; i++) payload[i] ^= key[i & 3];
+        return { fin, opcode, payload };
       }
     };
     WsClient = class extends EventEmitter {
@@ -4622,14 +4735,14 @@ var init_ws = __esm({
           this.closing = true;
           this.writeClose(code, reason);
         }
-        await new Promise((resolve8) => {
+        await new Promise((resolve9) => {
           const timer = setTimeout(() => {
             this.socket.destroy();
             this.finish(code, reason);
           }, this.closeTimeoutMs);
           this.once("close", () => {
             clearTimeout(timer);
-            resolve8();
+            resolve9();
           });
         });
       }
@@ -4779,12 +4892,12 @@ ${method}`;
         if (this.isClosed) return Promise.reject(new Error(`CDP connection closed (${method})`));
         const id = ++this.nextId;
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve8, reject) => {
+        return new Promise((resolve9, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id);
             reject(new Error(`CDP command timed out: ${method} (${timeoutMs} ms)`));
           }, timeoutMs);
-          this.pending.set(id, { method, resolve: resolve8, reject, timer });
+          this.pending.set(id, { method, resolve: resolve9, reject, timer });
           try {
             this.ws.send(JSON.stringify({ id, method, params, sessionId: opts.sessionId }));
           } catch (e) {
@@ -4810,7 +4923,7 @@ ${method}`;
       /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
       once(method, opts = {}) {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve8, reject) => {
+        return new Promise((resolve9, reject) => {
           const cleanup = () => {
             clearTimeout(timer);
             this.off(method, handler, opts.sessionId);
@@ -4819,7 +4932,7 @@ ${method}`;
           const handler = (params) => {
             if (opts.predicate && !opts.predicate(params)) return;
             cleanup();
-            resolve8(params);
+            resolve9(params);
           };
           const onClose = () => {
             cleanup();
@@ -5052,11 +5165,11 @@ function dialHost(host) {
 }
 async function http(method, port, host, path, timeoutMs = REQUEST_TIMEOUT_MS) {
   const { request } = await import("http");
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const req = request({ host: dialHost(host), port, path, method, timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve8({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("end", () => resolve9({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
       res.on("error", reject);
     });
     req.on("timeout", () => req.destroy(new Error(`DevTools request ${method} ${path} timed out after ${timeoutMs} ms`)));
@@ -5120,74 +5233,10 @@ var init_discovery = __esm({
   }
 });
 
-// src/browser/deps.ts
-import { spawn as nodeSpawn } from "child_process";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
-function defaultBrowserDeps() {
-  return {
-    spawn: (cmd, args, opts) => nodeSpawn(cmd, args, opts),
-    fs: { readFile, writeFile, rename, mkdir, rm, stat, open },
-    now: () => Date.now(),
-    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
-    discovery: discovery_exports,
-    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
-    kill: (pid, signal) => void process.kill(pid, signal),
-    env: (name) => env(name),
-    platform: process.platform
-  };
-}
-function browserDeps(own) {
-  return { ...defaultBrowserDeps(), ...own };
-}
-var init_deps = __esm({
-  "src/browser/deps.ts"() {
-    "use strict";
-    init_brand();
-    init_cdp();
-    init_detect();
-    init_discovery();
-  }
-});
-
-// src/browser/extensions.ts
-import { existsSync as existsSync5, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute2, join as join7 } from "path";
-function extensionDirs(raw) {
-  const name = envName("BROWSER_EXTENSIONS");
-  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
-    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
-    let isDir = false;
-    try {
-      isDir = statSync3(dir).isDirectory();
-    } catch {
-    }
-    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
-    if (!existsSync5(join7(dir, "manifest.json"))) {
-      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
-    }
-    return dir;
-  });
-}
-function extensionArgs(dirs) {
-  if (dirs.length === 0) return [];
-  const list = dirs.join(",");
-  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
-}
-var unpackedIgnoredNote;
-var init_extensions = __esm({
-  "src/browser/extensions.ts"() {
-    "use strict";
-    init_brand();
-    init_cli_kit();
-    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
-  }
-});
-
 // src/browser/profile.ts
-import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync6, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync4, writeFileSync as writeFileSync5 } from "fs";
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync3, writeFileSync as writeFileSync5 } from "fs";
 import { homedir as homedir2 } from "os";
-import { basename as basename2, join as join8, resolve as resolve2, sep } from "path";
+import { basename as basename2, join as join8, resolve as resolve3, sep } from "path";
 function browserHome() {
   return env("BROWSER_DIR") ?? brand().browserDir ?? join8(homedir2(), `.${brand().name}`, "browser");
 }
@@ -5244,8 +5293,8 @@ var init_profile = __esm({
 });
 
 // src/browser/state.ts
-import { randomUUID } from "crypto";
-import { appendFileSync, closeSync, existsSync as existsSync7, openSync, readFileSync as readFileSync8, rmSync as rmSync5, statSync as statSync5, unlinkSync as unlinkSync2, writeSync } from "fs";
+import { randomUUID as randomUUID2 } from "crypto";
+import { appendFileSync, closeSync, existsSync as existsSync6, linkSync, openSync, readFileSync as readFileSync8, renameSync as renameSync3, rmSync as rmSync5, statSync as statSync4, unlinkSync as unlinkSync2, writeSync } from "fs";
 import { join as join9 } from "path";
 function checkTargetId(id) {
   if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*$/.test(id)) throw new Error(`invalid target id: ${JSON.stringify(id)}`);
@@ -5295,11 +5344,22 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
-function staleReason(path, staleMs, now) {
+function readOrNull(path) {
+  try {
+    return readFileSync8(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+function judgeLock(path, staleMs, now) {
+  const raw = readOrNull(path);
+  return { reason: staleReason(path, raw, staleMs, now), raw };
+}
+function staleReason(path, raw, staleMs, now) {
   let at;
   let pid;
   try {
-    const held = JSON.parse(readFileSync8(path, "utf8"));
+    const held = JSON.parse(raw ?? "");
     pid = held.pid;
     at = typeof held.at === "number" ? held.at : Number.NaN;
   } catch {
@@ -5307,7 +5367,7 @@ function staleReason(path, staleMs, now) {
   }
   if (Number.isNaN(at)) {
     try {
-      at = statSync5(path).mtimeMs;
+      at = statSync4(path).mtimeMs;
     } catch {
       return "gone";
     }
@@ -5315,6 +5375,25 @@ function staleReason(path, staleMs, now) {
   if (now - at > staleMs) return "old";
   if (typeof pid === "number" && !pidAlive(pid)) return "dead";
   return null;
+}
+function moveAsideStale(path, judged, token) {
+  const aside = `${path}.${token}.stale`;
+  try {
+    renameSync3(path, aside);
+  } catch (e) {
+    if (e.code === "ENOENT") return;
+    throw e;
+  }
+  try {
+    if (readOrNull(aside) === judged) return;
+    try {
+      linkSync(aside, path);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+  } finally {
+    rmSync5(aside, { force: true });
+  }
 }
 function holds(path, token) {
   try {
@@ -5331,7 +5410,7 @@ async function withBrowserLock(fn, opts = {}) {
   const dir = homeOf(opts);
   ensurePrivateDir(dir);
   const path = join9(dir, "lock");
-  const token = randomUUID();
+  const token = randomUUID2();
   const stamp = () => JSON.stringify({ pid: process.pid, at: now(), token });
   const deadline = now() + waitMs;
   for (; ; ) {
@@ -5346,11 +5425,9 @@ async function withBrowserLock(fn, opts = {}) {
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
     }
-    if (staleReason(path, staleMs, now())) {
-      try {
-        unlinkSync2(path);
-      } catch {
-      }
+    const judged = judgeLock(path, staleMs, now());
+    if (judged.reason) {
+      moveAsideStale(path, judged.raw, token);
       continue;
     }
     if (now() >= deadline) throw new Error(`browser busy: another webindex command holds ${path} (waited ${waitMs} ms)`);
@@ -5394,8 +5471,74 @@ var init_state = __esm({
   }
 });
 
+// src/browser/deps.ts
+import { spawn as nodeSpawn } from "child_process";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
+function defaultBrowserDeps() {
+  return {
+    spawn: (cmd, args, opts) => nodeSpawn(cmd, args, opts),
+    fs: { readFile, writeFile, rename, mkdir, rm, stat, open },
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
+    discovery: discovery_exports,
+    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
+    kill: (pid, signal) => void process.kill(pid, signal),
+    alive: pidAlive,
+    env: (name) => env(name),
+    platform: process.platform
+  };
+}
+function browserDeps(own) {
+  return { ...defaultBrowserDeps(), ...own };
+}
+var init_deps = __esm({
+  "src/browser/deps.ts"() {
+    "use strict";
+    init_brand();
+    init_cdp();
+    init_detect();
+    init_discovery();
+    init_state();
+  }
+});
+
+// src/browser/extensions.ts
+import { existsSync as existsSync7, statSync as statSync5 } from "fs";
+import { isAbsolute as isAbsolute2, join as join10 } from "path";
+function extensionDirs(raw) {
+  const name = envName("BROWSER_EXTENSIONS");
+  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
+    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
+    let isDir = false;
+    try {
+      isDir = statSync5(dir).isDirectory();
+    } catch {
+    }
+    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
+    if (!existsSync7(join10(dir, "manifest.json"))) {
+      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
+    }
+    return dir;
+  });
+}
+function extensionArgs(dirs) {
+  if (dirs.length === 0) return [];
+  const list = dirs.join(",");
+  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
+}
+var unpackedIgnoredNote;
+var init_extensions = __esm({
+  "src/browser/extensions.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
+  }
+});
+
 // src/browser/launch.ts
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 async function resolveEndpoint(opts = {}) {
   const deps = browserDeps(opts.deps);
   const profile = opts.profile ?? "default";
@@ -5448,9 +5591,9 @@ async function launch(deps, binary, profile, headless, kind) {
   const bin = found.path;
   const dir = profileDir(profile);
   ensurePrivateDir(browserHome());
-  ensurePrivateDir(join10(browserHome(), "profiles"));
+  ensurePrivateDir(join11(browserHome(), "profiles"));
   ensurePrivateDir(dir);
-  const portFile = join10(dir, "DevToolsActivePort");
+  const portFile = join11(dir, "DevToolsActivePort");
   const running = await readActivePort(deps, portFile);
   if (running && await isSameBrowser(deps, running.port, "127.0.0.1", running.path)) {
     return { host: "127.0.0.1", port: running.port, launchedByUs: true, profile, headless };
@@ -5563,7 +5706,7 @@ var init_launch = __esm({
 });
 
 // src/browser/session.ts
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 function cleanTabs(v) {
   const out = {};
   if (typeof v !== "object" || v === null) return out;
@@ -5874,14 +6017,14 @@ var init_session = __esm({
           },
           /** Whether such an event has come, whatever was waited for. */
           saw: (match) => seen.some(match),
-          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve8, reject) => {
+          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve9, reject) => {
             const timer = setTimeout(() => {
               wake = void 0;
               reject(new NavigationTimeoutError(`${what} within ${timeoutMs} ms`));
             }, timeoutMs);
             wake = () => {
               const hit = seen.find(match);
-              if (hit) resolve8(hit);
+              if (hit) resolve9(hit);
               else if (cancelled) reject(new Error(`${cancelledWhat} was cancelled: the page asked to confirm leaving it (beforeunload), and that was declined`));
               else if (closed) reject(new Error("the browser connection closed while waiting for the page to load"));
               else return;
@@ -6335,10 +6478,30 @@ function htmlAttributes(tag) {
   }
   return attrs;
 }
+function implicitHeadEnd(html, from) {
+  const re = new RegExp(TAG_RE.source, "g");
+  re.lastIndex = from;
+  let m;
+  while (m = re.exec(html)) {
+    const tag = m[0];
+    if (tag[1] === "/" || tag[1] === "!" || tag[1] === "?") continue;
+    const name = tagName(tag);
+    if (!HEAD_CONTENT.has(name)) return m.index;
+    if (!HEAD_RAW.has(name) || tag.endsWith("/>")) continue;
+    const close = closeTagRe(name);
+    close.lastIndex = re.lastIndex;
+    const c = close.exec(html);
+    if (!c) return -1;
+    re.lastIndex = c.index + c[0].length;
+  }
+  return -1;
+}
 function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
+  if (!new RegExp(`<!--|<(?:${names.join("|")})(?=[\\s/>])`, "i").test(html)) return html;
   const drop = new Set(names);
   const open2 = new RegExp(`<!--|${TAG_RE.source}|<(${names.join("|")})(?=[\\s/>])`, "gi");
   const unclosed = /* @__PURE__ */ new Set();
+  const noClose = /* @__PURE__ */ new Set();
   let out = "";
   let last = 0;
   let m;
@@ -6348,14 +6511,20 @@ function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
     const opaque = !drop.has(name) && RCDATA_ELEMENTS.has(name);
     if (name !== "!--" && !drop.has(name) && !opaque || unclosed.has(name)) continue;
     let end;
-    if (name === "!--") {
+    if (!m[1] && SELF_CLOSING_FOREIGN.has(name) && tag.endsWith("/>")) {
+      end = m.index + tag.length;
+    } else if (name === "!--") {
       const close = html.indexOf("-->", m.index + 2);
       end = close < 0 ? -1 : close + 3;
     } else {
-      const close = closeTagRe(name);
-      close.lastIndex = open2.lastIndex;
-      const c = close.exec(html);
-      end = c ? c.index + c[0].length : toEof.has(name) ? html.length : -1;
+      let c = null;
+      if (!noClose.has(name)) {
+        const close = closeTagRe(name);
+        close.lastIndex = open2.lastIndex;
+        c = close.exec(html);
+        if (!c) noClose.add(name);
+      }
+      end = c ? c.index + c[0].length : toEof.has(name) ? html.length : name === "head" ? implicitHeadEnd(html, open2.lastIndex) : -1;
     }
     if (end < 0) {
       unclosed.add(name);
@@ -6400,10 +6569,124 @@ function dropLandmarks(html, roles) {
   }
   return last === 0 ? html : out + html.slice(last);
 }
-var BLOCK_TAGS, INLINE_TAGS, TAG_RE, LOOSE_TAG_RE, tagName, CLOSE_TAG_RE, RCDATA_ELEMENTS, CHROME_ROLES, HIDDEN_ELEMENTS, CHROME_ELEMENTS, RAW_TEXT_ELEMENTS;
+function dropLanguageSelectors(html) {
+  let seen = 0;
+  for (let i = html.indexOf("hreflang"); i >= 0 && seen < MIN_LANGUAGE_LINKS; i = html.indexOf("hreflang", i + 8)) seen++;
+  if (seen < MIN_LANGUAGE_LINKS) return html;
+  const totals = { links: 0, lang: 0, text: 0, blocks: 0 };
+  const stack = [];
+  const open2 = /* @__PURE__ */ new Map();
+  const done = [];
+  let inLangLink = false;
+  let last = 0;
+  const re = new RegExp(TAG_RE.source, "g");
+  let m;
+  while (m = re.exec(html)) {
+    if (!inLangLink) totals.text += countVisible(html, last, m.index);
+    last = re.lastIndex;
+    const tag = m[0];
+    const closing = tag[1] === "/";
+    const name = tagName(tag);
+    if (name === "a") {
+      if (closing) inLangLink = false;
+      else {
+        totals.links++;
+        if (HREFLANG_ATTR.test(tag)) {
+          totals.lang++;
+          inLangLink = true;
+        }
+      }
+    } else if (!closing && SELECTOR_BLOCKERS.has(name)) totals.blocks++;
+    if (!SELECTOR_CONTAINERS.has(name)) continue;
+    if (!closing) {
+      if (tag.endsWith("/>")) continue;
+      stack.push({ name, node: { from: m.index, to: -1, links: 0, lang: 0, text: 0, blocks: 0, parent: stack.at(-1)?.node }, at: { ...totals } });
+      open2.set(name, (open2.get(name) ?? 0) + 1);
+      continue;
+    }
+    if (!open2.get(name)) continue;
+    let i = stack.length - 1;
+    while (stack[i].name !== name) i--;
+    for (let j = i; j < stack.length; j++) open2.set(stack[j].name, open2.get(stack[j].name) - 1);
+    const { node, at: at2 } = stack[i];
+    stack.length = i;
+    Object.assign(node, {
+      to: re.lastIndex,
+      links: totals.links - at2.links,
+      lang: totals.lang - at2.lang,
+      text: totals.text - at2.text,
+      blocks: totals.blocks - at2.blocks
+    });
+    done.push(node);
+  }
+  const isSelector = (n) => !!n && n.to >= 0 && n.lang >= MIN_LANGUAGE_LINKS && n.lang * 2 > n.links && n.blocks === 0 && n.text <= MAX_SELECTOR_TEXT;
+  const outermost = /* @__PURE__ */ new Map();
+  const targets = /* @__PURE__ */ new Set();
+  for (let k = done.length - 1; k >= 0; k--) {
+    const n = done[k];
+    if (!isSelector(n)) continue;
+    const top = isSelector(n.parent) ? outermost.get(n.parent) ?? n.parent : n;
+    outermost.set(n, top);
+    targets.add(top);
+  }
+  if (!targets.size) return html;
+  let out = "";
+  let at = 0;
+  for (const r of [...targets].sort((a, b) => a.from - b.from)) {
+    if (r.from < at) continue;
+    out += `${html.slice(at, r.from)} `;
+    at = r.to;
+  }
+  return out + html.slice(at);
+}
+function countVisible(html, from, to) {
+  let n = 0;
+  for (let i = from; i < to; i++) {
+    const c = html.charCodeAt(i);
+    if (c > 32) n++;
+  }
+  return n;
+}
+function firstElementText(html, name) {
+  const open2 = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
+  if (!open2) return void 0;
+  const close = closeTagRe(name);
+  close.lastIndex = open2.index + open2[0].length;
+  const c = close.exec(html);
+  if (!c) return void 0;
+  const inner = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag) => INLINE_TAGS.has(tagName(tag)) ? "" : " ");
+  return decodeEntities(inner).replace(/\s+/g, " ").trim() || void 0;
+}
+function metaContent(html, keys) {
+  const found = /* @__PURE__ */ new Map();
+  for (const m of html.matchAll(/<meta(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = htmlAttributes(m[0]);
+    const key = (attrs.get("property") ?? attrs.get("name"))?.toLowerCase();
+    const value = attrs.get("content")?.trim();
+    if (key && value && keys.includes(key) && !found.has(key)) found.set(key, decodeEntities(value).replace(/\s+/g, " ").trim());
+  }
+  return keys.map((k) => found.get(k)).find(Boolean);
+}
+function canonicalHref(clean3) {
+  const end = clean3.search(/<\/head\s*>|<body(?=[\s/>])/i);
+  const head = end < 0 ? clean3 : clean3.slice(0, end);
+  let og;
+  for (const m of head.matchAll(/<(link|meta)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = htmlAttributes(m[0]);
+    if (m[1].toLowerCase() === "link") {
+      const href = attrs.get("href")?.trim();
+      if (href && (attrs.get("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical")) return decodeEntities(href);
+    } else if (og === void 0 && attrs.get("property")?.toLowerCase() === "og:url") {
+      og = attrs.get("content")?.trim() || void 0;
+    }
+  }
+  return og && decodeEntities(og);
+}
+var BLOCK_TAGS, INLINE_TAGS, TAG_RE, LOOSE_TAG_RE, tagName, CLOSE_TAG_RE, RCDATA_ELEMENTS, SELF_CLOSING_FOREIGN, HEAD_CONTENT, HEAD_RAW, SELECTOR_CONTAINERS, SELECTOR_BLOCKERS, HREFLANG_ATTR, MIN_LANGUAGE_LINKS, MAX_SELECTOR_TEXT, CHROME_ROLES, HIDDEN_ELEMENTS, CHROME_ELEMENTS, RAW_TEXT_ELEMENTS, METADATA_HIDDEN;
 var init_html = __esm({
   "src/html.ts"() {
     "use strict";
+    init_entities();
     BLOCK_TAGS = /* @__PURE__ */ new Set([
       "p",
       "div",
@@ -6482,10 +6765,19 @@ var init_html = __esm({
     tagName = (tag) => /^<\/?([a-zA-Z][^\s/>]*)/.exec(tag)?.[1]?.toLowerCase() ?? "";
     CLOSE_TAG_RE = /* @__PURE__ */ new Map();
     RCDATA_ELEMENTS = /* @__PURE__ */ new Set(["title"]);
+    SELF_CLOSING_FOREIGN = /* @__PURE__ */ new Set(["svg", "math"]);
+    HEAD_CONTENT = /* @__PURE__ */ new Set(["title", "meta", "link", "base", "style", "script", "noscript", "template"]);
+    HEAD_RAW = /* @__PURE__ */ new Set(["title", "style", "script", "noscript", "template"]);
+    SELECTOR_CONTAINERS = /* @__PURE__ */ new Set(["div", "ul", "ol", "menu", "nav", "section", "aside", "details"]);
+    SELECTOR_BLOCKERS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "article", "main", "pre", "blockquote"]);
+    HREFLANG_ATTR = /\shreflang\s*=/i;
+    MIN_LANGUAGE_LINKS = 3;
+    MAX_SELECTOR_TEXT = 80;
     CHROME_ROLES = ["navigation", "banner", "contentinfo"];
     HIDDEN_ELEMENTS = ["script", "style", "noscript", "head", "svg", "template", "select", "datalist"];
     CHROME_ELEMENTS = ["nav", "footer"];
     RAW_TEXT_ELEMENTS = /* @__PURE__ */ new Set(["script", "style"]);
+    METADATA_HIDDEN = ["script", "style", "template", "svg"];
   }
 });
 
@@ -6694,7 +6986,7 @@ function markdownAgainst(html, base2, fullPage) {
   const src = withoutNul(html);
   const hidden = fullPage ? HIDDEN_ELEMENTS : [...HIDDEN_ELEMENTS, ...CHROME_ELEMENTS];
   let s = dropElements(src, hidden, RAW_TEXT_ELEMENTS);
-  if (!fullPage) s = dropLandmarks(s, CHROME_ROLES);
+  if (!fullPage) s = dropLanguageSelectors(dropLandmarks(s, CHROME_ROLES));
   const tables = /* @__PURE__ */ new Map();
   if (TABLE_OPEN.test(s)) for (const r of balancedRegions(s, "table", () => true)) tables.set(r.from, r);
   const w = new Writer();
@@ -6714,7 +7006,7 @@ function markdownAgainst(html, base2, fullPage) {
     const closing = t[1] === "/";
     const name = tagName(t);
     const adjacentLinks = name === "a" && !closing && m.index === prevAEnd;
-    prevAEnd = name === "a" && closing ? tag.lastIndex : -1;
+    prevAEnd = closing && (name === "a" || m.index === prevAEnd && INLINE_TAGS.has(name)) ? tag.lastIndex : -1;
     if (!name) continue;
     if (name === "div") {
       if (closing) {
@@ -7369,7 +7661,7 @@ var init_locale = __esm({
 function firecrawlBase(opts = {}) {
   const raw = (opts.firecrawl ?? env("FIRECRAWL") ?? FIRECRAWL_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 function firecrawlIsExplicit(opts = {}) {
   return !!(opts.firecrawl ?? env("FIRECRAWL"));
@@ -7544,6 +7836,7 @@ var init_firecrawl = __esm({
     init_brand();
     init_fetch();
     init_locale();
+    init_trim();
     FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
     PROBE_TIMEOUT_MS2 = 2e3;
     SCRAPE_TIMEOUT_MS = 45e3;
@@ -7573,6 +7866,52 @@ var init_firecrawl = __esm({
     };
     probeCache = new ProbeMemo();
     prefixCache = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/forge-host.ts
+function normalizeForgeHost(host) {
+  const h = host.trim().toLowerCase();
+  const bare = h.replace(/^www\./, "");
+  return WWW_ALIASED.has(bare) ? bare : h;
+}
+function configuredForgeHosts() {
+  const out = /* @__PURE__ */ new Map();
+  for (const entry of (env("FORGE_HOSTS") ?? "").split(/[\s,]+/)) {
+    const eq = entry.indexOf("=");
+    if (eq < 1) continue;
+    const kind = entry.slice(eq + 1).trim().toLowerCase();
+    if (KINDS.has(kind)) out.set(normalizeForgeHost(entry.slice(0, eq)), kind);
+  }
+  return out;
+}
+function hostForgeKind(host) {
+  const h = normalizeForgeHost(host);
+  const declared = configuredForgeHosts().get(h);
+  if (declared) return declared;
+  if (h === "github.com" || h.endsWith(".github.com") || h.startsWith("github.")) return "github";
+  if (h === "gitlab.com" || h.includes("gitlab")) return "gitlab";
+  if (h.includes("gitea") || h.includes("codeberg")) return "gitea";
+  return void 0;
+}
+function githubRawUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return void 0;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:" || normalizeForgeHost(u.hostname) !== "github.com") return void 0;
+  const m = /^\/([^/]+)\/([^/]+)\/blob\/([^/]+\/.+)$/.exec(u.pathname);
+  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : void 0;
+}
+var KINDS, WWW_ALIASED;
+var init_forge_host = __esm({
+  "src/forge-host.ts"() {
+    "use strict";
+    init_brand();
+    KINDS = /* @__PURE__ */ new Set(["github", "gitlab", "gitea"]);
+    WWW_ALIASED = /* @__PURE__ */ new Set(["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"]);
   }
 });
 
@@ -7662,12 +8001,12 @@ function sleep(ms, signal) {
   return signal ? sleepUnlessAborted(ms, signal) : new Promise((r) => setTimeout(r, ms));
 }
 function sleepUnlessAborted(ms, signal) {
-  return new Promise((resolve8) => {
-    if (signal?.aborted) return resolve8();
+  return new Promise((resolve9) => {
+    if (signal?.aborted) return resolve9();
     const done = () => {
       clearTimeout(t);
       signal?.removeEventListener("abort", done);
-      resolve8();
+      resolve9();
     };
     const t = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
@@ -7846,6 +8185,14 @@ async function httpGet(url, opts = {}) {
         ctrl.abort();
         return { ok: false, status: res.status, body: "", bytesRead: 0, truncated: true, ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
       }
+      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(meta.retryAfterMs) : void 0;
+      if (wait !== void 0) {
+        await res.body?.cancel();
+        last = { ok: false, status: res.status, body: "", bytesRead: 0, truncated: false, ...meta };
+        if (wait > 0) opts.onBackOff?.(meta.url, wait);
+        await sleepUnlessAborted(wait, opts.signal);
+        continue;
+      }
       let { bytes, bytesRead, truncated } = res.status === 304 ? { bytes: Buffer.alloc(0), bytesRead: 0, truncated: false } : await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
       const sniffed = ambiguous ? sniffDocument(bytes) : void 0;
@@ -7869,13 +8216,6 @@ async function httpGet(url, opts = {}) {
         ...meta,
         ...filename ? { filename } : {}
       };
-      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(meta.retryAfterMs) : void 0;
-      if (wait !== void 0) {
-        last = result;
-        if (wait > 0) opts.onBackOff?.(result.url, wait);
-        await sleepUnlessAborted(wait, opts.signal);
-        continue;
-      }
       return result;
     } catch (e) {
       if (!timedOut && opts.signal?.aborted) return cancelled();
@@ -7902,8 +8242,12 @@ async function httpJson(method, url, body, opts = {}) {
   const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, data: void 0 };
   const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs2();
+  const cancelled = { ok: false, status: 0, data: void 0, error: "cancelled" };
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (opts.signal?.aborted) return cancelled;
     const ctrl = new AbortController();
+    const onCancel = () => ctrl.abort();
+    opts.signal?.addEventListener("abort", onCancel, { once: true });
     let timedOut = false;
     const t = setTimeout(() => {
       timedOut = true;
@@ -7923,6 +8267,13 @@ async function httpJson(method, url, body, opts = {}) {
         headers,
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
+      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(parseRetryAfter(res.headers, Number.POSITIVE_INFINITY)) : void 0;
+      if (wait !== void 0) {
+        await res.body?.cancel();
+        last = { ok: false, status: res.status, data: void 0 };
+        await sleepUnlessAborted(wait, opts.signal);
+        continue;
+      }
       const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
       const { bytes, bytesRead, truncated } = await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
@@ -7937,23 +8288,18 @@ async function httpJson(method, url, body, opts = {}) {
       } catch {
         data = text;
       }
-      const result = { ok: res.ok, status: res.status, data, bytesRead, truncated };
-      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(parseRetryAfter(res.headers, Number.POSITIVE_INFINITY)) : void 0;
-      if (wait !== void 0) {
-        last = result;
-        await sleep(wait);
-        continue;
-      }
-      return result;
+      return { ok: res.ok, status: res.status, data, bytesRead, truncated };
     } catch (e) {
+      if (!timedOut && opts.signal?.aborted) return cancelled;
       last = timedOut ? { ok: false, status: 0, data: void 0, error: `timed out after ${timeoutMs} ms`, timedOut: true } : { ok: false, status: 0, data: void 0, error: networkFailure(e) };
       if (timedOut || isPermanentFailure(e)) break;
-      if (attempt < attempts - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleepUnlessAborted(defaultRetryMs(), opts.signal);
     } finally {
       clearTimeout(t);
+      opts.signal?.removeEventListener("abort", onCancel);
     }
   }
-  return last;
+  return opts.signal?.aborted ? cancelled : last;
 }
 function cleanInline(s) {
   const text = decodeEntities(String(s));
@@ -8022,15 +8368,18 @@ ${"#".repeat(Number(m[1]))} ${text}
 function htmlToText(html, opts = {}) {
   const hidden = opts.fullPage ? HIDDEN_ELEMENTS : [...HIDDEN_ELEMENTS, ...CHROME_ELEMENTS];
   let s = dropElements(html.includes(NUL2) ? html.split(NUL2).join("\uFFFD") : html, hidden, RAW_TEXT_ELEMENTS);
-  if (!opts.fullPage) s = dropLandmarks(s, CHROME_ROLES);
+  if (!opts.fullPage) s = dropLanguageSelectors(dropLandmarks(s, CHROME_ROLES));
   const pre = [];
-  s = flattenHeadings(setAsidePre(s, pre));
+  s = setAsidePre(s, pre).replace(/[\r\n]+/g, " ").replace(PRE_SLOT_INLINE, (slot) => `
+${slot}
+`);
+  s = flattenHeadings(s);
   let prevAEnd = -1;
   s = s.replace(TAG_RE, (tag, at) => {
     const closing = tag[1] === "/";
     const name = tagName(tag);
     const adjacentLinks = name === "a" && !closing && at === prevAEnd;
-    prevAEnd = name === "a" && closing ? at + tag.length : -1;
+    prevAEnd = closing && (name === "a" || at === prevAEnd && INLINE_TAGS.has(name)) ? at + tag.length : -1;
     if (/^h[1-6]$/.test(name)) {
       return closing ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
     }
@@ -8048,48 +8397,14 @@ function htmlToText(html, opts = {}) {
     return t.includes(NUL2) ? restoreInlinePre(t, pre) : t;
   }).filter((l) => l.length > 0).join("\n");
 }
-function firstElementText(html, name) {
-  const open2 = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
-  if (!open2) return void 0;
-  const close = closeTagRe(name);
-  close.lastIndex = open2.index + open2[0].length;
-  const c = close.exec(html);
-  if (!c) return void 0;
-  const inner = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag) => INLINE_TAGS.has(tagName(tag)) ? "" : " ");
-  return decodeEntities(inner).replace(/\s+/g, " ").trim() || void 0;
-}
 function htmlTitle(html) {
-  return firstElementText(dropElements(html, NOT_TITLE), "title");
+  return firstElementText(dropElements(html, METADATA_HIDDEN), "title");
 }
-function metaContent(html, keys) {
-  const found = /* @__PURE__ */ new Map();
-  for (const m of html.matchAll(/<meta(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
-    const attrs = htmlAttributes(m[0]);
-    const key = (attrs.get("property") ?? attrs.get("name"))?.toLowerCase();
-    const value = attrs.get("content")?.trim();
-    if (key && value && keys.includes(key) && !found.has(key)) found.set(key, decodeEntities(value).replace(/\s+/g, " ").trim());
-  }
-  return keys.map((k) => found.get(k)).find(Boolean);
-}
-function pageTitle(html) {
-  const clean3 = dropElements(html, NOT_TITLE);
+function pageTitleIn(clean3) {
   return firstElementText(clean3, "title") ?? metaContent(clean3, ["og:title", "twitter:title"]) ?? firstElementText(clean3, "h1");
 }
 function htmlCanonicalUrl(html) {
-  const clean3 = dropElements(html, ["script", "style", "template"]);
-  const end = clean3.search(/<\/head\s*>|<body(?=[\s/>])/i);
-  const head = end < 0 ? clean3 : clean3.slice(0, end);
-  let og;
-  for (const m of head.matchAll(/<(link|meta)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
-    const attrs = htmlAttributes(m[0]);
-    if (m[1].toLowerCase() === "link") {
-      const href = attrs.get("href")?.trim();
-      if (href && (attrs.get("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical")) return decodeEntities(href);
-    } else if (og === void 0 && attrs.get("property")?.toLowerCase() === "og:url") {
-      og = attrs.get("content")?.trim() || void 0;
-    }
-  }
-  return og && decodeEntities(og);
+  return canonicalHref(dropElements(html, ["script", "style", "template"]));
 }
 function absoluteCanonical(href, base2) {
   if (!href) return void 0;
@@ -8274,6 +8589,12 @@ async function fetchAndExtract(url, opts = {}) {
       ...t.reason ? { note: `No transcript for ${url}: ${t.reason}.` } : {}
     };
   }
+  const raw = opts.fullPage ? void 0 : githubRawUrl(url);
+  if (raw) {
+    const file = await fetchAndExtract(raw, opts);
+    if (opts.signal?.aborted) return cancelled();
+    if (file.status === 304 || file.text.trim()) return { ...file, finalUrl: url };
+  }
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
   const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchMode(opts.browser);
@@ -8306,7 +8627,7 @@ async function renderInBrowser(url, opts) {
 async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
   const cancelled = () => ({ text: "", finalUrl: url, status: 0, note: `Fetching ${url} was cancelled.` });
   let firecrawlNote;
-  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage) {
+  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage && !opts.headers) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
       seen.page = true;
@@ -8423,7 +8744,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
   const body = !res.body && res.bytes ? decodeBody(res.bytes, res.contentType) : res.body;
   const isHtml = HTML_TYPE_RE.test(mime) || ambiguousType && /^\s*<(?:!doctype\s+html\b|html\b|head\b|body\b|article\b|main\b|p\b|h[1-6]\b)/i.test(body);
   seen.page = isHtml;
-  const extracted = isHtml ? extractFromHtml(body, res.url, opts) : { text: body, consentDropped: 0, title: void 0, canonical: void 0, metaDescription: void 0 };
+  const extracted = isHtml ? extractFromHtml(body, res.url, opts) : { text: trimBlankLines(body), consentDropped: 0, title: void 0, canonical: void 0, metaDescription: void 0 };
   const notDocument = answeredHtml ? `${url} looked like ${claimsPdf ? "a PDF" : "an office document"} but the server returned HTML (a login wall or landing page?), so it was read as a web page.` : void 0;
   const cut = res.truncated ? `Read only the first ${res.bytesRead} bytes of ${url} (the response size cap), so this text is a prefix.` : void 0;
   return {
@@ -8440,19 +8761,35 @@ function extractFromHtml(html, finalUrl, opts = {}) {
   const main = opts.fullPage ? html : extractMainHtml(html);
   const stripped = markdown ? markdownAgainst(main, documentBaseUrl(html, finalUrl), opts.fullPage) : htmlToText(main, opts);
   const consent = opts.stripConsent && !opts.fullPage ? stripConsentBoilerplate(stripped, { markdown }) : { text: stripped, dropped: 0 };
+  const clean3 = dropElements(html, METADATA_HIDDEN);
   return {
     text: consent.text,
     consentDropped: consent.dropped,
-    title: pageTitle(html),
-    canonical: absoluteCanonical(htmlCanonicalUrl(html), finalUrl),
-    metaDescription: metaDescriptionOf(html),
+    title: pageTitleIn(clean3),
+    canonical: absoluteCanonical(canonicalHref(clean3), finalUrl),
+    metaDescription: metaDescriptionOf(clean3),
     ...opts.keepHtml ? { html } : {}
   };
+}
+function trimBlankLines(s) {
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 10) start = i + 1;
+    else if (c !== 32 && c !== 9 && c !== 13) break;
+  }
+  let end = s.length;
+  for (let i = s.length - 1; i >= start; i--) {
+    const c = s.charCodeAt(i);
+    if (c === 10) end = i + 1;
+    else if (c !== 32 && c !== 9 && c !== 13) break;
+  }
+  return start === 0 && end === s.length ? s : s.slice(start, end);
 }
 async function rescueViaWayback(url, opts = {}) {
   if (opts.authorizeUrl || envFlag("NO_WAYBACK")) return void 0;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
-  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa() });
+  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa(), signal: opts.signal });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
   if (snap?.available !== true || typeof snap.url !== "string") return void 0;
   const got = await fetchAndExtract(snap.url, opts);
@@ -8513,22 +8850,53 @@ function metaDescriptionOf(html) {
 }
 function focusedSnippet(text, question, opts = {}) {
   const maxChars = opts.maxChars ?? 360;
-  const maxSentences = opts.maxSentences ?? 3;
+  const maxSentences = Math.max(1, opts.maxSentences ?? 3);
   const lines = text.split("\n");
   const matcher = buildMatcher(question);
   const sentences = [];
+  const headingTerms = [/* @__PURE__ */ new Set()];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^#{1,6}\s/.test(line)) continue;
+    if (/^#{1,6}\s/.test(line)) {
+      headingTerms.push(matcher.matchLine(line));
+      continue;
+    }
     for (const raw of line.split(/(?<=[.!?])\s+/)) {
       const t = raw.trim();
       if (t.length < 20) continue;
-      sentences.push({ text: t, line: i, score: matcher.matchLine(t).size });
+      sentences.push({ text: t, line: i, section: headingTerms.length - 1, terms: matcher.matchLine(t), prose: PROSE_END.test(t) });
     }
   }
   if (!sentences.length) return lines.slice(0, 4).join(" ").slice(0, maxChars).trim();
-  const hits = sentences.filter((s) => s.score > 0);
-  const chosen = (hits.length ? hits : sentences).map((s, idx) => ({ s, idx })).sort((a, b) => b.s.score - a.s.score || a.idx - b.idx).slice(0, maxSentences).sort((a, b) => a.idx - b.idx).map((x) => x.s);
+  const df = /* @__PURE__ */ new Map();
+  for (const s of sentences) for (const t of s.terms) df.set(t, (df.get(t) ?? 0) + 1);
+  const weight = (t) => Math.log(1 + sentences.length / (df.get(t) ?? 0.5));
+  let best;
+  for (let start2 = 0; start2 < sentences.length; start2++) {
+    if (!sentences[start2].terms.size) continue;
+    const section = sentences[start2].section;
+    const held = /* @__PURE__ */ new Set();
+    const inProse = /* @__PURE__ */ new Set();
+    let prose = 0;
+    let chars = 0;
+    for (let end2 = start2; end2 < sentences.length && end2 - start2 < maxSentences; end2++) {
+      const s = sentences[end2];
+      if (s.section !== section || end2 > start2 && chars + s.text.length > maxChars) break;
+      chars += s.text.length + 1;
+      for (const t of s.terms) {
+        held.add(t);
+        if (s.prose) inProse.add(t);
+      }
+      let score = 0;
+      for (const t of held) score += inProse.has(t) ? weight(t) : weight(t) / 2;
+      for (const t of headingTerms[section]) score += weight(t);
+      if (s.prose) prose++;
+      if (!best || score > best.score + 1e-9 || Math.abs(score - best.score) <= 1e-9 && prose > best.prose) best = { start: start2, end: end2, score, prose };
+    }
+  }
+  const { start, end } = best ?? { start: 0, end: Math.min(sentences.length, maxSentences) - 1 };
+  const seen = /* @__PURE__ */ new Set();
+  const chosen = sentences.slice(start, end + 1).filter((s) => !seen.has(s.text) && seen.add(s.text));
   const heading = nearestHeading(lines, chosen[0].line);
   let out = chosen.map((s) => s.text).join(" ");
   if (heading && !out.startsWith(heading)) out = `${heading} \u2014 ${out}`;
@@ -8544,7 +8912,7 @@ function capExtract(text, depth) {
   const lastNl = slice.lastIndexOf("\n");
   return (lastNl > cap * 0.6 ? slice.slice(0, lastNl) : slice) + "\n\n\u2026 [truncated]";
 }
-var DEFAULT_BROWSER_UA, RETRY_STATUS, defaultTimeoutMs2, DEFAULT_MAX_RESPONSE_BYTES, mimeOf, namesDocument, REDIRECT_STATUS, INLINE_FORMAT, INLINE_FORMAT_TAG, NUL2, PRE_SLOT, HEADING_OPEN, HEADING_BOUNDARY, PERMALINK, NOT_TITLE, visibleLength, ROLE_MAIN, ROLE_MAIN_TAG, CONTENT_WORDS, CHROME_WORDS, CLOSES_P, isLinkList, MIN_PROSE, PDF_URL_RE, PDF_ROUTE_RE, NON_PDF_TAIL_RE, PDF_FETCH_OPTS, DOC_FETCH_OPTS, PURE_VIDEO_HOSTS, HTML_TYPE_RE, NON_TEXT_TYPE_RE, DEAD_LINK_STATUS, CONSENT_PATTERNS, CONSENT_ACTIONS, BANNER_VOICE, BUTTON_LABEL, BUTTON_LENGTH, NOTICE_LENGTH, MD_FENCE, MD_LINE_START, MD_DESTINATION, MD_MARKUP;
+var DEFAULT_BROWSER_UA, RETRY_STATUS, defaultTimeoutMs2, DEFAULT_MAX_RESPONSE_BYTES, mimeOf, namesDocument, REDIRECT_STATUS, INLINE_FORMAT, INLINE_FORMAT_TAG, NUL2, PRE_SLOT, PRE_SLOT_INLINE, HEADING_OPEN, HEADING_BOUNDARY, PERMALINK, visibleLength, ROLE_MAIN, ROLE_MAIN_TAG, CONTENT_WORDS, CHROME_WORDS, CLOSES_P, isLinkList, MIN_PROSE, PDF_URL_RE, PDF_ROUTE_RE, NON_PDF_TAIL_RE, PDF_FETCH_OPTS, DOC_FETCH_OPTS, PURE_VIDEO_HOSTS, HTML_TYPE_RE, NON_TEXT_TYPE_RE, DEAD_LINK_STATUS, CONSENT_PATTERNS, CONSENT_ACTIONS, BANNER_VOICE, BUTTON_LABEL, BUTTON_LENGTH, NOTICE_LENGTH, MD_FENCE, MD_LINE_START, MD_DESTINATION, MD_MARKUP, PROSE_END;
 var init_fetch = __esm({
   "src/fetch.ts"() {
     "use strict";
@@ -8559,6 +8927,7 @@ var init_fetch = __esm({
     init_pdf();
     init_doc();
     init_firecrawl();
+    init_forge_host();
     init_video();
     init_mode();
     init_junk();
@@ -8575,10 +8944,10 @@ var init_fetch = __esm({
     PRE_SLOT = (i) => `
 ${NUL2}${i}${NUL2}
 `;
+    PRE_SLOT_INLINE = new RegExp(`${NUL2}\\d+${NUL2}`, "g");
     HEADING_OPEN = /<h([1-6])(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
     HEADING_BOUNDARY = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/gi;
     PERMALINK = /<a\b[^<>]*>\s*(?:(?:¶|#|§|🔗|&para;|&#182;|&#x[bB]6;|&sect;)\s*)?<\/a\s*>/gi;
-    NOT_TITLE = ["script", "style", "template", "svg"];
     visibleLength = (h) => h.replace(/<[^<>]*>/g, " ").replace(/\s+/g, " ").trim().length;
     ROLE_MAIN = /\srole\s*=\s*["']?main(?=["'\s/>])/i;
     ROLE_MAIN_TAG = /<([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>])[^<>]*\srole\s*=\s*["']?main(?=["'\s/>])/gi;
@@ -8678,6 +9047,7 @@ ${NUL2}${i}${NUL2}
     MD_LINE_START = /^[\s>]*(?:(?:[-+*]|\d{1,9}[.)])\s+)?(?:#{1,6}\s+)?/;
     MD_DESTINATION = /\]\((?:[^()\s\\]|\\.|\([^()\s]*\))*\)/g;
     MD_MARKUP = /\\(?=[!-/:-@[-`{-~])|!?\[|\]|\*+|`+/g;
+    PROSE_END = /[.!?…:;]["'”’»)\]]*(?:\[[^\]\s]{1,12}\])*$/;
   }
 });
 
@@ -9368,7 +9738,7 @@ function pump() {
 async function acquire(limit, signal, cancelled) {
   if (queue.length === 0 && active < limit) active++;
   else {
-    await new Promise((resolve8, reject) => {
+    await new Promise((resolve9, reject) => {
       const onAbort = () => {
         queue.splice(queue.indexOf(waiter), 1);
         reject(cancelled());
@@ -9377,7 +9747,7 @@ async function acquire(limit, signal, cancelled) {
         limit,
         go: () => {
           signal?.removeEventListener("abort", onAbort);
-          resolve8();
+          resolve9();
         }
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -9557,7 +9927,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.33.0";
+var ENGINE_VERSION = "1.34.0";
 
 // src/index.ts
 init_brand();
@@ -9997,52 +10367,21 @@ init_exec2();
 // src/repo.ts
 init_brand();
 init_exec2();
-import { createHash as createHash2, randomBytes as randomBytes2 } from "crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync3, rmSync as rmSync6, statSync as statSync6 } from "fs";
-import { tmpdir as tmpdir4 } from "os";
-import { basename as basename3, join as join12, resolve as resolve3 } from "path";
-
-// src/forge-host.ts
-init_brand();
-var KINDS = /* @__PURE__ */ new Set(["github", "gitlab", "gitea"]);
-var WWW_ALIASED = /* @__PURE__ */ new Set(["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"]);
-function normalizeForgeHost(host) {
-  const h = host.trim().toLowerCase();
-  const bare = h.replace(/^www\./, "");
-  return WWW_ALIASED.has(bare) ? bare : h;
-}
-function configuredForgeHosts() {
-  const out = /* @__PURE__ */ new Map();
-  for (const entry of (env("FORGE_HOSTS") ?? "").split(/[\s,]+/)) {
-    const eq = entry.indexOf("=");
-    if (eq < 1) continue;
-    const kind = entry.slice(eq + 1).trim().toLowerCase();
-    if (KINDS.has(kind)) out.set(normalizeForgeHost(entry.slice(0, eq)), kind);
-  }
-  return out;
-}
-function hostForgeKind(host) {
-  const h = normalizeForgeHost(host);
-  const declared = configuredForgeHosts().get(h);
-  if (declared) return declared;
-  if (h === "github.com" || h.endsWith(".github.com") || h.startsWith("github.")) return "github";
-  if (h === "gitlab.com" || h.includes("gitlab")) return "gitlab";
-  if (h.includes("gitea") || h.includes("codeberg")) return "gitea";
-  return void 0;
-}
-
-// src/repo.ts
+init_forge_host();
 init_text();
+import { createHash as createHash2, randomBytes as randomBytes2 } from "crypto";
+import { existsSync as existsSync8, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync6 } from "fs";
+import { basename as basename3, join as join13, resolve as resolve4 } from "path";
 function repoCacheRoot() {
-  return env("REPO_DIR") ?? brand().repoDir ?? join12(tmpdir4(), brand().name, "repos");
+  return env("REPO_DIR") ?? brand().repoDir ?? userTmpDir("repos");
 }
-var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3);
-var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3);
-var historyTimeoutMs = () => envInt("GIT_HISTORY_TIMEOUT_MS", 3e5, 1e3);
+var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3, MAX_TIMER_MS);
+var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3, MAX_TIMER_MS);
+var historyTimeoutMs = () => envInt("GIT_HISTORY_TIMEOUT_MS", 3e5, 1e3, MAX_TIMER_MS);
 function resolveRepo(raw, opts = {}) {
   const trimmed = raw.trim();
   if (trimmed && opts.local !== false) {
-    const asPath = resolve3(trimmed);
+    const asPath = resolve4(trimmed);
     if (existsSync8(asPath) && statSync6(asPath).isDirectory()) {
       return { raw: trimmed, host: "local", isLocal: true, slug: `local-${slugify(`${basename3(asPath)}-${asPath}`)}` };
     }
@@ -10148,12 +10487,12 @@ function repoSegments(host, rest, kind) {
   return segments.filter(Boolean).length ? segments.filter(Boolean) : void 0;
 }
 async function ensureClone(ref, opts = {}) {
-  if (ref.isLocal) return resolve3(ref.raw);
+  if (ref.isLocal) return resolve4(ref.raw);
   if (!ref.cloneUrl) throw new Error(`"${ref.raw}" does not name a repository that can be cloned`);
   if (!have("git")) throw new Error(`git is not installed or not on PATH \u2014 cannot clone ${ref.cloneUrl}`);
   const branch = opts.branch?.trim() || void 0;
   if (branch?.startsWith("-")) throw new Error(`"${branch}" is not a branch name`);
-  const dir = join12(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
+  const dir = join13(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
   const pending = inflight2.get(dir);
   if (pending && !opts.refresh) {
     return pending.catch((e) => {
@@ -10174,17 +10513,17 @@ function branchSlug(branch) {
 }
 async function obtainClone(ref, dir, opts) {
   let target = dir;
-  if (!existsSync8(join12(dir, ".git")) && !opts.branch) {
+  if (!existsSync8(join13(dir, ".git")) && !opts.branch) {
     for (const old of legacySlugs(ref)) {
-      const legacy = join12(repoCacheRoot(), old);
-      const origin = existsSync8(join12(legacy, ".git")) ? originUrl(legacy) : void 0;
+      const legacy = join13(repoCacheRoot(), old);
+      const origin = existsSync8(join13(legacy, ".git")) ? originUrl(legacy) : void 0;
       if (origin && resolveRepo(origin).slug === ref.slug) {
         target = legacy;
         break;
       }
     }
   }
-  if (existsSync8(join12(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
+  if (existsSync8(join13(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
   return freshClone(ref, dir, opts.branch);
 }
 async function refreshClone(ref, dir, branch) {
@@ -10214,18 +10553,18 @@ function discard(path) {
 function sweepStaging(staging) {
   try {
     for (const name of readdirSync6(staging)) {
-      const at = join12(staging, name);
+      const at = join13(staging, name);
       if (Date.now() - statSync6(at).mtimeMs > STALE_STAGING_MS) rmSync6(at, { recursive: true, force: true });
     }
   } catch {
   }
 }
 async function freshClone(ref, dir, branch) {
-  const staging = join12(repoCacheRoot(), ".partial");
+  const staging = join13(repoCacheRoot(), ".partial");
   mkdirSync4(staging, { recursive: true });
   sweepStaging(staging);
   const attempt = async (filter) => {
-    const tmp = join12(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
+    const tmp = join13(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
     const args = ["clone", "--depth", "1", ...filter ? ["--filter=blob:none"] : [], ...branch ? ["--branch", branch] : [], "--", ref.cloneUrl, tmp];
     const r = await shAsync("git", args, { timeoutMs: cloneTimeoutMs() });
     if (!r.ok) discard(tmp);
@@ -10246,12 +10585,12 @@ async function freshClone(ref, dir, branch) {
     }
   }
   if (!existsSync8(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
-  if (existsSync8(dir) && !existsSync8(join12(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
+  if (existsSync8(dir) && !existsSync8(join13(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
   try {
-    renameSync3(done.tmp, dir);
+    renameSync4(done.tmp, dir);
   } catch (e) {
     discard(done.tmp);
-    if (!existsSync8(join12(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
+    if (!existsSync8(join13(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
   }
   return dir;
 }
@@ -10263,7 +10602,7 @@ async function ensureHistoryDepth(dir, opts = {}) {
   const cached = deepened.get(dir);
   if (cached) return cached;
   const out = await computeHistoryDepth(dir, opts);
-  deepened.set(dir, out);
+  if (out.ok) deepened.set(dir, out);
   return out;
 }
 async function computeHistoryDepth(dir, opts) {
@@ -10305,21 +10644,23 @@ function sameCommit(a, b) {
 init_brand();
 init_exec2();
 init_fetch();
-import { resolve as resolve4 } from "path";
+init_forge_host();
+import { resolve as resolve5 } from "path";
 init_retry();
 init_text();
+init_trim();
 function forgeKind(host, opts = {}) {
   return opts.kind ?? hostForgeKind(host);
 }
 function forgeRef(ref, opts = {}) {
   if (!ref.isLocal) return ref;
-  const origin = originUrl(resolve4(ref.raw));
+  const origin = originUrl(resolve5(ref.raw));
   if (!origin) return ref;
   const remote = resolveRepo(origin.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1"), opts);
   return remote.host === "generic" || remote.isLocal ? ref : remote;
 }
 function apiBase(ref, opts = {}) {
-  if (opts.apiBase) return opts.apiBase.replace(/\/+$/, "");
+  if (opts.apiBase) return trimTrailing(opts.apiBase, "/");
   const host = normalizeForgeHost(typeof ref === "string" ? ref : ref.host);
   const kind = forgeKind(host, opts);
   if (kind === "github") return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
@@ -10755,6 +11096,7 @@ function mapRepoFacts(forge, d) {
 
 // src/registry.ts
 init_fetch();
+init_trim();
 var REGISTRIES = ["npm", "pypi", "crates"];
 var NPM = (n) => `https://registry.npmjs.org/${encodeURIComponent(n).replace(/^%40/, "@")}`;
 var PYPI = (n, version) => `https://pypi.org/pypi/${encodeURIComponent(n)}/${version ? `${encodeURIComponent(version)}/` : ""}json`;
@@ -10765,7 +11107,10 @@ function normalizeRepoUrl(raw) {
   if (!s) return void 0;
   const short = /^(github|gitlab|bitbucket):([\w.-]+\/[\w.-]+?)(?:\.git)?(?:#.*)?$/i.exec(s);
   if (short) return `https://${SHORTHAND_HOST[short[1].toLowerCase()]}/${short[2]}`;
-  let out = s.replace(/#.*$/s, "").replace(/^git\+/i, "").replace(/^git:\/\//i, "https://").replace(/^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\//i, "https://$1/").replace(/^ssh:\/\/(?:[^@/]+@)?([^/:]+):/i, "https://$1/").replace(/^[\w.-]+@([^:/]+):/, "https://$1/").replace(/\/+$/, "").replace(/\.git$/i, "");
+  let out = trimTrailing(
+    s.replace(/#.*$/s, "").replace(/^git\+/i, "").replace(/^git:\/\//i, "https://").replace(/^ssh:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\//i, "https://$1/").replace(/^ssh:\/\/(?:[^@/]+@)?([^/:]+):/i, "https://$1/").replace(/^[\w.-]+@([^:/]+):/, "https://$1/"),
+    "/"
+  ).replace(/\.git$/i, "");
   if (/^[\w.-]+\/[\w.-]+$/.test(out)) out = `https://github.com/${out}`;
   return /^https?:\/\//i.test(out) ? out.replace(/^https?:\/\//i, (scheme) => scheme.toLowerCase()) : void 0;
 }
@@ -10986,6 +11331,11 @@ async function cratesLookup(n, version) {
     }
   };
 }
+function splitRegistryPrefix(spec) {
+  const m = /^\s*([A-Za-z]+):(?!\/)(.+)$/.exec(spec);
+  const registry = REGISTRIES.find((r) => r === m?.[1]?.toLowerCase());
+  return m?.[2] && registry ? { registry, name: m[2].trim() } : { name: spec };
+}
 async function resolvePackage(name, opts = {}) {
   return (await resolvePackageResult(name, opts)).facts;
 }
@@ -11179,7 +11529,6 @@ async function fetchRobots(url, opts = {}) {
 
 // src/structured.ts
 init_entities();
-init_fetch();
 init_html();
 var openTag = (name) => new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "gi");
 function parseJsonLd(raw) {
@@ -11238,8 +11587,11 @@ function extractJsonLd(html) {
   return out;
 }
 function metaEntries(html) {
+  return metaEntriesIn(dropElements(html, ["script", "style", "template"]));
+}
+function metaEntriesIn(clean3) {
   const out = [];
-  for (const m of dropElements(html, ["script", "style", "template"]).matchAll(openTag("meta"))) {
+  for (const m of clean3.matchAll(openTag("meta"))) {
     const attrs = htmlAttributes(m[0]);
     const key = (attrs.get("property") ?? attrs.get("name") ?? attrs.get("itemprop"))?.trim().toLowerCase();
     const content = attrs.has("content") ? decodeEntities(attrs.get("content")).trim() : "";
@@ -11341,7 +11693,8 @@ function firstString(v) {
   return allStrings(v)[0];
 }
 function pageMetadata(html, opts = {}) {
-  const entries = metaEntries(html);
+  const clean3 = dropElements(html, METADATA_HIDDEN);
+  const entries = metaEntriesIn(clean3);
   const meta = /* @__PURE__ */ new Map();
   for (const [key, content] of entries) if (!meta.has(key)) meta.set(key, content);
   const jsonLd = extractJsonLd(html);
@@ -11394,7 +11747,7 @@ function pageMetadata(html, opts = {}) {
   set("publishedAt", meta.get("article:published_time") ?? meta.get("datepublished") ?? meta.get("citation_publication_date"));
   set("modifiedAt", meta.get("article:modified_time") ?? meta.get("datemodified"));
   set("imageUrl", meta.get("og:image") ?? meta.get("twitter:image"));
-  set("canonicalUrl", htmlCanonicalUrl(html) ?? sources.map((n) => firstString(n.url)).find(Boolean));
+  set("canonicalUrl", canonicalHref(clean3) ?? sources.map((n) => firstString(n.url)).find(Boolean));
   const authorKeys = /* @__PURE__ */ new Set(["article:author", "author", "citation_author", "dc.creator"]);
   for (const [key, v] of entries) if (authorKeys.has(key)) addAuthor(v);
   if (!primary || rank(primary) < 4) {
@@ -11406,7 +11759,7 @@ function pageMetadata(html, opts = {}) {
     }
     set("publishedAt", rest.map((n) => firstString(n.datePublished)).find(Boolean));
   }
-  set("title", htmlTitle(html));
+  set("title", firstElementText(clean3, "title"));
   if (opts.baseUrl) {
     for (const k of ["canonicalUrl", "imageUrl"]) {
       if (out[k] === void 0) continue;
@@ -11569,8 +11922,8 @@ function rootElement(xml) {
   }
 }
 var NOT_THE_PAGE = /* @__PURE__ */ new Set(["self", "edit", "replies", "enclosure", "via", "related", "license"]);
-function itemUrl(block, base2) {
-  const links = openTags(block, "link").map(htmlAttributes);
+function itemUrl(block, base2, link = "link") {
+  const links = openTags(block, link).map(htmlAttributes);
   const hrefOf = (attrs) => {
     const href2 = attrs.get("href");
     return href2 ? decodeEntities(href2).trim() : void 0;
@@ -11579,7 +11932,7 @@ function itemUrl(block, base2) {
   const pick2 = links.find((a) => hrefOf(a) && (rels(a).length === 0 || rels(a).includes("alternate"))) ?? links.find((a) => hrefOf(a) && !rels(a).some((r) => NOT_THE_PAGE.has(r))) ?? links.find((a) => hrefOf(a));
   const href = pick2 && hrefOf(pick2);
   if (href) return resolveUrl2(href, base2);
-  const text = tagText(block, "link");
+  const text = tagText(block, link);
   if (text) return resolveUrl2(text, base2);
   const guid = elements(block, "guid", 1)[0];
   if (!guid || htmlAttributes(guid.attrs).get("ispermalink")?.toLowerCase() === "false") return void 0;
@@ -11597,22 +11950,23 @@ function parseFeed(xml, baseUrl) {
   const kind = root === "rss" || /(^|:)rdf$/.test(root) ? "rss" : /(^|:)feed$/.test(root) ? "atom" : void 0;
   if (!kind) return void 0;
   const atom = kind === "atom";
+  const a = (name) => atom ? root.slice(0, root.lastIndexOf(":") + 1) + name : name;
   const rootTag = atom ? openTags(xml, root)[0] : void 0;
   const feedBase = rootTag ? xmlBase(rootTag, baseUrl) : baseUrl;
-  const blocks = elements(xml, atom ? "entry" : "item");
+  const blocks = elements(xml, atom ? a("entry") : "item");
   const items = [];
   for (const block of blocks) {
     const inner = block.inner;
     const it = {};
-    const title2 = proseText(inner, atom, "title");
+    const title2 = proseText(inner, atom, a("title"));
     if (title2) it.title = title2;
-    const url = itemUrl(inner, atom ? xmlBase(block.attrs, feedBase) : feedBase);
+    const url = itemUrl(inner, atom ? xmlBase(block.attrs, feedBase) : feedBase, a("link"));
     if (url) it.url = url;
-    const published = tagText(inner, "pubDate", "published", "updated", "dc:date");
+    const published = tagText(inner, "pubDate", a("published"), a("updated"), "dc:date");
     if (published) it.published = published;
-    const summary = proseText(inner, atom, "description", "summary") ?? clip2(proseText(inner, atom, "content", "content:encoded"));
+    const summary = proseText(inner, atom, "description", a("summary")) ?? clip2(proseText(inner, atom, a("content"), "content:encoded"));
     if (summary) it.summary = summary;
-    const id = tagText(inner, "guid", "id");
+    const id = tagText(inner, "guid", a("id"));
     if (id) it.id = id;
     if (it.title || it.url) items.push(it);
   }
@@ -11623,7 +11977,7 @@ function parseFeed(xml, baseUrl) {
     last = b.to;
   }
   head += xml.slice(last);
-  const title = proseText(head, atom, "title");
+  const title = proseText(head, atom, a("title"));
   return { kind, items, ...title ? { title } : {} };
 }
 function parseJsonFeed(text, baseUrl) {
@@ -12057,6 +12411,7 @@ init_brand();
 init_fetch();
 init_firecrawl();
 init_locale();
+init_trim();
 init_url();
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 var PROBE_TIMEOUT_MS4 = 2e3;
@@ -12064,7 +12419,7 @@ var QUERY_TIMEOUT_MS = 8e3;
 function searxngBase(opts = {}) {
   const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 function searxngIsExplicit(opts = {}) {
   return !!(opts.searxng ?? env("SEARXNG"));
@@ -12305,7 +12660,7 @@ function closingNote(rungs, cancelled) {
 init_brand();
 import { spawnSync as spawnSync3 } from "child_process";
 import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
-import { dirname as dirname2, join as join14, resolve as resolve5 } from "path";
+import { dirname as dirname2, join as join15, resolve as resolve6 } from "path";
 
 // src/cache.ts
 init_fetch();
@@ -12317,23 +12672,18 @@ init_no_write();
 init_brand();
 init_mode();
 import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
-import { dirname, join as join13 } from "path";
-import { tmpdir as tmpdir5 } from "os";
+import { dirname, join as join14 } from "path";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return namedCacheDir() ?? join13(tmpdir5(), userScoped(brand().name), "cache");
+  return namedCacheDir() ?? userTmpDir("cache");
 }
 var namedCacheDir = () => env("CACHE_DIR") ?? brand().cacheDir;
-function userScoped(name) {
-  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
-  return uid === void 0 ? name : `${name}-${uid}`;
-}
 function cachePath(url, acceptLanguage = "", extractor = "native", variant = "") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
   const ns = extractor === "browser" ? "browser\0no-overlays" : extractor;
   const key = `${canon}\0${acceptLanguage}\0${ns}${variant ? `\0${variant}` : ""}`;
-  return join13(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
+  return join14(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
 }
 var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
@@ -12363,18 +12713,23 @@ function namespaceFor(result, predicted) {
   if (predicted === VIDEO_CACHE_NS && result.documentType !== "video") return result.extractor ?? "native";
   return result.documentType ?? (predicted === PDF_CACHE_NS || predicted === DOC_CACHE_NS || predicted === VIDEO_CACHE_NS ? predicted : result.extractor ?? "native");
 }
-function readAnyNamespace(url, acceptLanguage, namespaces = WRITTEN_NAMESPACES, variants = PLAIN) {
-  let best;
+function readAnyNamespace(read3, namespaces = WRITTEN_NAMESPACES, variants = PLAIN) {
+  const found = [];
   for (const ns of namespaces) {
     for (const variant of splitByVariant(ns) ? variants : PLAIN) {
-      const hit = readCache(url, acceptLanguage, ns, variant);
-      if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
+      const at = read3.meta(ns, variant)?.entry.cachedAt;
+      if (at !== void 0) found.push([ns, variant, at]);
     }
   }
-  return best;
+  for (const [ns, variant] of found.sort((a, b) => b[2] - a[2])) {
+    const hit = read3.entry(ns, variant);
+    if (hit) return hit;
+  }
+  return void 0;
 }
 function readAnyCopy(url, acceptLanguage, variant) {
-  return readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, [variant]) ?? readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, sameFormat(variant));
+  const read3 = cacheReader(url, acceptLanguage);
+  return readAnyNamespace(read3, WRITTEN_NAMESPACES, [variant]) ?? readAnyNamespace(read3, WRITTEN_NAMESPACES, sameFormat(variant));
 }
 function ttlMs() {
   const fallback = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
@@ -12408,13 +12763,40 @@ function entryPaths(url, acceptLanguage, extractor, variant) {
   const meta = cachePath(url, acceptLanguage, extractor, splitByVariant(extractor) ? variant : "");
   return { meta, body: meta.replace(/\.json$/, ".body") };
 }
-function readCache(url, acceptLanguage = "", extractor = "native", variant = "") {
-  if (!entryDir(false)) return void 0;
+function cacheReader(url, acceptLanguage = "") {
+  const open2 = entryDir(false) !== void 0;
+  const metas = /* @__PURE__ */ new Map();
+  const entries = /* @__PURE__ */ new Map();
+  const keyOf = (ns, variant) => `${ns}\0${splitByVariant(ns) ? variant : ""}`;
+  const meta = (ns, variant) => {
+    const key = keyOf(ns, variant);
+    if (!metas.has(key)) metas.set(key, open2 ? readCacheMeta(url, acceptLanguage, ns, variant) : void 0);
+    return metas.get(key);
+  };
+  return {
+    meta,
+    entry(ns, variant) {
+      const key = keyOf(ns, variant);
+      if (!entries.has(key)) {
+        const m = meta(ns, variant);
+        entries.set(key, m && readCacheBody(m));
+      }
+      return entries.get(key);
+    }
+  };
+}
+function readCacheMeta(url, acceptLanguage, extractor, variant) {
   const { meta, body } = entryPaths(url, acceptLanguage, extractor, variant);
   if (!existsSync9(meta)) return void 0;
   try {
     const entry = JSON.parse(readFileSync9(meta, "utf8"));
-    if (typeof entry.cachedAt !== "number") return void 0;
+    return typeof entry.cachedAt === "number" ? { entry, body } : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readCacheBody({ entry, body }) {
+  try {
     const text = existsSync9(body) ? readFileSync9(body, "utf8") : entry.text;
     if (!text?.trim()) return void 0;
     return { ...entry, text };
@@ -12550,17 +12932,18 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   return res;
 }
 function lookup(url, acceptLanguage, ns, variant, browserFallback = false) {
-  const own = lookupOwn(url, acceptLanguage, ns, variant);
+  const read3 = cacheReader(url, acceptLanguage);
+  const own = lookupOwn(read3, ns, variant);
   const best = browserFallback && own && wouldRender(own) ? void 0 : own;
-  const rendered = browserFallback ? readCache(url, acceptLanguage, "browser", variant) : void 0;
+  const rendered = browserFallback ? read3.entry("browser", variant) : void 0;
   return rendered && (!best || rendered.cachedAt > best.cachedAt) ? rendered : best;
 }
 var wouldRender = (entry) => !entry.browserTried && !entry.documentType && ["native", "firecrawl"].includes(entry.extractor ?? "native") && worthRendering(entry) !== void 0;
-function lookupOwn(url, acceptLanguage, ns, variant) {
-  const best = readAnyNamespace(url, acceptLanguage, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
-  if (ns === VIDEO_CACHE_NS && !best) return readCache(url, acceptLanguage, "native", variant);
+function lookupOwn(read3, ns, variant) {
+  const best = readAnyNamespace(read3, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
+  if (ns === VIDEO_CACHE_NS && !best) return read3.entry("native", variant);
   if (ns !== "firecrawl") return best;
-  const fallback = readCache(url, acceptLanguage, "native", variant);
+  const fallback = read3.entry("native", variant);
   return fallback?.fallbackFrom === "firecrawl" && (!best || fallback.cachedAt > best.cachedAt) ? fallback : best;
 }
 var WRITER_TMP = /\.\d+\.\d+\.tmp$/;
@@ -12601,7 +12984,7 @@ function cacheStats(now = Date.now()) {
   for (const name of readdirSync7(dir)) {
     const own = ownFile(name);
     if (!own) continue;
-    const abs = join13(dir, name);
+    const abs = join14(dir, name);
     if (own.kind !== "json") {
       out.bytes += sizeOf(abs);
       continue;
@@ -12628,7 +13011,7 @@ function cacheClean(all = false, now = Date.now()) {
   const present = new Set(names);
   const remove = (name) => {
     try {
-      rmSync7(join13(dir, name), { force: true });
+      rmSync7(join14(dir, name), { force: true });
       return true;
     } catch {
       return false;
@@ -12636,7 +13019,7 @@ function cacheClean(all = false, now = Date.now()) {
   };
   const abandoned = (name) => {
     try {
-      return all || now - statSync7(join13(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
+      return all || now - statSync7(join14(dir, name)).mtimeMs > ORPHAN_GRACE_MS;
     } catch {
       return false;
     }
@@ -12646,7 +13029,7 @@ function cacheClean(all = false, now = Date.now()) {
     const own = ownFile(name);
     if (!own) continue;
     if (own.kind === "json") {
-      const entry = readEntryMeta(join13(dir, name));
+      const entry = readEntryMeta(join14(dir, name));
       if (!entry || !all && isCacheFresh(entry, now) || !remove(name)) continue;
       remove(`${own.stem}.body`);
       removed++;
@@ -12691,7 +13074,7 @@ services:
     image: qdrant/qdrant:v1.18.2
     container_name: skills-qdrant
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - qdrant:/qdrant/storage
     restart: unless-stopped
@@ -12711,7 +13094,7 @@ services:
     image: ollama/ollama:0.30.7
     container_name: skills-ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
@@ -12730,7 +13113,7 @@ services:
     image: searxng/searxng:2026.6.11-a1490676e
     container_name: skills-searxng
     ports:
-      - "8888:8080"
+      - "127.0.0.1:8888:8080"
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888/
     volumes:
@@ -12759,7 +13142,7 @@ services:
     image: ghcr.io/firecrawl/firecrawl:2.10.5@sha256:8ce1af201332e1de046d70d5d516fbfe7f0f6229820d271d880873eeca531ea6
     container_name: skills-firecrawl
     ports:
-      - "3002:3002"
+      - "127.0.0.1:3002:3002"
     env_file:
       - ./docker/firecrawl/firecrawl.env
     environment:
@@ -12918,11 +13301,11 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function composeAssets() {
-  const base2 = join14(cacheDir(), "compose");
+  const base2 = join15(cacheDir(), "compose");
   return [
-    { path: join14(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
-    { path: join14(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
-    { path: join14(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
+    { path: join15(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
+    { path: join15(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
+    { path: join15(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
   ];
 }
 function ensureComposeMaterialized() {
@@ -12942,12 +13325,12 @@ function untrustedStack() {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   if (uid === void 0) return void 0;
-  const root = resolve5(cacheDir());
+  const root = resolve6(cacheDir());
   const chosen = !!(env("CACHE_DIR") ?? brand().cacheDir);
   const top = chosen ? root : dirname2(root);
   const paths = /* @__PURE__ */ new Set();
   for (const a of assets) {
-    for (let p = resolve5(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
+    for (let p = resolve6(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
   }
   for (const p of [top, ...paths]) {
     try {
@@ -13004,11 +13387,16 @@ function defaultHas(cmd) {
 var STACKS = {
   searxng: {
     profiles: ["search"],
-    summary: "SearXNG is up (:8888) \u2014 keyless discovery, JSON API enabled."
+    summary: "SearXNG is up (:8888) \u2014 keyless discovery, JSON API enabled.",
+    ports: [[8888, "SearXNG", "SEARXNG"]]
   },
   firecrawl: {
     profiles: ["search", "extract"],
     summary: "Firecrawl is up (:3002 \xB7 playwright \xB7 redis \xB7 rabbitmq \xB7 postgres), with SearXNG behind it.",
+    ports: [
+      [8888, "SearXNG", "SEARXNG"],
+      [3002, "Firecrawl", "FIRECRAWL"]
+    ],
     postUp: () => [
       "  keyless: USE_DB_AUTHENTICATION=false \u2014 no API key is sent or needed.",
       "  effect:  pages are now cleaned by a real browser; --firecrawl off opts out."
@@ -13017,6 +13405,10 @@ var STACKS = {
   semantic: {
     profiles: ["semantic"],
     summary: "Qdrant (:6333) and Ollama (:11434) are up.",
+    ports: [
+      [6333, "Qdrant", "QDRANT"],
+      [11434, "Ollama", "OLLAMA"]
+    ],
     postUp: (file, run) => {
       const model = embedModel();
       const pull = run("docker", ["compose", "-f", file, "exec", "-T", "ollama", "ollama", "pull", model], { timeoutMs: MODEL_PULL_TIMEOUT_MS, capture: true });
@@ -13026,6 +13418,12 @@ var STACKS = {
   all: {
     profiles: ["all", "extract"],
     summary: "The whole stack is up (Qdrant \xB7 Ollama \xB7 SearXNG \xB7 Firecrawl).",
+    ports: [
+      [6333, "Qdrant", "QDRANT"],
+      [11434, "Ollama", "OLLAMA"],
+      [8888, "SearXNG", "SEARXNG"],
+      [3002, "Firecrawl", "FIRECRAWL"]
+    ],
     postUp: (file, run) => STACKS.semantic.postUp(file, run)
   }
 };
@@ -13037,6 +13435,7 @@ function combine(names) {
   return {
     profiles: [...new Set(found.flatMap((x) => x.profiles))],
     summary: found.map((x) => x.summary).join("\n  "),
+    ports: [...new Map(found.flatMap((x) => x.ports).map((p) => [p[0], p])).values()],
     postUp: (file, run) => found.flatMap((x) => x.postUp?.(file, run) ?? [])
   };
 }
@@ -13095,7 +13494,9 @@ ${pulled.stderr}` : ""}`, code: 1 };
   const up = run("docker", ["compose", "-f", file, ...profiles, "up", "-d", "--wait"], { timeoutMs: UP_TIMEOUT_MS });
   if (!up.ok) {
     const why = up.timedOut ? ` \u2014 the services were not healthy within ${UP_TIMEOUT_MS / 1e3}s` : "";
-    return { message: `${tag}: up failed${why}.${up.stderr ? `
+    const taken = up.timedOut ? "" : `
+  a port already taken? ${spec.ports.map(([port, name, variable]) => `:${port} (${name}, ${envName(variable)})`).join(", ")} \u2014 stop what holds it, or point that variable at it and leave this service down.`;
+    return { message: `${tag}: up failed${why}.${taken}${up.stderr ? `
 ${up.stderr}` : ""}`, code: 1 };
   }
   return { message: [`${tag}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
@@ -13103,31 +13504,12 @@ ${up.stderr}` : ""}`, code: 1 };
 
 // src/index.ts
 init_pool();
-
-// src/run-lock.ts
-var chains = /* @__PURE__ */ new Map();
-function withRunLock(slug, fn) {
-  const prev = chains.get(slug) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  const tail = next.then(noop, noop);
-  chains.set(slug, tail);
-  tail.then(() => {
-    if (chains.get(slug) === tail) chains.delete(slug);
-  }, noop);
-  return next;
-}
-function noop() {
-}
-function resetRunLocks() {
-  chains.clear();
-}
-
-// src/index.ts
+init_run_lock();
 init_no_write();
 
 // src/run.ts
 init_no_write();
-import { join as join15 } from "path";
+import { join as join16 } from "path";
 import { readFileSync as readFileSync11 } from "fs";
 function pad(n) {
   return String(n).padStart(2, "0");
@@ -13146,10 +13528,10 @@ function readJsonSafe(path) {
   }
 }
 function readManifest(dir, file = "manifest.json") {
-  return readJsonSafe(join15(dir, file));
+  return readJsonSafe(join16(dir, file));
 }
 function writeManifest(dir, value, file = "manifest.json") {
-  return writeArtifact(join15(dir, file), `${JSON.stringify(value, null, 2)}
+  return writeArtifact(join16(dir, file), `${JSON.stringify(value, null, 2)}
 `);
 }
 
@@ -13234,7 +13616,6 @@ function resetHostSchedule() {
   nextFree.clear();
   holdUntil.clear();
 }
-var MAX_TIMER_MS = 2 ** 31 - 1;
 async function sleepFor(ms, signal) {
   for (let left = ms; left > 0 && !signal?.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal);
 }
@@ -13432,8 +13813,8 @@ async function crawlSite(seed, opts = {}) {
   const authorizeUrl = (url) => authorizeHop(url, false);
   const authorizeSeed = (url) => authorizeHop(url, true);
   let settleSeed;
-  const seedSettled = new Promise((resolve8) => {
-    settleSeed = resolve8;
+  const seedSettled = new Promise((resolve9) => {
+    settleSeed = resolve9;
   });
   const authorizeSitemap = async (url) => {
     if (!sameOrigin(url, seedOrigin)) await seedSettled;
@@ -13633,6 +14014,7 @@ function cachedProbe(cache2, key, ask) {
 }
 
 // src/embed.ts
+init_trim();
 function ollamaBase() {
   return env("OLLAMA") ?? "http://localhost:11434";
 }
@@ -13650,14 +14032,14 @@ function resetOllamaProbe() {
   probed.clear();
 }
 async function probeOllama(base2 = ollamaBase()) {
-  const key = base2.replace(/\/+$/, "");
+  const key = trimTrailing(base2, "/");
   if (key.toLowerCase() === "off") return false;
   return cachedProbe(probed, key, async () => (await httpJson("GET", `${key}/api/tags`, void 0, { timeoutMs: 2e3, retries: 0 })).ok);
 }
 async function embed(texts, opts = {}) {
   const model = opts.model ?? embedModel();
   if (texts.length === 0) return { vectors: [], model };
-  const base2 = (opts.base ?? ollamaBase()).replace(/\/+$/, "");
+  const base2 = trimTrailing(opts.base ?? ollamaBase(), "/");
   if (base2.toLowerCase() === "off") return { vectors: [], model, note: "embeddings are disabled (OLLAMA=off)." };
   if (!await probeOllama(base2)) {
     return { vectors: [], model, note: `no embedding server at ${base2} \u2014 \`${brand().cli} semantic up\` starts Ollama and pulls ${model}.` };
@@ -13668,8 +14050,8 @@ async function embed(texts, opts = {}) {
   let note;
   let failed2 = false;
   const results = await mapLimit(batches, opts.concurrency ?? embedConcurrency(), async (batch) => {
-    if (failed2) return void 0;
-    const r = await httpJson("POST", `${base2}/api/embed`, { model, input: batch }, { timeoutMs: 6e4 });
+    if (failed2 || opts.signal?.aborted) return void 0;
+    const r = await httpJson("POST", `${base2}/api/embed`, { model, input: batch }, { timeoutMs: 6e4, signal: opts.signal });
     const got = r.ok ? r.data?.embeddings : void 0;
     if (!got || got.length !== batch.length) {
       failed2 = true;
@@ -13678,6 +14060,7 @@ async function embed(texts, opts = {}) {
     }
     return got;
   });
+  if (opts.signal?.aborted) return { vectors: [], model, note: "embedding cancelled." };
   if (results.some((r) => r === void 0)) return { vectors: [], model, ...note ? { note } : {} };
   return { vectors: results.flat(), model };
 }
@@ -13736,10 +14119,11 @@ function normalize(v) {
 init_brand();
 init_fetch();
 init_rank();
+init_trim();
 function qdrantBase() {
   return env("QDRANT") ?? "http://localhost:6333";
 }
-var clean2 = (base2) => base2.replace(/\/+$/, "");
+var clean2 = (base2) => trimTrailing(base2, "/");
 var probed2 = /* @__PURE__ */ new Map();
 function resetQdrantProbe() {
   probed2.clear();
@@ -13814,7 +14198,8 @@ async function hybridSearch(question, docs, opts = {}) {
   const maxChars = opts.maxChars ?? envInt("EMBED_MAX_CHARS", 8e3);
   const embedding = embed([queryPrefix + question, ...docs.map((d) => docPrefix + clip3([d.title, d.headings, d.body].filter(Boolean).join("\n"), maxChars))], {
     ...opts.base !== void 0 ? { base: opts.base } : {},
-    ...opts.model !== void 0 ? { model: opts.model } : {}
+    ...opts.model !== void 0 ? { model: opts.model } : {},
+    ...opts.signal ? { signal: opts.signal } : {}
   });
   const index = buildBm25Index(question, docs);
   const lexical = docs.map((doc, i) => ({ i, score: bm25Score(index, doc) })).sort((a, b) => b.score - a.score).map((s) => s.i);
@@ -13860,7 +14245,17 @@ function parseFileLine(token) {
   return { path: m[1], start, end };
 }
 function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+  let out = "";
+  let from = 0;
+  for (; ; ) {
+    const open2 = text.indexOf("<!--", from);
+    if (open2 < 0) break;
+    const close = text.indexOf("-->", open2 + 4);
+    if (close < 0) break;
+    out += text.slice(from, open2) + text.slice(open2, close + 3).replace(/[^\n]/g, " ");
+    from = close + 3;
+  }
+  return out + text.slice(from);
 }
 function stripInlineCode(line) {
   return line.replace(/`[^`\n]*`/g, " ");
@@ -14111,11 +14506,11 @@ function extractNumerals(text, max = 8) {
 init_brand();
 init_no_write();
 import { existsSync as existsSync11 } from "fs";
-import { join as join17, resolve as resolve6 } from "path";
+import { join as join18, resolve as resolve7 } from "path";
 
 // src/orchestrate/templates.ts
 init_brand();
-import { join as join16 } from "path";
+import { join as join17 } from "path";
 var WORKFLOW_FORBIDDEN = ["Date.now(", "Math.random(", "new Date("];
 function oneWriterFooter(runAbs, opts = {}) {
   const forbidden = opts.writingCommands?.length ? ` Do not run any engine command that writes (${opts.writingCommands.map((c) => `\`${c}\``).join(", ")}).` : "";
@@ -14126,7 +14521,7 @@ Return ONLY the structured output specified above. Do NOT write, edit, or delete
 
 One sanctioned exception: ${opts.sanctioned}` : ""}
 
-Exception for oversized prose: if a note is too large to return, write ONLY to \`${join16(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
+Exception for oversized prose: if a note is too large to return, write ONLY to \`${join17(runAbs, "orchestration", "out")}/<role>-<batch>.md\` \u2014 a file namespaced to you alone \u2014 and return its path.
 `;
 }
 var SMALL_WORKLIST = 3;
@@ -14151,15 +14546,18 @@ function assertWorkflowSafe(script, phaseName) {
 }
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
-  const scriptPath = join16(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
+  const scriptPath = join17(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
   const script = [
     `export const meta = ${JSON.stringify(meta)}`,
     ``,
-    `// NOT a plain Node script: launch it with the Workflow tool \u2014`,
+    `// Optional Claude Code fast path \u2014 NOT a plain Node script: launch it with the`,
+    `// Workflow tool for a one-call parallel fan-out:`,
     `// Workflow({ scriptPath: ${JSON.stringify(scriptPath)} }).`,
+    `// Any other host: dispatch one subagent per batch with`,
+    `// ${join17(runAbs, "orchestration", "agents", `${emission.role}.md`)}, or follow RUNBOOK.md alone.`,
     `//`,
     `// Emitted by \`${cli} orchestrate\` from the CURRENT worklist. The worklist is the`,
     `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${phase.name}\``,
@@ -14211,8 +14609,9 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
   if (preamble.length) lines.push(...preamble, ``);
   lines.push(
     `The subagents return fragments; **you** are the sole writer. Each phase below`,
-    `either fans out through its \`*.workflow.mjs\` or runs sequentially here \u2014 the`,
-    `fold at the end of a phase is yours either way.`,
+    `fans out through its \`agents/<role>.md\` contract \u2014 one subagent per batch, on`,
+    `any host that has subagents \u2014 or runs sequentially here. The fold at the end`,
+    `of a phase is yours either way.`,
     ``
   );
   phases.forEach((ph, i) => {
@@ -14231,10 +14630,13 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
       const batches = phaseBatches(ph, emission, smallWorklist);
       const widest = batches.reduce((w, b) => Math.max(w, b.length), 0);
       lines.push(
-        `Fan out: \`Workflow({ scriptPath: "${join16(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
-        `(${batches.length} agent(s) of at most ${widest} item(s), contract \`agents/${emission.role}.md\`).`,
+        `Fan out: dispatch one subagent per batch with the contract \`agents/${emission.role}.md\``,
+        `(${batches.length} agent(s) of at most ${widest} item(s)): ${batches.map((b) => shq(b.join(","))).join(" \xB7 ")}.`,
         ``,
         `Sequentially instead: play \`agents/${emission.role}.md\` yourself over ${shq(ph.ids.join(","))}.`,
+        ``,
+        `Optional \u2014 Claude Code: launch \`${ph.name}.workflow.mjs\` (emitted unless \`--eco\`) with the`,
+        `Workflow tool for one-call parallel fan-out \u2014 \`Workflow({ scriptPath: "${join17(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\`.`,
         ``,
         `Then fold, as the sole writer:`,
         ``,
@@ -14250,9 +14652,9 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
 // src/orchestrate.ts
 var BATCH_SIZE = 8;
 function listPhases(runDir, engineAbs, defs) {
-  const run = resolve6(runDir);
+  const run = resolve7(runDir);
   return defs.map((def) => {
-    const worklist = join17(run, def.worklist);
+    const worklist = join18(run, def.worklist);
     const parsed = readJsonSafe(worklist);
     const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
@@ -14268,7 +14670,7 @@ function listPhases(runDir, engineAbs, defs) {
   });
 }
 function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
-  const run = resolve6(runDir);
+  const run = resolve7(runDir);
   if (!existsSync11(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
@@ -14298,14 +14700,14 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join17(run, "orchestration");
-  const agentsDir = join17(orchDir, "agents");
-  ensureDir(join17(orchDir, "out"));
+  const orchDir = join18(run, "orchestration");
+  const agentsDir = join18(orchDir, "agents");
+  ensureDir(join18(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(contracts(run, engineAbs, phases))) {
-    written.push(writeArtifact(join17(agentsDir, `${name}.md`), content));
+    written.push(writeArtifact(join18(agentsDir, `${name}.md`), content));
   }
   if (!opts.eco) {
     for (const ph of selected) {
@@ -14319,10 +14721,10 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join17(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
+      written.push(writeArtifact(join18(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
-  written.push(writeArtifact(join17(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
+  written.push(writeArtifact(join18(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 
@@ -14428,25 +14830,25 @@ init_brand();
 // src/mcp/resources.ts
 init_brand();
 import { existsSync as existsSync12, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync2, statSync as statSync9 } from "fs";
-import { basename as basename4, dirname as dirname3, join as join18, relative, resolve as resolve7, sep as sep2 } from "path";
+import { basename as basename4, dirname as dirname3, join as join19, relative, resolve as resolve8, sep as sep2 } from "path";
 import { fileURLToPath } from "url";
 var skillName = () => brand().name;
 var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname3(fileURLToPath(import.meta.url));
   const name = brand().name;
-  const candidates2 = [resolve7(here, ".."), resolve7(here, "..", "skills", name), resolve7(here, "..", "..", "skills", name)];
-  return candidates2.find((dir) => existsSync12(join18(dir, "SKILL.md")));
+  const candidates2 = [resolve8(here, ".."), resolve8(here, "..", "skills", name), resolve8(here, "..", "..", "skills", name)];
+  return candidates2.find((dir) => existsSync12(join19(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join18(root, "references");
+  const refDir = join19(root, "references");
   if (!existsSync12(refDir)) return out;
   for (const file of readdirSync8(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join18("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
+    out.push(describe(root, join19("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
   }
   return out;
 }
@@ -14458,7 +14860,7 @@ function readResource(uri, moduleDir) {
   if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
   const rel = uri.slice(URI_SCHEME.length);
   if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve7(root, rel);
+  const target = resolve8(root, rel);
   const served = relative(root, target).split(sep2).join("/");
   if (served !== "SKILL.md" && !/^references\/[^/]+\.md$/.test(served)) {
     throw new ResourceError(`not a resource this server serves: ${uri} (resources/list names them)`);
@@ -14485,7 +14887,7 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join18(root, rel));
+  const summary = firstProse(join19(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
@@ -14532,6 +14934,14 @@ function createServer(adapter, opts = {}) {
     if (msg.method === void 0 && ("result" in msg || "error" in msg)) return;
     if (msg.id !== void 0 && msg.id !== null && typeof msg.id !== "string" && typeof msg.id !== "number") {
       send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: `id` must be a string or a number" } });
+      return;
+    }
+    if (msg.id === null && typeof msg.method === "string" && !msg.method.startsWith("notifications/")) {
+      send({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: ERR_INVALID_REQUEST, message: "invalid request: `id` must not be null \u2014 omit it to send a notification" }
+      });
       return;
     }
     if (msg.id === void 0 || msg.id === null) {
@@ -14727,7 +15137,44 @@ function errMessage(e) {
 
 // src/mcp/stdio.ts
 import { createInterface } from "readline";
+
+// src/mcp/slots.ts
 var MAX_IN_FLIGHT = 4;
+function toolSlots(max = MAX_IN_FLIGHT) {
+  let active2 = 0;
+  const waiting = [];
+  return {
+    acquire(signal) {
+      return new Promise((resolve9) => {
+        const take = () => {
+          active2++;
+          let given = false;
+          resolve9(() => {
+            if (given) return;
+            given = true;
+            active2--;
+            waiting.shift()?.();
+          });
+        };
+        if (active2 < max) return take();
+        if (signal?.aborted) return resolve9(void 0);
+        const leave = () => {
+          const at = waiting.indexOf(wake);
+          if (at >= 0) waiting.splice(at, 1);
+          resolve9(void 0);
+        };
+        const wake = () => {
+          signal?.removeEventListener("abort", leave);
+          take();
+        };
+        waiting.push(wake);
+        signal?.addEventListener("abort", leave, { once: true });
+      });
+    }
+  };
+}
+
+// src/mcp/stdio.ts
 async function runStdioServer(adapter, opts = {}) {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
@@ -14759,7 +15206,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active2 >= MAX_IN_FLIGHT) await new Promise((resolve8) => waiting.push(resolve8));
+      while (active2 >= MAX_IN_FLIGHT) await new Promise((resolve9) => waiting.push(resolve9));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -14852,8 +15299,9 @@ async function startHttpServer(adapter, opts = {}) {
     );
   }
   const { createServer: createHttpServer } = await import("http");
+  const slots = toolSlots();
   const server = createHttpServer((req, res) => {
-    void route(req, res, adapter, opts).catch((e) => {
+    void route(req, res, adapter, opts, slots).catch((e) => {
       if (res.headersSent) {
         res.destroy();
         return;
@@ -14864,14 +15312,14 @@ async function startHttpServer(adapter, opts = {}) {
   server.requestTimeout = REQUEST_TIMEOUT_MS2;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve8({
+      resolve9({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -14883,7 +15331,7 @@ async function startHttpServer(adapter, opts = {}) {
     });
   });
 }
-async function route(req, res, adapter, opts) {
+async function route(req, res, adapter, opts, slots) {
   const path = (req.url ?? "").split("?")[0];
   const origin = header(req, "origin");
   if (!isOriginAllowed(origin, opts.allowOrigin)) {
@@ -14964,6 +15412,16 @@ async function route(req, res, adapter, opts) {
   res.on("close", () => {
     if (!res.writableFinished) lost.abort();
   });
+  const handle = async (m, reply, o) => {
+    if (m?.method !== "tools/call") return mcp.handle(m, reply, o);
+    const release = await slots.acquire(lost.signal);
+    if (!release) return;
+    try {
+      await mcp.handle(m, reply, o);
+    } finally {
+      release();
+    }
+  };
   const single = Array.isArray(parsed) ? void 0 : parsed;
   const token = single?.params?._meta;
   const asked = typeof single?.id === "string" || typeof single?.id === "number";
@@ -14975,14 +15433,14 @@ data: ${JSON.stringify(m)}
 
 `);
     };
-    await mcp.handle(single, event, { signal: lost.signal, notify: event });
+    await handle(single, event, { signal: lost.signal, notify: event });
     res.end();
     return;
   }
   const out = [];
   const collect = (m) => void out.push(m);
   const messages = Array.isArray(parsed) ? parsed : [parsed];
-  for (const m of messages) await mcp.handle(m, collect, { signal: lost.signal, notify: () => {
+  for (const m of messages) await handle(m, collect, { signal: lost.signal, notify: () => {
   } });
   if (out.length === 0) {
     res.writeHead(202, corsHeaders(origin));
@@ -15016,7 +15474,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -15040,7 +15498,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve8(Buffer.concat(chunks).toString("utf8"));
+      else resolve9(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -15386,6 +15844,7 @@ export {
   sleep,
   slugify,
   sniffDocument,
+  splitRegistryPrefix,
   stackControl,
   startHttpServer,
   stripConsentBoilerplate,

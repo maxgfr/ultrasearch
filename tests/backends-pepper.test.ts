@@ -153,11 +153,11 @@ describe("pepper backend", () => {
     expect(r.notes.at(-1)).toBe("www.dealabs.com voucher page: 2 code(s) (1 expired).");
   });
 
-  it("a throttled search becomes a note with the WebSearch fallback", async () => {
+  it("a throttled search becomes a note with the web-search fallback", async () => {
     installFetchMock(() => ({ status: 429, body: "" }));
     const r = await pepperBackend(makeCtx("decathlon", { lang: "fr" }));
     expect(r.items).toEqual([]);
-    expect(r.notes[0]).toBe("www.dealabs.com search rate-limited (HTTP 429). Search it with your own WebSearch instead — `site:dealabs.com decathlon`.");
+    expect(r.notes[0]).toBe("www.dealabs.com search rate-limited (HTTP 429). Search it with your own web search instead — `site:dealabs.com decathlon`.");
   });
 
   it("names a challenge page for what it is", async () => {

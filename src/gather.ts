@@ -157,11 +157,11 @@ export interface GatherResult {
 }
 
 const ENRICH_NUDGE =
-  "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with " +
+  "agent: run another web search round at the thin areas and fold the WHOLE round in with " +
   "`ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
 // `ingest` needs a dossier on disk, so under --stdout the top-up is the agent's
 // own reading rather than a command it cannot run.
-const ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
+const ENRICH_NUDGE_NO_WRITE = "agent: run another web search round at the thin areas and read those pages directly before answering.";
 
 // Default dossier directory under the OS temp dir, keyed by mode + question.
 export function defaultRunDir(mode: string, question: string, d?: Date): string {
@@ -173,7 +173,7 @@ export function defaultRunDir(mode: string, question: string, d?: Date): string 
 // cascade (see runWebCascade); a pinned engine runs just that one.
 const DISCOVERY: BackendKind[] = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 
-const ENGINE_BACKEND: Record<Exclude<GatherOptions["webEngine"], "auto" | "claude">, BackendKind> = {
+const ENGINE_BACKEND: Record<Exclude<GatherOptions["webEngine"], "auto" | "host">, BackendKind> = {
   searxng: "searxng",
   // Pinnable, but absent from DISCOVERY above — so `auto` never reaches for it.
   firecrawl: "firecrawl",
@@ -186,12 +186,12 @@ const ENGINE_BACKEND: Record<Exclude<GatherOptions["webEngine"], "auto" | "claud
 // Apply --web-engine to the general-web discovery backends: `auto` keeps the
 // profile's discovery engines (runGather then runs the full fallback cascade);
 // a named engine pins to exactly that one (injecting it if the profile didn't
-// list it); `claude` drops web discovery (you drive it via your own WebSearch +
+// list it); `host` drops web discovery (you drive it via your own web search +
 // `fetch --url`). Mode-specific backends (wikipedia, scholarly APIs) are
 // untouched.
 function applyWebEngine(kinds: BackendKind[], engine: GatherOptions["webEngine"]): BackendKind[] {
   if (engine === "auto") return kinds;
-  if (engine === "claude") return kinds.filter((k) => !DISCOVERY.includes(k));
+  if (engine === "host") return kinds.filter((k) => !DISCOVERY.includes(k));
   const keep = ENGINE_BACKEND[engine];
   if (kinds.includes(keep)) return kinds.filter((k) => !DISCOVERY.includes(k) || k === keep);
   return [...kinds.filter((k) => !DISCOVERY.includes(k)), keep];
@@ -244,7 +244,7 @@ export async function runWebCascade(engines: BackendKind[], ctx: RunContext, bre
  * Flags that `--backends` silently turns into no-ops. Pinning the retrieval set
  * is a legitimate power-user move, but `explicit` short-circuits SIX things —
  * the resilient web cascade, `--seed-domains`, the `--rounds 2` gap round,
- * `--web-engine`, the `--search` preset, and the `--web-results` WebSearch lane
+ * `--web-engine`, the `--search` preset, and the `--web-results` web-search lane
  * (resolveBackends returns before any of them apply). Naming them is the
  * difference between a deliberate choice and silent recall loss.
  */
@@ -255,9 +255,9 @@ export function ignoredByExplicitBackends(options: GatherOptions): string[] {
   if ((options.rounds ?? 1) >= 2) out.push("--rounds");
   if (options.webEngine !== "auto") out.push("--web-engine");
   if (options.search && options.search !== "auto") out.push("--search");
-  // The loudest one: the agent went and ran its own WebSearch, and pinning the
-  // backends threw every hit away unless "claude" is in the pinned set.
-  if (options.webResults?.length && !options.backends.includes("claude")) out.push("--web-results");
+  // The loudest one: the agent went and ran its own web search, and pinning the
+  // backends threw every hit away unless "host" is in the pinned set.
+  if (options.webResults?.length && !options.backends.includes("host")) out.push("--web-results");
   return out;
 }
 
@@ -265,11 +265,11 @@ export function ignoredByExplicitBackends(options: GatherOptions): string[] {
  * Resolve the `--search` preset to a concrete discovery width.
  *
  * `auto` is the whole backward-compatibility story. It picks `light` only when
- * the agent actually supplied a WebSearch lane AND did not pin a specific
+ * the agent actually supplied a web-search lane AND did not pin a specific
  * engine — a pinned `--web-engine` is a deliberate request for that engine, and
  * silently dropping it would be the kind of surprise this codebase spends the
  * `IGNORED:` line avoiding. Everything else resolves to `full`, so a harness
- * with no WebSearch tool behaves exactly as it did before this knob existed.
+ * with no web search tool behaves exactly as it did before this knob existed.
  */
 export function resolveSearchProfile(options: GatherOptions): Exclude<SearchProfile, "auto"> {
   const asked = options.search ?? "auto";
@@ -297,12 +297,12 @@ export function underCovered(cov: { term: string; sources: number }[]): string[]
 
 // Which backends a run uses: an explicit --backends override, else the mode's
 // profile (plus its deep-only backends at --depth deep), then the --web-engine
-// discovery filter, then the --search width, then the WebSearch lane.
+// discovery filter, then the --search width, then the web-search lane.
 export function resolveBackends(options: GatherOptions, mode: ModeProfile): BackendKind[] {
   if (options.backends?.length) return [...new Set(options.backends)];
   const base = options.depth === "deep" ? [...mode.backends, ...mode.deepOnly] : [...mode.backends];
   const withEngine = applyWebEngine(base, options.webEngine);
-  // `light` drops the scraped / self-hosted DISCOVERY engines: the WebSearch
+  // `light` drops the scraped / self-hosted DISCOVERY engines: the web search
   // lane IS the discovery. Firecrawl is untouched by design — it extracts pages,
   // it does not find them, so it keeps rescuing consent walls in either profile.
   const profile = resolveSearchProfile(options);
@@ -318,7 +318,7 @@ export function resolveBackends(options: GatherOptions, mode: ModeProfile): Back
   const ceiling: BackendKind[] = profile === "max" ? [...DISCOVERY, "firecrawl"] : [];
   // The lane runs whenever the agent supplied hits, whatever the mode profile
   // listed. It searched already; its hits are never silently discarded.
-  const lane: BackendKind[] = options.webResults?.length ? ["claude"] : [];
+  const lane: BackendKind[] = options.webResults?.length ? ["host"] : [];
   return [...new Set([...lane, ...discovery, ...ceiling])];
 }
 
@@ -570,7 +570,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     let merged = fuse(rawLists.map((l) => l.map(atNcbiPage)));
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged.length;
     if (options.excludeDomains.length) merged = merged.filter(excluded);
-    // A results page is not a document: a WebSearch hit pointing at PubMed's
+    // A results page is not a document: a web search hit pointing at PubMed's
     // own search, say, would bank PubMed's interface as a source.
     const searchPages = merged.filter((it) => searchPageOf(it.url));
     if (searchPages.length) {
@@ -962,10 +962,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const merged = r.merged;
   const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
   // Both lanes that find pages without being in the DISCOVERY cascade belong in
-  // the "engines" line: the WebSearch lane, and Firecrawl's /search once
+  // the "engines" line: the web-search lane, and Firecrawl's /search once
   // `--search max` puts it to work. Reporting 10 Firecrawl hits under a line
   // that names only marginalia is how a lane goes unnoticed.
-  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "claude" || b === "firecrawl"))];
+  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "host" || b === "firecrawl"))];
   const timings: Record<string, number> = {};
   for (const res of results) if (res.ms !== undefined) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
@@ -983,11 +983,11 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const under = underCovered(coverageTerms);
   const ignoredFlags = ignoredByExplicitBackends(options);
 
-  // What the harness WebSearch lane actually contributed. `supplied: 0` is the
+  // What the harness web-search lane actually contributed. `supplied: 0` is the
   // interesting case: a run that had no lane at all, which is worth SAYING in a
-  // tool whose best engine is the agent's own WebSearch.
+  // tool whose best engine is the agent's own web search.
   const supplied = options.webResults?.length ?? 0;
-  const laneKept = merged.filter((it) => it.backend === "claude").length;
+  const laneKept = merged.filter((it) => it.backend === "host").length;
   const webSearch = { supplied, rejected: options.webResultsRejected ?? 0, kept: laneKept };
 
   // `ingest` needs a dossier on disk, so under --stdout the way back into the
@@ -1036,19 +1036,19 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
             `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`,
         ]
       : []),
-    // The WebSearch lane, said out loud in every direction. Silence here is
+    // The web-search lane, said out loud in every direction. Silence here is
     // exactly the failure this whole layer exists to fix: the best engine
     // available to the caller going unused, and nothing recording the fact.
     ...(webSearch.rejected > 0
       ? [`--web-results: ignored ${webSearch.rejected} entr${webSearch.rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`]
       : []),
     ...(supplied > 0
-      ? [`WebSearch lane: ${supplied} agent-supplied hit(s), ${laneKept} kept after fusion, hydration and the relevance floor.`]
+      ? [`Web-search lane: ${supplied} agent-supplied hit(s), ${laneKept} kept after fusion, hydration and the relevance floor.`]
       : explicit
         ? []
         : [
-            `No WebSearch lane this run: discovery fell back to the keyless engines, which are best-effort. ` +
-              `If you have a WebSearch tool, run it and pass the hits with --web-results <file.json> — it is the strongest engine available here.`,
+            `No web-search lane this run: discovery fell back to the keyless engines, which are best-effort. ` +
+              `If you have a web search tool, run it and pass the hits with --web-results <file.json> — it is the strongest engine available here.`,
           ]),
     // `max` is a promise of the ceiling, and the ceiling includes ~3 GB of
     // containers the engine cannot start for you. A run that asked for max and
@@ -1083,7 +1083,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       : []),
     ...(profile === "light" && !explicit
       ? [
-          `--search light: the keyless scraped cascade and SearXNG are OFF (the WebSearch lane is the discovery). ` +
+          `--search light: the keyless scraped cascade and SearXNG are OFF (the web-search lane is the discovery). ` +
             `Firecrawl still extracts. Use --search full to fuse the keyless engines in as well.`,
           ...(seedDomains.length
             ? [
@@ -1113,7 +1113,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // never be queried, and leave no trace of the fact anywhere.
     `Helpers: ${describeServices(services)}`,
     ...(thin
-      ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch ${bridge}.`]
+      ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own web search ${bridge}.`]
       : []),
     ...(under.length
       ? [

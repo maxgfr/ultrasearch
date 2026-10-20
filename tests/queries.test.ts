@@ -3,7 +3,7 @@ import { planQueries, formatQueryPlan } from "../src/queries.js";
 import { listModes } from "../src/modes/registry.js";
 import { ALL_DEPTHS, ALL_MODES } from "../src/types.js";
 
-describe("planQueries — the WebSearch worklist", () => {
+describe("planQueries — the web search worklist", () => {
   it("widens the sweep with depth: one query is not a sweep", () => {
     const targets = ALL_DEPTHS.map((depth) => planQueries({ question: "q", mode: "topic", depth }).target);
     expect(targets).toEqual([2, 4, 8]);

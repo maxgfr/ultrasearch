@@ -111,6 +111,7 @@ return text directly (a Wikipedia summary, a Stack Overflow answer, an abstract)
 network, chosen by `--region`) are community content backends — never part of
 the discovery cascade.
 `generic` fetches explicit `--url`s; `fixture` is the offline CI backend;
-`claude` is the provenance label stamped on sources you add via `fetch`.
+`host` is the provenance label stamped on sources you add via `fetch` or your
+own web search (`claude` in dossiers written before the rename, read as `host`).
 
 See `references/backend-apis.md` for the endpoints and rate limits.

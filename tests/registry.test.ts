@@ -84,8 +84,8 @@ describe("runBackends — unknown backend", () => {
     expect(res!.notes.join(" ")).toMatch(/no handler for backend "not-a-backend"/i);
   });
 
-  it("the 'claude' WebSearch lane has a handler and reports an absent payload", async () => {
-    const [res] = await runBackends(["claude"], makeCtx("q"));
+  it("the 'host' web-search lane has a handler and reports an absent payload", async () => {
+    const [res] = await runBackends(["host"], makeCtx("q"));
     expect(res!.items).toHaveLength(0);
     expect(res!.notes.join(" ")).toMatch(/no hits supplied/i);
   });

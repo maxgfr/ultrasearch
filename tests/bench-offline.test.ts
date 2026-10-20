@@ -189,7 +189,7 @@ function buildRelinkDossier(dir: string, n: number): void {
     sources[i]!.title = url;
     writeFileSync(
       join(dir, sources[i]!.extract),
-      `# S${i + 1} — endpoint\n- url: x\n- backend: claude\ndoi: 10.1000/bench${i}\n\nA synthetic record naming its own document.\n`,
+      `# S${i + 1} — endpoint\n- url: x\n- backend: host\ndoi: 10.1000/bench${i}\n\nA synthetic record naming its own document.\n`,
     );
   }
   writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));

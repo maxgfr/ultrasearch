@@ -232,7 +232,7 @@ describe("gather — off-topic flag", () => {
       ]),
     );
     const options = opts({
-      backends: ["claude"],
+      backends: ["host"],
       webResults: [{ url: "https://eye-a.test/" }, { url: "https://eye-b.test/" }, { url: "https://eye-c.test/" }, { url: "https://arxiv-like.test/" }],
       out: dir,
     });

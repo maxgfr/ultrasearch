@@ -14,7 +14,7 @@ import { stripTags, ddgRedirectTarget as realUrl } from "../engine.js";
 // key). HTML attribute order is arbitrary, so we match the whole result anchor
 // then pull href + inner text out separately; snippets are zipped by index from
 // the parallel `result__snippet` anchors. A bit fragile if DDG changes markup —
-// that's why the agent's own WebSearch is the real workhorse (fed back via
+// that's why the agent's own web search is the real workhorse (fed back via
 // `fetch --url`).
 // Parse one DDG HTML results page. Each result is a BLOCK — the title anchor
 // plus everything up to the next result anchor — so a skipped result (an ad,
@@ -51,7 +51,8 @@ export const duckduckgoBackend: Backend = async (ctx): Promise<BackendResult> =>
     const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12000 });
     if (!r.ok || !r.body) {
       if (p === 0) {
-        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) — consider your own WebSearch` : `unreachable (status ${r.status})`;
+        const why =
+          r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) — consider your own web search` : `unreachable (status ${r.status})`;
         return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
       }
       break; // a later page failed — keep what page 1 already returned

@@ -1,6 +1,6 @@
 import type { Backend, BackendResult, RawSource, WebSearchHit } from "../types.js";
 
-// The harness WebSearch lane. The agent runs its OWN WebSearch tool — the best
+// The harness web-search lane. The agent runs its OWN web search tool — the best
 // index available to this process, and the only one that needs neither a
 // container nor a scrape — and hands the hits over. This backend does not
 // search: it turns those hits into candidates and lets the normal pipeline do
@@ -8,7 +8,7 @@ import type { Backend, BackendResult, RawSource, WebSearchHit } from "../types.j
 // near-dup collapse, cap).
 //
 // Deliberately NO privilege. A hit does not carry `text`, so the page is
-// fetched and cleaned like any other; and `claude` gets no authority floor in
+// fetched and cleaned like any other; and `host` gets no authority floor in
 // BACKEND_TRUST, so trust still comes from the domain alone. The lane's only
 // advantage is its fusion rank — the agent picked these URLs, so they enter
 // high — which is exactly the right amount of deference: a bad domain the agent
@@ -141,9 +141,9 @@ export const websearchBackend: Backend = async (ctx): Promise<BackendResult> => 
   const hits = ctx.options.webResults ?? [];
   if (!hits.length) {
     return {
-      backend: "claude",
+      backend: "host",
       items: [],
-      notes: ["WebSearch lane: no hits supplied (pass --web-results <file.json|->)."],
+      notes: ["Web-search lane: no hits supplied (pass --web-results <file.json|->)."],
     };
   }
   // Rank by the order the agent gave them: it ran the search and knows which
@@ -152,16 +152,16 @@ export const websearchBackend: Backend = async (ctx): Promise<BackendResult> => 
   const items: RawSource[] = hits.map((h, i) => ({
     url: h.url,
     title: h.title || h.url,
-    backend: "claude",
+    backend: "host",
     score: hits.length - i,
     snippet: h.snippet ?? "",
     // No `text`: the page is hydrated by the gatherer through the same rescue
-    // ladder as any other candidate, so a WebSearch hit is held to the same
+    // ladder as any other candidate, so a web search hit is held to the same
     // evidentiary standard. The snippet is only the fallback when it fails.
   }));
   return {
-    backend: "claude",
+    backend: "host",
     items,
-    notes: [`WebSearch lane: ${items.length} hit(s) supplied by the agent.`],
+    notes: [`Web-search lane: ${items.length} hit(s) supplied by the agent.`],
   };
 };

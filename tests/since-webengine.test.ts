@@ -58,8 +58,8 @@ describe("R6: --web-engine filters the discovery backends", () => {
   it("searxng keeps only searxng among discovery", () => {
     expect(resolveBackends(ctx("searxng"), topic)).toEqual(["wikipedia", "searxng", "standards"]);
   });
-  it("claude drops both discovery backends (agent drives WebSearch)", () => {
-    expect(resolveBackends(ctx("claude"), topic)).toEqual(["wikipedia", "standards"]);
+  it("host drops both discovery backends (the agent drives its own web search)", () => {
+    expect(resolveBackends(ctx("host"), topic)).toEqual(["wikipedia", "standards"]);
   });
   it("firecrawl is pinnable but never part of auto (it is not in DISCOVERY)", () => {
     expect(resolveBackends(ctx("firecrawl"), topic)).toEqual(["wikipedia", "standards", "firecrawl"]);

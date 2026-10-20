@@ -28,11 +28,11 @@ import { pepperBackend } from "./pepper.js";
 
 // Registry of retrieval backends. Each is independent, returns candidate
 // sources + honest notes, and never throws (the runner wraps failures into
-// notes). "claude" is the harness WebSearch lane: it does not search — it reads
+// notes). "host" is the harness web-search lane: it does not search — it reads
 // the hits the agent supplies via --web-results — and it doubles as the
 // provenance label for a source ingested through `fetch` / `ingest`.
 const HANDLERS: Partial<Record<BackendKind, Backend>> = {
-  claude: websearchBackend,
+  host: websearchBackend,
   searxng: searxngBackend,
   firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
@@ -72,7 +72,7 @@ const SINGLE_QUERY = new Set<BackendKind>([
   "standards",
   "fixture",
   "generic",
-  "claude",
+  "host",
   "reddit",
   "pepper",
 ]);

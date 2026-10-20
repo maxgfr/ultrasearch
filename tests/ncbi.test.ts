@@ -460,7 +460,7 @@ describe("gather — PubMed and PMC hits", () => {
     };
   }
 
-  it("hydrates PubMed and PMC WebSearch hits from their endpoints, citing the pages", async () => {
+  it("hydrates PubMed and PMC web search hits from their endpoints, citing the pages", async () => {
     const dir = scratch();
     installFetchMock(
       routes([
@@ -472,7 +472,7 @@ describe("gather — PubMed and PMC hits", () => {
     );
     const r = await runGather(
       opts({
-        backends: ["claude"],
+        backends: ["host"],
         webResults: [{ url: "https://pubmed.ncbi.nlm.nih.gov/34397876/" }, { url: "https://pmc.ncbi.nlm.nih.gov/articles/PMC7654321/", title: "PMC hit" }],
         out: dir,
       }),

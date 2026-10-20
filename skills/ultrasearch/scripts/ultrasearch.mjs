@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename5, join as join28, relative as relative3, resolve as resolve8 } from "path";
+import { basename as basename5, join as join29, relative as relative3, resolve as resolve5 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
 import { realpathSync as realpathSync4, existsSync as existsSync19, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync20 } from "fs";
 
@@ -31,7 +31,7 @@ var ALL_BACKENDS = [
   "pepper",
   "generic",
   "fixture",
-  "claude"
+  "host"
 ];
 var ALL_MODES = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
 var ALL_TEMPLATES = [...ALL_MODES, "verification"];
@@ -63,7 +63,11 @@ var DEEP_CAPS = {
   maxVerify: 40,
   perSubQuestionSources: 60
 };
-var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"];
+var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "host"];
+var LEGACY_BACKEND_ALIASES = { claude: "host" };
+function canonicalBackend(name) {
+  return Object.hasOwn(LEGACY_BACKEND_ALIASES, name) ? LEGACY_BACKEND_ALIASES[name] : name;
+}
 var ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"];
 var ALL_BROWSER_MODES = ["fallback", "always", "off"];
 
@@ -153,31 +157,31 @@ var websearchBackend = async (ctx) => {
   const hits = ctx.options.webResults ?? [];
   if (!hits.length) {
     return {
-      backend: "claude",
+      backend: "host",
       items: [],
-      notes: ["WebSearch lane: no hits supplied (pass --web-results <file.json|->)."]
+      notes: ["Web-search lane: no hits supplied (pass --web-results <file.json|->)."]
     };
   }
   const items = hits.map((h, i) => ({
     url: h.url,
     title: h.title || h.url,
-    backend: "claude",
+    backend: "host",
     score: hits.length - i,
     snippet: h.snippet ?? ""
     // No `text`: the page is hydrated by the gatherer through the same rescue
-    // ladder as any other candidate, so a WebSearch hit is held to the same
+    // ladder as any other candidate, so a web search hit is held to the same
     // evidentiary standard. The snippet is only the fallback when it fails.
   }));
   return {
-    backend: "claude",
+    backend: "host",
     items,
-    notes: [`WebSearch lane: ${items.length} hit(s) supplied by the agent.`]
+    notes: [`Web-search lane: ${items.length} hit(s) supplied by the agent.`]
   };
 };
 
 // src/gather.ts
-import { join as join12 } from "path";
-import { tmpdir as tmpdir3 } from "os";
+import { join as join13 } from "path";
+import { tmpdir as tmpdir4 } from "os";
 
 // src/modes/topic.ts
 var topicMode = {
@@ -419,21 +423,23 @@ function listModes() {
 }
 
 // src/vendor/webindex-engine.mjs
+import { tmpdir } from "os";
+import { join } from "path";
 import { inflateRawSync, inflateSync } from "zlib";
 import { spawn, spawnSync } from "child_process";
 import { readdirSync, readFileSync } from "fs";
 import { spawn as spawn2 } from "child_process";
 import { mkdtempSync, readFileSync as readFileSync2, rmSync, writeFileSync, existsSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+import { join as join2 } from "path";
+import { tmpdir as tmpdir2 } from "os";
 import { isAbsolute } from "path";
 import { inflateRawSync as inflateRawSync2 } from "zlib";
 import { spawn as spawn3, spawnSync as spawnSync2 } from "child_process";
 import { mkdtempSync as mkdtempSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
-import { tmpdir as tmpdir2 } from "os";
-import { join as join2 } from "path";
-import { existsSync as existsSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "fs";
+import { tmpdir as tmpdir3 } from "os";
 import { join as join3 } from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync4, writeFileSync as writeFileSync3 } from "fs";
+import { join as join4 } from "path";
 import { mkdirSync, renameSync, unlinkSync, writeFileSync as writeFileSync4 } from "fs";
 import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, statSync } from "fs";
 import { createHash, randomBytes } from "crypto";
@@ -441,31 +447,30 @@ import { EventEmitter } from "events";
 import { accessSync, constants, statSync as statSync2 } from "fs";
 import { homedir } from "os";
 import { posix, win32 } from "path";
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync5, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync3, writeFileSync as writeFileSync5 } from "fs";
+import { homedir as homedir2 } from "os";
+import { basename as basename2, join as join8, resolve as resolve3, sep } from "path";
+import { randomUUID as randomUUID2 } from "crypto";
+import { appendFileSync, closeSync, existsSync as existsSync6, linkSync, openSync, readFileSync as readFileSync8, renameSync as renameSync3, rmSync as rmSync5, statSync as statSync4, unlinkSync as unlinkSync2, writeSync } from "fs";
+import { join as join9 } from "path";
 import { spawn as nodeSpawn } from "child_process";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
-import { existsSync as existsSync5, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute2, join as join7 } from "path";
-import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync6, lstatSync, mkdirSync as mkdirSync3, readdirSync as readdirSync5, readFileSync as readFileSync7, realpathSync, rmSync as rmSync4, statSync as statSync4, writeFileSync as writeFileSync5 } from "fs";
-import { homedir as homedir2 } from "os";
-import { basename as basename2, join as join8, resolve as resolve2, sep } from "path";
-import { randomUUID } from "crypto";
-import { appendFileSync, closeSync, existsSync as existsSync7, openSync, readFileSync as readFileSync8, rmSync as rmSync5, statSync as statSync5, unlinkSync as unlinkSync2, writeSync } from "fs";
-import { join as join9 } from "path";
-import { join as join10 } from "path";
+import { existsSync as existsSync7, statSync as statSync5 } from "fs";
+import { isAbsolute as isAbsolute2, join as join10 } from "path";
+import { join as join11 } from "path";
 import { promisify } from "util";
 import { gunzip } from "zlib";
 import { spawnSync as spawnSync3 } from "child_process";
 import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
-import { dirname as dirname2, join as join14, resolve as resolve5 } from "path";
+import { dirname as dirname2, join as join15, resolve as resolve6 } from "path";
 import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
-import { dirname, join as join13 } from "path";
-import { tmpdir as tmpdir5 } from "os";
+import { dirname, join as join14 } from "path";
 import { readFileSync as readFileSync11 } from "fs";
 import { existsSync as existsSync11 } from "fs";
-import { join as join17, resolve as resolve6 } from "path";
-import { join as join16 } from "path";
+import { join as join18, resolve as resolve7 } from "path";
+import { join as join17 } from "path";
 import { existsSync as existsSync12, readdirSync as readdirSync8, readFileSync as readFileSync12, realpathSync as realpathSync2, statSync as statSync9 } from "fs";
-import { basename as basename4, dirname as dirname3, join as join18, relative, resolve as resolve7, sep as sep2 } from "path";
+import { basename as basename4, dirname as dirname3, join as join19, relative, resolve as resolve8, sep as sep2 } from "path";
 import { fileURLToPath } from "url";
 import { createInterface } from "readline";
 import { createHash as createHash4, timingSafeEqual } from "crypto";
@@ -494,6 +499,10 @@ function configure(next) {
 }
 function brand() {
   return current;
+}
+function userTmpDir(...segments) {
+  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
+  return join(tmpdir(), uid === void 0 ? current.name : `${current.name}-${uid}`, ...segments);
 }
 function countFetch(bytes, cached = false) {
   const hook = current.onFetch;
@@ -527,6 +536,7 @@ function envInt(suffix, def, min = 0, max = Number.MAX_SAFE_INTEGER) {
 }
 var DEFAULT_BRAND;
 var current;
+var MAX_TIMER_MS;
 var init_brand = __esm({
   "src/brand.ts"() {
     "use strict";
@@ -537,6 +547,7 @@ var init_brand = __esm({
       contactUrl: "https://github.com/maxgfr/webindex"
     };
     current = { ...DEFAULT_BRAND };
+    MAX_TIMER_MS = 2 ** 31 - 1;
   }
 });
 function decodePdfString(tok) {
@@ -920,12 +931,12 @@ function scanShape(t) {
 function assessPdfText(text) {
   return assessExtractedText(text, NO_TEXT_LAYER);
 }
-function assessExtractedText(text, emptyReason) {
+function assessExtractedText(text, emptyReason, undecodable = "undecodable PDF stream") {
   const t = text.trim();
   if (!t) return { ok: false, reason: emptyReason };
   const shape = scanShape(t);
   if (shape.control > CONTROL_RATIO_MAX) {
-    return { ok: false, reason: "binary/control characters in the text (undecodable PDF stream)" };
+    return { ok: false, reason: `binary/control characters in the text (${undecodable})` };
   }
   if (shape.replacement > REPLACEMENT_RATIO_MAX) {
     return { ok: false, reason: "replacement characters throughout (wrong character map)" };
@@ -1044,7 +1055,7 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
-  return new Promise((resolve82) => {
+  return new Promise((resolve9) => {
     let child;
     try {
       const bin = binaryName(cmd);
@@ -1053,7 +1064,7 @@ function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
       const common = { stdio: ["pipe", "pipe", "pipe"], ...opts.env ? { env: opts.env } : {} };
       child = viaShell ? spawn2([bin, ...args].map(quote).join(" "), { ...common, shell: true, windowsHide: true }) : spawn2(bin, args, common);
     } catch (e) {
-      resolve82({ ok: false, stdout: "", error: e.message });
+      resolve9({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -1072,12 +1083,15 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve82(r);
+      resolve9(r);
     };
-    const timer = setTimeout(() => {
-      killTree(child);
-      done(withStderr({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` }));
-    }, timeoutMs);
+    const timer = setTimeout(
+      () => {
+        killTree(child);
+        done(withStderr({ ok: false, stdout: "", error: `timed out after ${Math.round(timeoutMs / 1e3)}s` }));
+      },
+      Math.min(timeoutMs, MAX_TIMER_MS)
+    );
     child.stdout?.on("data", (d) => {
       if (size >= MAX_STDOUT_BYTES) return;
       size += d.length;
@@ -1115,6 +1129,7 @@ var STDERR_END_CHARS;
 var init_exec = __esm({
   "src/pdf/exec.ts"() {
     "use strict";
+    init_brand();
     init_process_tree();
     PDF_INSPECTOR_SPEC = "@firecrawl/pdf-inspector@1";
     ANYDOC_SPEC = "@firecrawl/anydoc@0.1";
@@ -1141,10 +1156,10 @@ async function ocrAttempt(bytes) {
   if (!copyablePdf || !tesseract) return { declined: "tools" };
   if (ocrBudgetLeft() <= 0) return { declined: "budget" };
   spent++;
-  const dir = mkdtempSync(join(tmpdir(), `${brand().name}-ocr-`));
+  const dir = mkdtempSync(join2(tmpdir2(), `${brand().name}-ocr-`));
   try {
-    const input = join(dir, "in.pdf");
-    const output = join(dir, "out.pdf");
+    const input = join2(dir, "in.pdf");
+    const output = join2(dir, "out.pdf");
     writeFileSync(input, bytes);
     const lang = env("OCR_LANG") || DEFAULT_LANG;
     const r = await runWithInput("copyable-pdf", ["-o", output, "-m", "-l", lang, input], Buffer.alloc(0), envInt("OCR_TIMEOUT_MS", DEFAULT_TIMEOUT_MS));
@@ -1856,6 +1871,7 @@ function sheetRows(xml, shared, styles, budget) {
   const table = { rows: [] };
   let row;
   let col = 0;
+  let nextCol = 0;
   let type;
   let style = 0;
   let value;
@@ -1863,9 +1879,12 @@ function sheetRows(xml, shared, styles, budget) {
   walkXml(xml, {
     open(name, attrs) {
       const n = local(name);
-      if (n === "row") row = [];
-      else if (n === "c" && row) {
-        col = columnOf(attr(attrs, "r")) ?? row.length;
+      if (n === "row") {
+        row = [];
+        nextCol = 0;
+      } else if (n === "c" && row) {
+        col = columnOf(attr(attrs, "r")) ?? nextCol;
+        nextCol = col + 1;
         type = attr(attrs, "t");
         style = Number(attr(attrs, "s") ?? 0);
         value = "";
@@ -1877,7 +1896,7 @@ function sheetRows(xml, shared, styles, budget) {
       else if (n === "c" && row && value !== void 0) {
         let shown = value;
         const kind = styles.temporal[style];
-        if (type === "s") shown = shared[Number(value)] ?? "";
+        if (type === "s") shown = value.trim() ? shared[Number(value)] ?? "" : "";
         else if (type === "b") shown = value === "1" ? "TRUE" : "FALSE";
         else if (kind && (type === void 0 || type === "n") && value.trim()) shown = serialDate(Number(value), kind, styles.date1904) ?? value;
         if (col < MAX_COLUMNS && shown && budget.take(shown.length)) {
@@ -2335,7 +2354,7 @@ async function extractDocument(bytes, fmt, opts = {}) {
       if (got.failure) failures.push(got.failure);
       continue;
     }
-    const verdict = assessExtractedText(got.text, "the converter produced no text");
+    const verdict = assessExtractedText(got.text, "the converter produced no text", "the converter returned the file's bytes, not its text");
     if (verdict.ok) return { text: got.text.trim(), via: id };
     lastReason = verdict.reason;
   }
@@ -2365,6 +2384,16 @@ var init_doc = __esm({
     init_office();
   }
 });
+function trimTrailing(s, ch) {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === ch) end--;
+  return s.slice(0, end);
+}
+var init_trim = __esm({
+  "src/trim.ts"() {
+    "use strict";
+  }
+});
 function canonicalizeUrl(raw) {
   try {
     const u = new URL(raw.trim());
@@ -2372,7 +2401,7 @@ function canonicalizeUrl(raw) {
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
     let port = u.port;
     if (proto === "http:" && port === "80" || proto === "https:" && port === "443") port = "";
-    const path = u.pathname.replace(/\/+$/, "");
+    const path = trimTrailing(u.pathname, "/");
     const keep = [];
     const shareSi = SHARE_SI_HOSTS.test(host);
     for (const [k, v] of u.searchParams) {
@@ -2435,6 +2464,7 @@ var laneLo;
 var init_url = __esm({
   "src/url.ts"() {
     "use strict";
+    init_trim();
     TRACKING_PARAMS = /^(utm_|fbclid$|gclid$|gclsrc$|dclid$|msclkid$|yclid$|twclid$|ttclid$|li_fat_id$|mkt_tok$|_gl$|mc_|ref_src$|ref_url$|spm$|_hsenc$|_hsmi$|igshid$|igsh$)/i;
     SHARE_SI_HOSTS = /(^|\.)(youtube\.com|youtu\.be|spotify\.com)$/;
     LOCAL_FILE_DOMAIN = "local file";
@@ -2601,9 +2631,9 @@ function have(cmd) {
   return hit;
 }
 function shAsync(cmd, args, opts = {}) {
-  const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs();
+  const timeoutMs = Math.min(opts.timeoutMs ?? defaultTimeoutMs(), MAX_TIMER_MS);
   if (opts.signal?.aborted) return Promise.resolve({ ok: false, status: 130, stdout: "", stderr: "aborted" });
-  return new Promise((resolve82) => {
+  return new Promise((resolve9) => {
     let settled = false;
     let timer;
     let onAbort;
@@ -2612,7 +2642,7 @@ function shAsync(cmd, args, opts = {}) {
       settled = true;
       clearTimeout(timer);
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-      resolve82(r);
+      resolve9(r);
     };
     let child;
     try {
@@ -2655,7 +2685,7 @@ var init_exec2 = __esm({
     init_brand();
     init_process_tree();
     STDOUT_CAP = 24 * 1024 * 1024;
-    defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3);
+    defaultTimeoutMs = () => envInt("SH_TIMEOUT_MS", 6e4, 1e3, MAX_TIMER_MS);
     havePresence = /* @__PURE__ */ new Map();
   }
 });
@@ -2752,7 +2782,7 @@ function classifyYtdlpError(stderr) {
   return `yt-dlp failed: ${(line ?? s.trim().split("\n")[0] ?? "").replace(/^ERROR:\s*/, "").slice(0, 200) || "no output"}`;
 }
 async function withTempDir(label, fn) {
-  const dir = mkdtempSync2(join2(tmpdir2(), `${brand().name}-${label}-`));
+  const dir = mkdtempSync2(join3(tmpdir3(), `${brand().name}-${label}-`));
   try {
     return await fn(dir);
   } finally {
@@ -2761,7 +2791,7 @@ async function withTempDir(label, fn) {
 }
 async function downloadSubtitle(info, lang, auto, run = defaultVideoRunner, signal, knownOnly = false) {
   return withTempDir("subs", async (dir) => {
-    const infoPath = join2(dir, "info.json");
+    const infoPath = join3(dir, "info.json");
     writeFileSync2(infoPath, info);
     const r = await runYtdlp(
       [
@@ -2775,12 +2805,12 @@ async function downloadSubtitle(info, lang, auto, run = defaultVideoRunner, sign
         "--sub-format",
         "vtt/srt",
         "-o",
-        join2(dir, "sub.%(ext)s")
+        join3(dir, "sub.%(ext)s")
       ],
       { run, timeoutMs: SUBTITLE_TIMEOUT_MS, signal, knownOnly }
     );
     const file = readdirSync2(dir).find((f) => f.endsWith(".vtt")) ?? readdirSync2(dir).find((f) => f.endsWith(".srt"));
-    if (file) return { vtt: readFileSync3(join2(dir, file), "utf8") };
+    if (file) return { vtt: readFileSync3(join3(dir, file), "utf8") };
     if (signal?.aborted) return { error: "cancelled" };
     return { error: r.ok ? `yt-dlp wrote no ${lang} track` : classifyYtdlpError(r.stderr) };
   });
@@ -2789,7 +2819,7 @@ async function downloadMedia(args, dir, stem, opts) {
   let stderr = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     const timeoutMs = typeof opts.timeoutMs === "function" ? opts.timeoutMs() : opts.timeoutMs;
-    const r = await runYtdlp([...args, "--no-warnings", "-o", join2(dir, `${stem}.%(ext)s`)], {
+    const r = await runYtdlp([...args, "--no-warnings", "-o", join3(dir, `${stem}.%(ext)s`)], {
       run: opts.run,
       url: opts.url,
       timeoutMs,
@@ -2880,13 +2910,25 @@ function mergeSegments(cues, breaks = []) {
     cur = void 0;
   };
   const crossesBreak = (from, to) => breaks.some((b) => b > from + BREAK_SLACK_S && b <= to + BREAK_SLACK_S);
+  let sentences = 0;
+  let spaceRuns = 0;
+  let endsInSpace = false;
   for (const cue of cues) {
     if (cur && (cue.start - cur.end > PAUSE_S || cue.end - cur.start > MAX_SEGMENT_S || crossesBreak(cur.start, cue.start))) flush();
-    cur = cur ? { start: cur.start, end: Math.max(cur.end, cue.end), text: `${cur.text} ${cue.text}` } : { ...cue };
-    const sentences = cur.text.match(SENTENCE_END)?.length ?? 0;
-    const endsSentence = /[.!?…]+["'”’)\]]*$/.test(cur.text);
-    const words = cur.text.split(/\s+/).length;
-    if (sentences >= MAX_SENTENCES || endsSentence && words >= WORDS_TO_CLOSE) flush();
+    const found = cue.text.match(SENTENCE_END)?.length ?? 0;
+    const runs = cue.text.match(/\s+/g)?.length ?? 0;
+    if (cur) {
+      sentences += found;
+      spaceRuns += runs + 1 - Number(endsInSpace) - Number(/^\s/.test(cue.text));
+      endsInSpace = cue.text === "" || /\s$/.test(cue.text);
+      cur = { start: cur.start, end: Math.max(cur.end, cue.end), text: `${cur.text} ${cue.text}` };
+    } else {
+      sentences = found;
+      spaceRuns = runs;
+      endsInSpace = /\s$/.test(cue.text);
+      cur = { ...cue };
+    }
+    if (sentences >= MAX_SENTENCES || ENDS_SENTENCE.test(cue.text) && spaceRuns + 1 >= WORDS_TO_CLOSE) flush();
   }
   flush();
   return out;
@@ -2896,6 +2938,7 @@ var MIN_CUE_S;
 var ENTITIES2;
 var clean;
 var SENTENCE_END;
+var ENDS_SENTENCE;
 var MAX_SEGMENT_S;
 var MAX_SENTENCES;
 var PAUSE_S;
@@ -2907,8 +2950,9 @@ var init_vtt = __esm({
     TIMING = /^((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/;
     MIN_CUE_S = 0.05;
     ENTITIES2 = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ", lrm: "", rlm: "" };
-    clean = (line) => decode(line.replace(/<[^>]*>/g, "").replace(/\{\\[^}]*\}/g, "")).replace(/\s+/g, " ").trim();
-    SENTENCE_END = /[.!?…]+["'”’)\]]*(?=\s|$)/g;
+    clean = (line) => decode(line.replace(/<[^<>]*>/g, "").replace(/\{\\[^{}]*\}/g, "")).replace(/\s+/g, " ").trim();
+    SENTENCE_END = /(?<![.!?…])[.!?…]+["'”’)\]]*(?=\s|$)/g;
+    ENDS_SENTENCE = /(?<![.!?…])[.!?…]+["'”’)\]]*$/;
     MAX_SEGMENT_S = 30;
     MAX_SENTENCES = 3;
     PAUSE_S = 5;
@@ -2950,15 +2994,15 @@ async function whisperTranscribe(info, language, run, signal, knownOnly = false)
   const left = () => Math.max(1e3, deadline - Date.now());
   const timedOut = { failed: `whisper: timed out after ${Math.round(budgetMs / 6e4)} min (${envName("WHISPER_TIMEOUT_MS")})` };
   return withTempDir("whisper", async (dir) => {
-    const infoPath = join3(dir, "info.json");
+    const infoPath = join4(dir, "info.json");
     writeFileSync3(infoPath, info);
     const dl = await downloadMedia(["--load-info-json", infoPath, "-f", AUDIO_FORMAT], dir, "audio", { run, timeoutMs: left, signal, knownOnly });
     if (signal?.aborted) return refund({ failed: "whisper: cancelled" });
     if ("timedOut" in dl) return timedOut;
     if ("error" in dl) return refund({ failed: `whisper: the audio download failed (${dl.error})` });
     const audio = dl.file;
-    const wav = join3(dir, "speech.wav");
-    const ff = await run("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", join3(dir, audio), "-ar", "16000", "-ac", "1", wav], {
+    const wav = join4(dir, "speech.wav");
+    const ff = await run("ffmpeg", ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", join4(dir, audio), "-ar", "16000", "-ac", "1", wav], {
       timeoutMs: left(),
       signal
     });
@@ -2973,7 +3017,7 @@ async function whisperTranscribe(info, language, run, signal, knownOnly = false)
     if (w.missing) return refund({ failed: "whisper needs uvx", unavailable: true });
     if (signal?.aborted) return { failed: "whisper: cancelled" };
     if (w.status === 124) return timedOut;
-    const out = join3(dir, "speech.json");
+    const out = join4(dir, "speech.json");
     if (!w.ok || !existsSync2(out)) return { failed: `whisper: ${w.stderr.trim().split("\n").pop() || "failed"}` };
     return { segments: whisperSegments(readFileSync4(out, "utf8")) };
   });
@@ -3718,11 +3762,6 @@ function rrf(lists, keyOf, k = 60) {
   }
   return score;
 }
-function trimTrailing(s, ch) {
-  let end = s.length;
-  while (end > 0 && s[end - 1] === ch) end--;
-  return s.slice(0, end);
-}
 function arxivIdFromUrl(url) {
   let host;
   let path;
@@ -4133,6 +4172,7 @@ var NO_SUBTERMS;
 var subtermCache;
 var subtermExtras;
 var MASK32;
+var unsigned64;
 var PAIR_CACHE_MAX;
 var URL_IN_TEXT;
 var init_rank = __esm({
@@ -4140,6 +4180,7 @@ var init_rank = __esm({
     "use strict";
     init_brand();
     init_text();
+    init_trim();
     init_url();
     byCodeUnit = (a, b) => a < b ? -1 : a > b ? 1 : 0;
     indexTokenCache = /* @__PURE__ */ new WeakMap();
@@ -4155,6 +4196,7 @@ var init_rank = __esm({
     subtermCache = /* @__PURE__ */ new Map();
     subtermExtras = { list: void 0, length: 0 };
     MASK32 = 0xffffffffn;
+    unsigned64 = (v) => v < 0n ? BigInt.asUintN(64, v) : v;
     PAIR_CACHE_MAX = 2048;
     URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
   }
@@ -4183,6 +4225,25 @@ var init_run = __esm({
     };
     PASSAGE_S = 45;
     chapterAt = (chapters, t) => [...chapters].reverse().find((c) => c.start <= t + 0.5)?.title;
+  }
+});
+function withRunLock(slug, fn) {
+  const prev = chains.get(slug) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  const tail = next.then(noop, noop);
+  chains.set(slug, tail);
+  tail.then(() => {
+    if (chains.get(slug) === tail) chains.delete(slug);
+  }, noop);
+  return next;
+}
+function noop() {
+}
+var chains;
+var init_run_lock = __esm({
+  "src/run-lock.ts"() {
+    "use strict";
+    chains = /* @__PURE__ */ new Map();
   }
 });
 var BEFORE_S;
@@ -4219,6 +4280,7 @@ var init_frames = __esm({
   "src/video/frames.ts"() {
     "use strict";
     init_no_write();
+    init_run_lock();
     init_align();
     init_dhash();
     init_ladder3();
@@ -4302,6 +4364,8 @@ function parseArgs(argv, spec) {
   const commands = new Set(spec.commands);
   const valueFlags = new Set(spec.valueFlags);
   const boolFlags = new Set(spec.boolFlags);
+  const scoped = spec.commandFlags?.[argv[0] ?? ""];
+  const takes = scoped === void 0 ? void 0 : new Set(scoped);
   if (argv.length === 0) return { kind: "help" };
   if (isHelpWord(argv[0])) return argv[1] !== void 0 && commands.has(argv[1]) ? { kind: "help", command: argv[1] } : { kind: "help" };
   if (isVersionWord(argv[0])) return { kind: "version" };
@@ -4319,14 +4383,22 @@ function parseArgs(argv, spec) {
       break;
     }
     if (!arg.startsWith("--") && arg !== "-h" && arg !== "-v") {
+      if (arg.length > 1 && arg[0] === "-" && !/^-\.?\d/.test(arg)) {
+        throw new UsageError(`unknown flag "${arg}" \u2014 flags here are long (--name); put -- before a word that starts with a dash`);
+      }
       positional.push(arg);
       continue;
     }
     const eq = arg.indexOf("=");
     const key = eq !== -1 ? arg.slice(2, eq) : arg.slice(2);
-    if (!boolFlags.has(key) && !valueFlags.has(key)) {
+    const declared = boolFlags.has(key) || valueFlags.has(key);
+    const own = declared && (takes === void 0 || takes.has(key));
+    if (!own) {
       if (isHelpWord(arg)) return { kind: "help", command: command2 };
       if (isVersionWord(arg)) return { kind: "version" };
+    }
+    if (declared && !own) {
+      throw new UsageError(`--${key} does not apply to ${command2} \u2014 run \`${command2} --help\` for its options`);
     }
     if (boolFlags.has(key)) {
       if (eq !== -1) throw new UsageError(`--${key} is a boolean flag and takes no value`);
@@ -4395,7 +4467,7 @@ function unmask(payload, key) {
 }
 async function connectWebSocket(url, opts = {}) {
   const { request } = await import("http");
-  return new Promise((resolve82, reject) => {
+  return new Promise((resolve9, reject) => {
     let u;
     try {
       u = new URL(url);
@@ -4430,7 +4502,7 @@ async function connectWebSocket(url, opts = {}) {
         socket.destroy();
         return settle(() => reject(new Error("WebSocket handshake failed: bad Accept")));
       }
-      settle(() => resolve82(new WsClient(socket, opts, head)));
+      settle(() => resolve9(new WsClient(socket, opts, head)));
     });
     req.on("response", (res) => {
       res.resume();
@@ -4459,13 +4531,17 @@ var init_ws = __esm({
       code;
     };
     FrameParser = class {
-      buf = Buffer.alloc(0);
+      chunks = [];
+      bytes = 0;
       max;
       constructor(opts = {}) {
         this.max = opts.maxMessageSize ?? DEFAULT_MAX_MESSAGE;
       }
       push(chunk) {
-        this.buf = this.buf.length === 0 ? chunk : Buffer.concat([this.buf, chunk]);
+        if (chunk.length) {
+          this.chunks.push(chunk);
+          this.bytes += chunk.length;
+        }
         const frames = [];
         for (; ; ) {
           const frame = this.next();
@@ -4473,8 +4549,36 @@ var init_ws = __esm({
           frames.push(frame);
         }
       }
+      /** Remove the next `n` buffered bytes, joined into one buffer of their own. */
+      take(n) {
+        const pieces = [];
+        for (let left = n; left > 0; ) {
+          const c = this.chunks[0];
+          if (c.length <= left) {
+            pieces.push(c);
+            this.chunks.shift();
+            left -= c.length;
+          } else {
+            pieces.push(c.subarray(0, left));
+            this.chunks[0] = c.subarray(left);
+            left = 0;
+          }
+        }
+        this.bytes -= n;
+        return Buffer.concat(pieces, n);
+      }
+      /** The first chunk, grown to hold at least the first `n` buffered bytes (a header split across chunks). */
+      peek(n) {
+        if (this.chunks[0].length < n) {
+          const head = this.take(n);
+          this.chunks.unshift(head);
+          this.bytes += n;
+        }
+        return this.chunks[0];
+      }
       next() {
-        const b = this.buf;
+        if (this.bytes < 2) return void 0;
+        const b = this.peek(Math.min(this.bytes, 14));
         if (b.length < 2) return void 0;
         const masked = (b[1] & 128) !== 0;
         let len = b[1] & 127;
@@ -4492,10 +4596,14 @@ var init_ws = __esm({
         }
         if (len > this.max) throw new WsProtocolError("message too large", 1009);
         const total = off + (masked ? 4 : 0) + len;
-        if (b.length < total) return void 0;
-        const payload = masked ? unmask(b.subarray(off + 4, total), b.subarray(off, off + 4)) : Buffer.from(b.subarray(off, total));
-        this.buf = b.subarray(total);
-        return { fin: (b[0] & 128) !== 0, opcode: b[0] & 15, payload };
+        if (this.bytes < total) return void 0;
+        const fin = (b[0] & 128) !== 0;
+        const opcode = b[0] & 15;
+        const key = masked ? Buffer.from(b.subarray(off, off + 4)) : void 0;
+        this.take(off + (masked ? 4 : 0));
+        const payload = this.take(len);
+        if (key) for (let i = 0; i < payload.length; i++) payload[i] ^= key[i & 3];
+        return { fin, opcode, payload };
       }
     };
     WsClient = class extends EventEmitter {
@@ -4534,14 +4642,14 @@ var init_ws = __esm({
           this.closing = true;
           this.writeClose(code, reason);
         }
-        await new Promise((resolve82) => {
+        await new Promise((resolve9) => {
           const timer = setTimeout(() => {
             this.socket.destroy();
             this.finish(code, reason);
           }, this.closeTimeoutMs);
           this.once("close", () => {
             clearTimeout(timer);
-            resolve82();
+            resolve9();
           });
         });
       }
@@ -4694,12 +4802,12 @@ ${method}`;
         if (this.isClosed) return Promise.reject(new Error(`CDP connection closed (${method})`));
         const id = ++this.nextId;
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve82, reject) => {
+        return new Promise((resolve9, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id);
             reject(new Error(`CDP command timed out: ${method} (${timeoutMs} ms)`));
           }, timeoutMs);
-          this.pending.set(id, { method, resolve: resolve82, reject, timer });
+          this.pending.set(id, { method, resolve: resolve9, reject, timer });
           try {
             this.ws.send(JSON.stringify({ id, method, params, sessionId: opts.sessionId }));
           } catch (e) {
@@ -4725,7 +4833,7 @@ ${method}`;
       /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
       once(method, opts = {}) {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve82, reject) => {
+        return new Promise((resolve9, reject) => {
           const cleanup = () => {
             clearTimeout(timer);
             this.off(method, handler, opts.sessionId);
@@ -4734,7 +4842,7 @@ ${method}`;
           const handler = (params) => {
             if (opts.predicate && !opts.predicate(params)) return;
             cleanup();
-            resolve82(params);
+            resolve9(params);
           };
           const onClose = () => {
             cleanup();
@@ -4964,11 +5072,11 @@ function dialHost(host) {
 }
 async function http(method, port, host, path, timeoutMs = REQUEST_TIMEOUT_MS) {
   const { request } = await import("http");
-  return new Promise((resolve82, reject) => {
+  return new Promise((resolve9, reject) => {
     const req = request({ host: dialHost(host), port, path, method, timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve82({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("end", () => resolve9({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
       res.on("error", reject);
     });
     req.on("timeout", () => req.destroy(new Error(`DevTools request ${method} ${path} timed out after ${timeoutMs} ms`)));
@@ -5031,62 +5139,6 @@ var init_discovery = __esm({
     REQUEST_TIMEOUT_MS = 3e3;
     ALIVE_TIMEOUT_MS = 1e3;
     LOOPBACK = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
-  }
-});
-function defaultBrowserDeps() {
-  return {
-    spawn: (cmd, args, opts) => nodeSpawn(cmd, args, opts),
-    fs: { readFile, writeFile, rename, mkdir, rm, stat, open },
-    now: () => Date.now(),
-    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
-    discovery: discovery_exports,
-    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
-    kill: (pid, signal) => void process.kill(pid, signal),
-    env: (name) => env(name),
-    platform: process.platform
-  };
-}
-function browserDeps(own) {
-  return { ...defaultBrowserDeps(), ...own };
-}
-var init_deps = __esm({
-  "src/browser/deps.ts"() {
-    "use strict";
-    init_brand();
-    init_cdp();
-    init_detect();
-    init_discovery();
-  }
-});
-function extensionDirs(raw) {
-  const name = envName("BROWSER_EXTENSIONS");
-  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
-    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
-    let isDir = false;
-    try {
-      isDir = statSync3(dir).isDirectory();
-    } catch {
-    }
-    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
-    if (!existsSync5(join7(dir, "manifest.json"))) {
-      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
-    }
-    return dir;
-  });
-}
-function extensionArgs(dirs) {
-  if (dirs.length === 0) return [];
-  const list = dirs.join(",");
-  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
-}
-var unpackedIgnoredNote;
-var init_extensions = __esm({
-  "src/browser/extensions.ts"() {
-    "use strict";
-    init_brand();
-    init_cli_kit();
-    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
   }
 });
 function browserHome() {
@@ -5191,11 +5243,22 @@ function pidAlive(pid) {
     return e.code === "EPERM";
   }
 }
-function staleReason(path, staleMs, now) {
+function readOrNull(path) {
+  try {
+    return readFileSync8(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+function judgeLock(path, staleMs, now) {
+  const raw = readOrNull(path);
+  return { reason: staleReason(path, raw, staleMs, now), raw };
+}
+function staleReason(path, raw, staleMs, now) {
   let at;
   let pid;
   try {
-    const held = JSON.parse(readFileSync8(path, "utf8"));
+    const held = JSON.parse(raw ?? "");
     pid = held.pid;
     at = typeof held.at === "number" ? held.at : Number.NaN;
   } catch {
@@ -5203,7 +5266,7 @@ function staleReason(path, staleMs, now) {
   }
   if (Number.isNaN(at)) {
     try {
-      at = statSync5(path).mtimeMs;
+      at = statSync4(path).mtimeMs;
     } catch {
       return "gone";
     }
@@ -5211,6 +5274,25 @@ function staleReason(path, staleMs, now) {
   if (now - at > staleMs) return "old";
   if (typeof pid === "number" && !pidAlive(pid)) return "dead";
   return null;
+}
+function moveAsideStale(path, judged, token) {
+  const aside = `${path}.${token}.stale`;
+  try {
+    renameSync3(path, aside);
+  } catch (e) {
+    if (e.code === "ENOENT") return;
+    throw e;
+  }
+  try {
+    if (readOrNull(aside) === judged) return;
+    try {
+      linkSync(aside, path);
+    } catch (e) {
+      if (e.code !== "EEXIST") throw e;
+    }
+  } finally {
+    rmSync5(aside, { force: true });
+  }
 }
 function holds(path, token) {
   try {
@@ -5227,7 +5309,7 @@ async function withBrowserLock(fn, opts = {}) {
   const dir = homeOf(opts);
   ensurePrivateDir(dir);
   const path = join9(dir, "lock");
-  const token = randomUUID();
+  const token = randomUUID2();
   const stamp = () => JSON.stringify({ pid: process.pid, at: now(), token });
   const deadline = now() + waitMs;
   for (; ; ) {
@@ -5242,11 +5324,9 @@ async function withBrowserLock(fn, opts = {}) {
     } catch (e) {
       if (e.code !== "EEXIST") throw e;
     }
-    if (staleReason(path, staleMs, now())) {
-      try {
-        unlinkSync2(path);
-      } catch {
-      }
+    const judged = judgeLock(path, staleMs, now());
+    if (judged.reason) {
+      moveAsideStale(path, judged.raw, token);
       continue;
     }
     if (now() >= deadline) throw new Error(`browser busy: another webindex command holds ${path} (waited ${waitMs} ms)`);
@@ -5291,6 +5371,64 @@ var init_state = __esm({
       now: () => Date.now(),
       sleep: (ms) => new Promise((r) => setTimeout(r, ms))
     };
+  }
+});
+function defaultBrowserDeps() {
+  return {
+    spawn: (cmd, args, opts) => nodeSpawn(cmd, args, opts),
+    fs: { readFile, writeFile, rename, mkdir, rm, stat, open },
+    now: () => Date.now(),
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    connectCdp: (wsUrl) => CdpClient.connect(wsUrl),
+    discovery: discovery_exports,
+    detectBrowser: (kind) => detectBrowserBinary(kind ? { kind } : {}),
+    kill: (pid, signal) => void process.kill(pid, signal),
+    alive: pidAlive,
+    env: (name) => env(name),
+    platform: process.platform
+  };
+}
+function browserDeps(own) {
+  return { ...defaultBrowserDeps(), ...own };
+}
+var init_deps = __esm({
+  "src/browser/deps.ts"() {
+    "use strict";
+    init_brand();
+    init_cdp();
+    init_detect();
+    init_discovery();
+    init_state();
+  }
+});
+function extensionDirs(raw) {
+  const name = envName("BROWSER_EXTENSIONS");
+  return (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean).map((dir) => {
+    if (!isAbsolute2(dir)) throw new UsageError(`${name} takes absolute paths, not ${JSON.stringify(dir)}`);
+    let isDir = false;
+    try {
+      isDir = statSync5(dir).isDirectory();
+    } catch {
+    }
+    if (!isDir) throw new UsageError(`${name}: no such directory: ${dir}`);
+    if (!existsSync7(join10(dir, "manifest.json"))) {
+      throw new UsageError(`${name}: ${dir} has no manifest.json \u2014 name the unpacked extension's own folder, the one that holds manifest.json`);
+    }
+    return dir;
+  });
+}
+function extensionArgs(dirs) {
+  if (dirs.length === 0) return [];
+  const list = dirs.join(",");
+  return [`--load-extension=${list}`, `--disable-extensions-except=${list}`];
+}
+var unpackedIgnoredNote;
+var init_extensions = __esm({
+  "src/browser/extensions.ts"() {
+    "use strict";
+    init_brand();
+    init_cli_kit();
+    unpackedIgnoredNote = () => `Google Chrome \u2265 137 ignores unpacked extensions \u2014 use Brave (built-in ad/tracker blocking: ${envName("BROWSER_KIND")}=brave), Chromium or Chrome for Testing`;
   }
 });
 async function resolveEndpoint(opts = {}) {
@@ -5345,9 +5483,9 @@ async function launch(deps, binary, profile, headless, kind) {
   const bin = found.path;
   const dir = profileDir(profile);
   ensurePrivateDir(browserHome());
-  ensurePrivateDir(join10(browserHome(), "profiles"));
+  ensurePrivateDir(join11(browserHome(), "profiles"));
   ensurePrivateDir(dir);
-  const portFile = join10(dir, "DevToolsActivePort");
+  const portFile = join11(dir, "DevToolsActivePort");
   const running = await readActivePort(deps, portFile);
   if (running && await isSameBrowser(deps, running.port, "127.0.0.1", running.path)) {
     return { host: "127.0.0.1", port: running.port, launchedByUs: true, profile, headless };
@@ -5779,14 +5917,14 @@ var init_session = __esm({
           },
           /** Whether such an event has come, whatever was waited for. */
           saw: (match) => seen.some(match),
-          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve82, reject) => {
+          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve9, reject) => {
             const timer = setTimeout(() => {
               wake = void 0;
               reject(new NavigationTimeoutError(`${what} within ${timeoutMs} ms`));
             }, timeoutMs);
             wake = () => {
               const hit = seen.find(match);
-              if (hit) resolve82(hit);
+              if (hit) resolve9(hit);
               else if (cancelled) reject(new Error(`${cancelledWhat} was cancelled: the page asked to confirm leaving it (beforeunload), and that was declined`));
               else if (closed) reject(new Error("the browser connection closed while waiting for the page to load"));
               else return;
@@ -6239,10 +6377,30 @@ function htmlAttributes(tag2) {
   }
   return attrs;
 }
+function implicitHeadEnd(html, from) {
+  const re = new RegExp(TAG_RE.source, "g");
+  re.lastIndex = from;
+  let m;
+  while (m = re.exec(html)) {
+    const tag2 = m[0];
+    if (tag2[1] === "/" || tag2[1] === "!" || tag2[1] === "?") continue;
+    const name = tagName(tag2);
+    if (!HEAD_CONTENT.has(name)) return m.index;
+    if (!HEAD_RAW.has(name) || tag2.endsWith("/>")) continue;
+    const close = closeTagRe(name);
+    close.lastIndex = re.lastIndex;
+    const c = close.exec(html);
+    if (!c) return -1;
+    re.lastIndex = c.index + c[0].length;
+  }
+  return -1;
+}
 function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
+  if (!new RegExp(`<!--|<(?:${names.join("|")})(?=[\\s/>])`, "i").test(html)) return html;
   const drop = new Set(names);
   const open2 = new RegExp(`<!--|${TAG_RE.source}|<(${names.join("|")})(?=[\\s/>])`, "gi");
   const unclosed = /* @__PURE__ */ new Set();
+  const noClose = /* @__PURE__ */ new Set();
   let out = "";
   let last = 0;
   let m;
@@ -6252,14 +6410,20 @@ function dropElements(html, names, toEof = /* @__PURE__ */ new Set()) {
     const opaque = !drop.has(name) && RCDATA_ELEMENTS.has(name);
     if (name !== "!--" && !drop.has(name) && !opaque || unclosed.has(name)) continue;
     let end;
-    if (name === "!--") {
+    if (!m[1] && SELF_CLOSING_FOREIGN.has(name) && tag2.endsWith("/>")) {
+      end = m.index + tag2.length;
+    } else if (name === "!--") {
       const close = html.indexOf("-->", m.index + 2);
       end = close < 0 ? -1 : close + 3;
     } else {
-      const close = closeTagRe(name);
-      close.lastIndex = open2.lastIndex;
-      const c = close.exec(html);
-      end = c ? c.index + c[0].length : toEof.has(name) ? html.length : -1;
+      let c = null;
+      if (!noClose.has(name)) {
+        const close = closeTagRe(name);
+        close.lastIndex = open2.lastIndex;
+        c = close.exec(html);
+        if (!c) noClose.add(name);
+      }
+      end = c ? c.index + c[0].length : toEof.has(name) ? html.length : name === "head" ? implicitHeadEnd(html, open2.lastIndex) : -1;
     }
     if (end < 0) {
       unclosed.add(name);
@@ -6304,6 +6468,119 @@ function dropLandmarks(html, roles) {
   }
   return last === 0 ? html : out + html.slice(last);
 }
+function dropLanguageSelectors(html) {
+  let seen = 0;
+  for (let i = html.indexOf("hreflang"); i >= 0 && seen < MIN_LANGUAGE_LINKS; i = html.indexOf("hreflang", i + 8)) seen++;
+  if (seen < MIN_LANGUAGE_LINKS) return html;
+  const totals = { links: 0, lang: 0, text: 0, blocks: 0 };
+  const stack = [];
+  const open2 = /* @__PURE__ */ new Map();
+  const done = [];
+  let inLangLink = false;
+  let last = 0;
+  const re = new RegExp(TAG_RE.source, "g");
+  let m;
+  while (m = re.exec(html)) {
+    if (!inLangLink) totals.text += countVisible(html, last, m.index);
+    last = re.lastIndex;
+    const tag2 = m[0];
+    const closing2 = tag2[1] === "/";
+    const name = tagName(tag2);
+    if (name === "a") {
+      if (closing2) inLangLink = false;
+      else {
+        totals.links++;
+        if (HREFLANG_ATTR.test(tag2)) {
+          totals.lang++;
+          inLangLink = true;
+        }
+      }
+    } else if (!closing2 && SELECTOR_BLOCKERS.has(name)) totals.blocks++;
+    if (!SELECTOR_CONTAINERS.has(name)) continue;
+    if (!closing2) {
+      if (tag2.endsWith("/>")) continue;
+      stack.push({ name, node: { from: m.index, to: -1, links: 0, lang: 0, text: 0, blocks: 0, parent: stack.at(-1)?.node }, at: { ...totals } });
+      open2.set(name, (open2.get(name) ?? 0) + 1);
+      continue;
+    }
+    if (!open2.get(name)) continue;
+    let i = stack.length - 1;
+    while (stack[i].name !== name) i--;
+    for (let j = i; j < stack.length; j++) open2.set(stack[j].name, open2.get(stack[j].name) - 1);
+    const { node, at: at2 } = stack[i];
+    stack.length = i;
+    Object.assign(node, {
+      to: re.lastIndex,
+      links: totals.links - at2.links,
+      lang: totals.lang - at2.lang,
+      text: totals.text - at2.text,
+      blocks: totals.blocks - at2.blocks
+    });
+    done.push(node);
+  }
+  const isSelector = (n) => !!n && n.to >= 0 && n.lang >= MIN_LANGUAGE_LINKS && n.lang * 2 > n.links && n.blocks === 0 && n.text <= MAX_SELECTOR_TEXT;
+  const outermost = /* @__PURE__ */ new Map();
+  const targets = /* @__PURE__ */ new Set();
+  for (let k = done.length - 1; k >= 0; k--) {
+    const n = done[k];
+    if (!isSelector(n)) continue;
+    const top = isSelector(n.parent) ? outermost.get(n.parent) ?? n.parent : n;
+    outermost.set(n, top);
+    targets.add(top);
+  }
+  if (!targets.size) return html;
+  let out = "";
+  let at = 0;
+  for (const r of [...targets].sort((a, b) => a.from - b.from)) {
+    if (r.from < at) continue;
+    out += `${html.slice(at, r.from)} `;
+    at = r.to;
+  }
+  return out + html.slice(at);
+}
+function countVisible(html, from, to) {
+  let n = 0;
+  for (let i = from; i < to; i++) {
+    const c = html.charCodeAt(i);
+    if (c > 32) n++;
+  }
+  return n;
+}
+function firstElementText(html, name) {
+  const open2 = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
+  if (!open2) return void 0;
+  const close = closeTagRe(name);
+  close.lastIndex = open2.index + open2[0].length;
+  const c = close.exec(html);
+  if (!c) return void 0;
+  const inner2 = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag2) => INLINE_TAGS.has(tagName(tag2)) ? "" : " ");
+  return decodeEntities(inner2).replace(/\s+/g, " ").trim() || void 0;
+}
+function metaContent(html, keys) {
+  const found = /* @__PURE__ */ new Map();
+  for (const m of html.matchAll(/<meta(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = htmlAttributes(m[0]);
+    const key = (attrs.get("property") ?? attrs.get("name"))?.toLowerCase();
+    const value = attrs.get("content")?.trim();
+    if (key && value && keys.includes(key) && !found.has(key)) found.set(key, decodeEntities(value).replace(/\s+/g, " ").trim());
+  }
+  return keys.map((k) => found.get(k)).find(Boolean);
+}
+function canonicalHref(clean32) {
+  const end = clean32.search(/<\/head\s*>|<body(?=[\s/>])/i);
+  const head = end < 0 ? clean32 : clean32.slice(0, end);
+  let og;
+  for (const m of head.matchAll(/<(link|meta)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
+    const attrs = htmlAttributes(m[0]);
+    if (m[1].toLowerCase() === "link") {
+      const href = attrs.get("href")?.trim();
+      if (href && (attrs.get("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical")) return decodeEntities(href);
+    } else if (og === void 0 && attrs.get("property")?.toLowerCase() === "og:url") {
+      og = attrs.get("content")?.trim() || void 0;
+    }
+  }
+  return og && decodeEntities(og);
+}
 var BLOCK_TAGS;
 var INLINE_TAGS;
 var TAG_RE;
@@ -6311,13 +6588,23 @@ var LOOSE_TAG_RE;
 var tagName;
 var CLOSE_TAG_RE;
 var RCDATA_ELEMENTS;
+var SELF_CLOSING_FOREIGN;
+var HEAD_CONTENT;
+var HEAD_RAW;
+var SELECTOR_CONTAINERS;
+var SELECTOR_BLOCKERS;
+var HREFLANG_ATTR;
+var MIN_LANGUAGE_LINKS;
+var MAX_SELECTOR_TEXT;
 var CHROME_ROLES;
 var HIDDEN_ELEMENTS;
 var CHROME_ELEMENTS;
 var RAW_TEXT_ELEMENTS;
+var METADATA_HIDDEN;
 var init_html = __esm({
   "src/html.ts"() {
     "use strict";
+    init_entities();
     BLOCK_TAGS = /* @__PURE__ */ new Set([
       "p",
       "div",
@@ -6396,10 +6683,19 @@ var init_html = __esm({
     tagName = (tag2) => /^<\/?([a-zA-Z][^\s/>]*)/.exec(tag2)?.[1]?.toLowerCase() ?? "";
     CLOSE_TAG_RE = /* @__PURE__ */ new Map();
     RCDATA_ELEMENTS = /* @__PURE__ */ new Set(["title"]);
+    SELF_CLOSING_FOREIGN = /* @__PURE__ */ new Set(["svg", "math"]);
+    HEAD_CONTENT = /* @__PURE__ */ new Set(["title", "meta", "link", "base", "style", "script", "noscript", "template"]);
+    HEAD_RAW = /* @__PURE__ */ new Set(["title", "style", "script", "noscript", "template"]);
+    SELECTOR_CONTAINERS = /* @__PURE__ */ new Set(["div", "ul", "ol", "menu", "nav", "section", "aside", "details"]);
+    SELECTOR_BLOCKERS = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6", "p", "table", "article", "main", "pre", "blockquote"]);
+    HREFLANG_ATTR = /\shreflang\s*=/i;
+    MIN_LANGUAGE_LINKS = 3;
+    MAX_SELECTOR_TEXT = 80;
     CHROME_ROLES = ["navigation", "banner", "contentinfo"];
     HIDDEN_ELEMENTS = ["script", "style", "noscript", "head", "svg", "template", "select", "datalist"];
     CHROME_ELEMENTS = ["nav", "footer"];
     RAW_TEXT_ELEMENTS = /* @__PURE__ */ new Set(["script", "style"]);
+    METADATA_HIDDEN = ["script", "style", "template", "svg"];
   }
 });
 function retryDelayMs(retryAfterMs) {
@@ -6607,7 +6903,7 @@ function markdownAgainst(html, base2, fullPage) {
   const src = withoutNul(html);
   const hidden = fullPage ? HIDDEN_ELEMENTS : [...HIDDEN_ELEMENTS, ...CHROME_ELEMENTS];
   let s = dropElements(src, hidden, RAW_TEXT_ELEMENTS);
-  if (!fullPage) s = dropLandmarks(s, CHROME_ROLES);
+  if (!fullPage) s = dropLanguageSelectors(dropLandmarks(s, CHROME_ROLES));
   const tables = /* @__PURE__ */ new Map();
   if (TABLE_OPEN.test(s)) for (const r of balancedRegions(s, "table", () => true)) tables.set(r.from, r);
   const w = new Writer();
@@ -6627,7 +6923,7 @@ function markdownAgainst(html, base2, fullPage) {
     const closing2 = t[1] === "/";
     const name = tagName(t);
     const adjacentLinks = name === "a" && !closing2 && m.index === prevAEnd;
-    prevAEnd = name === "a" && closing2 ? tag2.lastIndex : -1;
+    prevAEnd = closing2 && (name === "a" || m.index === prevAEnd && INLINE_TAGS.has(name)) ? tag2.lastIndex : -1;
     if (!name) continue;
     if (name === "div") {
       if (closing2) {
@@ -7298,7 +7594,7 @@ var init_locale = __esm({
 function firecrawlBase(opts = {}) {
   const raw = (opts.firecrawl ?? env("FIRECRAWL") ?? FIRECRAWL_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 function firecrawlIsExplicit(opts = {}) {
   return !!(opts.firecrawl ?? env("FIRECRAWL"));
@@ -7479,6 +7775,7 @@ var init_firecrawl = __esm({
     init_brand();
     init_fetch();
     init_locale();
+    init_trim();
     FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
     PROBE_TIMEOUT_MS2 = 2e3;
     SCRAPE_TIMEOUT_MS = 45e3;
@@ -7508,6 +7805,32 @@ var init_firecrawl = __esm({
     };
     probeCache = new ProbeMemo();
     prefixCache = /* @__PURE__ */ new Map();
+  }
+});
+function normalizeForgeHost(host) {
+  const h = host.trim().toLowerCase();
+  const bare = h.replace(/^www\./, "");
+  return WWW_ALIASED.has(bare) ? bare : h;
+}
+function githubRawUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return void 0;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:" || normalizeForgeHost(u.hostname) !== "github.com") return void 0;
+  const m = /^\/([^/]+)\/([^/]+)\/blob\/([^/]+\/.+)$/.exec(u.pathname);
+  return m ? `https://raw.githubusercontent.com/${m[1]}/${m[2]}/${m[3]}` : void 0;
+}
+var KINDS;
+var WWW_ALIASED;
+var init_forge_host = __esm({
+  "src/forge-host.ts"() {
+    "use strict";
+    init_brand();
+    KINDS = /* @__PURE__ */ new Set(["github", "gitlab", "gitea"]);
+    WWW_ALIASED = /* @__PURE__ */ new Set(["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"]);
   }
 });
 function looksLikeJunkExtraction(text) {
@@ -7591,12 +7914,12 @@ function sleep(ms, signal) {
   return signal ? sleepUnlessAborted(ms, signal) : new Promise((r) => setTimeout(r, ms));
 }
 function sleepUnlessAborted(ms, signal) {
-  return new Promise((resolve82) => {
-    if (signal?.aborted) return resolve82();
+  return new Promise((resolve9) => {
+    if (signal?.aborted) return resolve9();
     const done = () => {
       clearTimeout(t);
       signal?.removeEventListener("abort", done);
-      resolve82();
+      resolve9();
     };
     const t = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
@@ -7772,6 +8095,14 @@ async function httpGet(url, opts = {}) {
         ctrl.abort();
         return { ok: false, status: res.status, body: "", bytesRead: 0, truncated: true, ...meta, error: `response too large: ${declared} bytes > ${max} cap` };
       }
+      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(meta.retryAfterMs) : void 0;
+      if (wait !== void 0) {
+        await res.body?.cancel();
+        last = { ok: false, status: res.status, body: "", bytesRead: 0, truncated: false, ...meta };
+        if (wait > 0) opts.onBackOff?.(meta.url, wait);
+        await sleepUnlessAborted(wait, opts.signal);
+        continue;
+      }
       let { bytes, bytesRead, truncated } = res.status === 304 ? { bytes: Buffer.alloc(0), bytesRead: 0, truncated: false } : await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
       const sniffed = ambiguous ? sniffDocument(bytes) : void 0;
@@ -7795,13 +8126,6 @@ async function httpGet(url, opts = {}) {
         ...meta,
         ...filename ? { filename } : {}
       };
-      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(meta.retryAfterMs) : void 0;
-      if (wait !== void 0) {
-        last = result;
-        if (wait > 0) opts.onBackOff?.(result.url, wait);
-        await sleepUnlessAborted(wait, opts.signal);
-        continue;
-      }
       return result;
     } catch (e) {
       if (!timedOut && opts.signal?.aborted) return cancelled();
@@ -7828,8 +8152,12 @@ async function httpJson(method, url, body, opts = {}) {
   const attempts = attemptsFor(opts.retries);
   let last = { ok: false, status: 0, data: void 0 };
   const timeoutMs = opts.timeoutMs ?? defaultTimeoutMs2();
+  const cancelled = { ok: false, status: 0, data: void 0, error: "cancelled" };
   for (let attempt = 0; attempt < attempts; attempt++) {
+    if (opts.signal?.aborted) return cancelled;
     const ctrl = new AbortController();
+    const onCancel = () => ctrl.abort();
+    opts.signal?.addEventListener("abort", onCancel, { once: true });
     let timedOut = false;
     const t = setTimeout(() => {
       timedOut = true;
@@ -7849,6 +8177,13 @@ async function httpJson(method, url, body, opts = {}) {
         headers,
         body: body === void 0 ? void 0 : JSON.stringify(body)
       });
+      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(parseRetryAfter(res.headers, Number.POSITIVE_INFINITY)) : void 0;
+      if (wait !== void 0) {
+        await res.body?.cancel();
+        last = { ok: false, status: res.status, data: void 0 };
+        await sleepUnlessAborted(wait, opts.signal);
+        continue;
+      }
       const max = opts.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
       const { bytes, bytesRead, truncated } = await readMeasuredBody(res, max);
       countFetch(bytes.length, false);
@@ -7863,23 +8198,18 @@ async function httpJson(method, url, body, opts = {}) {
       } catch {
         data = text;
       }
-      const result = { ok: res.ok, status: res.status, data, bytesRead, truncated };
-      const wait = RETRY_STATUS.has(res.status) && attempt < attempts - 1 ? retryDelayMs(parseRetryAfter(res.headers, Number.POSITIVE_INFINITY)) : void 0;
-      if (wait !== void 0) {
-        last = result;
-        await sleep(wait);
-        continue;
-      }
-      return result;
+      return { ok: res.ok, status: res.status, data, bytesRead, truncated };
     } catch (e) {
+      if (!timedOut && opts.signal?.aborted) return cancelled;
       last = timedOut ? { ok: false, status: 0, data: void 0, error: `timed out after ${timeoutMs} ms`, timedOut: true } : { ok: false, status: 0, data: void 0, error: networkFailure(e) };
       if (timedOut || isPermanentFailure(e)) break;
-      if (attempt < attempts - 1) await sleep(defaultRetryMs());
+      if (attempt < attempts - 1) await sleepUnlessAborted(defaultRetryMs(), opts.signal);
     } finally {
       clearTimeout(t);
+      opts.signal?.removeEventListener("abort", onCancel);
     }
   }
-  return last;
+  return opts.signal?.aborted ? cancelled : last;
 }
 function cleanInline(s) {
   const text = decodeEntities(String(s));
@@ -7948,15 +8278,18 @@ ${"#".repeat(Number(m[1]))} ${text}
 function htmlToText(html, opts = {}) {
   const hidden = opts.fullPage ? HIDDEN_ELEMENTS : [...HIDDEN_ELEMENTS, ...CHROME_ELEMENTS];
   let s = dropElements(html.includes(NUL2) ? html.split(NUL2).join("\uFFFD") : html, hidden, RAW_TEXT_ELEMENTS);
-  if (!opts.fullPage) s = dropLandmarks(s, CHROME_ROLES);
+  if (!opts.fullPage) s = dropLanguageSelectors(dropLandmarks(s, CHROME_ROLES));
   const pre = [];
-  s = flattenHeadings(setAsidePre(s, pre));
+  s = setAsidePre(s, pre).replace(/[\r\n]+/g, " ").replace(PRE_SLOT_INLINE, (slot) => `
+${slot}
+`);
+  s = flattenHeadings(s);
   let prevAEnd = -1;
   s = s.replace(TAG_RE, (tag2, at) => {
     const closing2 = tag2[1] === "/";
     const name = tagName(tag2);
     const adjacentLinks = name === "a" && !closing2 && at === prevAEnd;
-    prevAEnd = name === "a" && closing2 ? at + tag2.length : -1;
+    prevAEnd = closing2 && (name === "a" || at === prevAEnd && INLINE_TAGS.has(name)) ? at + tag2.length : -1;
     if (/^h[1-6]$/.test(name)) {
       return closing2 ? "\n" : "\n" + "#".repeat(Number(name[1])) + " ";
     }
@@ -7974,45 +8307,8 @@ function htmlToText(html, opts = {}) {
     return t.includes(NUL2) ? restoreInlinePre(t, pre) : t;
   }).filter((l) => l.length > 0).join("\n");
 }
-function firstElementText(html, name) {
-  const open2 = new RegExp(`<${name}(?=[\\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>`, "i").exec(html);
-  if (!open2) return void 0;
-  const close = closeTagRe(name);
-  close.lastIndex = open2.index + open2[0].length;
-  const c = close.exec(html);
-  if (!c) return void 0;
-  const inner2 = html.slice(open2.index + open2[0].length, c.index).replace(TAG_RE, (tag2) => INLINE_TAGS.has(tagName(tag2)) ? "" : " ");
-  return decodeEntities(inner2).replace(/\s+/g, " ").trim() || void 0;
-}
-function metaContent(html, keys) {
-  const found = /* @__PURE__ */ new Map();
-  for (const m of html.matchAll(/<meta(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
-    const attrs = htmlAttributes(m[0]);
-    const key = (attrs.get("property") ?? attrs.get("name"))?.toLowerCase();
-    const value = attrs.get("content")?.trim();
-    if (key && value && keys.includes(key) && !found.has(key)) found.set(key, decodeEntities(value).replace(/\s+/g, " ").trim());
-  }
-  return keys.map((k) => found.get(k)).find(Boolean);
-}
-function pageTitle(html) {
-  const clean32 = dropElements(html, NOT_TITLE);
+function pageTitleIn(clean32) {
   return firstElementText(clean32, "title") ?? metaContent(clean32, ["og:title", "twitter:title"]) ?? firstElementText(clean32, "h1");
-}
-function htmlCanonicalUrl(html) {
-  const clean32 = dropElements(html, ["script", "style", "template"]);
-  const end = clean32.search(/<\/head\s*>|<body(?=[\s/>])/i);
-  const head = end < 0 ? clean32 : clean32.slice(0, end);
-  let og;
-  for (const m of head.matchAll(/<(link|meta)(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi)) {
-    const attrs = htmlAttributes(m[0]);
-    if (m[1].toLowerCase() === "link") {
-      const href = attrs.get("href")?.trim();
-      if (href && (attrs.get("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical")) return decodeEntities(href);
-    } else if (og === void 0 && attrs.get("property")?.toLowerCase() === "og:url") {
-      og = attrs.get("content")?.trim() || void 0;
-    }
-  }
-  return og && decodeEntities(og);
 }
 function absoluteCanonical(href, base2) {
   if (!href) return void 0;
@@ -8197,6 +8493,12 @@ async function fetchAndExtract(url, opts = {}) {
       ...t.reason ? { note: `No transcript for ${url}: ${t.reason}.` } : {}
     };
   }
+  const raw = opts.fullPage ? void 0 : githubRawUrl(url);
+  if (raw) {
+    const file = await fetchAndExtract(raw, opts);
+    if (opts.signal?.aborted) return cancelled();
+    if (file.status === 304 || file.text.trim()) return { ...file, finalUrl: url };
+  }
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
   const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchMode(opts.browser);
@@ -8229,7 +8531,7 @@ async function renderInBrowser(url, opts) {
 async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
   const cancelled = () => ({ text: "", finalUrl: url, status: 0, note: `Fetching ${url} was cancelled.` });
   let firecrawlNote;
-  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage) {
+  if (!wantsPdf && !wantsDoc && !opts.authorizeUrl && !opts.fullPage && !opts.headers) {
     const fc = await scrapeViaFirecrawl(url, opts);
     if (fc.data && (fc.data.statusCode ?? 200) < 400) {
       seen.page = true;
@@ -8346,7 +8648,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
   const body = !res.body && res.bytes ? decodeBody(res.bytes, res.contentType) : res.body;
   const isHtml = HTML_TYPE_RE.test(mime) || ambiguousType && /^\s*<(?:!doctype\s+html\b|html\b|head\b|body\b|article\b|main\b|p\b|h[1-6]\b)/i.test(body);
   seen.page = isHtml;
-  const extracted = isHtml ? extractFromHtml(body, res.url, opts) : { text: body, consentDropped: 0, title: void 0, canonical: void 0, metaDescription: void 0 };
+  const extracted = isHtml ? extractFromHtml(body, res.url, opts) : { text: trimBlankLines(body), consentDropped: 0, title: void 0, canonical: void 0, metaDescription: void 0 };
   const notDocument = answeredHtml ? `${url} looked like ${claimsPdf ? "a PDF" : "an office document"} but the server returned HTML (a login wall or landing page?), so it was read as a web page.` : void 0;
   const cut = res.truncated ? `Read only the first ${res.bytesRead} bytes of ${url} (the response size cap), so this text is a prefix.` : void 0;
   return {
@@ -8363,19 +8665,35 @@ function extractFromHtml(html, finalUrl, opts = {}) {
   const main2 = opts.fullPage ? html : extractMainHtml(html);
   const stripped = markdown ? markdownAgainst(main2, documentBaseUrl(html, finalUrl), opts.fullPage) : htmlToText(main2, opts);
   const consent = opts.stripConsent && !opts.fullPage ? stripConsentBoilerplate(stripped, { markdown }) : { text: stripped, dropped: 0 };
+  const clean32 = dropElements(html, METADATA_HIDDEN);
   return {
     text: consent.text,
     consentDropped: consent.dropped,
-    title: pageTitle(html),
-    canonical: absoluteCanonical(htmlCanonicalUrl(html), finalUrl),
-    metaDescription: metaDescriptionOf(html),
+    title: pageTitleIn(clean32),
+    canonical: absoluteCanonical(canonicalHref(clean32), finalUrl),
+    metaDescription: metaDescriptionOf(clean32),
     ...opts.keepHtml ? { html } : {}
   };
+}
+function trimBlankLines(s) {
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 10) start = i + 1;
+    else if (c !== 32 && c !== 9 && c !== 13) break;
+  }
+  let end = s.length;
+  for (let i = s.length - 1; i >= start; i--) {
+    const c = s.charCodeAt(i);
+    if (c === 10) end = i + 1;
+    else if (c !== 32 && c !== 9 && c !== 13) break;
+  }
+  return start === 0 && end === s.length ? s : s.slice(start, end);
 }
 async function rescueViaWayback(url, opts = {}) {
   if (opts.authorizeUrl || envFlag("NO_WAYBACK")) return void 0;
   const api = `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`;
-  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa() });
+  const r = await httpJson("GET", api, void 0, { timeoutMs: 1e4, userAgent: contactUa(), signal: opts.signal });
   const snap = r.ok ? r.data?.archived_snapshots?.closest : void 0;
   if (snap?.available !== true || typeof snap.url !== "string") return void 0;
   const got = await fetchAndExtract(snap.url, opts);
@@ -8436,22 +8754,53 @@ function metaDescriptionOf(html) {
 }
 function focusedSnippet(text, question, opts = {}) {
   const maxChars = opts.maxChars ?? 360;
-  const maxSentences = opts.maxSentences ?? 3;
+  const maxSentences = Math.max(1, opts.maxSentences ?? 3);
   const lines = text.split("\n");
   const matcher = buildMatcher(question);
   const sentences = [];
+  const headingTerms = [/* @__PURE__ */ new Set()];
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^#{1,6}\s/.test(line)) continue;
+    if (/^#{1,6}\s/.test(line)) {
+      headingTerms.push(matcher.matchLine(line));
+      continue;
+    }
     for (const raw of line.split(/(?<=[.!?])\s+/)) {
       const t = raw.trim();
       if (t.length < 20) continue;
-      sentences.push({ text: t, line: i, score: matcher.matchLine(t).size });
+      sentences.push({ text: t, line: i, section: headingTerms.length - 1, terms: matcher.matchLine(t), prose: PROSE_END.test(t) });
     }
   }
   if (!sentences.length) return lines.slice(0, 4).join(" ").slice(0, maxChars).trim();
-  const hits = sentences.filter((s) => s.score > 0);
-  const chosen = (hits.length ? hits : sentences).map((s, idx) => ({ s, idx })).sort((a, b) => b.s.score - a.s.score || a.idx - b.idx).slice(0, maxSentences).sort((a, b) => a.idx - b.idx).map((x) => x.s);
+  const df = /* @__PURE__ */ new Map();
+  for (const s of sentences) for (const t of s.terms) df.set(t, (df.get(t) ?? 0) + 1);
+  const weight = (t) => Math.log(1 + sentences.length / (df.get(t) ?? 0.5));
+  let best;
+  for (let start2 = 0; start2 < sentences.length; start2++) {
+    if (!sentences[start2].terms.size) continue;
+    const section = sentences[start2].section;
+    const held = /* @__PURE__ */ new Set();
+    const inProse = /* @__PURE__ */ new Set();
+    let prose = 0;
+    let chars = 0;
+    for (let end2 = start2; end2 < sentences.length && end2 - start2 < maxSentences; end2++) {
+      const s = sentences[end2];
+      if (s.section !== section || end2 > start2 && chars + s.text.length > maxChars) break;
+      chars += s.text.length + 1;
+      for (const t of s.terms) {
+        held.add(t);
+        if (s.prose) inProse.add(t);
+      }
+      let score = 0;
+      for (const t of held) score += inProse.has(t) ? weight(t) : weight(t) / 2;
+      for (const t of headingTerms[section]) score += weight(t);
+      if (s.prose) prose++;
+      if (!best || score > best.score + 1e-9 || Math.abs(score - best.score) <= 1e-9 && prose > best.prose) best = { start: start2, end: end2, score, prose };
+    }
+  }
+  const { start, end } = best ?? { start: 0, end: Math.min(sentences.length, maxSentences) - 1 };
+  const seen = /* @__PURE__ */ new Set();
+  const chosen = sentences.slice(start, end + 1).filter((s) => !seen.has(s.text) && seen.add(s.text));
   const heading = nearestHeading(lines, chosen[0].line);
   let out = chosen.map((s) => s.text).join(" ");
   if (heading && !out.startsWith(heading)) out = `${heading} \u2014 ${out}`;
@@ -8478,10 +8827,10 @@ var INLINE_FORMAT;
 var INLINE_FORMAT_TAG;
 var NUL2;
 var PRE_SLOT;
+var PRE_SLOT_INLINE;
 var HEADING_OPEN;
 var HEADING_BOUNDARY;
 var PERMALINK;
-var NOT_TITLE;
 var visibleLength;
 var ROLE_MAIN;
 var ROLE_MAIN_TAG;
@@ -8509,6 +8858,7 @@ var MD_FENCE;
 var MD_LINE_START;
 var MD_DESTINATION;
 var MD_MARKUP;
+var PROSE_END;
 var init_fetch = __esm({
   "src/fetch.ts"() {
     "use strict";
@@ -8523,6 +8873,7 @@ var init_fetch = __esm({
     init_pdf();
     init_doc();
     init_firecrawl();
+    init_forge_host();
     init_video();
     init_mode();
     init_junk();
@@ -8539,10 +8890,10 @@ var init_fetch = __esm({
     PRE_SLOT = (i) => `
 ${NUL2}${i}${NUL2}
 `;
+    PRE_SLOT_INLINE = new RegExp(`${NUL2}\\d+${NUL2}`, "g");
     HEADING_OPEN = /<h([1-6])(?=[\s/>])(?:[^<>"']|"[^"]*"|'[^']*')*>/gi;
     HEADING_BOUNDARY = /<\/h[1-6]\s*>|<h[1-6](?=[\s/>])/gi;
     PERMALINK = /<a\b[^<>]*>\s*(?:(?:¶|#|§|🔗|&para;|&#182;|&#x[bB]6;|&sect;)\s*)?<\/a\s*>/gi;
-    NOT_TITLE = ["script", "style", "template", "svg"];
     visibleLength = (h) => h.replace(/<[^<>]*>/g, " ").replace(/\s+/g, " ").trim().length;
     ROLE_MAIN = /\srole\s*=\s*["']?main(?=["'\s/>])/i;
     ROLE_MAIN_TAG = /<([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>])[^<>]*\srole\s*=\s*["']?main(?=["'\s/>])/gi;
@@ -8642,6 +8993,7 @@ ${NUL2}${i}${NUL2}
     MD_LINE_START = /^[\s>]*(?:(?:[-+*]|\d{1,9}[.)])\s+)?(?:#{1,6}\s+)?/;
     MD_DESTINATION = /\]\((?:[^()\s\\]|\\.|\([^()\s]*\))*\)/g;
     MD_MARKUP = /\\(?=[!-/:-@[-`{-~])|!?\[|\]|\*+|`+/g;
+    PROSE_END = /[.!?…:;]["'”’»)\]]*(?:\[[^\]\s]{1,12}\])*$/;
   }
 });
 function add(out, cond, e) {
@@ -9362,7 +9714,7 @@ function pump() {
 async function acquire(limit, signal, cancelled) {
   if (queue.length === 0 && active < limit) active++;
   else {
-    await new Promise((resolve82, reject) => {
+    await new Promise((resolve9, reject) => {
       const onAbort = () => {
         queue.splice(queue.indexOf(waiter), 1);
         reject(cancelled());
@@ -9371,7 +9723,7 @@ async function acquire(limit, signal, cancelled) {
         limit,
         go: () => {
           signal?.removeEventListener("abort", onAbort);
-          resolve82();
+          resolve9();
         }
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -9703,16 +10055,19 @@ init_locale();
 init_exec2();
 init_brand();
 init_exec2();
-init_brand();
+init_forge_host();
 init_text();
 var STALE_STAGING_MS = 24 * 60 * 60 * 1e3;
 init_brand();
 init_exec2();
 init_fetch();
+init_forge_host();
 init_retry();
 init_text();
+init_trim();
 var MAX_BODY_BYTES = 4 * 1024 * 1024;
 init_fetch();
+init_trim();
 var NPM_TIME_TAIL_FIRST_BYTES = 256 * 1024;
 var NPM_TIME_TAIL_BYTES = 2 * 1024 * 1024;
 init_charset();
@@ -9721,7 +10076,6 @@ init_fetch();
 var ROBOTS_TTL_MS = 24 * 60 * 60 * 1e3;
 var UNREACHABLE_TTL_MS = 5 * 60 * 1e3;
 init_entities();
-init_fetch();
 init_html();
 init_charset();
 init_fetch();
@@ -9862,8 +10216,8 @@ function rootElement(xml) {
   }
 }
 var NOT_THE_PAGE = /* @__PURE__ */ new Set(["self", "edit", "replies", "enclosure", "via", "related", "license"]);
-function itemUrl(block, base2) {
-  const links = openTags(block, "link").map(htmlAttributes);
+function itemUrl(block, base2, link = "link") {
+  const links = openTags(block, link).map(htmlAttributes);
   const hrefOf = (attrs) => {
     const href2 = attrs.get("href");
     return href2 ? decodeEntities(href2).trim() : void 0;
@@ -9872,7 +10226,7 @@ function itemUrl(block, base2) {
   const pick2 = links.find((a) => hrefOf(a) && (rels(a).length === 0 || rels(a).includes("alternate"))) ?? links.find((a) => hrefOf(a) && !rels(a).some((r) => NOT_THE_PAGE.has(r))) ?? links.find((a) => hrefOf(a));
   const href = pick2 && hrefOf(pick2);
   if (href) return resolveUrl2(href, base2);
-  const text = tagText(block, "link");
+  const text = tagText(block, link);
   if (text) return resolveUrl2(text, base2);
   const guid = elements(block, "guid", 1)[0];
   if (!guid || htmlAttributes(guid.attrs).get("ispermalink")?.toLowerCase() === "false") return void 0;
@@ -9890,22 +10244,23 @@ function parseFeed(xml, baseUrl) {
   const kind = root === "rss" || /(^|:)rdf$/.test(root) ? "rss" : /(^|:)feed$/.test(root) ? "atom" : void 0;
   if (!kind) return void 0;
   const atom = kind === "atom";
+  const a = (name) => atom ? root.slice(0, root.lastIndexOf(":") + 1) + name : name;
   const rootTag = atom ? openTags(xml, root)[0] : void 0;
   const feedBase = rootTag ? xmlBase(rootTag, baseUrl) : baseUrl;
-  const blocks2 = elements(xml, atom ? "entry" : "item");
+  const blocks2 = elements(xml, atom ? a("entry") : "item");
   const items = [];
   for (const block of blocks2) {
     const inner2 = block.inner;
     const it = {};
-    const title2 = proseText(inner2, atom, "title");
+    const title2 = proseText(inner2, atom, a("title"));
     if (title2) it.title = title2;
-    const url = itemUrl(inner2, atom ? xmlBase(block.attrs, feedBase) : feedBase);
+    const url = itemUrl(inner2, atom ? xmlBase(block.attrs, feedBase) : feedBase, a("link"));
     if (url) it.url = url;
-    const published = tagText(inner2, "pubDate", "published", "updated", "dc:date");
+    const published = tagText(inner2, "pubDate", a("published"), a("updated"), "dc:date");
     if (published) it.published = published;
-    const summary = proseText(inner2, atom, "description", "summary") ?? clip2(proseText(inner2, atom, "content", "content:encoded"));
+    const summary = proseText(inner2, atom, "description", a("summary")) ?? clip2(proseText(inner2, atom, a("content"), "content:encoded"));
     if (summary) it.summary = summary;
-    const id = tagText(inner2, "guid", "id");
+    const id = tagText(inner2, "guid", a("id"));
     if (id) it.id = id;
     if (it.title || it.url) items.push(it);
   }
@@ -9916,7 +10271,7 @@ function parseFeed(xml, baseUrl) {
     last = b.to;
   }
   head += xml.slice(last);
-  const title = proseText(head, atom, "title");
+  const title = proseText(head, atom, a("title"));
   return { kind, items, ...title ? { title } : {} };
 }
 function parseJsonFeed(text, baseUrl) {
@@ -10118,13 +10473,14 @@ init_brand();
 init_fetch();
 init_firecrawl();
 init_locale();
+init_trim();
 init_url();
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 var PROBE_TIMEOUT_MS4 = 2e3;
 function searxngBase(opts = {}) {
   const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
-  return raw.replace(/\/+$/, "");
+  return trimTrailing(raw, "/");
 }
 function searxngIsExplicit(opts = {}) {
   return !!(opts.searxng ?? env("SEARXNG"));
@@ -10156,19 +10512,15 @@ init_brand();
 init_mode();
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
-  return namedCacheDir() ?? join13(tmpdir5(), userScoped(brand().name), "cache");
+  return namedCacheDir() ?? userTmpDir("cache");
 }
 var namedCacheDir = () => env("CACHE_DIR") ?? brand().cacheDir;
-function userScoped(name) {
-  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
-  return uid === void 0 ? name : `${name}-${uid}`;
-}
 function cachePath(url, acceptLanguage = "", extractor = "native", variant = "") {
   const canon = canonicalizeUrl(url);
   const domain = domainOf(url).replace(/[^a-z0-9.-]/gi, "_") || "url";
   const ns = extractor === "browser" ? "browser\0no-overlays" : extractor;
   const key = `${canon}\0${acceptLanguage}\0${ns}${variant ? `\0${variant}` : ""}`;
-  return join13(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
+  return join14(cacheDir(), `${domain}-${fnv1a64(key).toString(16)}.json`);
 }
 var TEXT_VARIANTS = ["", "consent", "full"];
 var MARKDOWN_VARIANTS = ["md", "consent-md", "full-md"];
@@ -10198,18 +10550,23 @@ function namespaceFor(result, predicted) {
   if (predicted === VIDEO_CACHE_NS && result.documentType !== "video") return result.extractor ?? "native";
   return result.documentType ?? (predicted === PDF_CACHE_NS || predicted === DOC_CACHE_NS || predicted === VIDEO_CACHE_NS ? predicted : result.extractor ?? "native");
 }
-function readAnyNamespace(url, acceptLanguage, namespaces = WRITTEN_NAMESPACES, variants = PLAIN) {
-  let best;
+function readAnyNamespace(read3, namespaces = WRITTEN_NAMESPACES, variants = PLAIN) {
+  const found = [];
   for (const ns of namespaces) {
     for (const variant of splitByVariant(ns) ? variants : PLAIN) {
-      const hit = readCache(url, acceptLanguage, ns, variant);
-      if (hit && (!best || hit.cachedAt > best.cachedAt)) best = hit;
+      const at = read3.meta(ns, variant)?.entry.cachedAt;
+      if (at !== void 0) found.push([ns, variant, at]);
     }
   }
-  return best;
+  for (const [ns, variant] of found.sort((a, b) => b[2] - a[2])) {
+    const hit = read3.entry(ns, variant);
+    if (hit) return hit;
+  }
+  return void 0;
 }
 function readAnyCopy(url, acceptLanguage, variant) {
-  return readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, [variant]) ?? readAnyNamespace(url, acceptLanguage, WRITTEN_NAMESPACES, sameFormat(variant));
+  const read3 = cacheReader(url, acceptLanguage);
+  return readAnyNamespace(read3, WRITTEN_NAMESPACES, [variant]) ?? readAnyNamespace(read3, WRITTEN_NAMESPACES, sameFormat(variant));
 }
 function ttlMs() {
   const fallback2 = brand().cacheTtlMs ?? DEFAULT_TTL_MS;
@@ -10240,13 +10597,40 @@ function entryPaths(url, acceptLanguage, extractor, variant) {
   const meta = cachePath(url, acceptLanguage, extractor, splitByVariant(extractor) ? variant : "");
   return { meta, body: meta.replace(/\.json$/, ".body") };
 }
-function readCache(url, acceptLanguage = "", extractor = "native", variant = "") {
-  if (!entryDir(false)) return void 0;
+function cacheReader(url, acceptLanguage = "") {
+  const open2 = entryDir(false) !== void 0;
+  const metas = /* @__PURE__ */ new Map();
+  const entries = /* @__PURE__ */ new Map();
+  const keyOf = (ns, variant) => `${ns}\0${splitByVariant(ns) ? variant : ""}`;
+  const meta = (ns, variant) => {
+    const key = keyOf(ns, variant);
+    if (!metas.has(key)) metas.set(key, open2 ? readCacheMeta(url, acceptLanguage, ns, variant) : void 0);
+    return metas.get(key);
+  };
+  return {
+    meta,
+    entry(ns, variant) {
+      const key = keyOf(ns, variant);
+      if (!entries.has(key)) {
+        const m = meta(ns, variant);
+        entries.set(key, m && readCacheBody(m));
+      }
+      return entries.get(key);
+    }
+  };
+}
+function readCacheMeta(url, acceptLanguage, extractor, variant) {
   const { meta, body } = entryPaths(url, acceptLanguage, extractor, variant);
   if (!existsSync9(meta)) return void 0;
   try {
     const entry = JSON.parse(readFileSync9(meta, "utf8"));
-    if (typeof entry.cachedAt !== "number") return void 0;
+    return typeof entry.cachedAt === "number" ? { entry, body } : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function readCacheBody({ entry, body }) {
+  try {
     const text = existsSync9(body) ? readFileSync9(body, "utf8") : entry.text;
     if (!text?.trim()) return void 0;
     return { ...entry, text };
@@ -10382,17 +10766,18 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
   return res;
 }
 function lookup(url, acceptLanguage, ns, variant, browserFallback = false) {
-  const own = lookupOwn(url, acceptLanguage, ns, variant);
+  const read3 = cacheReader(url, acceptLanguage);
+  const own = lookupOwn(read3, ns, variant);
   const best = browserFallback && own && wouldRender(own) ? void 0 : own;
-  const rendered = browserFallback ? readCache(url, acceptLanguage, "browser", variant) : void 0;
+  const rendered = browserFallback ? read3.entry("browser", variant) : void 0;
   return rendered && (!best || rendered.cachedAt > best.cachedAt) ? rendered : best;
 }
 var wouldRender = (entry) => !entry.browserTried && !entry.documentType && ["native", "firecrawl"].includes(entry.extractor ?? "native") && worthRendering(entry) !== void 0;
-function lookupOwn(url, acceptLanguage, ns, variant) {
-  const best = readAnyNamespace(url, acceptLanguage, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
-  if (ns === VIDEO_CACHE_NS && !best) return readCache(url, acceptLanguage, "native", variant);
+function lookupOwn(read3, ns, variant) {
+  const best = readAnyNamespace(read3, [.../* @__PURE__ */ new Set([ns, ...DOCUMENT_NAMESPACES])], [variant]);
+  if (ns === VIDEO_CACHE_NS && !best) return read3.entry("native", variant);
   if (ns !== "firecrawl") return best;
-  const fallback2 = readCache(url, acceptLanguage, "native", variant);
+  const fallback2 = read3.entry("native", variant);
   return fallback2?.fallbackFrom === "firecrawl" && (!best || fallback2.cachedAt > best.cachedAt) ? fallback2 : best;
 }
 var ORPHAN_GRACE_MS = 10 * 60 * 1e3;
@@ -10429,7 +10814,7 @@ services:
     image: qdrant/qdrant:v1.18.2
     container_name: skills-qdrant
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - qdrant:/qdrant/storage
     restart: unless-stopped
@@ -10449,7 +10834,7 @@ services:
     image: ollama/ollama:0.30.7
     container_name: skills-ollama
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped
@@ -10468,7 +10853,7 @@ services:
     image: searxng/searxng:2026.6.11-a1490676e
     container_name: skills-searxng
     ports:
-      - "8888:8080"
+      - "127.0.0.1:8888:8080"
     environment:
       - SEARXNG_BASE_URL=http://localhost:8888/
     volumes:
@@ -10497,7 +10882,7 @@ services:
     image: ghcr.io/firecrawl/firecrawl:2.10.5@sha256:8ce1af201332e1de046d70d5d516fbfe7f0f6229820d271d880873eeca531ea6
     container_name: skills-firecrawl
     ports:
-      - "3002:3002"
+      - "127.0.0.1:3002:3002"
     env_file:
       - ./docker/firecrawl/firecrawl.env
     environment:
@@ -10656,11 +11041,11 @@ function renderAsset(template) {
   return template.replaceAll("{{CLI}}", brand().cli);
 }
 function composeAssets() {
-  const base2 = join14(cacheDir(), "compose");
+  const base2 = join15(cacheDir(), "compose");
   return [
-    { path: join14(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
-    { path: join14(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
-    { path: join14(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
+    { path: join15(base2, "docker-compose.yml"), content: renderAsset(COMPOSE_YAML) },
+    { path: join15(base2, "docker", "searxng", "settings.yml"), content: renderAsset(SEARXNG_SETTINGS_YAML) },
+    { path: join15(base2, "docker", "firecrawl", "firecrawl.env"), content: renderAsset(FIRECRAWL_ENV) }
   ];
 }
 function ensureComposeMaterialized() {
@@ -10680,12 +11065,12 @@ function untrustedStack() {
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
   if (uid === void 0) return void 0;
-  const root = resolve5(cacheDir());
+  const root = resolve6(cacheDir());
   const chosen = !!(env("CACHE_DIR") ?? brand().cacheDir);
   const top = chosen ? root : dirname2(root);
   const paths = /* @__PURE__ */ new Set();
   for (const a of assets) {
-    for (let p = resolve5(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
+    for (let p = resolve6(a.path); p !== top && p !== dirname2(p); p = dirname2(p)) paths.add(p);
   }
   for (const p of [top, ...paths]) {
     try {
@@ -10742,11 +11127,16 @@ function defaultHas(cmd) {
 var STACKS = {
   searxng: {
     profiles: ["search"],
-    summary: "SearXNG is up (:8888) \u2014 keyless discovery, JSON API enabled."
+    summary: "SearXNG is up (:8888) \u2014 keyless discovery, JSON API enabled.",
+    ports: [[8888, "SearXNG", "SEARXNG"]]
   },
   firecrawl: {
     profiles: ["search", "extract"],
     summary: "Firecrawl is up (:3002 \xB7 playwright \xB7 redis \xB7 rabbitmq \xB7 postgres), with SearXNG behind it.",
+    ports: [
+      [8888, "SearXNG", "SEARXNG"],
+      [3002, "Firecrawl", "FIRECRAWL"]
+    ],
     postUp: () => [
       "  keyless: USE_DB_AUTHENTICATION=false \u2014 no API key is sent or needed.",
       "  effect:  pages are now cleaned by a real browser; --firecrawl off opts out."
@@ -10755,6 +11145,10 @@ var STACKS = {
   semantic: {
     profiles: ["semantic"],
     summary: "Qdrant (:6333) and Ollama (:11434) are up.",
+    ports: [
+      [6333, "Qdrant", "QDRANT"],
+      [11434, "Ollama", "OLLAMA"]
+    ],
     postUp: (file, run) => {
       const model = embedModel();
       const pull = run("docker", ["compose", "-f", file, "exec", "-T", "ollama", "ollama", "pull", model], { timeoutMs: MODEL_PULL_TIMEOUT_MS, capture: true });
@@ -10764,6 +11158,12 @@ var STACKS = {
   all: {
     profiles: ["all", "extract"],
     summary: "The whole stack is up (Qdrant \xB7 Ollama \xB7 SearXNG \xB7 Firecrawl).",
+    ports: [
+      [6333, "Qdrant", "QDRANT"],
+      [11434, "Ollama", "OLLAMA"],
+      [8888, "SearXNG", "SEARXNG"],
+      [3002, "Firecrawl", "FIRECRAWL"]
+    ],
     postUp: (file, run) => STACKS.semantic.postUp(file, run)
   }
 };
@@ -10775,6 +11175,7 @@ function combine(names) {
   return {
     profiles: [...new Set(found.flatMap((x) => x.profiles))],
     summary: found.map((x) => x.summary).join("\n  "),
+    ports: [...new Map(found.flatMap((x) => x.ports).map((p) => [p[0], p])).values()],
     postUp: (file, run) => found.flatMap((x) => x.postUp?.(file, run) ?? [])
   };
 }
@@ -10833,25 +11234,15 @@ ${pulled.stderr}` : ""}`, code: 1 };
   const up = run("docker", ["compose", "-f", file, ...profiles, "up", "-d", "--wait"], { timeoutMs: UP_TIMEOUT_MS });
   if (!up.ok) {
     const why = up.timedOut ? ` \u2014 the services were not healthy within ${UP_TIMEOUT_MS / 1e3}s` : "";
-    return { message: `${tag2}: up failed${why}.${up.stderr ? `
+    const taken = up.timedOut ? "" : `
+  a port already taken? ${spec.ports.map(([port, name, variable]) => `:${port} (${name}, ${envName(variable)})`).join(", ")} \u2014 stop what holds it, or point that variable at it and leave this service down.`;
+    return { message: `${tag2}: up failed${why}.${taken}${up.stderr ? `
 ${up.stderr}` : ""}`, code: 1 };
   }
   return { message: [`${tag2}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
 }
 init_pool();
-var chains = /* @__PURE__ */ new Map();
-function withRunLock(slug, fn) {
-  const prev = chains.get(slug) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  const tail = next.then(noop, noop);
-  chains.set(slug, tail);
-  tail.then(() => {
-    if (chains.get(slug) === tail) chains.delete(slug);
-  }, noop);
-  return next;
-}
-function noop() {
-}
+init_run_lock();
 init_no_write();
 init_no_write();
 function pad(n) {
@@ -10881,7 +11272,6 @@ init_markdown2();
 init_url();
 var nextFree = /* @__PURE__ */ new Map();
 var holdUntil = /* @__PURE__ */ new Map();
-var MAX_TIMER_MS = 2 ** 31 - 1;
 async function sleepFor(ms, signal) {
   for (let left = ms; left > 0 && !signal?.aborted; left -= MAX_TIMER_MS) await sleep(Math.min(left, MAX_TIMER_MS), signal);
 }
@@ -10918,12 +11308,24 @@ async function awaitHostSlot(url, delayMs = hostDelayMs(), now = Date.now(), sig
 init_brand();
 init_fetch();
 init_pool();
+init_trim();
 init_brand();
 init_fetch();
 init_rank();
+init_trim();
 var TOKEN_RE2 = /\[([^\]\n]+)\](?!\()/g;
 function stripHtmlComments(text) {
-  return text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
+  let out = "";
+  let from = 0;
+  for (; ; ) {
+    const open2 = text.indexOf("<!--", from);
+    if (open2 < 0) break;
+    const close = text.indexOf("-->", open2 + 4);
+    if (close < 0) break;
+    out += text.slice(from, open2) + text.slice(open2, close + 3).replace(/[^\n]/g, " ");
+    from = close + 3;
+  }
+  return out + text.slice(from);
 }
 function stripInlineCode(line) {
   return line.replace(/`[^`\n]*`/g, " ");
@@ -11046,15 +11448,18 @@ function assertWorkflowSafe(script, phaseName) {
 }
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
-  const scriptPath = join16(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
+  const scriptPath = join17(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
   const script = [
     `export const meta = ${JSON.stringify(meta)}`,
     ``,
-    `// NOT a plain Node script: launch it with the Workflow tool \u2014`,
+    `// Optional Claude Code fast path \u2014 NOT a plain Node script: launch it with the`,
+    `// Workflow tool for a one-call parallel fan-out:`,
     `// Workflow({ scriptPath: ${JSON.stringify(scriptPath)} }).`,
+    `// Any other host: dispatch one subagent per batch with`,
+    `// ${join17(runAbs, "orchestration", "agents", `${emission.role}.md`)}, or follow RUNBOOK.md alone.`,
     `//`,
     `// Emitted by \`${cli} orchestrate\` from the CURRENT worklist. The worklist is the`,
     `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${phase.name}\``,
@@ -11106,8 +11511,9 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
   if (preamble.length) lines.push(...preamble, ``);
   lines.push(
     `The subagents return fragments; **you** are the sole writer. Each phase below`,
-    `either fans out through its \`*.workflow.mjs\` or runs sequentially here \u2014 the`,
-    `fold at the end of a phase is yours either way.`,
+    `fans out through its \`agents/<role>.md\` contract \u2014 one subagent per batch, on`,
+    `any host that has subagents \u2014 or runs sequentially here. The fold at the end`,
+    `of a phase is yours either way.`,
     ``
   );
   phases.forEach((ph, i) => {
@@ -11126,10 +11532,13 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
       const batches = phaseBatches(ph, emission, smallWorklist);
       const widest = batches.reduce((w, b) => Math.max(w, b.length), 0);
       lines.push(
-        `Fan out: \`Workflow({ scriptPath: "${join16(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\``,
-        `(${batches.length} agent(s) of at most ${widest} item(s), contract \`agents/${emission.role}.md\`).`,
+        `Fan out: dispatch one subagent per batch with the contract \`agents/${emission.role}.md\``,
+        `(${batches.length} agent(s) of at most ${widest} item(s)): ${batches.map((b) => shq(b.join(","))).join(" \xB7 ")}.`,
         ``,
         `Sequentially instead: play \`agents/${emission.role}.md\` yourself over ${shq(ph.ids.join(","))}.`,
+        ``,
+        `Optional \u2014 Claude Code: launch \`${ph.name}.workflow.mjs\` (emitted unless \`--eco\`) with the`,
+        `Workflow tool for one-call parallel fan-out \u2014 \`Workflow({ scriptPath: "${join17(runAbs, "orchestration", `${ph.name}.workflow.mjs`)}" })\`.`,
         ``,
         `Then fold, as the sole writer:`,
         ``,
@@ -11142,9 +11551,9 @@ function runbookMd(phases, defs, runAbs, engineAbs, cli, preamble = [], smallWor
 `;
 }
 function listPhases(runDir, engineAbs, defs) {
-  const run = resolve6(runDir);
+  const run = resolve7(runDir);
   return defs.map((def) => {
-    const worklist = join17(run, def.worklist);
+    const worklist = join18(run, def.worklist);
     const parsed = readJsonSafe(worklist);
     const ids = def.ids(parsed, run, engineAbs);
     const ready = ids !== void 0;
@@ -11160,7 +11569,7 @@ function listPhases(runDir, engineAbs, defs) {
   });
 }
 function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
-  const run = resolve6(runDir);
+  const run = resolve7(runDir);
   if (!existsSync11(run)) {
     return { exitCode: 2, written: [], notices: [], errors: [`run dir not found: ${run}`], phases: [] };
   }
@@ -11190,14 +11599,14 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
     }
     selected = [ph];
   }
-  const orchDir = join17(run, "orchestration");
-  const agentsDir = join17(orchDir, "agents");
-  ensureDir(join17(orchDir, "out"));
+  const orchDir = join18(run, "orchestration");
+  const agentsDir = join18(orchDir, "agents");
+  ensureDir(join18(orchDir, "out"));
   ensureDir(agentsDir);
   const written = [];
   const notices = [];
   for (const [name, content] of Object.entries(contracts(run, engineAbs, phases))) {
-    written.push(writeArtifact(join17(agentsDir, `${name}.md`), content));
+    written.push(writeArtifact(join18(agentsDir, `${name}.md`), content));
   }
   if (!opts.eco) {
     for (const ph of selected) {
@@ -11211,10 +11620,10 @@ function orchestrateRun(runDir, engineAbs, defs, contracts, opts = {}) {
       if (ph.items <= floor) {
         notices.push(`phase "${ph.name}": only ${ph.items} item(s) \u2014 the sequential --eco path is equivalent and cheaper.`);
       }
-      written.push(writeArtifact(join17(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
+      written.push(writeArtifact(join18(orchDir, `${ph.name}.workflow.mjs`), emitWorkflowScript(ph, def, run, engineAbs, small, opts.constants)));
     }
   }
-  written.push(writeArtifact(join17(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
+  written.push(writeArtifact(join18(orchDir, "RUNBOOK.md"), runbookMd(phases, defs, run, engineAbs, brand().cli, opts.runbookPreamble, small)));
   return { exitCode: 0, written, notices, errors: [], phases };
 }
 init_cli_kit();
@@ -11316,18 +11725,18 @@ var URI_SCHEME = "skill://";
 function resolveSkillRoot(moduleDir) {
   const here = moduleDir ?? dirname3(fileURLToPath(import.meta.url));
   const name = brand().name;
-  const candidates2 = [resolve7(here, ".."), resolve7(here, "..", "skills", name), resolve7(here, "..", "..", "skills", name)];
-  return candidates2.find((dir) => existsSync12(join18(dir, "SKILL.md")));
+  const candidates2 = [resolve8(here, ".."), resolve8(here, "..", "skills", name), resolve8(here, "..", "..", "skills", name)];
+  return candidates2.find((dir) => existsSync12(join19(dir, "SKILL.md")));
 }
 function listResources(moduleDir) {
   const root = resolveSkillRoot(moduleDir);
   if (!root) return [];
   const out = [describe(root, "SKILL.md", `${skillName()}: the skill`)];
-  const refDir = join18(root, "references");
+  const refDir = join19(root, "references");
   if (!existsSync12(refDir)) return out;
   for (const file of readdirSync8(refDir).sort()) {
     if (!file.endsWith(".md")) continue;
-    out.push(describe(root, join18("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
+    out.push(describe(root, join19("references", file), `${skillName()} reference: ${basename4(file, ".md")}`));
   }
   return out;
 }
@@ -11339,7 +11748,7 @@ function readResource(uri, moduleDir) {
   if (!root) throw new ResourceError("no skill payload found next to this build \u2014 nothing to read");
   const rel = uri.slice(URI_SCHEME.length);
   if (!rel) throw new ResourceError("empty resource path");
-  const target = resolve7(root, rel);
+  const target = resolve8(root, rel);
   const served = relative(root, target).split(sep2).join("/");
   if (served !== "SKILL.md" && !/^references\/[^/]+\.md$/.test(served)) {
     throw new ResourceError(`not a resource this server serves: ${uri} (resources/list names them)`);
@@ -11366,7 +11775,7 @@ function describe(root, rel, fallbackTitle) {
     title: fallbackTitle,
     mimeType: "text/markdown"
   };
-  const summary = firstProse(join18(root, rel));
+  const summary = firstProse(join19(root, rel));
   if (summary) decl.description = summary;
   return decl;
 }
@@ -11411,6 +11820,14 @@ function createServer(adapter, opts = {}) {
     if (msg.method === void 0 && ("result" in msg || "error" in msg)) return;
     if (msg.id !== void 0 && msg.id !== null && typeof msg.id !== "string" && typeof msg.id !== "number") {
       send({ jsonrpc: "2.0", id: null, error: { code: ERR_INVALID_REQUEST, message: "invalid request: `id` must be a string or a number" } });
+      return;
+    }
+    if (msg.id === null && typeof msg.method === "string" && !msg.method.startsWith("notifications/")) {
+      send({
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: ERR_INVALID_REQUEST, message: "invalid request: `id` must not be null \u2014 omit it to send a notification" }
+      });
       return;
     }
     if (msg.id === void 0 || msg.id === null) {
@@ -11604,6 +12021,39 @@ function errMessage(e) {
   return e instanceof Error ? e.message : String(e);
 }
 var MAX_IN_FLIGHT = 4;
+function toolSlots(max = MAX_IN_FLIGHT) {
+  let active22 = 0;
+  const waiting = [];
+  return {
+    acquire(signal) {
+      return new Promise((resolve9) => {
+        const take = () => {
+          active22++;
+          let given = false;
+          resolve9(() => {
+            if (given) return;
+            given = true;
+            active22--;
+            waiting.shift()?.();
+          });
+        };
+        if (active22 < max) return take();
+        if (signal?.aborted) return resolve9(void 0);
+        const leave = () => {
+          const at = waiting.indexOf(wake);
+          if (at >= 0) waiting.splice(at, 1);
+          resolve9(void 0);
+        };
+        const wake = () => {
+          signal?.removeEventListener("abort", leave);
+          take();
+        };
+        waiting.push(wake);
+        signal?.addEventListener("abort", leave, { once: true });
+      });
+    }
+  };
+}
 async function runStdioServer(adapter, opts = {}) {
   const input = opts.input ?? process.stdin;
   const output = opts.output ?? process.stdout;
@@ -11635,7 +12085,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve82) => waiting.push(resolve82));
+      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve9) => waiting.push(resolve9));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -11725,8 +12175,9 @@ async function startHttpServer(adapter, opts = {}) {
     );
   }
   const { createServer: createHttpServer } = await import("http");
+  const slots = toolSlots();
   const server = createHttpServer((req, res) => {
-    void route(req, res, adapter, opts).catch((e) => {
+    void route(req, res, adapter, opts, slots).catch((e) => {
       if (res.headersSent) {
         res.destroy();
         return;
@@ -11737,14 +12188,14 @@ async function startHttpServer(adapter, opts = {}) {
   server.requestTimeout = REQUEST_TIMEOUT_MS2;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve82, reject) => {
+  return new Promise((resolve9, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve82({
+      resolve9({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -11756,7 +12207,7 @@ async function startHttpServer(adapter, opts = {}) {
     });
   });
 }
-async function route(req, res, adapter, opts) {
+async function route(req, res, adapter, opts, slots) {
   const path = (req.url ?? "").split("?")[0];
   const origin = header(req, "origin");
   if (!isOriginAllowed(origin, opts.allowOrigin)) {
@@ -11837,6 +12288,16 @@ async function route(req, res, adapter, opts) {
   res.on("close", () => {
     if (!res.writableFinished) lost.abort();
   });
+  const handle = async (m, reply, o) => {
+    if (m?.method !== "tools/call") return mcp.handle(m, reply, o);
+    const release = await slots.acquire(lost.signal);
+    if (!release) return;
+    try {
+      await mcp.handle(m, reply, o);
+    } finally {
+      release();
+    }
+  };
   const single = Array.isArray(parsed) ? void 0 : parsed;
   const token = single?.params?._meta;
   const asked = typeof single?.id === "string" || typeof single?.id === "number";
@@ -11848,14 +12309,14 @@ data: ${JSON.stringify(m)}
 
 `);
     };
-    await mcp.handle(single, event, { signal: lost.signal, notify: event });
+    await handle(single, event, { signal: lost.signal, notify: event });
     res.end();
     return;
   }
   const out = [];
   const collect = (m) => void out.push(m);
   const messages = Array.isArray(parsed) ? parsed : [parsed];
-  for (const m of messages) await mcp.handle(m, collect, { signal: lost.signal, notify: () => {
+  for (const m of messages) await handle(m, collect, { signal: lost.signal, notify: () => {
   } });
   if (out.length === 0) {
     res.writeHead(202, corsHeaders(origin));
@@ -11889,7 +12350,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
-  return new Promise((resolve82, reject) => {
+  return new Promise((resolve9, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -11913,7 +12374,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve82(Buffer.concat(chunks).toString("utf8"));
+      else resolve9(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -11922,11 +12383,11 @@ function readBody(req) {
 
 // src/stack.ts
 import { homedir as homedir3 } from "os";
-import { join as join4 } from "path";
+import { join as join5 } from "path";
 function withStackCache(action) {
   const key = brand().envPrefix + "_CACHE_DIR";
   const saved2 = process.env[key];
-  process.env[key] = process.env.ULTRA_STACK_CACHE_DIR || join4(homedir3(), ".cache", "skills");
+  process.env[key] = process.env.ULTRA_STACK_CACHE_DIR || join5(homedir3(), ".cache", "skills");
   try {
     return action();
   } finally {
@@ -12068,7 +12529,7 @@ var searxngBackend = async (ctx) => {
       backend: "searxng",
       items: [],
       notes: [
-        explicit ? `SearXNG not reachable at ${base2}. Skipping; consider your own WebSearch.` : `SearXNG not running at ${base2} \u2014 start it with \`ultrasearch searxng up\` for a local, keyless discovery backend. Skipping.`
+        explicit ? `SearXNG not reachable at ${base2}. Skipping; consider your own web search.` : `SearXNG not running at ${base2} \u2014 start it with \`ultrasearch searxng up\` for a local, keyless discovery backend. Skipping.`
       ]
     };
   }
@@ -12088,7 +12549,7 @@ var searxngBackend = async (ctx) => {
         return {
           backend: "searxng",
           items: [],
-          notes: [`SearXNG ${why} at ${base2}. Skipping; consider your own WebSearch.`]
+          notes: [`SearXNG ${why} at ${base2}. Skipping; consider your own web search.`]
         };
       }
       break;
@@ -12190,7 +12651,7 @@ var duckduckgoBackend = async (ctx) => {
     const r = await httpGet(url, { accept: "text/html", acceptLanguage, timeoutMs: 12e3 });
     if (!r.ok || !r.body) {
       if (p === 0) {
-        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) \u2014 consider your own WebSearch` : `unreachable (status ${r.status})`;
+        const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status}) \u2014 consider your own web search` : `unreachable (status ${r.status})`;
         return { backend: "duckduckgo", items: [], notes: [`DuckDuckGo ${why}.`] };
       }
       break;
@@ -13226,7 +13687,7 @@ function postText(summary) {
   return (summary ?? "").replace(/\s*submitted by\s+\/u\/\S+[\s\S]*$/i, "").trim();
 }
 function fallback(q) {
-  return `Search it with your own WebSearch instead \u2014 \`site:reddit.com ${q}\` \u2014 and ingest the threads that matter.`;
+  return `Search it with your own web search instead \u2014 \`site:reddit.com ${q}\` \u2014 and ingest the threads that matter.`;
 }
 var redditBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
@@ -13276,7 +13737,7 @@ ${comments.join("\n")}`;
 }
 
 // src/codes.ts
-import { join as join5 } from "path";
+import { join as join6 } from "path";
 var KEYWORDS = [
   // en
   "promotional code",
@@ -13791,7 +14252,7 @@ function writeCodes(dir, sources, manifest) {
     candidates: candidates2,
     expired
   };
-  writeArtifact(join5(dir, "codes.json"), JSON.stringify(file, null, 2));
+  writeArtifact(join6(dir, "codes.json"), JSON.stringify(file, null, 2));
   const out = [
     "## Candidate codes (extracted \u2014 UNVERIFIED)",
     "",
@@ -14095,7 +14556,7 @@ async function get(url, lang, region) {
   return httpGet(url, { accept: "text/html", acceptLanguage: acceptLanguageHeader(lang, region), userAgent: browserUa(), retries: 0, timeoutMs: 15e3 });
 }
 function websearchHint(host, q) {
-  return `Search it with your own WebSearch instead \u2014 \`site:${host.replace(/^www\./, "")} ${q}\`.`;
+  return `Search it with your own web search instead \u2014 \`site:${host.replace(/^www\./, "")} ${q}\`.`;
 }
 var pepperBackend = async (ctx) => {
   const found = pepperSiteFor(ctx.options.lang, ctx.options.region);
@@ -14151,7 +14612,7 @@ var pepperBackend = async (ctx) => {
 
 // src/backends/registry.ts
 var HANDLERS = {
-  claude: websearchBackend,
+  host: websearchBackend,
   searxng: searxngBackend,
   firecrawl: firecrawlBackend,
   duckduckgo: duckduckgoBackend,
@@ -14184,7 +14645,7 @@ var SINGLE_QUERY = /* @__PURE__ */ new Set([
   "standards",
   "fixture",
   "generic",
-  "claude",
+  "host",
   "reddit",
   "pepper"
 ]);
@@ -14245,7 +14706,7 @@ async function runBackends(kinds, ctx) {
 
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
-import { join as join11 } from "path";
+import { join as join12 } from "path";
 
 // src/authority.ts
 function sourceSignals(opts) {
@@ -14259,7 +14720,7 @@ function sourceSignals(opts) {
 }
 
 // src/extras.ts
-import { join as join6 } from "path";
+import { join as join7 } from "path";
 
 // src/bibtex.ts
 function clean2(s) {
@@ -14310,7 +14771,7 @@ var EXTRAS = {
   bibtex: {
     files: ["refs.bib"],
     write: ({ dir, sources }) => {
-      writeArtifact(join6(dir, "refs.bib"), toBibtex(sources));
+      writeArtifact(join7(dir, "refs.bib"), toBibtex(sources));
       return [];
     }
   },
@@ -14507,7 +14968,7 @@ function renderSourceExtract(s, text, depth, question = "") {
   return head + selectSourcePassages(text, question, depth) + "\n";
 }
 function readSourceText(dir, s) {
-  const p = join11(dir, s.extract);
+  const p = join12(dir, s.extract);
   if (!existsSync4(p)) return s.snippet ?? "";
   const lines = readFileSync6(p, "utf8").split("\n");
   const hasHeader = lines.length >= 3 && lines[0].startsWith("# ") && lines[1].startsWith("- url:") && lines[2].startsWith("- backend:");
@@ -14515,12 +14976,12 @@ function readSourceText(dir, s) {
   return body || s.snippet || "";
 }
 function writeSourceExtract(dir, s, text, depth, question = "") {
-  writeArtifact(join11(dir, s.extract), renderSourceExtract(s, text, depth, question));
+  writeArtifact(join12(dir, s.extract), renderSourceExtract(s, text, depth, question));
 }
 function writeDossierIndex(dir, sources, manifest, template) {
-  const sourcesJson = join11(dir, "sources.json");
-  const dossierMd = join11(dir, "DOSSIER.md");
-  const manifestJson = join11(dir, "manifest.json");
+  const sourcesJson = join12(dir, "sources.json");
+  const dossierMd = join12(dir, "DOSSIER.md");
+  const manifestJson = join12(dir, "manifest.json");
   writeArtifact(sourcesJson, JSON.stringify(sources, null, 2));
   writeArtifact(manifestJson, JSON.stringify(manifest, null, 2));
   const blocks2 = writeExtras(dir, sources, manifest);
@@ -14528,7 +14989,7 @@ function writeDossierIndex(dir, sources, manifest, template) {
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
 function writeDossier(dir, rawSources, manifest, template) {
-  ensureDir(join11(dir, "sources"));
+  ensureDir(join12(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
     const id = `S${i + 1}`;
     const text = rs.text ?? rs.snippet ?? "";
@@ -14541,7 +15002,7 @@ function writeDossier(dir, rawSources, manifest, template) {
 }
 function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   const noWrite = isNoWrite();
-  const enrich = noWrite ? "Search further yourself (your own WebSearch) and read those pages directly" : "Top them up (another WebSearch round + `ingest --run <dir> --web-results <f.json>`)";
+  const enrich = noWrite ? "Search further yourself (your own web search) and read those pages directly" : "Top them up (another web search round + `ingest --run <dir> --web-results <f.json>`)";
   const out = [];
   out.push(`# Search dossier`);
   out.push("");
@@ -14555,7 +15016,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   if (manifest.webSearch) {
     const ws = manifest.webSearch;
     out.push(
-      ws.supplied ? `**WebSearch lane:** ${ws.supplied} agent-supplied hit(s) \u2192 ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "") : `> \u{1F50E} **No WebSearch lane** \u2014 discovery ran on the keyless engines alone, and those are best-effort. If you have a WebSearch tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; next time, pass them to \`gather --web-results\` from the start.`
+      ws.supplied ? `**web-search lane:** ${ws.supplied} agent-supplied hit(s) \u2192 ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "") : `> \u{1F50E} **No web-search lane** \u2014 discovery ran on the keyless engines alone, and those are best-effort. If you have a web search tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; next time, pass them to \`gather --web-results\` from the start.`
     );
     out.push("");
   }
@@ -14628,7 +15089,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   }
   if (sources.length === 0) {
     out.push(
-      noWrite ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._` : `_No sources were retrieved. Search yourself and feed the hits in \u2014 \`gather --web-results <f.json>\`, or \`ingest --run <dir> --web-results <f.json>\` on this dossier \u2014 then widen with \`--search full\`._`
+      noWrite ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own web search._` : `_No sources were retrieved. Search yourself and feed the hits in \u2014 \`gather --web-results <f.json>\`, or \`ingest --run <dir> --web-results <f.json>\` on this dossier \u2014 then widen with \`--search full\`._`
     );
   }
   for (const s of sources) {
@@ -14644,11 +15105,29 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   }
   return out.join("\n");
 }
+var canonicalKind = (b) => typeof b === "string" ? canonicalBackend(b) : b;
+function upgradeLegacySources(sources) {
+  if (Array.isArray(sources)) {
+    for (const s of sources) if (s && typeof s === "object" && "backend" in s) s.backend = canonicalKind(s.backend);
+  }
+  return sources;
+}
+function upgradeLegacyManifest(manifest) {
+  if (!manifest || typeof manifest !== "object") return manifest;
+  const kinds = (list) => Array.isArray(list) ? [...new Set(list.map(canonicalKind))] : list;
+  if (Array.isArray(manifest.backends)) manifest.backends = kinds(manifest.backends);
+  if (Array.isArray(manifest.backendsUsed)) manifest.backendsUsed = kinds(manifest.backendsUsed);
+  if (Array.isArray(manifest.enginesFused)) manifest.enginesFused = kinds(manifest.enginesFused);
+  if (manifest.timings && typeof manifest.timings === "object") {
+    manifest.timings = Object.fromEntries(Object.entries(manifest.timings).map(([k, v]) => [canonicalBackend(k), v]));
+  }
+  return manifest;
+}
 function readDossier(dir) {
-  const sources = readJson3(join11(dir, "sources.json"), "sources.json");
+  const sources = upgradeLegacySources(readJson3(join12(dir, "sources.json"), "sources.json"));
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
-  const manifest = readJson3(join11(dir, "manifest.json"), "manifest.json");
+  const manifest = upgradeLegacyManifest(readJson3(join12(dir, "manifest.json"), "manifest.json"));
   return { sources, manifest };
 }
 
@@ -15154,10 +15633,10 @@ function round4(n) {
 function headingLines(text) {
   return text.split("\n").filter((l) => /^#{1,6}\s/.test(l)).join("\n");
 }
-var ENRICH_NUDGE = "agent: run another WebSearch round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
-var ENRICH_NUDGE_NO_WRITE = "agent: run another WebSearch round at the thin areas and read those pages directly before answering.";
+var ENRICH_NUDGE = "agent: run another web search round at the thin areas and fold the WHOLE round in with `ultrasearch ingest --run <dir> --web-results <f.json>` (one process, not one per URL) before writing the report.";
+var ENRICH_NUDGE_NO_WRITE = "agent: run another web search round at the thin areas and read those pages directly before answering.";
 function defaultRunDir(mode2, question, d) {
-  return join12(tmpdir3(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
+  return join13(tmpdir4(), "ultrasearch", `${mode2}-${slugify(question, RUN_SLUG)}`, runId(d));
 }
 var DISCOVERY = ["searxng", "duckduckgo", "ddglite", "mojeek", "marginalia"];
 var ENGINE_BACKEND = {
@@ -15171,7 +15650,7 @@ var ENGINE_BACKEND = {
 };
 function applyWebEngine(kinds, engine) {
   if (engine === "auto") return kinds;
-  if (engine === "claude") return kinds.filter((k) => !DISCOVERY.includes(k));
+  if (engine === "host") return kinds.filter((k) => !DISCOVERY.includes(k));
   const keep = ENGINE_BACKEND[engine];
   if (kinds.includes(keep)) return kinds.filter((k) => !DISCOVERY.includes(k) || k === keep);
   return [...kinds.filter((k) => !DISCOVERY.includes(k)), keep];
@@ -15208,7 +15687,7 @@ function ignoredByExplicitBackends(options) {
   if ((options.rounds ?? 1) >= 2) out.push("--rounds");
   if (options.webEngine !== "auto") out.push("--web-engine");
   if (options.search && options.search !== "auto") out.push("--search");
-  if (options.webResults?.length && !options.backends.includes("claude")) out.push("--web-results");
+  if (options.webResults?.length && !options.backends.includes("host")) out.push("--web-results");
   return out;
 }
 function resolveSearchProfile(options) {
@@ -15231,7 +15710,7 @@ function resolveBackends(options, mode2) {
   const profile = resolveSearchProfile(options);
   const discovery = profile === "light" ? withEngine.filter((k) => !DISCOVERY.includes(k)) : withEngine;
   const ceiling = profile === "max" ? [...DISCOVERY, "firecrawl"] : [];
-  const lane = options.webResults?.length ? ["claude"] : [];
+  const lane = options.webResults?.length ? ["host"] : [];
   return [.../* @__PURE__ */ new Set([...lane, ...discovery, ...ceiling])];
 }
 var MAX_PROFILE_KNOBS = { pages: 5, webBreadth: 5, rounds: 2, perSource: 50 };
@@ -15606,7 +16085,7 @@ async function runGather(options) {
   }
   const merged = r.merged;
   const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
-  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "claude" || b === "firecrawl"))];
+  const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "host" || b === "firecrawl"))];
   const timings = {};
   for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
   timings.total = Date.now() - t0;
@@ -15616,7 +16095,7 @@ async function runGather(options) {
   const under = underCovered(coverageTerms);
   const ignoredFlags = ignoredByExplicitBackends(options);
   const supplied = options.webResults?.length ?? 0;
-  const laneKept = merged.filter((it) => it.backend === "claude").length;
+  const laneKept = merged.filter((it) => it.backend === "host").length;
   const webSearch = { supplied, rejected: options.webResultsRejected ?? 0, kept: laneKept };
   const bridge = options.stdout ? "and read those pages directly before answering" : "and fold the round in with `ingest --web-results` before writing";
   const searxngResult = results.find((res) => res.backend === "searxng");
@@ -15649,12 +16128,12 @@ async function runGather(options) {
     ...explicit ? [
       `--backends pinned retrieval to ${backends.join(", ")}: the resilient web cascade is OFF` + (ignoredFlags.length ? `, and ${ignoredFlags.join(" / ")} ${ignoredFlags.length > 1 ? "were" : "was"} ignored` : "") + `. Drop --backends to get the auto cascade, seed-domain and gap rounds back.`
     ] : [],
-    // The WebSearch lane, said out loud in every direction. Silence here is
+    // The web-search lane, said out loud in every direction. Silence here is
     // exactly the failure this whole layer exists to fix: the best engine
     // available to the caller going unused, and nothing recording the fact.
     ...webSearch.rejected > 0 ? [`--web-results: ignored ${webSearch.rejected} entr${webSearch.rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`] : [],
-    ...supplied > 0 ? [`WebSearch lane: ${supplied} agent-supplied hit(s), ${laneKept} kept after fusion, hydration and the relevance floor.`] : explicit ? [] : [
-      `No WebSearch lane this run: discovery fell back to the keyless engines, which are best-effort. If you have a WebSearch tool, run it and pass the hits with --web-results <file.json> \u2014 it is the strongest engine available here.`
+    ...supplied > 0 ? [`Web-search lane: ${supplied} agent-supplied hit(s), ${laneKept} kept after fusion, hydration and the relevance floor.`] : explicit ? [] : [
+      `No web-search lane this run: discovery fell back to the keyless engines, which are best-effort. If you have a web search tool, run it and pass the hits with --web-results <file.json> \u2014 it is the strongest engine available here.`
     ],
     // `max` is a promise of the ceiling, and the ceiling includes ~3 GB of
     // containers the engine cannot start for you. A run that asked for max and
@@ -15676,7 +16155,7 @@ async function runGather(options) {
       ] : []
     ] : [],
     ...profile === "light" && !explicit ? [
-      `--search light: the keyless scraped cascade and SearXNG are OFF (the WebSearch lane is the discovery). Firecrawl still extracts. Use --search full to fuse the keyless engines in as well.`,
+      `--search light: the keyless scraped cascade and SearXNG are OFF (the web-search lane is the discovery). Firecrawl still extracts. Use --search full to fuse the keyless engines in as well.`,
       ...seedDomains.length ? [
         `--seed-domains needs a discovery engine to run its site: queries; --search light has none. Use --search full, or pass those pages in --web-results.`
       ] : [],
@@ -15694,7 +16173,7 @@ async function runGather(options) {
     // says what they actually did. Without it a container can be up for weeks,
     // never be queried, and leave no trace of the fact anywhere.
     `Helpers: ${describeServices(services)}`,
-    ...thin ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own WebSearch ${bridge}.`] : [],
+    ...thin ? [`Thin dossier: only ${merged.length} on-topic source(s) (recall floor ${floor}). Enrich the thin areas with your own web search ${bridge}.`] : [],
     ...under.length ? [
       `Under-covered term(s): ${under.join(", ")} \u2014 fewer than ${UNDER_COVERED_MIN} of the top sources mention them. Search these yourself ${bridge}, or say so under "Open questions".`
     ] : [],
@@ -15981,7 +16460,7 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
   if (ncbi) {
     const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
     if (got.ok) {
-      const backend2 = opts.backend ?? "claude";
+      const backend2 = opts.backend ?? "host";
       const raw2 = {
         url: citeUrl,
         title: givenTitle(opts.title) || got.title || titleFromText(got.text) || citeUrl,
@@ -16101,7 +16580,7 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
     if (dup && dup.id !== opts.repairs) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
   if (rendered) meta.extractor = "browser";
-  const backend = opts.backend ?? "claude";
+  const backend = opts.backend ?? "host";
   const raw = {
     url: citeUrl,
     // Never fall back to the URL as a title when the text came from an API
@@ -16118,7 +16597,7 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
 
 // src/render.ts
 import { existsSync as existsSync13, readFileSync as readFileSync14 } from "fs";
-import { join as join15 } from "path";
+import { join as join16 } from "path";
 
 // src/claims.ts
 var SOURCE_RE = /^S\d+$/;
@@ -16489,7 +16968,7 @@ function loadRenderContext(dir) {
   const tiers = [];
   const cited = /* @__PURE__ */ new Set();
   for (const tier of TIERS) {
-    const p = join15(dir, tier.file);
+    const p = join16(dir, tier.file);
     if (!existsSync13(p)) continue;
     const text = readFileSync14(p, "utf8");
     tiers.push({ tier, text });
@@ -16501,7 +16980,7 @@ function toContext(dirOrCtx) {
   return typeof dirOrCtx === "string" ? loadRenderContext(dirOrCtx) : dirOrCtx;
 }
 function readVerify(dir) {
-  const p = join15(dir, "VERIFY.json");
+  const p = join16(dir, "VERIFY.json");
   if (!existsSync13(p)) return void 0;
   try {
     return JSON.parse(readFileSync14(p, "utf8"));
@@ -16622,7 +17101,7 @@ function sourcesSection(sources, cited) {
 function writeHtml(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const html = renderHtml(ctx);
-  const path = out ?? join15(ctx.dir, "index.html");
+  const path = out ?? join16(ctx.dir, "index.html");
   return writeArtifact(path, html);
 }
 function mdLinkText(s) {
@@ -16683,18 +17162,18 @@ function buildReportMarkdown(dirOrCtx) {
 function writeReportMarkdown(dirOrCtx, out) {
   const ctx = toContext(dirOrCtx);
   const md = buildReportMarkdown(ctx);
-  const path = out ?? join15(ctx.dir, "index.md");
+  const path = out ?? join16(ctx.dir, "index.md");
   return writeArtifact(path, md);
 }
 
 // src/check.ts
 import { existsSync as existsSync15, readFileSync as readFileSync16 } from "fs";
-import { join as join20 } from "path";
+import { join as join21 } from "path";
 
 // src/verify.ts
 import { createHash as createHash2 } from "crypto";
 import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync4 } from "fs";
-import { join as join19 } from "path";
+import { join as join20 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function pairFingerprint(claim, extract) {
@@ -16710,7 +17189,7 @@ function claimStrings(text) {
   return out;
 }
 function buildWorklist(dir, opts = {}) {
-  const sources = readJson3(join19(dir, "sources.json"), "sources.json");
+  const sources = upgradeLegacySources(readJson3(join20(dir, "sources.json"), "sources.json"));
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`);
   const byId = new Map(sources.map((s) => [s.id, s]));
@@ -16735,7 +17214,7 @@ function buildWorklist(dir, opts = {}) {
   const pairs = [];
   let claimNo = 0;
   for (const file of HARD_FILES) {
-    const p = join19(dir, file);
+    const p = join20(dir, file);
     if (!existsSync14(p)) continue;
     const text = readFileSync15(p, "utf8");
     for (const { claim, noNumerals } of claimStrings(text)) {
@@ -16797,8 +17276,8 @@ function runVerify(dir, opts = {}) {
   };
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
-  writeArtifact(join19(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join19(dir, mdName), renderWorklistMd(worklist, total, kept));
+  writeArtifact(join20(dir, todoName), JSON.stringify(todo, null, 2));
+  writeArtifact(join20(dir, mdName), renderWorklistMd(worklist, total, kept));
   return worklist;
 }
 function renderWorklistMd(wl, total, kept) {
@@ -16864,7 +17343,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
   if (!opts.strict) {
     for (const name of readdirSync4(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
       try {
-        const todo = JSON.parse(readFileSync15(join19(dir, name), "utf8"));
+        const todo = JSON.parse(readFileSync15(join20(dir, name), "utf8"));
         if (!Array.isArray(todo?.pairs)) continue;
         for (const p of todo.pairs) {
           if (!p || typeof p.claimId !== "string" || typeof p.sourceId !== "string" || !/^[a-f0-9]{32}$/.test(p.fingerprint ?? "")) continue;
@@ -16925,7 +17404,7 @@ function applyVerdicts(dir, verdictsPath) {
   }
   const verdicts = binding.bound;
   const result = reduceVerdicts(verdicts);
-  writeArtifact(join19(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
+  writeArtifact(join20(dir, "VERIFY.json"), JSON.stringify({ ...result, verdicts }, null, 2));
   return result;
 }
 function reduceVerdicts(verdicts) {
@@ -17062,7 +17541,7 @@ function analyzeFile(file, text) {
 }
 function applySemantic(dir, result, requireVerify) {
   const flag = requireVerify ? "--require-verify" : "--semantic";
-  const p = join20(dir, "VERIFY.json");
+  const p = join21(dir, "VERIFY.json");
   if (!existsSync15(p)) {
     result.ok = false;
     result.errors.push(`${flag}: no VERIFY.json \u2014 run \`verify\` then \`verify --apply <verdicts.json>\` before the semantic gate.`);
@@ -17133,7 +17612,7 @@ function applySemantic(dir, result, requireVerify) {
 }
 function readManifestSafe(dir) {
   try {
-    return JSON.parse(readFileSync16(join20(dir, "manifest.json"), "utf8"));
+    return upgradeLegacyManifest(JSON.parse(readFileSync16(join21(dir, "manifest.json"), "utf8")));
   } catch {
     return void 0;
   }
@@ -17141,24 +17620,24 @@ function readManifestSafe(dir) {
 function runCheck(dir, opts = {}) {
   const errors = [];
   const warnings = [];
-  const sourcesPath = join20(dir, "sources.json");
+  const sourcesPath = join21(dir, "sources.json");
   if (!existsSync15(sourcesPath)) {
     return blank(false, [`No sources.json in ${dir} \u2014 run \`ultrasearch gather\` first.`]);
   }
   let sources;
   try {
-    sources = JSON.parse(readFileSync16(sourcesPath, "utf8"));
+    sources = upgradeLegacySources(JSON.parse(readFileSync16(sourcesPath, "utf8")));
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${e.message}`]);
   }
   const identityError = sourceIdentityError(sources);
   if (identityError) return blank(false, [`sources.json in ${dir} ${identityError} \u2014 re-run \`ultrasearch gather\`.`]);
   const ids = new Set(sources.map((s) => s.id));
-  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync15(join20(dir, f)));
+  const present = [...HARD_FILES2, ...SOFT_FILES].filter((f) => existsSync15(join21(dir, f)));
   if (!present.some((f) => HARD_FILES2.includes(f))) {
     return blank(false, [`No REPORT.md in ${dir} \u2014 write the report tier, then re-run check.`]);
   }
-  const analyses = present.map((f) => analyzeFile(f, readFileSync16(join20(dir, f), "utf8")));
+  const analyses = present.map((f) => analyzeFile(f, readFileSync16(join21(dir, f), "utf8")));
   const danglingSet = /* @__PURE__ */ new Set();
   const citedIds = /* @__PURE__ */ new Set();
   let sourceCitations = 0;
@@ -17209,7 +17688,7 @@ function runCheck(dir, opts = {}) {
     if (t === void 0) {
       const s = bySourceId.get(id);
       try {
-        t = s && existsSync15(join20(dir, s.extract)) ? readSourceText(dir, s) : null;
+        t = s && existsSync15(join21(dir, s.extract)) ? readSourceText(dir, s) : null;
       } catch {
         t = null;
       }
@@ -17291,7 +17770,7 @@ function runCheck(dir, opts = {}) {
   const manifest = readManifestSafe(dir);
   if (manifest?.recallFloor) {
     warnings.push(
-      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 run another WebSearch round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`
+      `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) \u2014 run another web search round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`
     );
   }
   if (manifest?.coverage?.under.length) {
@@ -17299,7 +17778,7 @@ function runCheck(dir, opts = {}) {
       `Under-covered question term(s): ${manifest.coverage.under.slice(0, 6).join(", ")} \u2014 the dossier may not support claims about them; enrich with \`fetch --url\` or say so under "Open questions".`
     );
   }
-  if (!hasOpenQuestions(stripHtmlComments(readFileSync16(join20(dir, "REPORT.md"), "utf8")))) {
+  if (!hasOpenQuestions(stripHtmlComments(readFileSync16(join21(dir, "REPORT.md"), "utf8")))) {
     warnings.push(`REPORT.md has no "Open questions" section \u2014 section titles are free, but say what the sources leave open.`);
   }
   if (opts.minSources !== void 0 && sources.length < opts.minSources) {
@@ -17486,7 +17965,7 @@ function refreshed(manifest, sources) {
 
 // src/drop.ts
 import { existsSync as existsSync16, readFileSync as readFileSync17, rmSync as rmSync3 } from "fs";
-import { join as join21 } from "path";
+import { join as join22 } from "path";
 function stripExtractHeader(text) {
   return text.split("\n").filter((l) => !/^# S\d+ — /.test(l) && !/^- (url|backend|doi|via|text via|wayback|authors|venue|year):/i.test(l)).join("\n");
 }
@@ -17533,7 +18012,7 @@ function dropSources(dir, sel) {
   const ids = new Set(dropped.map((d) => d.id));
   const citedBy = [];
   for (const file of TIERS2) {
-    const p = join21(dir, file);
+    const p = join22(dir, file);
     if (!existsSync16(p)) continue;
     const hit = [...citedSourceIds(readFileSync17(p, "utf8"))].filter((id) => ids.has(id));
     if (hit.length) citedBy.push({ file, ids: hit });
@@ -17544,7 +18023,7 @@ function dropSources(dir, sel) {
     if (!isNoWrite()) {
       for (const d of dropped) {
         const s = byId.get(d.id);
-        rmSync3(join21(dir, s.extract), { force: true });
+        rmSync3(join22(dir, s.extract), { force: true });
       }
     }
     const droppedIds = [.../* @__PURE__ */ new Set([...manifest.droppedIds ?? [], ...ids])].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
@@ -17567,7 +18046,7 @@ function formatDropReport(r) {
 }
 
 // src/plan.ts
-import { join as join22 } from "path";
+import { join as join23 } from "path";
 var SKIP_HEADING = /^(tl;?dr|abstract\b|executive summary|sources\b|references\b|further reading|solutions\b)/i;
 function subjectOf(question) {
   const bare = question.trim().replace(/\?+\s*$/, "");
@@ -17880,12 +18359,12 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   }
   uniq.forEach((s, i) => {
     s.id = `Q${i + 1}`;
-    if (runRoot) s.out = join22(runRoot, s.id.toLowerCase());
+    if (runRoot) s.out = join23(runRoot, s.id.toLowerCase());
   });
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
-    writeArtifact(join22(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
+    writeArtifact(join23(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;
 }
@@ -17904,17 +18383,17 @@ function planQueries(opts) {
     target,
     planned: planVariants(opts.question, opts.depth),
     angles: mode2.searchAngles.slice(0, target),
-    next: `Run your own WebSearch once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`
+    next: `Run your own web search once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`
   };
 }
 function formatQueryPlan(plan) {
   const lines = [
-    `ultrasearch: WebSearch worklist for "${plan.question}"`,
+    `ultrasearch: Web search worklist for "${plan.question}"`,
     `  mode: ${plan.mode} \xB7 depth: ${plan.depth} \xB7 search language: ${plan.lang}`,
     ``,
     // Say the budget AND what it covers. Announcing "run 8" over a list of 6
     // is the kind of small dishonesty that teaches an agent to stop reading.
-    plan.angles.length >= plan.target ? `Run ${plan.target} DISTINCT WebSearch queries \u2014 one per angle, phrased in ${plan.lang}:` : `Run ${plan.target} DISTINCT WebSearch queries, phrased in ${plan.lang} \u2014 these ${plan.angles.length} angles, then ${plan.target - plan.angles.length} of your own:`,
+    plan.angles.length >= plan.target ? `Run ${plan.target} DISTINCT web search queries \u2014 one per angle, phrased in ${plan.lang}:` : `Run ${plan.target} DISTINCT web search queries, phrased in ${plan.lang} \u2014 these ${plan.angles.length} angles, then ${plan.target - plan.angles.length} of your own:`,
     ...plan.angles.map((a, i) => `  ${i + 1}. ${a}`),
     ``,
     `Starting points from the built-in planner (yours will be better):`,
@@ -17927,7 +18406,7 @@ function formatQueryPlan(plan) {
 }
 
 // src/brainstorm.ts
-import { join as join23 } from "path";
+import { join as join24 } from "path";
 var PROBE_BACKENDS = ["wikipedia", "duckduckgo"];
 var PROBE_CAP = 10;
 var INTERROGATIVE = /\?|^\s*(what|how|why|when|who|whom|which|whose|is|are|was|were|does|do|did|can|could|should|would|will)\b/i;
@@ -18034,8 +18513,8 @@ async function runBrainstorm(options) {
     userQuestions
   };
   ensureDir(dir);
-  writeArtifact(join23(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join23(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
+  writeArtifact(join24(dir, "BRAINSTORM.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join24(dir, "BRAINSTORM.md"), renderBrainstormMd(result));
   return result;
 }
 function renderBrainstormMd(r) {
@@ -18145,10 +18624,10 @@ function runMerge(options) {
 }
 
 // src/orchestrate.ts
-import { join as join25 } from "path";
+import { join as join26 } from "path";
 
 // src/orchestrate-templates.ts
-import { join as join24 } from "path";
+import { join as join25 } from "path";
 var ONE_WRITER_FOOTER = `
 ## Return, don't write
 
@@ -18206,19 +18685,19 @@ function agentContracts(runAbs, engineAbs, opts = {}) {
 
 You are gathering web evidence for ONE (or a few) sub-question(s) of a larger ultrasearch research run. Handle ONLY the sub-questions whose \`id\` (Q#) is named in your prompt (\`ITEMS=<Q#,\u2026>\`).
 
-Worklist: \`${join24(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
+Worklist: \`${join25(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \`id\`, \`question\`, \`queries\`, \`out\`; the plan also carries the run's \`mode\` and \`depth\`).
 
 **Stale-id guard:** if an ITEMS id is no longer in the worklist, or its \`Q#\` entry's question text doesn't match the sub-question you were dispatched for, STOP and report the mismatch instead of gathering \u2014 a re-plan renumbers ids, and gathering under a stale id would fill the wrong sub-dossier.
 
 For EACH of your sub-questions:
 
-1. **Sweep with your OWN WebSearch first \u2014 this is the primary engine, not an extra.**
+1. **Sweep with your OWN web search first \u2014 this is the primary engine, not an extra.**
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
-   names how many DISTINCT queries to run and which angles to cover. Run your WebSearch once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
-2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your WebSearch queries into that language when the run targets a non-English audience):
+   names how many DISTINCT queries to run and which angles to cover. Run your web search once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
+2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your web search queries into that language when the run targets a non-English audience):
    \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
-3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND WebSearch round at that gap and fold the whole round in with ONE call:
+3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND web search round at that gap and fold the whole round in with ONE call:
    \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
 4. Do NOT write any report tier.
@@ -18229,7 +18708,7 @@ ${gathererFooter}`,
 
 You are an adversarial skeptic verifying the claims of an ultrasearch report against their cited sources. Try to REFUTE each claim: assume it is wrong until the source proves it.
 
-Worklist: \`${join24(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
+Worklist: \`${join25(runAbs, "VERIFY.todo.json")}\` (an object with \`pairs[]\`; each entry has \`claimId\`, \`sourceId\`, \`claim\`, \`extractPath\`, \`extractDigest\`, and sometimes \`numeralsAbsent\`). Handle ONLY the pairs whose \`claimId:sourceId\` key is named in your prompt (\`ITEMS=<C#:S#,\u2026>\`).
 
 **Stale-id guard:** if an ITEMS key is no longer in the worklist, STOP and report the mismatch instead of adjudicating \u2014 a regenerated worklist renumbers claim ids, and a verdict filed under a stale id would adjudicate the wrong claim.
 
@@ -18255,7 +18734,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
   const engine = `node ${shq(engineAbs)}`;
   const gather = phases.find((p) => p.name === "gather");
   const gatherPlan = gather?.parsed;
-  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join24(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
+  const outs = gatherPlan ? shq(gatherPlan.subQuestions.map((s) => s.out ?? join25(runAbs, s.id.toLowerCase())).join(",")) : '"<the out dirs, comma-joined>"';
   const q = gatherPlan ? shq(gatherPlan.question) : '"<question>"';
   const mode2 = gatherPlan ? gatherPlan.mode : "<m>";
   const run = shq(runAbs);
@@ -18263,7 +18742,7 @@ function runbookPreamble(phases, runAbs, engineAbs) {
     `Engine: \`${engine}\`
 
 Generated by \`ultrasearch orchestrate\` from the CURRENT run state. This sequential path is
-correctness-identical to the multi-agent workflows \u2014 same worklists, same contracts, same
+correctness-identical to the multi-agent fan-out \u2014 same worklists, same contracts, same
 fail-closed gates; only wall-clock differs.
 Parallel subagents are an optimization, never a requirement.
 
@@ -18275,15 +18754,16 @@ ${status}
 
 ## The loop (play every role yourself, one item at a time)
 
-1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join24(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
-2. **Gather per sub-question** \u2014 for EVERY entry in \`${join24(runAbs, "PLAN.json")}\`, apply \`${join24(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own WebSearch into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
+1. **Plan** (if not done): \`${engine} plan --q "<question>" --mode <m> --run-root ${run}\` \u2192 \`${join25(runAbs, "PLAN.json")}\` (standard tier: keep it small with \`--max-subquestions 3\` and pass \`--depth standard\`; deep tier: add \`--depth deep\`; without \`--depth\` the fan-out gathers deep).
+2. **Gather per sub-question** \u2014 for EVERY entry in \`${join25(runAbs, "PLAN.json")}\`, apply \`${join25(runAbs, "orchestration", "agents", "gatherer.md")}\` yourself: sweep with your own web search into \`<its out dir>/websearch.json\`, run its \`gather --q \u2026 --queries \u2026 --web-results \u2026 --out <its out dir>\`, then top up a thin or under-covered sub-dossier with a second round (\`ingest --run <its out dir> --web-results <round2.json>\`).
 3. **Merge** \u2014 \`${engine} merge --runs ${outs} --master ${run} --q ${q} --mode ${mode2}\`. Cite only the MASTER \`[S#]\` ids from here.
 4. **Write the tiers** \u2014 SUMMARY.md + REPORT.md in \`${runAbs}\`, every claim cited \`[S#]\`, your own knowledge flagged \`[M]\`.
-5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join24(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join24(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join24(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
+5. **Verify the claims** \u2014 \`${engine} verify --run ${run}\` writes \`${join25(runAbs, "VERIFY.todo.json")}\`. For EVERY pair, apply \`${join25(runAbs, "orchestration", "agents", "skeptic.md")}\` yourself (open the cited extract, verdict supported/partial/unsupported/refuted + note). Save your verdicts as \`${join25(runAbs, "verdicts.json")}\`, then fold: \`${engine} verify --apply ${run} --run ${run}\`.
 6. **Gate** \u2014 \`${engine} render --run ${run}\` and \`${engine} check --run ${run} --semantic\` must pass before presenting (deep tier: add \`--require-verify\`).
 7. **Loop until dry** \u2014 NEW sub-questions from step 2 \u2192 fan out again, \`merge\` into the SAME master, re-verify. Before re-folding, delete or archive the previous round's \`verdicts*.json\`: re-running \`verify\` renumbers claim ids, and the \`--apply\` directory glob refolds every \`verdicts*.json\` (a stale round-1 file corrupts the gate last-wins). Stop when a round surfaces nothing new.
 
-With subagents available, prefer the emitted workflows instead: \`orchestrate --run ${run} --phase <p>\` then \`Workflow({ scriptPath: "${join24(runAbs, "orchestration", "<p>.workflow.mjs")}" })\` \u2014 you stay the sole writer either way.
+With subagents available, fan out instead: \`orchestrate --run ${run} --phase <p>\`, then dispatch one subagent per batch with \`${join25(runAbs, "orchestration", "agents", "<role>.md")}\` (each phase below lists its batches) \u2014 you stay the sole writer either way.
+Optional \u2014 Claude Code: launch \`${join25(runAbs, "orchestration", "<p>.workflow.mjs")}\` with the Workflow tool for one-call parallel fan-out.
 `
   ];
 }
@@ -18291,7 +18771,7 @@ With subagents available, prefer the emitted workflows instead: \`orchestrate --
 // src/orchestrate.ts
 var PHASES = ["gather", "verify"];
 function mergeHint(runAbs, engineAbs, plan) {
-  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join25(runAbs, s.id.toLowerCase())) : [`${join25(runAbs, "q1")},\u2026`];
+  const outs = plan ? plan.subQuestions.map((s) => s.out ?? join26(runAbs, s.id.toLowerCase())) : [`${join26(runAbs, "q1")},\u2026`];
   const q = plan ? plan.question : "<question>";
   const mode2 = plan ? plan.mode : "<mode>";
   return [
@@ -18332,7 +18812,7 @@ var VERIFY = {
   applyHint: (run, engineAbs) => [
     `round 2+: delete or archive the previous round's verdicts*.json FIRST \u2014 re-running verify renumbers claim ids,`,
     `and the directory fold below picks up EVERY verdicts*.json (a stale fragment corrupts the fold last-wins). Then:`,
-    `save each returned fragment as ${join25(run, "verdicts.<i>.json")} then reassemble + gate:`,
+    `save each returned fragment as ${join26(run, "verdicts.<i>.json")} then reassemble + gate:`,
     `node ${shq(engineAbs)} verify --apply ${shq(run)} --run ${shq(run)}   # a dir picks up every verdicts*.json`
   ]
 };
@@ -18350,12 +18830,12 @@ function listPhasesFor(runDir, engineAbs) {
 
 // src/mcp/handlers.ts
 import { existsSync as existsSync18, readFileSync as readFileSync19, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
-import { isAbsolute as isAbsolute3, join as join27, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+import { isAbsolute as isAbsolute3, join as join28, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
 
 // src/refcheck/index.ts
 import { existsSync as existsSync17, readFileSync as readFileSync18 } from "fs";
-import { basename as basename3, extname, join as join26, resolve as resolve3 } from "path";
-import { tmpdir as tmpdir4 } from "os";
+import { basename as basename3, extname, join as join27, resolve as resolve2 } from "path";
+import { tmpdir as tmpdir5 } from "os";
 
 // src/refcheck/parse.ts
 var REF_HEADING = /^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]?\s+)?(r[ée]f[ée]rences(?:\s+bibliographiques)?|bibliograph(?:y|ie)|references|works cited|literature cited|literatur(?:verzeichnis)?|referencias|bibliografia)\s*:?\s*$/i;
@@ -19085,7 +19565,7 @@ async function resolveReferences(refs) {
 // src/refcheck/index.ts
 var TEXT_EXT = /\.(txt|md|markdown|bib|bibtex|text|ris)$/i;
 async function readDocumentText(path) {
-  const abs = resolve3(path);
+  const abs = resolve2(path);
   if (!existsSync17(abs)) throw new Error(`file not found: ${abs}`);
   const bytes = readFileSync18(abs);
   const ext = extname(abs).toLowerCase();
@@ -19144,14 +19624,14 @@ async function runRefcheck(opts) {
   let citingText;
   let citingFile;
   if (opts.citing) {
-    citingFile = resolve3(opts.citing);
+    citingFile = resolve2(opts.citing);
     const raw = await readDocumentText(opts.citing);
     citingText = splitDocument(raw).body || raw;
   } else {
     const body = splitDocument(refsText).body;
     if (new RegExp("\\p{L}{3,}", "u").test(body)) {
       citingText = body;
-      citingFile = resolve3(opts.refs);
+      citingFile = resolve2(opts.refs);
       notes.push(`Citing text: the body of ${basename3(opts.refs)}, before its reference list.`);
     }
   }
@@ -19162,11 +19642,11 @@ async function runRefcheck(opts) {
   if (resolved) notes.push(...resolved.notes);
   else notes.push("Offline: nothing was resolved \u2014 metadata, DOIs and figures are unchecked.");
   const builtAt = (/* @__PURE__ */ new Date()).toISOString();
-  const dir = resolve3(opts.out ?? join26(tmpdir4(), "ultrasearch", `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`, runId()));
-  if (existsSync17(join26(dir, "sources.json")) && !existsSync17(join26(dir, "refcheck.json"))) {
+  const dir = resolve2(opts.out ?? join27(tmpdir5(), "ultrasearch", `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`, runId()));
+  if (existsSync17(join27(dir, "sources.json")) && !existsSync17(join27(dir, "refcheck.json"))) {
     throw new Error(`${dir} already holds a dossier that refcheck did not write \u2014 pass another --out`);
   }
-  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync17(join26(dir, f)));
+  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync17(join27(dir, f)));
   if (stale.length && !opts.force) {
     throw new Error(
       `${dir} already holds ${stale.join(", ")} from an earlier run \u2014 pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`
@@ -19210,7 +19690,7 @@ async function runRefcheck(opts) {
   });
   ensureDir(dir);
   if (resolved) {
-    ensureDir(join26(dir, "sources"));
+    ensureDir(join27(dir, "sources"));
     const manifest = {
       version: VERSION,
       question: `Reference check \u2014 ${basename3(opts.refs)}`,
@@ -19265,7 +19745,7 @@ async function runRefcheck(opts) {
   }
   const result = {
     version: VERSION,
-    refsFile: resolve3(opts.refs),
+    refsFile: resolve2(opts.refs),
     ...citingFile ? { citingFile } : {},
     builtAt,
     offline: !resolved,
@@ -19275,8 +19755,8 @@ async function runRefcheck(opts) {
     ...citing ? { citing: { ...citing, calls: citing.calls.length } } : {},
     notes
   };
-  writeArtifact(join26(dir, "refcheck.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join26(dir, "REFCHECK.md"), renderRefcheckMarkdown(result));
+  writeArtifact(join27(dir, "refcheck.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join27(dir, "REFCHECK.md"), renderRefcheckMarkdown(result));
   return result;
 }
 var cell2 = (s) => (s ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
@@ -19437,13 +19917,17 @@ function requiredRun(args, defaults) {
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
   if (!isAbsolute3(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve4(run);
-  if (!existsSync18(join27(abs, "manifest.json"))) {
+  if (!existsSync18(join28(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
 }
+function webEngineArg(v) {
+  const e = str2(v);
+  return e === void 0 ? void 0 : canonicalBackend(e);
+}
 function gatherOptions(args) {
-  const backends = strArray(args.backends);
+  const backends = strArray(args.backends)?.map(canonicalBackend);
   if (backends) {
     for (const b of backends) {
       if (!ALL_BACKENDS.includes(b)) throw new ToolError(`unknown backend "${b}" \u2014 one of: ${[...ALL_BACKENDS].join(", ")}`);
@@ -19465,8 +19949,8 @@ function gatherOptions(args) {
     lang: str2(args.lang) ?? "en",
     region: str2(args.region),
     // Pilotable from MCP, at last: these were hardcoded, so a client could not
-    // pin an engine, point at a SearXNG, or reach the WebSearch lane at all.
-    webEngine: oneOf(str2(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
+    // pin an engine, point at a SearXNG, or reach the web-search lane at all.
+    webEngine: oneOf(webEngineArg(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
     search: oneOf(str2(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
     ...web ? { webResults: web.hits, webResultsRejected: web.rejected } : {},
     searxng: str2(args.searxng),
@@ -19566,7 +20050,7 @@ function artifactFor(name, result) {
 async function handleSearch(args) {
   const query = requiredStr(args, "query", "the search query.");
   const chosen = requiredStr(args, "backend", `which backend to query, one of: ${[...ALL_BACKENDS].join(", ")}`);
-  const backend = oneOf(chosen, ALL_BACKENDS, "backend", ALL_BACKENDS[0]);
+  const backend = oneOf(canonicalBackend(chosen), ALL_BACKENDS, "backend", ALL_BACKENDS[0]);
   const options = gatherOptions({ ...args, question: query, depth: "summary" });
   const results = await runBackends([backend], { question: query, mode: getMode(options.mode), options, variants: [query] });
   const max = positive(args.max_sources, "max_sources") ?? 10;
@@ -19605,9 +20089,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join27(res.dir, "DOSSIER.md"),
+    dossier_md: join28(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join27(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join28(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -19645,14 +20129,14 @@ function handleMerge(args) {
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
     if (!isAbsolute3(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync18(join27(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!existsSync18(join28(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
   if (master !== void 0 && !isAbsolute3(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
-    dossier_md: join27(res.dir, "DOSSIER.md"),
+    dossier_md: join28(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -19686,7 +20170,7 @@ async function handleRefcheck(args) {
   const hasDossier = res.references.some((e) => e.sourceId);
   return {
     dir: res.dir,
-    report: join27(res.dir, "REFCHECK.md"),
+    report: join28(res.dir, "REFCHECK.md"),
     summary: res.summary,
     ...res.citing ? { citing: res.citing } : {},
     // One line per reference that needs a look, not the whole record set.
@@ -19698,7 +20182,7 @@ async function handleRefcheck(args) {
       ...e.doi?.resolves === false ? { doi: "does not resolve" } : {}
     })),
     notes: res.notes,
-    next: hasDossier ? `Read ${join27(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join27(res.dir, "REFCHECK.md")}.`
+    next: hasDossier ? `Read ${join28(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join28(res.dir, "REFCHECK.md")}.`
   };
 }
 async function handleIngest(args, run) {
@@ -19801,7 +20285,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute3(raw) ? raw : join27(run, raw);
+  const target = isAbsolute3(raw) ? raw : join28(run, raw);
   let real;
   try {
     real = realpathSync3(target);
@@ -19834,7 +20318,8 @@ function handleRead(args, run) {
 // src/mcp/tools.ts
 var MODE_ENUM = [...ALL_MODES].sort();
 var DEPTH_ENUM = [...ALL_DEPTHS].sort();
-var BACKEND_ENUM = [...ALL_BACKENDS].sort();
+var LEGACY_ENUM = Object.keys(LEGACY_BACKEND_ALIASES);
+var BACKEND_ENUM = [...ALL_BACKENDS, ...LEGACY_ENUM].sort();
 var runProp = { type: "string", description: "The dossier directory returned by ultrasearch_gather." };
 var questionProp = { type: "string", description: "The topic or question, in natural language." };
 var modeProp = {
@@ -19860,8 +20345,8 @@ var searchProfileProp = {
 };
 var webEngineProp = {
   type: "string",
-  enum: [...ALL_WEB_ENGINES].sort(),
-  description: "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'claude' means your web_results lane IS the discovery."
+  enum: [...ALL_WEB_ENGINES, ...LEGACY_ENUM].sort(),
+  description: "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'host' means your web_results lane (your own built-in web search) IS the discovery ('claude' is a deprecated alias)."
 };
 var searxngProp = { type: "string", description: "SearXNG base URL (optional self-hosted container; auto-detected on localhost:8888)." };
 var firecrawlProp = {
@@ -20420,16 +20905,16 @@ Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
            You then write SUMMARY/REPORT.md, run render, then check.
-  queries  Print the WebSearch worklist: how many DISTINCT queries to run for
+  queries  Print the web search worklist: how many DISTINCT queries to run for
            this depth, the mode's angles to cover, and the planner's starting
-           points. Run YOUR OWN WebSearch once per angle, pool every hit, and
+           points. Run YOUR OWN web search once per angle, pool every hit, and
            feed them to gather --web-results. One query is not a sweep.
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest ONE URL into an existing dossier (alias: add-source). Prints
            the new source id (S#).
   ingest   Ingest MANY URLs into an existing dossier in a single process \u2014 the
            batch form of 'fetch', and the way to top up a dossier from your own
-           WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
+           web search. Takes --web-results <f.json|-> or --urls <u,...>, and
            reports one outcome per URL (added / already there / refused).
            PubMed and PMC pages (and efetch URLs) are read through E-utilities
            and Europe PMC, never through their cookie / anti-bot walls.
@@ -20463,7 +20948,7 @@ Commands:
            and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
-           With --run <dossier-dir>, also says whether THAT run had a WebSearch
+           With --run <dossier-dir>, also says whether THAT run had a web search
            lane \u2014 a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
   browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
@@ -20484,11 +20969,13 @@ Deep research (the agentic tier \u2014 see references/deep-research-playbook.md)
            --shard <i> writes shard i only (one skeptic subagent per shard);
            --apply accepts several verdict files (comma list or a directory).
   orchestrate  Emit the run's multi-agent orchestration from its CURRENT
-           worklists: one launchable workflow per ready phase (gather fans out
-           one gatherer per PLAN.json sub-question; verify fans skeptics over
-           VERIFY.todo.json) + the agents/<role>.md dispatch contracts + a
-           sequential RUNBOOK.md, under <RUN>/orchestration/. Subagents return
-           fragments; the merge / verify --apply folds stay with you.
+           worklists: the agents/<role>.md dispatch contracts any host's
+           subagents can run (gather fans out one gatherer per PLAN.json
+           sub-question; verify fans skeptics over VERIFY.todo.json) + a
+           sequential RUNBOOK.md, plus \u2014 optionally, for Claude Code's Workflow
+           tool \u2014 one launchable <phase>.workflow.mjs per ready phase, under
+           <RUN>/orchestration/. Subagents return fragments; the merge /
+           verify --apply folds stay with you.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -20531,14 +21018,14 @@ Options:
                        be shown \u2014 macOS, Windows, Linux with a display \u2014 else
                        off; always off by default under --stdout, which writes
                        nothing, not even the browser's profile)
-  --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, \u2026]
+  --web-results <f>    YOUR OWN web search hits, as JSON: [{url,title,snippet}, \u2026]
                        (a bare array of URLs, or '-' for stdin, also work). For
                        'ingest', a hit may add citeUrl: read the text from url,
                        cite that page (fetch --cite-url, per hit). This
                        is the PRIMARY discovery lane \u2014 the strongest index here,
                        and the only one needing neither a container nor a scrape.
   --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
-                       light = the WebSearch lane + the mode's API backends
+                       light = the web-search lane + the mode's API backends
                        full  = also fuse the keyless cascade + SearXNG
                        max   = the ceiling \u2014 full + Firecrawl's /search in
                                discovery, every recall knob at its limit, and
@@ -20547,6 +21034,9 @@ Options:
                        auto  = light when --web-results is given, else full
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
+                       host = no keyless discovery: your own built-in web
+                              search (--web-results) is the discovery
+                              ('claude' is accepted as a deprecated alias)
   --pages <n>          Result pages to fetch per web engine (\u22645; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (\u22645; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
@@ -20760,10 +21250,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve8(x));
-  const abs = resolve8(spec);
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
+  const abs = resolve5(spec);
   if (existsSync19(abs) && statSync11(abs).isDirectory()) {
-    const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve8(abs, f));
+    const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -20797,7 +21287,7 @@ function readWebResultsPayload(spec) {
       fail("--web-results -: could not read stdin");
     }
   }
-  const abs = resolve8(spec);
+  const abs = resolve5(spec);
   if (!existsSync19(abs)) fail(`--web-results file not found: ${abs}`);
   try {
     return readFileSync20(abs, "utf8");
@@ -20805,9 +21295,16 @@ function readWebResultsPayload(spec) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
 }
+function canonicalLabel(flag, value) {
+  const name = canonicalBackend(value);
+  if (name !== value) process.stderr.write(`ultrasearch: ${flag} ${value} is deprecated \u2014 use ${name} (same behaviour).
+`);
+  return name;
+}
 function parseBackends(s) {
   const out = [];
-  for (const t of parseList(s)) {
+  for (const raw of parseList(s)) {
+    const t = canonicalLabel("--backends", raw);
     if (!ALL_BACKENDS.includes(t)) {
       fail(`unknown backend "${t}" (use: ${ALL_BACKENDS.join(", ")})`);
     }
@@ -20871,8 +21368,8 @@ function gatherReport(r, options) {
       lines: [
         ...head,
         `  EMPTY DOSSIER \u2014 retrieval returned nothing usable. Do NOT write tiers over this. Recover it:`,
-        noLane ? `    1. run YOUR OWN WebSearch and feed it back: ultrasearch gather --q "\u2026" --web-results <hits.json>` : `    1. widen the lane: more/other WebSearch queries \u2192 a bigger --web-results, or --search full to fuse the keyless engines`,
-        options.stdout ? `    2. or read the pages your WebSearch found directly \u2014 \`fetch\`/\`ingest\` need a dossier on disk.` : `    2. or pin what you found: ultrasearch ingest --run ${r.dir} --web-results <hits.json>`,
+        noLane ? `    1. run YOUR OWN web search and feed it back: ultrasearch gather --q "\u2026" --web-results <hits.json>` : `    1. widen the lane: more/other web search queries \u2192 a bigger --web-results, or --search full to fuse the keyless engines`,
+        options.stdout ? `    2. or read the pages your web search found directly \u2014 \`fetch\`/\`ingest\` need a dossier on disk.` : `    2. or pin what you found: ultrasearch ingest --run ${r.dir} --web-results <hits.json>`,
         `    3. stop after two empty attempts \u2014 report the gap; NEVER invent sources.`
       ]
     };
@@ -20933,7 +21430,7 @@ function buildGatherOptions(p, opts = {}) {
   const askedMax = p.values.search === "max";
   const depth = oneOf2("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf2("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
+  const webEngine = oneOf2("web-engine", canonicalLabel("--web-engine", p.values["web-engine"] ?? "auto"), ALL_WEB_ENGINES);
   const search = oneOf2("search", p.values.search ?? "auto", ALL_SEARCH_PROFILES);
   const webSpec = p.values["web-results"];
   const parsedWeb = webSpec ? parseWebResults(readWebResultsPayload(webSpec)) : void 0;
@@ -20974,7 +21471,7 @@ function buildGatherOptions(p, opts = {}) {
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
-    out: p.values.out ? resolve8(p.values.out) : void 0,
+    out: p.values.out ? resolve5(p.values.out) : void 0,
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
@@ -21099,10 +21596,10 @@ async function dispatch2(p) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join28(resolve8(runDir), "manifest.json");
-        if (!existsSync19(mf)) fail(`no dossier at ${resolve8(runDir)} (no manifest.json)`);
+        const mf = join29(resolve5(runDir), "manifest.json");
+        if (!existsSync19(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync20(mf, "utf8"));
+          manifest = upgradeLegacyManifest(JSON.parse(readFileSync20(mf, "utf8")));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -21119,7 +21616,7 @@ async function dispatch2(p) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve8(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
+      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve5(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
       process.stdout.write(`${head}
 
 ${formatServices(rows)}
@@ -21202,7 +21699,7 @@ ${formatServices(rows)}
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve8(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve5(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -21210,7 +21707,7 @@ ${formatServices(rows)}
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num4("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve8(p.values["run-root"]) : void 0;
+      const runRoot = p.values["run-root"] ? resolve5(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       if (options.stdout) takeArtifacts();
@@ -21223,13 +21720,13 @@ ${formatServices(rows)}
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve8(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve5(d)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
       for (const d of runs) if (!existsSync19(d)) fail(`run dir not found: ${d}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve8(p.values.master) : void 0,
+        master: p.values.master ? resolve5(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode: mode2
       });
@@ -21252,7 +21749,7 @@ ${formatServices(rows)}
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve8(dir), url, {
+      const r = await addSource(resolve5(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
@@ -21287,9 +21784,9 @@ ${formatServices(rows)}
       const files = p.values.files ? parseList(p.values.files) : [];
       const template = templateOf(p);
       if (template) {
-        if (!existsSync19(join28(resolve8(dir), "manifest.json"))) fail(`no dossier at ${resolve8(dir)} (no manifest.json)`);
-        setDossierTemplate(resolve8(dir), template);
-        process.stderr.write(`ultrasearch: ${resolve8(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
+        if (!existsSync19(join29(resolve5(dir), "manifest.json"))) fail(`no dossier at ${resolve5(dir)} (no manifest.json)`);
+        setDossierTemplate(resolve5(dir), template);
+        process.stderr.write(`ultrasearch: ${resolve5(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
 `);
         if (!spec && !listed.length && !files.length) return;
       }
@@ -21310,8 +21807,8 @@ ${formatServices(rows)}
         firecrawl: p.values.firecrawl,
         browser: browserMode(p)
       };
-      const web = hits.length ? await addSources(resolve8(dir), hits, enrichOpts) : void 0;
-      const local2 = files.length ? await addFiles(resolve8(dir), files, enrichOpts) : void 0;
+      const web = hits.length ? await addSources(resolve5(dir), hits, enrichOpts) : void 0;
+      const local2 = files.length ? await addFiles(resolve5(dir), files, enrichOpts) : void 0;
       const repaired = web?.repaired ?? 0;
       const r = {
         results: [...web?.results ?? [], ...local2?.results ?? []],
@@ -21331,7 +21828,7 @@ ${formatServices(rows)}
         }
         const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
         const fixed = repaired ? `, repaired ${repaired} in place` : "";
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve8(dir)}
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve5(dir)}
 `);
       }
       if (!r.added && !repaired) await exitClosed(1);
@@ -21363,7 +21860,7 @@ ${formatServices(rows)}
           `  citing:   ${r.citing.calls} call(s) \xB7 ${s.uncited} never cited \xB7 ${s.unknownCalls} unknown number(s) \xB7 ${s.outOfOrder} out of order`,
           ...r.offline ? [] : [`  figures:  ${s.numeralsChecked} checked against abstracts, ${s.numeralsAbsent} not found`]
         ] : [`  citing:   none \u2014 pass --citing <file> to check orphans, order and figures`],
-        `  report:   ${join28(r.dir, "REFCHECK.md")}`,
+        `  report:   ${join29(r.dir, "REFCHECK.md")}`,
         ...r.references.some((e) => e.sourceId) ? [`  dossier:  ${r.dir} \u2014 source S<n> is reference n; write REPORT.md (verification template), then check --run ${r.dir}`] : []
       ];
       process.stderr.write(lines.join("\n") + "\n");
@@ -21372,7 +21869,7 @@ ${formatServices(rows)}
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve8(dir);
+      const rdir = resolve5(dir);
       if (isNoWrite()) {
         if (p.bools.has("no-md")) {
           process.stderr.write("ultrasearch render: --stdout --no-md leaves nothing to emit (--stdout never produces HTML).\n");
@@ -21390,7 +21887,7 @@ ${formatServices(rows)}
       if (wantHtml || wantMd) {
         const ctx = loadRenderContext(rdir);
         if (wantHtml) {
-          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve8(p.values.out) : void 0);
+          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
           process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
         }
@@ -21406,7 +21903,7 @@ ${formatServices(rows)}
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve8(dir);
+      const rdir = resolve5(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -21446,8 +21943,8 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync19(resolve8(dir))) {
-          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve8(dir)}
+        if (!existsSync19(resolve5(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve5(dir)}
 `);
           process.exit(2);
         }
@@ -21470,11 +21967,15 @@ ${formatServices(rows)}
       for (const w of res.written) lines.push(`  ${w}`);
       const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
       if (workflows.length) {
+        const orch = join29(resolve5(dir), "orchestration");
         lines.push("");
-        for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
-        lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) \u2014 you stay the sole writer.");
+        lines.push(`Fan out: dispatch one subagent per batch with ${join29(orch, "agents", "<role>.md")} (batches in ${join29(orch, "RUNBOOK.md")}),`);
+        lines.push("  or play the contracts yourself, sequentially, from RUNBOOK.md (or re-run with --eco).");
+        lines.push("Optional \u2014 Claude Code: launch with the Workflow tool for one-call parallel fan-out:");
+        for (const w of workflows) lines.push(`  Workflow({ scriptPath: ${JSON.stringify(w)} })`);
+        lines.push("Then run the fold yourself (merge / verify --apply; RUNBOOK.md shows it) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join28(resolve8(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join29(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -21522,8 +22023,14 @@ ${formatServices(rows)}
       }
       process.stderr.write(`ultrasearch: MCP server listening on ${running.url}
 `);
-      process.stderr.write(`  client: claude mcp add --transport http ultrasearch ${running.url}
-`);
+      process.stderr.write(
+        [
+          `  connect any MCP client to that URL, e.g.:`,
+          `    Claude Code  claude mcp add --transport http ultrasearch ${running.url}`,
+          `    Codex        codex mcp add ultrasearch --url ${running.url}`,
+          `    OpenCode     opencode mcp add ultrasearch --url ${running.url}`
+        ].join("\n") + "\n"
+      );
       for (const sig of ["SIGINT", "SIGTERM"]) {
         process.once(sig, () => {
           void closeBrowserReads({ waitMs: 0 }).then(() => running.close()).finally(() => process.exit(0));
@@ -21536,7 +22043,7 @@ ${formatServices(rows)}
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num4("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve8(dir), {
+      const res = runCheck(resolve5(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -21546,7 +22053,7 @@ ${formatServices(rows)}
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve8(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve5(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;
@@ -21557,7 +22064,7 @@ ${formatServices(rows)}
       const where = p.values.where === void 0 ? void 0 : oneOf2("where", p.values.where, DROP_WHERE);
       const ids = p.values.id ? parseList(p.values.id) : [];
       if (!ids.length && !where) fail("drop: pass --id <S#,...> or --where wall|snippet|offtopic");
-      const r = dropSources(resolve8(dir), { ids, where, dryRun: p.bools.has("dry-run") });
+      const r = dropSources(resolve5(dir), { ids, where, dryRun: p.bools.has("dry-run") });
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       else process.stdout.write(formatDropReport(r) + "\n");
       if (r.missing.length) process.exitCode = 1;
@@ -21566,7 +22073,7 @@ ${formatServices(rows)}
     case "relink": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve8(dir);
+      const rdir = resolve5(dir);
       if (p.bools.has("list")) {
         const issues = listIssues(rdir);
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");

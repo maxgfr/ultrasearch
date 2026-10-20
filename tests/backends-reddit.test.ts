@@ -79,7 +79,7 @@ describe("reddit backend", () => {
   it.each([
     [429, "rate-limited (HTTP 429)"],
     [403, "blocked this client as automated traffic (HTTP 403)"],
-  ])("turns HTTP %i into a note pointing at the WebSearch lane", async (status, why) => {
+  ])("turns HTTP %i into a note pointing at the web-search lane", async (status, why) => {
     installFetchMock(() => ({ status, body: "" }));
     const r = await redditBackend(makeCtx("decathlon promo code"));
     expect(r.items).toEqual([]);

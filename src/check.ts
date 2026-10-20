@@ -13,7 +13,7 @@ import {
   TOKEN_RE,
   SOURCE_RE,
 } from "./claims.js";
-import { readSourceText, sourceIdentityError } from "./dossier.js";
+import { readSourceText, sourceIdentityError, upgradeLegacyManifest, upgradeLegacySources } from "./dossier.js";
 import { isApiEndpoint } from "./citable.js";
 import { bindToWorklist, reduceVerdicts } from "./verify.js";
 import { sourceTextWithoutPassageLabels } from "./passages.js";
@@ -256,7 +256,7 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
 // `check` (no opts) is byte-for-byte unchanged.
 function readManifestSafe(dir: string): Manifest | undefined {
   try {
-    return JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest;
+    return upgradeLegacyManifest(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as Manifest);
   } catch {
     return undefined;
   }
@@ -275,7 +275,7 @@ export function runCheck(
   }
   let sources: Source[];
   try {
-    sources = JSON.parse(readFileSync(sourcesPath, "utf8")) as Source[];
+    sources = upgradeLegacySources(JSON.parse(readFileSync(sourcesPath, "utf8")) as Source[]);
   } catch (e) {
     return blank(false, [`sources.json is unreadable: ${(e as Error).message}`]);
   }
@@ -480,7 +480,7 @@ export function runCheck(
   if (manifest?.recallFloor) {
     warnings.push(
       `Thin dossier: ${manifest.recallFloor.count} source(s) retrieved (recall floor ${manifest.recallFloor.floor}) — ` +
-        `run another WebSearch round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`,
+        `run another web search round and fold it in with \`ingest --run <dir> --web-results <f.json>\` before relying on it.`,
     );
   }
   if (manifest?.coverage?.under.length) {

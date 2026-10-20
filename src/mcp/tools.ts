@@ -1,4 +1,13 @@
-import { ALL_BACKENDS, ALL_BROWSER_MODES, ALL_DEPTHS, ALL_MODES, ALL_SEARCH_PROFILES, ALL_TEMPLATES, ALL_WEB_ENGINES } from "../types.js";
+import {
+  ALL_BACKENDS,
+  ALL_BROWSER_MODES,
+  ALL_DEPTHS,
+  ALL_MODES,
+  ALL_SEARCH_PROFILES,
+  ALL_TEMPLATES,
+  ALL_WEB_ENGINES,
+  LEGACY_BACKEND_ALIASES,
+} from "../types.js";
 import { ANNOTATIONS_SINCE, RICH_TOOLS_SINCE, type JsonSchema, type JsonSchemaProp, type ProtocolVersion } from "../engine.js";
 import { isNoWrite } from "../no-write.js";
 
@@ -13,7 +22,10 @@ import type { ToolDecl } from "../engine.js";
 // never rejected by schema validation for something the engine understood.
 const MODE_ENUM = [...ALL_MODES].sort();
 const DEPTH_ENUM = [...ALL_DEPTHS].sort();
-const BACKEND_ENUM = [...ALL_BACKENDS].sort();
+// The deprecated `claude` spelling of `host` stays valid input, so a client
+// written before the rename is not rejected by schema validation.
+const LEGACY_ENUM = Object.keys(LEGACY_BACKEND_ALIASES);
+const BACKEND_ENUM = [...ALL_BACKENDS, ...LEGACY_ENUM].sort();
 
 const runProp: JsonSchemaProp = { type: "string", description: "The dossier directory returned by ultrasearch_gather." };
 const questionProp: JsonSchemaProp = { type: "string", description: "The topic or question, in natural language." };
@@ -32,7 +44,7 @@ const templateProp: JsonSchemaProp = {
     "discrepancies, not verifiable). Headings are free; ultrasearch_check only expects an 'Open questions' section.",
 };
 
-// The WebSearch lane, as an MCP client sees it: structured args, not a file
+// The web-search lane, as an MCP client sees it: structured args, not a file
 // path. A client passes values, so the payload comes inline here where the CLI
 // takes `--web-results <file>`.
 const webResultsProp: JsonSchemaProp = {
@@ -52,9 +64,9 @@ const searchProfileProp: JsonSchemaProp = {
 };
 const webEngineProp: JsonSchemaProp = {
   type: "string",
-  enum: [...ALL_WEB_ENGINES].sort(),
+  enum: [...ALL_WEB_ENGINES, ...LEGACY_ENUM].sort(),
   description:
-    "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'claude' means your web_results lane IS the discovery.",
+    "Pin the keyless discovery engine instead of running the fallback cascade. 'auto' (default) cascades; 'host' means your web_results lane (your own built-in web search) IS the discovery ('claude' is a deprecated alias).",
 };
 const searxngProp: JsonSchemaProp = { type: "string", description: "SearXNG base URL (optional self-hosted container; auto-detected on localhost:8888)." };
 const firecrawlProp: JsonSchemaProp = {

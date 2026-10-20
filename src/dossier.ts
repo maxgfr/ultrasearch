@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Manifest, RawSource, Source } from "./types.js";
-import { UNDER_COVERED_MIN } from "./types.js";
+import type { BackendKind, Manifest, RawSource, Source } from "./types.js";
+import { UNDER_COVERED_MIN, canonicalBackend } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
 import { sourceSignals } from "./authority.js";
 import { ensureDir, isNoWrite, writeArtifact } from "./no-write.js";
@@ -229,8 +229,8 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
 export function renderDossierMarkdown(sources: Source[], manifest: Manifest, template: string, extraBlocks: string[][] = []): string {
   const noWrite = isNoWrite();
   const enrich = noWrite
-    ? "Search further yourself (your own WebSearch) and read those pages directly"
-    : "Top them up (another WebSearch round + `ingest --run <dir> --web-results <f.json>`)";
+    ? "Search further yourself (your own web search) and read those pages directly"
+    : "Top them up (another web search round + `ingest --run <dir> --web-results <f.json>`)";
   const out: string[] = [];
   out.push(`# Search dossier`);
   out.push("");
@@ -242,16 +242,16 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   out.push(`**Backends used:** ${manifest.backendsUsed.join(", ") || "none"}`);
   if (manifest.searchProfile) out.push(`**Search profile:** ${manifest.searchProfile}`);
   out.push("");
-  // The WebSearch lane, stated in the dossier itself. A run that had no lane is
+  // The web-search lane, stated in the dossier itself. A run that had no lane is
   // the case worth surfacing: the strongest engine available to the reader sat
   // idle while scrapers did its job, and nothing else would ever say so.
   if (manifest.webSearch) {
     const ws = manifest.webSearch;
     out.push(
       ws.supplied
-        ? `**WebSearch lane:** ${ws.supplied} agent-supplied hit(s) → ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "")
-        : `> 🔎 **No WebSearch lane** — discovery ran on the keyless engines alone, and those are best-effort. ` +
-            `If you have a WebSearch tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; ` +
+        ? `**web-search lane:** ${ws.supplied} agent-supplied hit(s) → ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "")
+        : `> 🔎 **No web-search lane** — discovery ran on the keyless engines alone, and those are best-effort. ` +
+            `If you have a web search tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; ` +
             `next time, pass them to \`gather --web-results\` from the start.`,
     );
     out.push("");
@@ -355,7 +355,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   if (sources.length === 0) {
     out.push(
       noWrite
-        ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own WebSearch._`
+        ? `_No sources were retrieved. Broaden the query, add backends, or search yourself with your own web search._`
         : `_No sources were retrieved. Search yourself and feed the hits in — \`gather --web-results <f.json>\`, or \`ingest --run <dir> --web-results <f.json>\` on this dossier — then widen with \`--search full\`._`,
     );
   }
@@ -381,11 +381,36 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
   return out.join("\n");
 }
 
+// Dossiers written before the `claude` → `host` rename of the host-search lane
+// still carry `claude` as a backend label. Read them as `host`, so a stored run
+// reports, filters and merges exactly like a fresh one; the next write of the
+// index files persists the current name.
+const canonicalKind = (b: BackendKind): BackendKind => (typeof b === "string" ? (canonicalBackend(b) as BackendKind) : b);
+
+export function upgradeLegacySources<T>(sources: T): T {
+  if (Array.isArray(sources)) {
+    for (const s of sources) if (s && typeof s === "object" && "backend" in s) s.backend = canonicalKind(s.backend);
+  }
+  return sources;
+}
+
+export function upgradeLegacyManifest(manifest: Manifest): Manifest {
+  if (!manifest || typeof manifest !== "object") return manifest;
+  const kinds = (list: BackendKind[] | undefined) => (Array.isArray(list) ? [...new Set(list.map(canonicalKind))] : list);
+  if (Array.isArray(manifest.backends)) manifest.backends = kinds(manifest.backends)!;
+  if (Array.isArray(manifest.backendsUsed)) manifest.backendsUsed = kinds(manifest.backendsUsed)!;
+  if (Array.isArray(manifest.enginesFused)) manifest.enginesFused = kinds(manifest.enginesFused);
+  if (manifest.timings && typeof manifest.timings === "object") {
+    manifest.timings = Object.fromEntries(Object.entries(manifest.timings).map(([k, v]) => [canonicalBackend(k), v]));
+  }
+  return manifest;
+}
+
 // Read back a persisted dossier (for check / render / enrich).
 export function readDossier(dir: string): { sources: Source[]; manifest: Manifest } {
-  const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
+  const sources = upgradeLegacySources(readJson<Source[]>(join(dir, "sources.json"), "sources.json"));
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} — re-run \`ultrasearch gather\`.`);
-  const manifest = readJson<Manifest>(join(dir, "manifest.json"), "manifest.json");
+  const manifest = upgradeLegacyManifest(readJson<Manifest>(join(dir, "manifest.json"), "manifest.json"));
   return { sources, manifest };
 }

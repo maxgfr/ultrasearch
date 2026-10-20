@@ -40,7 +40,7 @@ describe("gather — a source naming none of the question's named terms moves do
       webEngine: "auto",
       excludeDomains: [],
       json: false,
-      backends: ["claude"],
+      backends: ["host"],
       out: dir,
       webResults: [{ url: "https://review.test/infants" }, { url: "https://carlevale.test/four-years" }],
     });

@@ -64,7 +64,7 @@ describe("main() — ingest (the batch that replaces N subprocesses)", () => {
       expect(r.err).toMatch(/ingested 3 source\(s\), skipped 0 of 3/);
 
       const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
-      const added = sources.filter((s) => s.backend === "claude");
+      const added = sources.filter((s) => s.backend === "host");
       expect(added).toHaveLength(3);
       // Ids are contiguous and unique — the property the sequential ingest
       // exists to protect. A concurrent one would let two sources claim the
@@ -168,13 +168,13 @@ describe("main() — gather --web-results (the lane, end to end)", () => {
         ]),
       );
 
-      const r = await run(["gather", "--q", "rate limiting", "--out", dir, "--web-results", hits, "--backends", "claude"]);
+      const r = await run(["gather", "--q", "rate limiting", "--out", dir, "--web-results", hits, "--backends", "host"]);
       expect(r.exit).toBeUndefined();
       expect(r.err).toMatch(/websearch: 2 hit\(s\) supplied/);
 
       const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
       expect(sources.length).toBeGreaterThan(0);
-      expect(sources.every((s) => s.backend === "claude")).toBe(true);
+      expect(sources.every((s) => s.backend === "host")).toBe(true);
       // Hydrated, not trusted-on-faith: the lane supplies URLs, the engine
       // still reads the pages.
       expect(readFileSync(join(dir, sources[0]!.extract), "utf8")).toMatch(/Rate limiting caps/);
@@ -184,7 +184,7 @@ describe("main() — gather --web-results (the lane, end to end)", () => {
     }
   });
 
-  it("says so, loudly, when a run had no WebSearch lane", async () => {
+  it("says so, loudly, when a run had no web-search lane", async () => {
     const dir = mkdtempSync(join(tmpdir(), "us-nolane-"));
     try {
       const r = await run(["gather", "--q", "rate limiting", "--backends", "fixture", "--out", dir]);

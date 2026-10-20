@@ -62,11 +62,11 @@ More generally the dossier is thin when no source addresses the specific
 question, or when one backend dominated and a needed angle is missing (e.g.
 `bug` has Stack Overflow answers but no GitHub issue confirming the fix).
 
-## 5. Top up with a second WebSearch round
+## 5. Top up with a second web search round
 
 Your first sweep aimed at the question as asked; the dossier now names exactly
 where it fell short (`🔍 Under-covered`, `⚠ Thin`, a missing angle). Run
-**another WebSearch round** at those gaps — the authoritative primary sources,
+**another web search round** at those gaps — the authoritative primary sources,
 the specific thing the user asked about — then fold the whole round in at once:
 
 ```

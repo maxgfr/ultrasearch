@@ -358,7 +358,7 @@ async function get(url: string, lang: string, region: string) {
 }
 
 function websearchHint(host: string, q: string): string {
-  return `Search it with your own WebSearch instead — \`site:${host.replace(/^www\./, "")} ${q}\`.`;
+  return `Search it with your own web search instead — \`site:${host.replace(/^www\./, "")} ${q}\`.`;
 }
 
 export const pepperBackend: Backend = async (ctx): Promise<BackendResult> => {
