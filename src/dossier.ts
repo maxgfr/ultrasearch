@@ -249,7 +249,7 @@ export function renderDossierMarkdown(sources: Source[], manifest: Manifest, tem
     const ws = manifest.webSearch;
     out.push(
       ws.supplied
-        ? `**web-search lane:** ${ws.supplied} agent-supplied hit(s) → ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "")
+        ? `**Web-search lane:** ${ws.supplied} agent-supplied hit(s) → ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "")
         : `> 🔎 **No web-search lane** — discovery ran on the keyless engines alone, and those are best-effort. ` +
             `If you have a web search tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; ` +
             `next time, pass them to \`gather --web-results\` from the start.`,
