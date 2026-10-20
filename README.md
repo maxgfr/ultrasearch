@@ -457,28 +457,9 @@ host, applied to the **installed** copy of the skill:
 | --- | --- | --- |
 | Claude Code | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
 | Codex | `allow_implicit_invocation: true` under `policy:` in `agents/openai.yaml` | set it to `false` |
-| OpenCode | `metadata.opencode/autoinvoke: 'true'` in `SKILL.md` | set it to `'false'` |
 
 Claude Code can do it without touching the file:
 `"skillOverrides": { "ultrasearch": "user-invocable-only" }` in `settings.json`
 leaves `/ultrasearch` working while hiding the skill from the model. Plugin installs
 ignore `skillOverrides`, so edit the frontmatter there. Updating or reinstalling
 the skill restores the shipped default, so reapply the change afterwards.
-
-OpenCode V1 reads no `autoinvoke` metadata; `permission.skill` in
-`~/.config/opencode/opencode.json` or the project configuration is how you force
-explicit-only there. Retain unrelated permissions:
-
-```json
-{
-  "permission": {
-    "skill": {
-      "ultrasearch": "deny"
-    }
-  }
-}
-```
-
-On OpenCode 1.18.30 that rule hides the skill from the agent and rejects
-skill-tool loading, while the explicit `/ultrasearch` command still works.
-Installation with `skills add` does not write this OpenCode V1 configuration.
