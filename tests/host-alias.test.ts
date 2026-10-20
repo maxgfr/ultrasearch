@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildGatherOptions, parseCli as parseArgs } from "../src/cli.js";
+import { buildGatherOptions, main, parseCli as parseArgs } from "../src/cli.js";
 import { callTool } from "../src/mcp/handlers.js";
 import { TOOLS } from "../src/mcp/tools.js";
 import { validateArgs } from "../src/engine.js";
@@ -37,6 +37,13 @@ describe("CLI — `claude` is a deprecated alias of `host`", () => {
   it("accepts --backends claude as host", () => {
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--backends", "claude,wikipedia,host"])).backends).toEqual(["host", "wikipedia"]);
+  });
+
+  it("names the flag that was used: search --backend claude", async () => {
+    const err = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await main(["search", "--backend", "claude", "--q", "x", "--json"]);
+    expect(err.mock.calls.map((c) => String(c[0])).join("")).toMatch(/--backend claude is deprecated — use host/);
   });
 
   it("takes --web-engine host without any note", () => {

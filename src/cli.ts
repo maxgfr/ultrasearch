@@ -517,16 +517,16 @@ function canonicalLabel(flag: string, value: string): string {
   return name;
 }
 
-function parseBackends(s: string): BackendKind[] {
+function parseBackends(s: string, flag = "--backends"): BackendKind[] {
   const out: BackendKind[] = [];
   for (const raw of parseList(s)) {
-    const t = canonicalLabel("--backends", raw);
+    const t = canonicalLabel(flag, raw);
     if (!(ALL_BACKENDS as readonly string[]).includes(t)) {
       fail(`unknown backend "${t}" (use: ${ALL_BACKENDS.join(", ")})`);
     }
     if (!out.includes(t as BackendKind)) out.push(t as BackendKind);
   }
-  if (out.length === 0) fail("--backends resolved to nothing");
+  if (out.length === 0) fail(`${flag} resolved to nothing`);
   return out;
 }
 
@@ -856,7 +856,7 @@ async function dispatch(p: Parsed): Promise<void> {
     case "search": {
       const backendStr = p.values.backend;
       if (!backendStr) fail("missing --backend <kind>");
-      const [backend] = parseBackends(backendStr);
+      const [backend] = parseBackends(backendStr, "--backend");
       const options = buildGatherOptions(p);
       const ctx = { question: options.question, mode: getMode(options.mode), options, variants: [options.question] };
       const [res] = await runBackends([backend!], ctx);

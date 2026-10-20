@@ -15016,7 +15016,7 @@ function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   if (manifest.webSearch) {
     const ws = manifest.webSearch;
     out.push(
-      ws.supplied ? `**web-search lane:** ${ws.supplied} agent-supplied hit(s) \u2192 ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "") : `> \u{1F50E} **No web-search lane** \u2014 discovery ran on the keyless engines alone, and those are best-effort. If you have a web search tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; next time, pass them to \`gather --web-results\` from the start.`
+      ws.supplied ? `**Web-search lane:** ${ws.supplied} agent-supplied hit(s) \u2192 ${ws.kept} kept` + (ws.rejected ? ` (${ws.rejected} rejected as unusable)` : "") : `> \u{1F50E} **No web-search lane** \u2014 discovery ran on the keyless engines alone, and those are best-effort. If you have a web search tool, search yourself and fold the hits in with \`ingest --run <dir> --web-results <f.json>\`; next time, pass them to \`gather --web-results\` from the start.`
     );
     out.push("");
   }
@@ -21301,16 +21301,16 @@ function canonicalLabel(flag, value) {
 `);
   return name;
 }
-function parseBackends(s) {
+function parseBackends(s, flag = "--backends") {
   const out = [];
   for (const raw of parseList(s)) {
-    const t = canonicalLabel("--backends", raw);
+    const t = canonicalLabel(flag, raw);
     if (!ALL_BACKENDS.includes(t)) {
       fail(`unknown backend "${t}" (use: ${ALL_BACKENDS.join(", ")})`);
     }
     if (!out.includes(t)) out.push(t);
   }
-  if (out.length === 0) fail("--backends resolved to nothing");
+  if (out.length === 0) fail(`${flag} resolved to nothing`);
   return out;
 }
 var NO_WRITE_REFUSED = {
@@ -21536,7 +21536,7 @@ async function dispatch2(p) {
     case "search": {
       const backendStr = p.values.backend;
       if (!backendStr) fail("missing --backend <kind>");
-      const [backend] = parseBackends(backendStr);
+      const [backend] = parseBackends(backendStr, "--backend");
       const options = buildGatherOptions(p);
       const ctx = { question: options.question, mode: getMode(options.mode), options, variants: [options.question] };
       const [res] = await runBackends([backend], ctx);

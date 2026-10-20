@@ -140,6 +140,11 @@ describe("renderDossierMarkdown — thin & empty branches", () => {
     const md = renderDossierMarkdown([], manifest(), "## T");
     expect(md).toMatch(/No sources were retrieved/i);
   });
+
+  it("labels the web-search lane line like every other header field", () => {
+    const md = renderDossierMarkdown([], manifest({ webSearch: { supplied: 4, rejected: 1, kept: 3 } }), "## T");
+    expect(md).toContain("**Web-search lane:** 4 agent-supplied hit(s) → 3 kept (1 rejected as unusable)");
+  });
 });
 
 describe("nextSourceId", () => {
