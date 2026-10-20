@@ -2,9 +2,9 @@ import type { Depth, ModeName } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { planVariants } from "./util.js";
 
-// The WebSearch worklist.
+// The web search worklist.
 //
-// The engine cannot run the agent's WebSearch tool for it — that tool lives in
+// The engine cannot run the agent's web search tool for it — that tool lives in
 // the harness, not in this process. What it CAN do is stop the agent from
 // firing one query and calling it a sweep. One query against a great index
 // still only sees one slice of it; the recall win comes from asking several
@@ -22,7 +22,7 @@ export interface QueryPlan {
   mode: ModeName;
   depth: Depth;
   lang: string;
-  /** How many DISTINCT WebSearch queries to run before pooling the hits. */
+  /** How many DISTINCT web search queries to run before pooling the hits. */
   target: number;
   /** Deterministic starting points from the built-in planner. */
   planned: string[];
@@ -49,20 +49,20 @@ export function planQueries(opts: { question: string; mode: ModeName; depth: Dep
     target,
     planned: planVariants(opts.question, opts.depth),
     angles: mode.searchAngles.slice(0, target),
-    next: `Run your own WebSearch once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`,
+    next: `Run your own web search once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`,
   };
 }
 
 export function formatQueryPlan(plan: QueryPlan): string {
   const lines = [
-    `ultrasearch: WebSearch worklist for "${plan.question}"`,
+    `ultrasearch: Web search worklist for "${plan.question}"`,
     `  mode: ${plan.mode} · depth: ${plan.depth} · search language: ${plan.lang}`,
     ``,
     // Say the budget AND what it covers. Announcing "run 8" over a list of 6
     // is the kind of small dishonesty that teaches an agent to stop reading.
     plan.angles.length >= plan.target
-      ? `Run ${plan.target} DISTINCT WebSearch queries — one per angle, phrased in ${plan.lang}:`
-      : `Run ${plan.target} DISTINCT WebSearch queries, phrased in ${plan.lang} — these ${plan.angles.length} angles, then ${plan.target - plan.angles.length} of your own:`,
+      ? `Run ${plan.target} DISTINCT web search queries — one per angle, phrased in ${plan.lang}:`
+      : `Run ${plan.target} DISTINCT web search queries, phrased in ${plan.lang} — these ${plan.angles.length} angles, then ${plan.target - plan.angles.length} of your own:`,
     ...plan.angles.map((a, i) => `  ${i + 1}. ${a}`),
     ``,
     `Starting points from the built-in planner (yours will be better):`,

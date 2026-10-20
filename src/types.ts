@@ -7,7 +7,9 @@ export const VERSION = "1.41.1";
 // (searxng, duckduckgo) yield candidate URLs the gatherer then fetches;
 // content backends (wikipedia, the keyless APIs) yield items that already carry
 // text. "generic" fetches an explicit URL; "fixture" is the offline CI backend;
-// "claude" is the provenance label for a source the agent added via `fetch`.
+// "host" is the provenance label for a source the agent added via `fetch` or
+// its own built-in web search (the `--web-results` lane). It was spelled
+// "claude" before; see LEGACY_BACKEND_ALIASES.
 // "firecrawl" is a self-hosted Firecrawl instance's keyless /search — an
 // EXPLICIT choice only, never part of the `auto` discovery cascade.
 export type BackendKind =
@@ -38,7 +40,7 @@ export type BackendKind =
   | "pepper"
   | "generic"
   | "fixture"
-  | "claude"
+  | "host"
   // A document read off the local filesystem (`ingest --files`). Deliberately
   // absent from ALL_BACKENDS below: it is a provenance label, not something a
   // run can be pointed at, so `--backends file` stays an error.
@@ -68,7 +70,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "pepper",
   "generic",
   "fixture",
-  "claude",
+  "host",
 ];
 
 // The seven report shapes. Each maps to a ModeProfile (backend priority +
@@ -209,19 +211,32 @@ export interface Provenance {
 // Which keyless discovery engine the web layer uses. "auto" runs a resilient
 // fallback cascade (searxng → duckduckgo → ddglite → mojeek → marginalia),
 // short-circuiting once one yields enough results; the named engines pin to that
-// one; "claude" drops web discovery so the agent drives it via its own WebSearch.
+// one; "host" drops web discovery so the agent drives it via its own built-in
+// web search.
 // "firecrawl" is pinnable but deliberately absent from the `auto` cascade — it
 // needs a local container stack, and its upstream is the same SearXNG the
 // `searxng` engine already queries directly.
 // Single source of truth: the CLI validator and --help both derive from this list.
-export const ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "claude"] as const;
+export const ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "host"] as const;
 export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 
+// The host-search lane was called "claude" until it was renamed "host": it
+// hands discovery to whichever agent runs the skill. The old name is still
+// accepted wherever a backend or web engine is named (`--backends`,
+// `--web-engine`, the MCP `backends` / `web_engine` / `backend` arguments) and
+// still read back from dossiers written before the rename.
+export const LEGACY_BACKEND_ALIASES: Readonly<Record<string, BackendKind>> = { claude: "host" };
+
+/** The current name of a backend / web-engine label, mapping a deprecated alias (`claude`) onto it. */
+export function canonicalBackend(name: string): string {
+  return Object.hasOwn(LEGACY_BACKEND_ALIASES, name) ? (LEGACY_BACKEND_ALIASES[name] as string) : name;
+}
+
 // How wide the DISCOVERY layer casts, as a preset over the primitives above.
-// The harness WebSearch lane is the engine; the keyless cascade is the
+// The harness web-search lane is the engine; the keyless cascade is the
 // amplifier — this knob says whether to pay for the amplifier.
 //
-//   light — the WebSearch lane + the mode's API backends (Wikipedia, arXiv,
+//   light — the web-search lane + the mode's API backends (Wikipedia, arXiv,
 //           Crossref, StackExchange, GitHub, HN, standards). No scraped cascade,
 //           no SearXNG. Firecrawl still EXTRACTS (it is not a discovery engine).
 //   full  — everything keyless, fused: the lane + the scraped cascade + SearXNG.
@@ -231,7 +246,7 @@ export type WebEngine = (typeof ALL_WEB_ENGINES)[number];
 //           pinned one. Wants
 //           the whole container stack up; says so plainly when it is not.
 //   auto  — light when the agent supplied --web-results, full when it did not.
-//           A harness with no WebSearch tool therefore keeps the old behaviour
+//           A harness with no web search tool therefore keeps the old behaviour
 //           and never comes back empty. `auto` never resolves to `max`: paying
 //           for ~3 GB of containers and a 10-minute run is always a decision.
 export const ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"] as const;
@@ -251,7 +266,7 @@ export type SearchProfile = (typeof ALL_SEARCH_PROFILES)[number];
 export const ALL_BROWSER_MODES = ["fallback", "always", "off"] as const;
 export type BrowserMode = (typeof ALL_BROWSER_MODES)[number];
 
-// One hit from the agent's own WebSearch tool, as handed to `--web-results`.
+// One hit from the agent's own web search tool, as handed to `--web-results`.
 // Only `url` is required — a hit with no title falls back to the URL, and a
 // missing snippet just means the excerpt comes from the hydrated page.
 export interface WebSearchHit {
@@ -383,9 +398,9 @@ export interface ModeProfile {
   deepOnly: BackendKind[]; // additional backends run only at --depth deep
   template: string; // the markdown template skeleton (section headings)
   extras: ModeExtra[];
-  // The distinct ANGLES a WebSearch sweep should cover for this mode, emitted by
+  // The distinct ANGLES a web search sweep should cover for this mode, emitted by
   // `queries` as the agent's search worklist. The engine cannot run the agent's
-  // WebSearch for it, so the next best thing is to say precisely what to search
+  // web search for it, so the next best thing is to say precisely what to search
   // — one query per angle beats one query repeated.
   searchAngles: string[];
 }
@@ -412,7 +427,7 @@ export interface GatherOptions {
   firecrawl?: string; // Firecrawl base URL (else env / http://localhost:3002); "off" disables it
   webEngine: WebEngine;
   search?: SearchProfile; // --search: how wide DISCOVERY casts (default auto)
-  webResults?: WebSearchHit[]; // --web-results: the harness WebSearch hits the agent supplied
+  webResults?: WebSearchHit[]; // --web-results: the harness web search hits the agent supplied
   webResultsRejected?: number; // entries in that payload with no usable http(s) URL (reported, never hidden)
   pages?: number; // result pages each web engine fetches per query (else per depth)
   webBreadth?: number; // engines the auto cascade fuses before stopping (else per depth)
@@ -445,7 +460,7 @@ export interface RunContext {
 }
 
 // manifest.json — run metadata. `notes` carries retrieval hints (incl. the
-// "agent: enrich with your own WebSearch via `fetch --url`" nudge).
+// "agent: enrich with your own web search via `fetch --url`" nudge).
 export interface Manifest {
   version: string;
   question: string;
@@ -458,8 +473,8 @@ export interface Manifest {
   pages?: number; // result pages fetched per web engine this run
   backends: BackendKind[]; // requested
   backendsUsed: BackendKind[]; // returned at least one source
-  enginesFused?: BackendKind[]; // discovery lanes whose results were fused this run (incl. "claude", the WebSearch lane)
-  // What the harness WebSearch lane contributed. `supplied: 0` on a run that
+  enginesFused?: BackendKind[]; // discovery lanes whose results were fused this run (incl. "host", the host-search lane)
+  // What the harness web-search lane contributed. `supplied: 0` on a run that
   // could have had one is the signal that the best engine available was not
   // used — the dossier says so rather than leaving it to be inferred.
   webSearch?: { supplied: number; rejected: number; kept: number };

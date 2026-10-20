@@ -80,7 +80,7 @@ describe("autoRelink", () => {
     // The extract is what the endpoint returned — and it names its own document.
     writeFileSync(
       join(dir, "sources/S2.md"),
-      "# S2 — endpoint\n- url: x\n- backend: claude\n1. Science. 2012;337:816. doi: 10.1126/science.aad5227.\n\nA programmable endonuclease.\n",
+      "# S2 — endpoint\n- url: x\n- backend: host\n1. Science. 2012;337:816. doi: 10.1126/science.aad5227.\n\nA programmable endonuclease.\n",
     );
     const { repaired, remaining } = autoRelink(dir);
     expect(repaired).toHaveLength(1);
@@ -93,7 +93,7 @@ describe("autoRelink", () => {
   it("leaves what it cannot prove for the agent, and says so", () => {
     const dir = scratch();
     withEndpointSource(dir);
-    writeFileSync(join(dir, "sources/S2.md"), '# S2 — endpoint\n- url: x\n- backend: claude\n{"count": 3, "results": []}\n');
+    writeFileSync(join(dir, "sources/S2.md"), '# S2 — endpoint\n- url: x\n- backend: host\n{"count": 3, "results": []}\n');
     const { repaired, remaining } = autoRelink(dir);
     expect(repaired).toEqual([]);
     expect(remaining).toHaveLength(1);
@@ -109,7 +109,7 @@ describe("autoRelink", () => {
     sources[0]!.url = "https://doi.org/10.1126/science.aad5227";
     sources[0]!.canonicalUrl = "https://doi.org/10.1126/science.aad5227";
     writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
-    writeFileSync(join(dir, "sources/S2.md"), "# S2\n- url: x\n- backend: claude\ndoi: 10.1126/science.aad5227\n");
+    writeFileSync(join(dir, "sources/S2.md"), "# S2\n- url: x\n- backend: host\ndoi: 10.1126/science.aad5227\n");
     const { repaired, remaining } = autoRelink(dir);
     expect(repaired).toEqual([]);
     expect(remaining).toHaveLength(1);
@@ -130,7 +130,7 @@ describe("autoRelink", () => {
     ] as [number, string][]) {
       sources[i]!.url = `https://api.test/v1/rec/${i}?format=json`;
       sources[i]!.canonicalUrl = sources[i]!.url;
-      writeFileSync(join(dir, `sources/S${i + 1}.md`), `# S${i + 1}\n- url: x\n- backend: claude\n${body}\n`);
+      writeFileSync(join(dir, `sources/S${i + 1}.md`), `# S${i + 1}\n- url: x\n- backend: host\n${body}\n`);
     }
     writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
     const { repaired, remaining } = autoRelink(dir);

@@ -1,17 +1,17 @@
-# Web discovery — your WebSearch is the engine, the cascade is the amplifier
+# Web discovery — your web search is the engine, the cascade is the amplifier
 
 Discovery has two lanes. Fetching and text extraction of the chosen URLs is
 always done by the script, whichever lane found them.
 
-## Lane 1 — your own WebSearch (the engine)
+## Lane 1 — your own web search (the engine)
 
-The best index in this pipeline, and the only one that needs neither a container
-nor a scrape. The engine cannot call it — that tool lives in your harness — so
-you run it and hand the hits over:
+The agent's built-in web search is the best index in this pipeline, and the only
+one that needs neither a container nor a scrape. The engine cannot call it —
+that tool lives in your harness — so you run it and hand the hits over:
 
 ```
 node <skill-dir>/scripts/ultrasearch.mjs queries --q "<question>" --mode <m> --depth <d>
-# → run your WebSearch once per angle, pool every hit into one JSON array
+# → run your web search once per angle, pool every hit into one JSON array
 node <skill-dir>/scripts/ultrasearch.mjs gather --q "<question>" --web-results <RUN>/websearch.json
 ```
 
@@ -26,7 +26,7 @@ entry it cannot use is **counted and reported**, never silently dropped.
 
 What the lane gets, and what it deliberately does not:
 
-- **No trust privilege.** `claude` has no authority floor, exactly like every
+- **No trust privilege.** `host` has no authority floor, exactly like every
   other discovery engine. There is no hostname table at all any more: `trust`
   reflects only the ROUTE a source arrived by, and judging the page is the
   reading agent's job.
@@ -40,7 +40,7 @@ What the lane gets, and what it deliberately does not:
 
 ## The two profiles (`--search`)
 
-| `--search` | Your WebSearch lane | Mode API backends (Wikipedia, arXiv, Crossref, StackExchange, GitHub, HN, standards) | Keyless cascade (DDG, DDG Lite, Mojeek, Marginalia) | SearXNG | Firecrawl |
+| `--search` | Your web-search lane | Mode API backends (Wikipedia, arXiv, Crossref, StackExchange, GitHub, HN, standards) | Keyless cascade (DDG, DDG Lite, Mojeek, Marginalia) | SearXNG | Firecrawl |
 |---|---|---|---|---|---|
 | `light` | ✅ the engine | ✅ | ❌ | ❌ | ✅ (extraction) |
 | `full` | ✅ | ✅ | ✅ fused | ✅ if up | ✅ (extraction) |
@@ -85,7 +85,7 @@ Two consequences worth knowing:
 - **`light` has no discovery engine**, so `--seed-domains` and `--rounds 2` have
   nothing to run their queries on. The run says so in its notes rather than
   pretending. Pass those hosts' pages in `--web-results`, or use `--search full`.
-- **`auto` never regresses a harness without WebSearch.** No `--web-results` ⇒
+- **`auto` never regresses a harness without web search.** No `--web-results` ⇒
   `full` ⇒ exactly the behaviour that existed before this lane did.
 
 ## Lane 2 — the keyless cascade (`--search full`)
@@ -136,7 +136,7 @@ fused as discovery engines.
 
 ## Topping up an existing dossier
 
-A second WebSearch round folds in as one process, never one per URL:
+A second web search round folds in as one process, never one per URL:
 
 ```
 node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dossier-dir> --web-results <round2.json>
@@ -144,15 +144,17 @@ node <skill-dir>/scripts/ultrasearch.mjs ingest --run <dossier-dir> --web-result
 
 Each URL gets its own `S#` and its own outcome line — added, already present, or
 refused with the reason. `fetch --url` remains the single-page form. Sources
-ingested either way are stamped with the `claude` backend label for provenance.
+ingested either way are stamped with the `host` backend label for provenance
+(dossiers written before the rename say `claude`; they are read as `host`).
 
 ## Pinning an engine
 
-`--web-engine auto|searxng|firecrawl|ddg|ddglite|mojeek|marginalia|claude` —
+`--web-engine auto|searxng|firecrawl|ddg|ddglite|mojeek|marginalia|host` —
 `auto` (default) runs the fallback cascade above; a named engine pins to exactly
-that one (injected even if the mode profile didn't list it); `claude` drops the
+that one (injected even if the mode profile didn't list it); `host` drops the
 keyless engines so your `--web-results` lane IS the discovery — the same thing
-`--search light` does, spelled as an engine.
+`--search light` does, spelled as an engine. `claude`, its former name, is still
+accepted as a deprecated alias.
 
 Pinning is a deliberate request, so it **suppresses the `auto` inference**:
 `--web-results` plus `--web-engine mojeek` resolves to `full`, not `light`, and

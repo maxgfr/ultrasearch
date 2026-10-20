@@ -248,7 +248,7 @@ describe("gatherReport (empty-dossier guardrail)", () => {
     if (keyless > -1) expect(first).toBeLessThan(keyless);
   });
 
-  it("with a lane already supplied, points at widening it rather than re-running WebSearch", () => {
+  it("with a lane already supplied, points at widening it rather than re-running the web search", () => {
     const withLane = buildGatherOptions(parseArgs(["gather", "--q", "niche commercial query"]));
     withLane.webResults = [{ url: "https://a.test" }];
     const r = gatherReport({ dir: "/tmp/run", sources: [], manifest: fakeManifest } as never, withLane);

@@ -154,7 +154,7 @@ function flushIndex(dir: string, state: IngestState): void {
 }
 
 // Ingest a BATCH of URLs into one dossier — the whole point being that a
-// WebSearch that returned twelve good pages costs ONE process, not twelve.
+// web search that returned twelve good pages costs ONE process, not twelve.
 //
 // Deliberately SEQUENTIAL. The batch picks the next free [S#] for each source
 // in turn; two concurrent items both claim the same highest id, and one source
@@ -330,7 +330,7 @@ async function prepareFile(stateOf: () => IngestState, abs: string, opts: { ques
 }
 
 // Ingest a single URL into an existing dossier — the bridge for the agent's own
-// WebSearch hits. Fetches + cleans the page, allocates the next S# id, appends
+// web search hits. Fetches + cleans the page, allocates the next S# id, appends
 // to sources.json, writes sources/S#.md, and refreshes manifest + DOSSIER.md.
 // If the URL is already in the dossier it returns the existing id (no dup).
 //
@@ -449,7 +449,7 @@ async function prepareSource(
 
 /**
  * A caller's title, unless it is no title at all: empty, a URL, or a bare host
- * name ("pmc.ncbi.nlm.nih.gov" — what a WebSearch hit often carries). Then the
+ * name ("pmc.ncbi.nlm.nih.gov" — what a web search hit often carries). Then the
  * page's own title is better.
  */
 function givenTitle(t: string | undefined): string | undefined {
@@ -496,7 +496,7 @@ async function readSource(
   if (ncbi) {
     const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
     if (got.ok) {
-      const backend: BackendKind = opts.backend ?? "claude";
+      const backend: BackendKind = opts.backend ?? "host";
       const raw: RawSource = {
         url: citeUrl,
         title: givenTitle(opts.title) || got.title || titleFromText(got.text) || citeUrl,
@@ -605,7 +605,7 @@ async function readSource(
     }
   }
   // A dead origin (404/410/451/403) → try the Wayback Machine's closest snapshot
-  // before giving up, so an agent's own WebSearch hit that has since rotted still
+  // before giving up, so an agent's own web search hit that has since rotted still
   // makes it into the dossier. The ORIGINAL url is kept as the source url.
   if (!text?.trim() && (DEAD_LINK_STATUS.has(fetched.status) || home)) {
     const wb = await rescueViaWayback(readUrl, readOpts);
@@ -666,7 +666,7 @@ async function readSource(
   }
 
   if (rendered) meta.extractor = "browser";
-  const backend: BackendKind = opts.backend ?? "claude";
+  const backend: BackendKind = opts.backend ?? "host";
   const raw: RawSource = {
     url: citeUrl,
     // Never fall back to the URL as a title when the text came from an API

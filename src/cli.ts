@@ -12,6 +12,7 @@ import {
   ALL_TEMPLATES,
   DEPTH_CAPS,
   DEEP_CAPS,
+  canonicalBackend,
 } from "./types.js";
 
 // Re-exported for scripts/verify-skill-bundle.mjs, which imports the built
@@ -22,7 +23,7 @@ import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
-import { buildSource } from "./dossier.js";
+import { buildSource, upgradeLegacyManifest } from "./dossier.js";
 import { extraFiles, extraSummaries } from "./extras.js";
 import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
@@ -74,16 +75,16 @@ Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
            dossier (sources.json, sources/S#.md, DOSSIER.md, manifest.json).
            You then write SUMMARY/REPORT.md, run render, then check.
-  queries  Print the WebSearch worklist: how many DISTINCT queries to run for
+  queries  Print the web search worklist: how many DISTINCT queries to run for
            this depth, the mode's angles to cover, and the planner's starting
-           points. Run YOUR OWN WebSearch once per angle, pool every hit, and
+           points. Run YOUR OWN web search once per angle, pool every hit, and
            feed them to gather --web-results. One query is not a sweep.
   search   Drill ONE backend and print ranked results (writes nothing).
   fetch    Ingest ONE URL into an existing dossier (alias: add-source). Prints
            the new source id (S#).
   ingest   Ingest MANY URLs into an existing dossier in a single process — the
            batch form of 'fetch', and the way to top up a dossier from your own
-           WebSearch. Takes --web-results <f.json|-> or --urls <u,...>, and
+           web search. Takes --web-results <f.json|-> or --urls <u,...>, and
            reports one outcome per URL (added / already there / refused).
            PubMed and PMC pages (and efetch URLs) are read through E-utilities
            and Europe PMC, never through their cookie / anti-bot walls.
@@ -117,7 +118,7 @@ Commands:
            and Firecrawl containers, the browser rung, the PDF extractor ladder. The helpers are
            skipped in SILENCE when absent, so this is how you find out a
            container is up but unused, or a stronger PDF reader is missing.
-           With --run <dossier-dir>, also says whether THAT run had a WebSearch
+           With --run <dossier-dir>, also says whether THAT run had a web search
            lane — a dossier built without one looks just like a good one.
   searxng  | firecrawl   Manage the optional container: up | down | status.
   browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
@@ -138,11 +139,13 @@ Deep research (the agentic tier — see references/deep-research-playbook.md):
            --shard <i> writes shard i only (one skeptic subagent per shard);
            --apply accepts several verdict files (comma list or a directory).
   orchestrate  Emit the run's multi-agent orchestration from its CURRENT
-           worklists: one launchable workflow per ready phase (gather fans out
-           one gatherer per PLAN.json sub-question; verify fans skeptics over
-           VERIFY.todo.json) + the agents/<role>.md dispatch contracts + a
-           sequential RUNBOOK.md, under <RUN>/orchestration/. Subagents return
-           fragments; the merge / verify --apply folds stay with you.
+           worklists: the agents/<role>.md dispatch contracts any host's
+           subagents can run (gather fans out one gatherer per PLAN.json
+           sub-question; verify fans skeptics over VERIFY.todo.json) + a
+           sequential RUNBOOK.md, plus — optionally, for Claude Code's Workflow
+           tool — one launchable <phase>.workflow.mjs per ready phase, under
+           <RUN>/orchestration/. Subagents return fragments; the merge /
+           verify --apply folds stay with you.
 
 Options:
   --q, --question <s>  The topic or question                      (required)
@@ -185,14 +188,14 @@ Options:
                        be shown — macOS, Windows, Linux with a display — else
                        off; always off by default under --stdout, which writes
                        nothing, not even the browser's profile)
-  --web-results <f>    YOUR OWN WebSearch hits, as JSON: [{url,title,snippet}, …]
+  --web-results <f>    YOUR OWN web search hits, as JSON: [{url,title,snippet}, …]
                        (a bare array of URLs, or '-' for stdin, also work). For
                        'ingest', a hit may add citeUrl: read the text from url,
                        cite that page (fetch --cite-url, per hit). This
                        is the PRIMARY discovery lane — the strongest index here,
                        and the only one needing neither a container nor a scrape.
   --search <p>         ${ALL_SEARCH_PROFILES.join(" | ")}   how wide discovery casts:
-                       light = the WebSearch lane + the mode's API backends
+                       light = the web-search lane + the mode's API backends
                        full  = also fuse the keyless cascade + SearXNG
                        max   = the ceiling — full + Firecrawl's /search in
                                discovery, every recall knob at its limit, and
@@ -201,6 +204,9 @@ Options:
                        auto  = light when --web-results is given, else full
   --web-engine <e>     ${ALL_WEB_ENGINES.join(" | ")}
                        auto = resilient fallback cascade        (default: auto)
+                       host = no keyless discovery: your own built-in web
+                              search (--web-results) is the discovery
+                              ('claude' is accepted as a deprecated alias)
   --pages <n>          Result pages to fetch per web engine (≤5; default: per depth)
   --web-breadth <n>    Web engines the auto cascade fuses   (≤5; default: per depth)
   --url <u,...>        URLs for the 'generic' backend / 'fetch' / 'relink'
@@ -503,9 +509,18 @@ export function readWebResultsPayload(spec: string): string {
   }
 }
 
+// `claude` is the pre-rename spelling of the `host` lane: still accepted, with
+// a one-line nudge toward the current name.
+function canonicalLabel(flag: string, value: string): string {
+  const name = canonicalBackend(value);
+  if (name !== value) process.stderr.write(`ultrasearch: ${flag} ${value} is deprecated — use ${name} (same behaviour).\n`);
+  return name;
+}
+
 function parseBackends(s: string): BackendKind[] {
   const out: BackendKind[] = [];
-  for (const t of parseList(s)) {
+  for (const raw of parseList(s)) {
+    const t = canonicalLabel("--backends", raw);
     if (!(ALL_BACKENDS as readonly string[]).includes(t)) {
       fail(`unknown backend "${t}" (use: ${ALL_BACKENDS.join(", ")})`);
     }
@@ -592,10 +607,10 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
     options.stdout ? `  dossier:  --stdout — nothing written; the dossier is on stdout` : `  dossier:  ${r.dir}`,
   ];
   if (r.sources.length === 0) {
-    // The recovery order follows the engine hierarchy: the agent's own WebSearch
+    // The recovery order follows the engine hierarchy: the agent's own web search
     // first (strongest index, no infra), the keyless engines second. Telling an
     // agent to re-roll the dice on a scraper before it has tried the tool in its
-    // own hand is what made WebSearch a last resort in the first place.
+    // own hand is what made web search a last resort in the first place.
     const noLane = !options.webResults?.length;
     return {
       exitCode: 1,
@@ -603,10 +618,10 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
         ...head,
         `  EMPTY DOSSIER — retrieval returned nothing usable. Do NOT write tiers over this. Recover it:`,
         noLane
-          ? `    1. run YOUR OWN WebSearch and feed it back: ultrasearch gather --q "…" --web-results <hits.json>`
-          : `    1. widen the lane: more/other WebSearch queries → a bigger --web-results, or --search full to fuse the keyless engines`,
+          ? `    1. run YOUR OWN web search and feed it back: ultrasearch gather --q "…" --web-results <hits.json>`
+          : `    1. widen the lane: more/other web search queries → a bigger --web-results, or --search full to fuse the keyless engines`,
         options.stdout
-          ? `    2. or read the pages your WebSearch found directly — \`fetch\`/\`ingest\` need a dossier on disk.`
+          ? `    2. or read the pages your web search found directly — \`fetch\`/\`ingest\` need a dossier on disk.`
           : `    2. or pin what you found: ultrasearch ingest --run ${r.dir} --web-results <hits.json>`,
         `    3. stop after two empty attempts — report the gap; NEVER invent sources.`,
       ],
@@ -620,7 +635,7 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   const under = r.manifest.coverage?.under ?? [];
   const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
   // Say which lane drove discovery, and say it when there was none: an agent
-  // that owns a WebSearch tool and did not use it should learn that from the
+  // that owns a web search tool and did not use it should learn that from the
   // run, not from re-reading the docs.
   const ws = r.manifest.webSearch;
   const laneLine = ws?.supplied
@@ -704,10 +719,10 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
   const askedMax = p.values.search === "max";
   const depth = oneOf<Depth>("depth", p.values.depth ?? (askedMax ? "deep" : "standard"), ALL_DEPTHS);
   const caps = DEPTH_CAPS[depth];
-  const webEngine = oneOf<WebEngine>("web-engine", p.values["web-engine"] ?? "auto", ALL_WEB_ENGINES);
+  const webEngine = oneOf<WebEngine>("web-engine", canonicalLabel("--web-engine", p.values["web-engine"] ?? "auto"), ALL_WEB_ENGINES);
   const search = oneOf<SearchProfile>("search", p.values.search ?? "auto", ALL_SEARCH_PROFILES);
 
-  // The WebSearch lane. Parsing is forgiving (see parseWebResults) but an EMPTY
+  // The web-search lane. Parsing is forgiving (see parseWebResults) but an EMPTY
   // result is a hard failure, not a silent downgrade: the agent believed it had
   // handed over its hits, and letting the run quietly fall back to the keyless
   // engines would hide the one thing it most needs to know.
@@ -912,7 +927,7 @@ async function dispatch(p: Parsed): Promise<void> {
         const mf = join(resolve(runDir), "manifest.json");
         if (!existsSync(mf)) fail(`no dossier at ${resolve(runDir)} (no manifest.json)`);
         try {
-          manifest = JSON.parse(readFileSync(mf, "utf8")) as Manifest;
+          manifest = upgradeLegacyManifest(JSON.parse(readFileSync(mf, "utf8")) as Manifest);
         } catch (e) {
           fail(`could not read ${mf}: ${(e as Error).message}`);
         }
@@ -1320,9 +1335,13 @@ async function dispatch(p: Parsed): Promise<void> {
       for (const w of res.written) lines.push(`  ${w}`);
       const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
       if (workflows.length) {
+        const orch = join(resolve(dir), "orchestration");
         lines.push("");
-        for (const w of workflows) lines.push(`Launch: Workflow({ scriptPath: ${JSON.stringify(w)} })`);
-        lines.push("Then run the fold shown at the end of each workflow yourself (merge / verify --apply) — you stay the sole writer.");
+        lines.push(`Fan out: dispatch one subagent per batch with ${join(orch, "agents", "<role>.md")} (batches in ${join(orch, "RUNBOOK.md")}),`);
+        lines.push("  or play the contracts yourself, sequentially, from RUNBOOK.md (or re-run with --eco).");
+        lines.push("Optional — Claude Code: launch with the Workflow tool for one-call parallel fan-out:");
+        for (const w of workflows) lines.push(`  Workflow({ scriptPath: ${JSON.stringify(w)} })`);
+        lines.push("Then run the fold yourself (merge / verify --apply; RUNBOOK.md shows it) — you stay the sole writer.");
       } else {
         lines.push(`Follow ${join(resolve(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
@@ -1385,7 +1404,15 @@ async function dispatch(p: Parsed): Promise<void> {
       // but keeping the two transports identical here means no one has to
       // remember which is which.
       process.stderr.write(`ultrasearch: MCP server listening on ${running.url}\n`);
-      process.stderr.write(`  client: claude mcp add --transport http ultrasearch ${running.url}\n`);
+      // Any MCP client takes the URL; one line per common agent CLI.
+      process.stderr.write(
+        [
+          `  connect any MCP client to that URL, e.g.:`,
+          `    Claude Code  claude mcp add --transport http ultrasearch ${running.url}`,
+          `    Codex        codex mcp add ultrasearch --url ${running.url}`,
+          `    OpenCode     opencode mcp add ultrasearch --url ${running.url}`,
+        ].join("\n") + "\n",
+      );
       for (const sig of ["SIGINT", "SIGTERM"] as const) {
         // The browser first, without waiting for reads in flight: a call still
         // running would hold running.close() open, and process.exit skips the

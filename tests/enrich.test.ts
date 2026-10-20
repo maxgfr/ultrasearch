@@ -44,7 +44,7 @@ describe("addSource", () => {
 
     const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
     expect(sources).toHaveLength(3);
-    expect(sources[2]!.backend).toBe("claude");
+    expect(sources[2]!.backend).toBe("host");
     expect(sources[2]!.url).toBe("https://new.test/page");
     rmSync(dir, { recursive: true, force: true });
   });

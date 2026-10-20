@@ -9,9 +9,9 @@ ungrounded claims), pointed at the open web instead of a git repo.
 
 ```
 question
-  │  queries → the agent runs its OWN WebSearch, N distinct angles, pools the hits
+  │  queries → the agent runs its OWN web search, N distinct angles, pools the hits
   ▼
-[ --web-results ] ── the WebSearch lane (backend "claude"), the primary engine
+[ --web-results ] ── the web-search lane (backend "host"), the primary engine
   │  gather
   ▼
 plan query variants (full question + keywords + identifiers, by depth)
@@ -38,7 +38,7 @@ plan query variants (full question + keywords + identifiers, by depth)
 dossier on disk:  manifest.json · sources.json · sources/S#.md · DOSSIER.md
   │  (research mode also writes refs.bib)
   ▼
-the AGENT reads DOSSIER.md, tops up the gaps with a second WebSearch round
+the AGENT reads DOSSIER.md, tops up the gaps with a second web search round
 (`ingest --web-results`, one process for the whole round), then writes
 SUMMARY.md / REPORT.md  (+ glossary.md for learn)
   │  render                                   │  check
@@ -146,13 +146,13 @@ extracts, so it costs no extra retrieval. See
   re-read, and a good text REPAIRS it in place under its id (`repaired: true`).
   Dedupe runs on the cite URL and on identifiers (`identity.ts`); search results
   pages (`listing.ts`) are refused, and so is a deep link that redirected home.
-- `backends/websearch.ts` — the harness WebSearch lane (backend kind `claude`).
+- `backends/websearch.ts` — the host web-search lane (backend kind `host`, formerly `claude`).
   `parseWebResults` is the forgiving seam between a model's output and the
   engine — object arrays, bare URL arrays, `{results:[…]}` wrappers, newline
   lists — and it COUNTS what it refuses rather than silently halving recall. The
   backend itself carries no text, so every hit is hydrated and wall-checked like
   any other candidate.
-- `queries.ts` — `planQueries`: the agent's WebSearch worklist (how many distinct
+- `queries.ts` — `planQueries`: the agent's web search worklist (how many distinct
   queries for the depth, plus the mode's `searchAngles`). The engine cannot run
   the agent's search tool, so the next best thing is saying precisely what to
   search — one query against a great index is still only one slice of it.
@@ -196,8 +196,9 @@ extracts, so it costs no extra retrieval. See
   signals and candidate angles.
 - `plan.ts` — deterministic sub-question decomposition (`runPlan`) for the deep tier.
 - `orchestrate.ts` + `orchestrate-templates.ts` — `orchestrateRun`: emits the
-  per-phase Workflow scripts, the `agents/<role>.md` dispatch contracts and the
-  sequential `RUNBOOK.md` from the run's current worklists.
+  `agents/<role>.md` dispatch contracts (any host's subagents), the sequential
+  `RUNBOOK.md`, and optionally per-phase scripts for Claude Code's Workflow tool,
+  from the run's current worklists.
 - `merge.ts` — `runMerge`: union sub-dossiers into one master with stable `S#`
   ids, re-fusing + de-duplicating the combined pool and recording provenance.
 - `verify.ts` — `runVerify` (claim↔source worklist) + `applyVerdicts` /

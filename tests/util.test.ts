@@ -111,7 +111,7 @@ describe("trustScore — PROVENANCE only, never a judgment about the web", () =>
   });
 
   it("never invents authority for a general-web engine", () => {
-    for (const b of ["duckduckgo", "mojeek", "marginalia", "searxng", "firecrawl", "claude"] as const) {
+    for (const b of ["duckduckgo", "mojeek", "marginalia", "searxng", "firecrawl", "host"] as const) {
       expect(trustScore("https://anything.test/x", b), b).toBe(0.5);
     }
   });

@@ -103,7 +103,7 @@ describe("the websearch backend carries NO privilege", () => {
   it("emits the hits in the agent's order, with no pre-loaded text", async () => {
     const hits = [{ url: "https://a.test/1" }, { url: "https://b.test/2", title: "B" }];
     const res = await websearchBackend(makeCtx("q", { webResults: hits }));
-    expect(res.backend).toBe("claude");
+    expect(res.backend).toBe("host");
     expect(res.items.map((i) => i.url)).toEqual(["https://a.test/1", "https://b.test/2"]);
     expect(res.items[0]!.score).toBeGreaterThan(res.items[1]!.score);
     // No `text` ⇒ the gatherer hydrates the page through the same rescue ladder
@@ -143,7 +143,7 @@ describe("--search max — the ceiling", () => {
 
   it("adds Firecrawl to DISCOVERY, which no other profile does", () => {
     const b = resolveBackends(opts({ webResults: hits, search: "max" }), topic);
-    for (const k of ["claude", "firecrawl", "searxng", "duckduckgo", "ddglite", "mojeek", "marginalia", "wikipedia"]) {
+    for (const k of ["host", "firecrawl", "searxng", "duckduckgo", "ddglite", "mojeek", "marginalia", "wikipedia"]) {
       expect(b, k).toContain(k);
     }
     expect(resolveBackends(opts({ webResults: hits, search: "full" }), topic)).not.toContain("firecrawl");
@@ -178,7 +178,7 @@ describe("resolveBackends wires the lane and the profile together", () => {
 
   it("light drops the scraped cascade and SearXNG, keeps the API backends", () => {
     const b = resolveBackends(opts({ webResults: hits }), topic);
-    expect(b).toContain("claude");
+    expect(b).toContain("host");
     expect(b).toContain("wikipedia"); // an API backend: reliable, keyless, kept
     expect(b).not.toContain("duckduckgo");
     expect(b).not.toContain("searxng");
@@ -186,14 +186,14 @@ describe("resolveBackends wires the lane and the profile together", () => {
 
   it("full fuses the lane WITH the keyless cascade", () => {
     const b = resolveBackends(opts({ webResults: hits, search: "full" }), topic);
-    expect(b).toContain("claude");
+    expect(b).toContain("host");
     expect(b).toContain("duckduckgo");
     expect(b).toContain("searxng");
   });
 
   it("no lane ⇒ the pre-existing behaviour, unchanged", () => {
     const b = resolveBackends(opts(), topic);
-    expect(b).not.toContain("claude");
+    expect(b).not.toContain("host");
     expect(b).toContain("duckduckgo");
     expect(b).toContain("searxng");
   });
@@ -202,7 +202,7 @@ describe("resolveBackends wires the lane and the profile together", () => {
     // research's profile is scholarly APIs only — the agent still searched, so
     // its hits are never thrown away.
     const b = resolveBackends(opts({ webResults: hits }), getMode("research"));
-    expect(b).toContain("claude");
+    expect(b).toContain("host");
     expect(b).toContain("arxiv");
   });
 });
@@ -215,7 +215,7 @@ describe("--backends names what it voids, including the lane", () => {
   });
 
   it("stays quiet about the lane when the pin deliberately KEEPS it", () => {
-    const ignored = ignoredByExplicitBackends(opts({ backends: ["claude"], webResults: [{ url: "https://a.test/1" }] }));
+    const ignored = ignoredByExplicitBackends(opts({ backends: ["host"], webResults: [{ url: "https://a.test/1" }] }));
     expect(ignored).not.toContain("--web-results");
   });
 

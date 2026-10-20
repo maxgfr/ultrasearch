@@ -23,7 +23,7 @@ retrieval; a `check` command that fails on ungrounded claims), pointed at the
 open web instead of a git repo.
 
 ```bash
-npx skills add maxgfr/ultrasearch
+npx skills add maxgfr/ultrasearch          # optional: -a <agent> to target one agent (e.g. -a codex)
 ```
 
 ## Why
@@ -102,13 +102,13 @@ abstracts — see `skills/ultrasearch/references/operations.md`.
 
 > Paths below are relative to a repo checkout. An **installed** skill runs from
 > its own folder, so the agent substitutes an absolute `<skill-dir>/` prefix
-> (`~/.claude/skills/ultrasearch/…`) — see `SKILL.md`.
+> (wherever `skills add` put it for that agent, e.g. `.agents/skills/ultrasearch/…`) — see `SKILL.md`.
 
 ```bash
 # 1. Sweep — what to search, and how wide
 node scripts/ultrasearch.mjs queries --q "how does HTTP rate limiting work" \
   --mode topic --depth standard
-#    The agent runs its OWN WebSearch once per angle and pools every hit into
+#    The agent runs its OWN web search once per angle and pools every hit into
 #    /tmp/rl-hits.json:  [{"url":"…","title":"…","snippet":"…"}, …]
 
 # 2. Retrieve — fetch, clean, rank and de-duplicate every page into the dossier
@@ -242,9 +242,9 @@ once — this file can no longer stop them, and they still hold the ports:
 docker rm -f $(docker ps -aq --filter name='^(ultrasearch|construct|ultradoc)-')
 ```
 
-## Your WebSearch is the engine
+## Your web search is the engine
 
-Discovery has two lanes, and the first one is the agent's own **WebSearch** —
+Discovery has two lanes, and the first one is the agent's own **web search** —
 the best index in the pipeline, and the only one needing neither a container nor
 a scrape. `queries` sizes the sweep (2 · 4 · 8 distinct queries by depth) and
 names the angles to cover; the agent runs them and pools the hits into
@@ -268,7 +268,7 @@ The second lane is the free fallback cascade, behind `--search full`:
 → **Marginalia**, fused by breadth. These are scrapers and free APIs — they
 rate-limit and go empty — so they amplify the first lane rather than replace it.
 `--search light` (the default once you pass `--web-results`) skips them entirely:
-no container, no scraping, nothing to rate-limit. A harness with no WebSearch
+no container, no scraping, nothing to rate-limit. A harness with no web search
 tool passes no hits and keeps the cascade as before.
 
 Mode-specific backends run in both profiles: Wikipedia, the keyless
@@ -300,7 +300,7 @@ that override silently voided.
 
 ## Commands
 
-- `queries` — the WebSearch worklist: how many distinct queries to run for this
+- `queries` — the web search worklist: how many distinct queries to run for this
   depth, and which angles to cover. Start here.
 - `gather` — the main entrypoint: fetch → rank → dedupe → write dossier, driven
   by `--web-results` (your hits) and sized by `--search light|full`.
@@ -341,12 +341,16 @@ your agent calls ultrasearch as typed tools, with JSON schemas in and structured
 results out. Same engine, same cache, no wrapper.
 
 ```bash
-# stdio — the default, and what Claude Code / Claude Desktop / Cursor expect
-claude mcp add ultrasearch -- node /abs/path/to/scripts/ultrasearch.mjs mcp
+# stdio — the default, and what most MCP clients expect
+claude mcp add ultrasearch -- node /abs/path/to/scripts/ultrasearch.mjs mcp     # Claude Code
+codex mcp add ultrasearch -- node /abs/path/to/scripts/ultrasearch.mjs mcp      # Codex
+opencode mcp add ultrasearch -- node /abs/path/to/scripts/ultrasearch.mjs mcp   # OpenCode
 
-# or over HTTP, on loopback
+# or over HTTP, on loopback (it prints these lines with the real URL)
 node scripts/ultrasearch.mjs mcp --transport http --port 7339
 claude mcp add --transport http ultrasearch http://127.0.0.1:7339/mcp
+codex mcp add ultrasearch --url http://127.0.0.1:7339/mcp
+opencode mcp add ultrasearch --url http://127.0.0.1:7339/mcp
 ```
 
 ```jsonc
@@ -395,7 +399,7 @@ and is annotated so a client asks before calling it.
 | `research_topic` | `question`, `depth?` | gather → read every source → cited report → `ultrasearch_check` → render |
 | `debug_error` | `error`, `context?` | `mode: bug` against StackOverflow/GitHub/HN, with the version caveat spelled out |
 | `literature_review` | `question` | plan → gather per sub-question → merge → one review against the merged ids |
-| `find_coupons` | `merchant`, `country?`, `lang?` | WebSearch sweep → `mode: deals` → read `codes.json` → every code cited to a page that shows it → `ultrasearch_check` |
+| `find_coupons` | `merchant`, `country?`, `lang?` | Web search sweep → `mode: deals` → read `codes.json` → every code cited to a page that shows it → `ultrasearch_check` |
 
 Each carries the invariant the skill exists for: the report says what the
 **fetched sources** say, not what the model remembers.

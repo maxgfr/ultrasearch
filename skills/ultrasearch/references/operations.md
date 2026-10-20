@@ -288,7 +288,7 @@ around them:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own WebSearch + `fetch --url`. Stop after two empty attempts and report the gap. |
+| `gather` exits 1, 0 sources | Every keyless backend blocked or offline | Retry once with a different `--web-engine`; then bridge with your own web search + `fetch --url`. Stop after two empty attempts and report the gap. |
 | `searxng` backend skipped although containers are running | A bare `docker compose up` on some other stack starts nothing here — every service is behind a profile | `ultrasearch searxng up` |
 | Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
 | A browser window opened during a run | The browser rung (`fallback` by default) rendered a walled or JS-only page | Expected; it closes when the command ends. `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not open one. |

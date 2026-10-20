@@ -317,7 +317,7 @@ describe("runCheck — source hygiene", () => {
     writeFixtureDossier(dir, 2);
     writeFileSync(
       join(dir, "sources/S2.md"),
-      "# S2 — PubMed\n- url: https://pubmed.ncbi.nlm.nih.gov/34397876/\n- backend: claude\n# Cookies must be enabled.\nEnable cookies for pubmed.ncbi.nlm.nih.gov and reload this page to continue.\n",
+      "# S2 — PubMed\n- url: https://pubmed.ncbi.nlm.nih.gov/34397876/\n- backend: host\n# Cookies must be enabled.\nEnable cookies for pubmed.ncbi.nlm.nih.gov and reload this page to continue.\n",
     );
     report(dir, GROUNDED);
     const r = runCheck(dir);

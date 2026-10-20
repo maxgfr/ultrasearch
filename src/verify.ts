@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
 import { extractNumerals, normalizeNumeralText, unitSourceTokens, unitsOfFile } from "./claims.js";
-import { readJson, readSourceText, sourceIdentityError } from "./dossier.js";
+import { readJson, readSourceText, sourceIdentityError, upgradeLegacySources } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 import { sourceTextWithoutPassageLabels } from "./passages.js";
 
@@ -76,7 +76,7 @@ function claimStrings(text: string): { claim: string; noNumerals: boolean }[] {
 // for `check --require-verify`, whose coverage gate matches pairs on
 // (claimId, sourceId) alone — never for a worklist an agent will adjudicate.
 export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number; keysOnly?: boolean } = {}): BuiltWorklist {
-  const sources = readJson<Source[]>(join(dir, "sources.json"), "sources.json");
+  const sources = upgradeLegacySources(readJson<Source[]>(join(dir, "sources.json"), "sources.json"));
   const identityError = sourceIdentityError(sources);
   if (identityError) throw new Error(`sources.json in ${dir} ${identityError} — re-run \`ultrasearch gather\`.`);
   const byId = new Map(sources.map((s) => [s.id, s] as const));

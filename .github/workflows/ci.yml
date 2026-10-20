@@ -76,8 +76,8 @@ jobs:
         run: |
           WORK="$(mktemp -d)"
           cd "$WORK"
-          npx --yes skills add "$GITHUB_WORKSPACE" --skill ultrasearch --agent claude-code --copy -y
-          DIR=.claude/skills/ultrasearch
+          npx --yes skills add "$GITHUB_WORKSPACE" --skill ultrasearch --agent codex --copy -y
+          DIR=.agents/skills/ultrasearch  # the shared, agent-neutral .agents/skills location
           test -f "$DIR/SKILL.md"                  || { echo "::error::SKILL.md not installed"; exit 1; }
           test -f "$DIR/scripts/ultrasearch.mjs"   || { echo "::error::engine not bundled — skills add dropped scripts/"; exit 1; }
           test -d "$DIR/references"                || { echo "::error::references/ not bundled"; exit 1; }

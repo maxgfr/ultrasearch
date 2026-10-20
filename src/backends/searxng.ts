@@ -40,7 +40,7 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
       items: [],
       notes: [
         explicit
-          ? `SearXNG not reachable at ${base}. Skipping; consider your own WebSearch.`
+          ? `SearXNG not reachable at ${base}. Skipping; consider your own web search.`
           : `SearXNG not running at ${base} — start it with \`ultrasearch searxng up\` for a local, keyless discovery backend. Skipping.`,
       ],
     };
@@ -70,7 +70,7 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
         return {
           backend: "searxng",
           items: [],
-          notes: [`SearXNG ${why} at ${base}. Skipping; consider your own WebSearch.`],
+          notes: [`SearXNG ${why} at ${base}. Skipping; consider your own web search.`],
         };
       }
       break;

@@ -47,7 +47,7 @@ function endpointDossier(dir: string, bodies: string[]): Source[] {
     sources[i]!.canonicalUrl = url;
     sources[i]!.domain = "api.test";
     sources[i]!.title = url; // a payload has no <title>: the url stands in
-    writeFileSync(join(dir, sources[i]!.extract), `# S${i + 1} — endpoint\n- url: x\n- backend: claude\n${body}\n`);
+    writeFileSync(join(dir, sources[i]!.extract), `# S${i + 1} — endpoint\n- url: x\n- backend: host\n${body}\n`);
   }
   writeFileSync(join(dir, "sources.json"), JSON.stringify(sources, null, 2));
   return sources;

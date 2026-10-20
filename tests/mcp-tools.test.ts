@@ -49,10 +49,11 @@ describe("tool declarations", () => {
     const gather = TOOLS.find((t) => t.name === "ultrasearch_gather")!;
     expect([...gather.inputSchema.properties.mode!.enum!].sort()).toEqual([...ALL_MODES].sort());
     expect([...gather.inputSchema.properties.depth!.enum!].sort()).toEqual([...ALL_DEPTHS].sort());
-    expect([...gather.inputSchema.properties.backends!.enum!].sort()).toEqual([...ALL_BACKENDS].sort());
+    // Plus the deprecated `claude` spelling of `host`, which the engine still maps.
+    expect([...gather.inputSchema.properties.backends!.enum!].sort()).toEqual([...ALL_BACKENDS, "claude"].sort());
 
     const search = TOOLS.find((t) => t.name === "ultrasearch_search")!;
-    expect([...search.inputSchema.properties.backend!.enum!].sort()).toEqual([...ALL_BACKENDS].sort());
+    expect([...search.inputSchema.properties.backend!.enum!].sort()).toEqual([...ALL_BACKENDS, "claude"].sort());
   });
 
   it("warns about wall-clock on the tool that can run for twenty minutes", () => {
@@ -155,7 +156,7 @@ describe("declared schemas accept what the handlers expect", () => {
         depth: "summary",
         web_results: [{ url: "https://example.com/a", title: "A" }],
         search: "light",
-        web_engine: "claude",
+        web_engine: "host",
       },
       ultrasearch_fetch: { run: "/tmp/d", url: "https://example.com", cite_url: "https://example.com/page" },
       ultrasearch_ingest: { run: "/tmp/d", web_results: [{ url: "https://example.com/a" }], urls: ["https://example.com/b"] },

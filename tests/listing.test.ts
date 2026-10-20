@@ -176,7 +176,7 @@ describe("one paper, several addresses", () => {
       webEngine: "auto",
       excludeDomains: [],
       json: false,
-      backends: ["claude"],
+      backends: ["host"],
       out: dir,
       webResults: [
         {
@@ -212,7 +212,7 @@ describe("one paper, several addresses", () => {
       webEngine: "auto",
       excludeDomains: [],
       json: false,
-      backends: ["claude"],
+      backends: ["host"],
       out: dir,
       webResults: [{ url: "https://pubmed.ncbi.nlm.nih.gov/?term=carlevale" }, { url: "https://journal.test/carlevale" }],
     });

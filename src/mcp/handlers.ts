@@ -23,6 +23,7 @@ import {
   ALL_TEMPLATES,
   ALL_WEB_ENGINES,
   DEPTH_CAPS,
+  canonicalBackend,
   type BackendKind,
   type BrowserMode,
   type Depth,
@@ -114,7 +115,7 @@ function oneOf<T extends string>(value: string | undefined, allowed: readonly T[
   return value as T;
 }
 
-// The WebSearch lane, as an MCP client supplies it: a structured array rather
+// The web-search lane, as an MCP client supplies it: a structured array rather
 // than the CLI's file path. Reuses the CLI's forgiving parser by round-tripping
 // through JSON, so both surfaces accept exactly the same shapes and there is
 // one place where "what counts as a hit" is decided.
@@ -147,10 +148,16 @@ function requiredRun(args: Record<string, unknown>, defaults: HandlerDefaults): 
   return abs;
 }
 
+function webEngineArg(v: unknown): string | undefined {
+  const e = str(v);
+  return e === undefined ? undefined : canonicalBackend(e);
+}
+
 // The MCP counterpart of cli.ts's option builder. Same shape, but it THROWS on
 // a bad value where the CLI exits.
 function gatherOptions(args: Record<string, unknown>): GatherOptions {
-  const backends = strArray(args.backends);
+  // `claude` is the pre-rename spelling of `host`, still accepted.
+  const backends = strArray(args.backends)?.map(canonicalBackend);
   if (backends) {
     for (const b of backends) {
       if (!(ALL_BACKENDS as readonly string[]).includes(b)) throw new ToolError(`unknown backend "${b}" — one of: ${[...ALL_BACKENDS].join(", ")}`);
@@ -177,8 +184,8 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     lang: str(args.lang) ?? "en",
     region: str(args.region),
     // Pilotable from MCP, at last: these were hardcoded, so a client could not
-    // pin an engine, point at a SearXNG, or reach the WebSearch lane at all.
-    webEngine: oneOf<WebEngine>(str(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
+    // pin an engine, point at a SearXNG, or reach the web-search lane at all.
+    webEngine: oneOf<WebEngine>(webEngineArg(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
     search: oneOf<SearchProfile>(str(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
     ...(web ? { webResults: web.hits, webResultsRejected: web.rejected } : {}),
     searxng: str(args.searxng),
@@ -315,7 +322,7 @@ async function handleSearch(args: Record<string, unknown>): Promise<unknown> {
   // ultrasearch_gather's job, and inventing a default here would send every
   // caller to one arbitrary engine without telling them.
   const chosen = requiredStr(args, "backend", `which backend to query, one of: ${[...ALL_BACKENDS].join(", ")}`);
-  const backend = oneOf(chosen, ALL_BACKENDS, "backend", ALL_BACKENDS[0]!);
+  const backend = oneOf(canonicalBackend(chosen), ALL_BACKENDS, "backend", ALL_BACKENDS[0]!);
   const options = gatherOptions({ ...args, question: query, depth: "summary" });
   const results = await runBackends([backend], { question: query, mode: getMode(options.mode), options, variants: [query] });
 

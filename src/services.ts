@@ -210,7 +210,7 @@ export function formatServices(rows: ServiceStatus[]): string {
 }
 
 /**
- * The WebSearch lane, as `doctor` reports it.
+ * The web-search lane, as `doctor` reports it.
  *
  * It cannot be probed: the tool lives in the caller's harness, not in this
  * process. What CAN be checked is whether a given run actually used one — and
