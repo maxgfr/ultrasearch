@@ -5,7 +5,7 @@
 **On request by default.** `ultrasearch` runs when you ask for it: `$ultrasearch` in Codex,
 `/ultrasearch` in Claude Code or OpenCode, or simply asking the agent for web research. Its
 description restricts it to explicit requests, so the agent calls it when you
-ask, not on its own, and CLI commands are unchanged. One setting per host makes
+ask, not on its own, and CLI commands are unchanged. One setting makes
 it explicit-only — see [On request or explicit-only](#on-request-or-explicit-only).
 
 **Recap everything the web says about a topic — grounded, not guessed.**
