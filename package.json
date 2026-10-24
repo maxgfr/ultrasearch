@@ -65,7 +65,7 @@
     "tsup": "^8.3.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.11",
-    "yaml": "^2.9.0",
+    "yaml": "^2.9.1",
     "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/313698c39307d7bc8a80e649b0dc22495d870060"
   },
   "pnpm": {
