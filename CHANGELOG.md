@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.42.4](https://github.com/maxgfr/ultrasearch/compare/v1.42.3...v1.42.4) (2026-10-24)
+
+
+### Bug Fixes
+
+* **gather:** widen the coverage window to one source per question term ([47f8ebf](https://github.com/maxgfr/ultrasearch/commit/47f8ebf949f2fda8304d7504507ac78518032740))
+
 ## [1.42.3](https://github.com/maxgfr/ultrasearch/compare/v1.42.2...v1.42.3) (2026-10-24)
 
 
