@@ -287,9 +287,19 @@ export function resolveSearchProfile(options: GatherOptions): Exclude<SearchProf
  * `--rounds 2` gap round that used to be its only consumer and threw the answer
  * away. This is what turns "enrich the thin areas" from prose into a worklist.
  */
-export function termCoverage(items: RawSource[], queryTerms: string[], top = 10): { term: string; sources: number }[] {
+export function termCoverage(items: RawSource[], queryTerms: string[], top = coverageWindow(queryTerms.length)): { term: string; sources: number }[] {
   const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
   return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+
+/**
+ * How many of the top sources `termCoverage` reads: 10, or one per question term when the
+ * question has more. A broad question ("early exits, Muon, looped transformers, DAgger…")
+ * spreads its facets over the ranking, so a fixed top 10 held by one facet called every other
+ * facet under-covered while several sources below rank 10 named it.
+ */
+export function coverageWindow(nTerms: number): number {
+  return Math.max(10, nTerms);
 }
 
 /** The enrichment worklist: terms fewer than UNDER_COVERED_MIN of the top sources mention. */

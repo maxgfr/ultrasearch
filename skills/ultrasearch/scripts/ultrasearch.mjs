@@ -3371,6 +3371,7 @@ function subtokens(raw) {
   const spaced = raw.replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{L})(\\p{N})", "gu"), "$1 $2").replace(new RegExp("(\\p{N})(\\p{L})", "gu"), "$1 $2");
   const parts = spaced.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
   if (parts.length < 2) return [];
+  if (/^[\p{L}\p{M}]+$/u.test(raw) && parts.some((p) => p.length === 1)) return [];
   const out = [];
   for (const p of parts) {
     const lower = p.toLowerCase();
@@ -15751,9 +15752,12 @@ function resolveSearchProfile(options) {
   if (options.webResults?.length && options.webEngine === "auto") return "light";
   return "full";
 }
-function termCoverage(items, queryTerms, top = 10) {
+function termCoverage(items, queryTerms, top = coverageWindow(queryTerms.length)) {
   const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
   return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+function coverageWindow(nTerms) {
+  return Math.max(10, nTerms);
 }
 function underCovered(cov) {
   return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);

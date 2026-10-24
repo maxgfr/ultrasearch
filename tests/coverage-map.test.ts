@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runGather, termCoverage, underCovered, ignoredByExplicitBackends } from "../src/gather.js";
+import { runGather, termCoverage, underCovered, ignoredByExplicitBackends, coverageWindow } from "../src/gather.js";
 import { runCheck } from "../src/check.js";
 import { UNDER_COVERED_MIN } from "../src/types.js";
 import type { GatherOptions, Manifest, RawSource } from "../src/types.js";
@@ -49,6 +49,18 @@ describe("termCoverage / underCovered", () => {
     const items = [...Array(10)].map((_, i) => src(`https://x${i}.test`, "filler")).concat(src("https://late.test", "quota"));
     expect(termCoverage(items, ["quota"], 10)).toEqual([{ term: "quota", sources: 0 }]);
     expect(termCoverage(items, ["quota"], 11)).toEqual([{ term: "quota", sources: 1 }]);
+    expect(termCoverage(items, ["quota"])).toEqual([{ term: "quota", sources: 0 }]);
+  });
+
+  it("widens the window to one source per term for a broad question", () => {
+    expect(coverageWindow(3)).toBe(10);
+    expect(coverageWindow(27)).toBe(27);
+    // 14 terms: the window is 14, so a facet first named at rank 12 counts.
+    const terms = [..."abcdefghijklmn"].map((c) => `term${c}`);
+    const items = [...Array(11)]
+      .map((_, i) => src(`https://x${i}.test`, "filler"))
+      .concat(src("https://late.test", "termn"), src("https://late2.test", "termn"));
+    expect(termCoverage(items, terms).find((c) => c.term === "termn")).toEqual({ term: "termn", sources: 2 });
   });
 
   it("flags exactly the terms under the floor", () => {
