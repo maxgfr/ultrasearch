@@ -94,8 +94,10 @@ import {
   trustScore,
   mapLimit,
   RUN_SLUG,
+  arxivIdFromUrl,
 } from "./util.js";
 import type { Bm25Doc } from "./util.js";
+import { arxivMeta, arxivText, readArxivRecords, type ArxivRecord } from "./backends/arxiv.js";
 
 // How many candidates beyond maxSources to hydrate so content-aware re-ranking
 // can promote a deeply-relevant page a backend ranked low.
@@ -561,6 +563,40 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     return p;
   };
 
+  // arXiv pages that reached the pool through a web search hit (or any route
+  // that carries no record): their bibliographic record — the paper's own
+  // title, authors, year, DOI — comes from arXiv's API, in ONE batched request
+  // per assemble pass and memoised for the run. Without it such a paper is
+  // missing from refs.bib, and keeps whatever title the search hit gave it.
+  const arxivKnown = new Map<string, ArxivRecord | null>();
+  const arxivRecordsFor = async (items: RawSource[]): Promise<string | undefined> => {
+    const want = items
+      .filter((it) => !it.meta?.arxivId)
+      .map((it) => arxivIdFromUrl(it.url))
+      .filter((id): id is string => !!id && !arxivKnown.has(id));
+    if (!want.length) return undefined;
+    const { records, note } = await readArxivRecords(want);
+    // A failed lookup is not memoised: the gap round may try again.
+    if (!note) for (const id of new Set(want)) arxivKnown.set(id, records.get(id) ?? null);
+    return note;
+  };
+  // The record of an item, applied: the paper's own title wins over a search
+  // hit's (a hit title is often a paraphrase), the bibliographic fields fill the
+  // meta, and an /abs/ page — the abstract wrapped in arXiv's site chrome — is
+  // read as the record itself. A PDF or /html/ page keeps its full-text read.
+  const applyArxivRecord = (it: RawSource): void => {
+    if (it.meta?.arxivId) return;
+    const id = arxivIdFromUrl(it.url);
+    const rec = id ? arxivKnown.get(id) : undefined;
+    if (!rec) return;
+    it.title = rec.title;
+    it.meta = { ...arxivMeta(rec), ...it.meta };
+    if (/\/abs\//.test(new URL(it.url).pathname) && !it.text?.trim()) {
+      it.text = arxivText(rec);
+      it.meta = { ...it.meta, textVia: `https://export.arxiv.org/api/query?id_list=${rec.arxivId}` };
+    }
+  };
+
   // Fuse → exclude → hydrate a slightly-oversized pool → content-aware re-rank
   // (BM25F field-weighted, proximity-aware, blended with fusion rank, trust and
   // pool-relative recency) → collapse near-duplicate CONTENT → cap. Shared by
@@ -589,6 +625,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // reader who is told "74 sources" deserves to know whether that was all the
     // web offered or all the budget allowed.
     const notFetched = merged.length - pool.length;
+
+    const arxivNote = await arxivRecordsFor(pool);
+    if (arxivNote) hydrateNotes.push(arxivNote);
+    for (const it of pool) applyArxivRecord(it);
 
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
       // A scholarly backend hands over "title + abstract" — or, with no

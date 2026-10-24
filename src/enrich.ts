@@ -13,7 +13,8 @@ import { cachedFetchAndExtract } from "./cache.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
-import { canonicalizeUrl, titleFromText } from "./util.js";
+import { arxivIdFromUrl, canonicalizeUrl, titleFromText } from "./util.js";
+import { arxivMeta, readArxivRecords, type ArxivRecord } from "./backends/arxiv.js";
 import { looksLikeWall, readPastCachedWall, wallPattern } from "./walls.js";
 import { ncbiDocument, readNcbiDocument } from "./providers/ncbi.js";
 import { redirectedHome, searchPageOf } from "./listing.js";
@@ -182,12 +183,22 @@ export async function addSources(
   let state: IngestState | undefined;
   const stateOf = (): IngestState => (state ??= loadState(dir));
   let committed = 0;
+  // The arXiv papers of the batch: their records (title, authors, year, DOI) in
+  // one request, so each lands in refs.bib under its own title rather than the
+  // search hit's paraphrase. A failed lookup only costs those fields.
+  const arxivIds = hits.map((h) => arxivIdFromUrl(typeof h === "string" ? h : (h.citeUrl ?? h.url))).filter((id): id is string => !!id);
+  const arxiv = arxivIds.length ? (await readArxivRecords(arxivIds)).records : new Map<string, ArxivRecord>();
   try {
     for (const hit of hits) {
       const { url, title, citeUrl } = typeof hit === "string" ? { url: hit, title: undefined, citeUrl: undefined } : hit;
       // A hit's own citeUrl is `fetch --cite-url` for that hit: the text comes
       // from `url`, the citation is the page. Without one, the provider decides.
       const p = await prepareSource(stateOf, url, { ...opts, title, ...(citeUrl ? { citeUrl } : {}), rescues });
+      const rec = arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? "");
+      if (p.ok && rec && !p.raw.meta?.arxivId) {
+        p.raw.title = rec.title;
+        p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
+      }
       let r: EnrichResult;
       if (p.ok) {
         r = commit(dir, stateOf(), p);

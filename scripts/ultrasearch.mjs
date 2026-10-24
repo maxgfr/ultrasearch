@@ -13159,6 +13159,67 @@ function tag(block, name) {
   const m = new RegExp(`<${name}[^>]*>([\\s\\S]*?)<\\/${name}>`, "i").exec(block);
   return m ? decodeEntities(m[1].replace(/\s+/g, " ").trim()) : "";
 }
+function repairCollaboration(names) {
+  const n = names.map((s) => s.trim()).filter(Boolean);
+  const colon = n.indexOf(":");
+  if (colon > 0 && n.slice(0, colon).every((w) => !/\s/.test(w))) return [n.slice(0, colon).join(" "), ...n.slice(colon + 1)];
+  return n.filter((s) => s !== ":");
+}
+function parseArxivEntry(block) {
+  const idUrl = tag(block, "id");
+  const arxivId = /abs\/(.+?)(?:v\d+)?$/.exec(idUrl)?.[1] ?? idUrl;
+  const authors = repairCollaboration([...block.matchAll(/<name>([\s\S]*?)<\/name>/gi)].map((m) => decodeEntities(m[1])));
+  const year = Number(/<published>(\d{4})/.exec(block)?.[1] ?? 0) || void 0;
+  const doi = tag(block, "arxiv:doi") || void 0;
+  const venue = tag(block, "arxiv:journal_ref") || void 0;
+  return {
+    arxivId,
+    title: tag(block, "title"),
+    summary: tag(block, "summary"),
+    authors,
+    ...year ? { year } : {},
+    ...doi ? { doi } : {},
+    ...venue ? { venue } : {}
+  };
+}
+function arxivMeta(rec) {
+  return {
+    arxivId: rec.arxivId,
+    authors: rec.authors,
+    ...rec.year ? { year: rec.year } : {},
+    ...rec.doi ? { doi: rec.doi } : {},
+    ...rec.venue ? { venue: rec.venue } : {},
+    absUrl: `https://arxiv.org/abs/${rec.arxivId}`
+  };
+}
+function arxivText(rec) {
+  const by = rec.authors.length ? `
+
+Authors: ${rec.authors.join(", ")}` : "";
+  const ref = rec.venue ? `
+Published in: ${rec.venue}` : "";
+  return `# ${rec.title}
+
+arXiv:${rec.arxivId}${rec.year ? ` (${rec.year})` : ""}${by}${ref}
+
+Abstract: ${rec.summary}`;
+}
+async function readArxivRecords(ids) {
+  const records = /* @__PURE__ */ new Map();
+  const unique = [...new Set(ids.map((id) => id.toLowerCase()))];
+  for (let i = 0; i < unique.length; i += 100) {
+    const batch = unique.slice(i, i + 100);
+    const url = `http://export.arxiv.org/api/query?id_list=${batch.map(encodeURIComponent).join(",")}&max_results=${batch.length}`;
+    const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: contactUa() });
+    if (!r.ok || !r.body)
+      return { records, note: `arXiv metadata lookup failed (status ${r.status}) \u2014 titles and BibTeX fields of arXiv pages come from the pages themselves.` };
+    for (const block of r.body.split(/<entry>/).slice(1)) {
+      const rec = parseArxivEntry(block);
+      if (rec.title && rec.arxivId) records.set(rec.arxivId.toLowerCase(), rec);
+    }
+  }
+  return { records };
+}
 var arxivBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
@@ -13169,25 +13230,19 @@ var arxivBackend = async (ctx) => {
   }
   const entries = r.body.split(/<entry>/).slice(1);
   const items = entries.slice(0, n).map((block, i) => {
-    const idUrl = tag(block, "id");
-    const arxivId = /abs\/([^v<]+)/.exec(idUrl)?.[1] ?? idUrl;
-    const authors = [...block.matchAll(/<name>([\s\S]*?)<\/name>/gi)].map((m) => decodeEntities(m[1].trim()));
-    const year = Number(/<published>(\d{4})/.exec(block)?.[1] ?? 0) || void 0;
-    const title = tag(block, "title");
-    const summary = tag(block, "summary");
-    const absUrl = idUrl || `https://arxiv.org/abs/${arxivId}`;
-    const htmlUrl = `https://arxiv.org/html/${arxivId}`;
+    const rec = parseArxivEntry(block);
+    const htmlUrl = `https://arxiv.org/html/${rec.arxivId}`;
     return {
       // Point at the HTML full text so the gatherer hydrates the whole paper,
       // not just the abstract. No `text` here → hydration fetches htmlUrl; if
       // that paper has no HTML rendering, the fetch falls back to the abstract
       // snippet (gather sets text = snippet when a fetch yields nothing).
       url: htmlUrl,
-      title,
+      title: rec.title,
       backend: "arxiv",
       score: n - i,
-      snippet: summary.slice(0, 360),
-      meta: { arxivId, authors, year, htmlUrl, absUrl }
+      snippet: rec.summary.slice(0, 360),
+      meta: { ...arxivMeta(rec), htmlUrl, absUrl: tag(block, "id") || `https://arxiv.org/abs/${rec.arxivId}` }
     };
   });
   return {
@@ -15849,6 +15904,26 @@ async function runGather(options) {
     }
     return p;
   };
+  const arxivKnown = /* @__PURE__ */ new Map();
+  const arxivRecordsFor = async (items) => {
+    const want = items.filter((it) => !it.meta?.arxivId).map((it) => arxivIdFromUrl(it.url)).filter((id) => !!id && !arxivKnown.has(id));
+    if (!want.length) return void 0;
+    const { records, note } = await readArxivRecords(want);
+    if (!note) for (const id of new Set(want)) arxivKnown.set(id, records.get(id) ?? null);
+    return note;
+  };
+  const applyArxivRecord = (it) => {
+    if (it.meta?.arxivId) return;
+    const id = arxivIdFromUrl(it.url);
+    const rec = id ? arxivKnown.get(id) : void 0;
+    if (!rec) return;
+    it.title = rec.title;
+    it.meta = { ...arxivMeta(rec), ...it.meta };
+    if (/\/abs\//.test(new URL(it.url).pathname) && !it.text?.trim()) {
+      it.text = arxivText(rec);
+      it.meta = { ...it.meta, textVia: `https://export.arxiv.org/api/query?id_list=${rec.arxivId}` };
+    }
+  };
   async function assemble(rawLists) {
     const hydrateNotes = [];
     let merged2 = fuse(rawLists.map((l) => l.map(atNcbiPage)));
@@ -15863,6 +15938,9 @@ async function runGather(options) {
     const budget = options.maxSources === void 0 ? merged2.length : Math.min(merged2.length, options.maxSources + overshoot);
     const pool = merged2.slice(0, budget);
     const notFetched = merged2.length - pool.length;
+    const arxivNote = await arxivRecordsFor(pool);
+    if (arxivNote) hydrateNotes.push(arxivNote);
+    for (const it of pool) applyArxivRecord(it);
     await mapLimit(pool, options.concurrency ?? HYDRATE_CONCURRENCY, async (it) => {
       let thinBackend = "";
       if (it.text?.trim() && ABSTRACT_BACKENDS.has(it.backend) && usefulChars(it.text.replace(NO_ABSTRACT_RE, "")) < MIN_USEFUL_CHARS) {
@@ -16275,10 +16353,17 @@ async function addSources(dir, hits, opts = {}) {
   let state;
   const stateOf = () => state ??= loadState(dir);
   let committed = 0;
+  const arxivIds = hits.map((h) => arxivIdFromUrl(typeof h === "string" ? h : h.citeUrl ?? h.url)).filter((id) => !!id);
+  const arxiv = arxivIds.length ? (await readArxivRecords(arxivIds)).records : /* @__PURE__ */ new Map();
   try {
     for (const hit of hits) {
       const { url, title, citeUrl } = typeof hit === "string" ? { url: hit, title: void 0, citeUrl: void 0 } : hit;
       const p = await prepareSource(stateOf, url, { ...opts, title, ...citeUrl ? { citeUrl } : {}, rescues });
+      const rec = arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? "");
+      if (p.ok && rec && !p.raw.meta?.arxivId) {
+        p.raw.title = rec.title;
+        p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
+      }
       let r;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
