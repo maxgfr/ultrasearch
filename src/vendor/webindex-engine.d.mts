@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.34.1";
+declare const ENGINE_VERSION = "1.34.2";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -4417,10 +4417,12 @@ declare function toBatches(ids: readonly string[], batchSize: number): string[][
  */
 declare function emitWorkflowScript<T>(phase: PhaseInfo<T>, emission: PhaseEmission, runAbs: string, engineAbs: string, smallWorklist: number, constants?: Record<string, unknown>): string;
 /**
- * The sequential fallback.
+ * The runbook: the primary route, on any host.
  *
- * Not a lesser path — it is the correct one for a small worklist, and the only
- * one when no subagent-capable harness is present. It lists every phase,
+ * It names each phase's batches for one subagent apiece under the
+ * `agents/<role>.md` contract, or for a single agent to play sequentially (the
+ * correct path for a small worklist, and the only one when the host has no
+ * subagents); the Workflow script comes last, as an option. It lists every phase,
  * whether it is ready, and the exact command that makes it ready, so a reader
  * can walk the whole run by hand.
  */
@@ -4510,8 +4512,8 @@ declare function listPhases<T>(runDir: string, engineAbs: string, defs: readonly
  *
  * Writes, in `<RUN>/orchestration/`:
  *   agents/<role>.md      the dispatch contracts, every role, every call
- *   <phase>.workflow.mjs  one launchable Workflow script per ready phase
- *   RUNBOOK.md            the sequential fallback
+ *   RUNBOOK.md            the batches to dispatch, or to play sequentially
+ *   <phase>.workflow.mjs  optional — one Claude Code Workflow script per ready phase
  *
  * The contracts are rewritten on every call, including under `--eco`: they
  * double as the RUNBOOK's self-pass checklists, so the sequential path needs
