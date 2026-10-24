@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.42.3](https://github.com/maxgfr/ultrasearch/compare/v1.42.2...v1.42.3) (2026-10-24)
+
+
+### Bug Fixes
+
+* **arxiv:** read the record of arXiv pages found by web search ([3b6da28](https://github.com/maxgfr/ultrasearch/commit/3b6da280cab68d31c5251093ac8582efca996019))
+
 ## [1.42.2](https://github.com/maxgfr/ultrasearch/compare/v1.42.1...v1.42.2) (2026-10-20)
 
 
