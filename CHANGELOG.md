@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.42.5](https://github.com/maxgfr/ultrasearch/compare/v1.42.4...v1.42.5) (2026-10-25)
+
+
+### Bug Fixes
+
+* **arxiv:** require the distinctive query words instead of any of them ([cb0283b](https://github.com/maxgfr/ultrasearch/commit/cb0283b5518c8f90355fe3a8507283bf2de88a04))
+
 ## [1.42.4](https://github.com/maxgfr/ultrasearch/compare/v1.42.3...v1.42.4) (2026-10-24)
 
 
