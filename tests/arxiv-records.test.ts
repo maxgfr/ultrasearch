@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { parseArxivEntry, repairCollaboration } from "../src/backends/arxiv.js";
+import { arxivQueries, parseArxivEntry, repairCollaboration } from "../src/backends/arxiv.js";
 import { runGather } from "../src/gather.js";
 import type { GatherOptions, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
@@ -93,5 +93,15 @@ describe("arXiv records", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain("id_list=2603.21376");
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("arxivQueries", () => {
+  it("asks for every content word, with an any-word fallback", () => {
+    const [all, any] = arxivQueries("What is the best learning rate for the Muon optimizer?");
+    expect(all.toLowerCase()).toContain("all:muon");
+    expect(all).toContain(" AND ");
+    expect(all).not.toMatch(/all:(what|the|for)\b/);
+    expect(any).toBe(all.replaceAll(" AND ", " OR "));
   });
 });

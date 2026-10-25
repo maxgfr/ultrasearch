@@ -13210,7 +13210,7 @@ async function readArxivRecords(ids) {
   const unique = [...new Set(ids.map((id) => id.toLowerCase()))];
   for (let i = 0; i < unique.length; i += 100) {
     const batch = unique.slice(i, i + 100);
-    const url = `http://export.arxiv.org/api/query?id_list=${batch.map(encodeURIComponent).join(",")}&max_results=${batch.length}`;
+    const url = `https://export.arxiv.org/api/query?id_list=${batch.map(encodeURIComponent).join(",")}&max_results=${batch.length}`;
     const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: contactUa() });
     if (!r.ok || !r.body)
       return { records, note: `arXiv metadata lookup failed (status ${r.status}) \u2014 titles and BibTeX fields of arXiv pages come from the pages themselves.` };
@@ -13221,15 +13221,29 @@ async function readArxivRecords(ids) {
   }
   return { records };
 }
+function arxivQueries(question) {
+  const terms = rankedKeywords(question).map((t) => t.replace(/[^\p{L}\p{N}-]/gu, "")).filter(Boolean).slice(0, 4);
+  if (!terms.length) return [`all:${question}`, `all:${question}`];
+  return [terms.map((t) => `all:${t}`).join(" AND "), terms.map((t) => `all:${t}`).join(" OR ")];
+}
 var arxivBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url = `http://export.arxiv.org/api/query?search_query=${encodeURIComponent("all:" + ctx.question)}&start=0&max_results=${n}`;
-  const r = await httpGet(url, { accept: "application/atom+xml", timeoutMs: 12e3, userAgent: contactUa() });
+  const get2 = (query) => httpGet(`https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}&start=0&max_results=${n}`, {
+    accept: "application/atom+xml",
+    timeoutMs: 12e3,
+    userAgent: contactUa()
+  });
+  const [all, any] = arxivQueries(ctx.question);
+  let r = await get2(all);
+  let entries = r.ok && r.body ? r.body.split(/<entry>/).slice(1) : [];
+  if (r.ok && !entries.length && any !== all) {
+    r = await get2(any);
+    entries = r.ok && r.body ? r.body.split(/<entry>/).slice(1) : [];
+  }
   if (!r.ok || !r.body) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
     return { backend: "arxiv", items: [], notes: [`arXiv search ${why}.`] };
   }
-  const entries = r.body.split(/<entry>/).slice(1);
   const items = entries.slice(0, n).map((block, i) => {
     const rec = parseArxivEntry(block);
     const htmlUrl = `https://arxiv.org/html/${rec.arxivId}`;
