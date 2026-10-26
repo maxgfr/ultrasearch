@@ -163,7 +163,8 @@ otherwise; `ULTRASEARCH_BROWSER_FETCH` overrides the default and `--browser
 fallback|always|off` overrides both. A window may appear during a run; every
 command that reads pages closes it on the way out. It never accepts a consent
 wall for you and never solves a challenge: a CAPTCHA is handed to the human with
-`ultrasearch browser open <url>`. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
+`ultrasearch browser open <url>`, or — for every such page of a dossier —
+`ultrasearch human --run <dir>`, which waits for them and repairs the sources. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
 is off unless asked for, since a browser writes its profile. `ultrasearch doctor`
 shows the binary, the mode and why it is off when it is.
 
@@ -322,6 +323,11 @@ that override silently voided.
 - `drop --run <dir> --id S43,S44 | --where wall|snippet|offtopic [--dry-run]` —
   remove sources from a dossier. Ids stay stable (the gaps remain) and a dropped
   id is never reused, so a report still citing one fails `check` as dangling.
+- `human --run <dir> [--id S3,S7] [--timeout <s>] [--list]` — hand the pages
+  only a person can get past (a CAPTCHA, an anti-bot check, a sign-in) to the
+  person: one at a time, each comes up in the dedicated browser's window, and
+  once they are past it the page is read there and repairs its source in place
+  (same `S#`). Never solved for them; skipped where no window can be shown.
 - `modes` — list modes and their backend profiles.
 - `brainstorm` — probe a vague ask and propose angles + clarifying questions
   before committing to a run.

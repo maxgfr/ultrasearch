@@ -118,7 +118,11 @@ export function runMerge(options: MergeOptions): MergeResult {
     extras: mode.extras,
     notes: [
       `Merged ${dossiers.length} sub-dossier(s) → ${merged.length} source(s) ` + `(${deduped.dropped} near-duplicate(s) collapsed).`,
-      "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic.",
+      // Route D's gate on a deep master; route S's on a standard one, where
+      // `--semantic` can only fail closed (no adjudicated VERIFY.json).
+      depth === "deep"
+        ? "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic --require-verify."
+        : "agent: write the report against THIS master dossier's [S#] ids; then render + check.",
     ],
     timings: {},
     mergedFrom: options.runs.slice(),

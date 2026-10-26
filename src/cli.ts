@@ -36,8 +36,19 @@ import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
 import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
 import { PHASES, emitOrchestration, listPhasesFor } from "./orchestrate.js";
-import { type CommandArgs, type ParsedArgs, closeBrowserReads, openBrowserSession, parseArgs, runStdioServer, startHttpServer, UsageError } from "./engine.js";
+import {
+  type CommandArgs,
+  type ParsedArgs,
+  canShowBrowserWindow,
+  closeBrowserReads,
+  openBrowserSession,
+  parseArgs,
+  runStdioServer,
+  startHttpServer,
+  UsageError,
+} from "./engine.js";
 import { closeBrowserOnSignal, resolveBrowserRung, withBrowserClosed } from "./browser.js";
+import { humanCandidates, humanHint, runHuman, selectForHuman, type HumanResult } from "./human.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
@@ -70,6 +81,7 @@ Usage:
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
   ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
   ultrasearch browser open <url>
+  ultrasearch human  --run <dossier-dir> [--id <S#,...>] [--timeout <s>] [--list] [--json]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -124,6 +136,16 @@ Commands:
   browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
            for YOU to deal with — the CAPTCHA or anti-bot check a read reported.
            The engine never solves one; once you have, the next read gets the page.
+  human    Hand the pages of a dossier that need a person to the person: every
+           ⛔ wall, and every snippet-only source whose read met a CAPTCHA, an
+           anti-bot check or a sign-in wall. One at a time, each page comes up
+           in the dedicated browser's window; once you are past the wall, the
+           page is read from that window and repairs its source in place (same
+           S#, like 'fetch' of a ⛔ source). Prints repaired / still walled /
+           timed out / skipped per source. --list is the dry run; --id picks
+           sources; --timeout is how long you have per page (default 300 s).
+           Nothing is ever solved for you, and with no window to show (no
+           display, a CI run) every page is skipped.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
            (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
@@ -225,7 +247,10 @@ Options:
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
-                       source(s) to remove (comma-separated)
+                       source(s) to remove (comma-separated). For 'human': the
+                       source(s) to hand over (comma-separated)
+  --timeout <s>        For 'human': how long you have to get past each page's
+                       wall, in seconds                         (default: 300)
   --where <kind>       For 'drop': remove every source of a kind — wall (the
                        page was a cookie/consent/anti-bot wall), snippet (only
                        the search snippet is on file), offtopic (flagged by
@@ -252,7 +277,8 @@ Options:
                        (exit 2 when its worklist does not exist yet)
   --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md —
                        the explicit sequential low-token path
-  --list               For 'orchestrate': print the phases + readiness as JSON
+  --list               For 'orchestrate': print the phases + readiness as JSON.
+                       For 'human': list the pages that need you, open nothing
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
@@ -267,7 +293,8 @@ Options:
                        read-only phase. gather → DOSSIER.md + every source
                        extract · brainstorm → BRAINSTORM.md · plan → PLAN.json ·
                        render → index.md (no HTML). merge / fetch / verify /
-                       orchestrate / drop exit 2: they exist to leave files behind.
+                       orchestrate / drop / human exit 2: they exist to leave
+                       files behind.
                        No 'check' gate is possible without files — cite carefully.
   --json               Machine-readable output
   -h, --help           Show this help
@@ -313,6 +340,7 @@ export const COMMANDS = new Set([
   "searxng",
   "firecrawl",
   "browser",
+  "human",
 ]);
 export const VALUE_FLAGS = new Set([
   "q",
@@ -362,6 +390,7 @@ export const VALUE_FLAGS = new Set([
   "template",
   "refs",
   "citing",
+  "timeout",
   // `mcp` only. The flag sets are global, so these are accepted (and ignored)
   // on every command — the same as --phase and --list already are.
   "transport",
@@ -548,6 +577,7 @@ export const NO_WRITE_REFUSED: Record<string, string> = {
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
   refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references",
+  human: "it repairs sources in a dossier on disk, and opens a browser that writes its profile",
 };
 
 // The brief each command leads with, in the order a reader wants them. Only one
@@ -634,6 +664,8 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
   const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
+  // Pages only a person can get past (a CAPTCHA, a sign-in): said once, with the command that hands them over.
+  const needHuman = options.stdout ? 0 : humanCandidates(r.sources, r.manifest).length;
   // Say which lane drove discovery, and say it when there was none: an agent
   // that owns a web search tool and did not use it should learn that from the
   // run, not from re-reading the docs.
@@ -658,6 +690,7 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
               (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`),
           ]
         : []),
+      ...(needHuman ? [`  human:    ${needHuman} page(s) need a human: ultrasearch human --run ${r.dir}`] : []),
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...(options.stdout
@@ -684,7 +717,7 @@ export function browserMode(p: Parsed): BrowserMode {
 // Commands that may read pages, and so may launch the browser rung. Each closes
 // the browser its reads launched on the way out — error and Ctrl-C included —
 // so no window is left behind.
-const PAGE_COMMANDS = new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm"]);
+const PAGE_COMMANDS = new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm", "human"]);
 
 // Close what this process's reads launched, then exit: process.exit would
 // otherwise skip the close in main()'s finally.
@@ -982,6 +1015,54 @@ async function dispatch(p: Parsed): Promise<void> {
       return;
     }
 
+    // The same handoff, for a whole dossier: each page that needs a person comes
+    // up in the dedicated browser's window, one at a time, and the text read
+    // once they are past it repairs its source in place.
+    case "human": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve(dir);
+      if (!existsSync(join(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
+      const secs = p.values.timeout === undefined ? undefined : num("timeout", p.values.timeout, 300);
+      if (secs !== undefined && secs < 1) fail(`invalid --timeout "${p.values.timeout}" (expected seconds ≥ 1)`);
+      const { chosen, skipped, missing } = selectForHuman(rdir, p.values.id ? parseList(p.values.id) : undefined);
+      const json = p.bools.has("json");
+      if (p.bools.has("list")) {
+        if (json) process.stdout.write(JSON.stringify({ chosen, skipped, missing }, null, 2) + "\n");
+        else if (!chosen.length) process.stdout.write("ultrasearch human: no page in this dossier needs a human.\n");
+        else for (const c of chosen) process.stdout.write(`${c.id}\t${c.url}\t${c.why}\n`);
+        for (const id of missing) process.stderr.write(`ultrasearch: ${id} is not in this dossier\n`);
+        if (missing.length) process.exitCode = 1;
+        return;
+      }
+      // Asked once for the whole run: no browser, or nobody to show a window to, and nobody is waited for.
+      const rung = resolveBrowserRung({ flag: "always" });
+      const noWindow = !rung.binary
+        ? (rung.reason ?? "no browser to show the page in")
+        : canShowBrowserWindow()
+          ? undefined
+          : "no window can be shown here (no display, or a CI run)";
+      const line = (r: HumanResult) => `${r.id}\t${r.url}\t${r.outcome}${r.note ? `\t${r.note}` : ""}`;
+      if (!json) for (const r of skipped) process.stdout.write(line(r) + "\n");
+      const results = await runHuman(rdir, chosen, {
+        ...(secs !== undefined ? { timeoutMs: secs * 1000 } : {}),
+        ...(p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {}),
+        ...(noWindow ? { noWindow } : {}),
+        onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) — handing ${c.url} to you in the browser window\n`),
+        onResult: (r) => {
+          if (!json) process.stdout.write(line(r) + "\n");
+        },
+      });
+      const all = [...skipped, ...results];
+      if (json) process.stdout.write(JSON.stringify({ results: all, missing }, null, 2) + "\n");
+      for (const id of missing) process.stderr.write(`ultrasearch: ${id} is not in this dossier\n`);
+      const repaired = results.filter((r) => r.outcome === "repaired").length;
+      if (!chosen.length) process.stderr.write("ultrasearch human: no page in this dossier needs a human.\n");
+      else process.stderr.write(`ultrasearch human: repaired ${repaired} of ${chosen.length} page(s) → ${rdir}\n`);
+      if (missing.length || (chosen.length > 0 && repaired === 0)) await exitClosed(1);
+      return;
+    }
+
     case "searxng":
     case "firecrawl": {
       const action = p.positional[0] ?? "status";
@@ -1080,11 +1161,17 @@ async function dispatch(p: Parsed): Promise<void> {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
         return;
       }
+      // The gate follows the master's recorded depth: only a deep (route D)
+      // master has the adjudicated VERIFY.json `--semantic` needs. On a standard
+      // one it can only fail closed, which is why SKILL.md forbids it there.
+      const d = result.dir;
       const lines = [
         `ultrasearch: merged ${runs.length} sub-dossier(s) → ${result.sources.length} source(s)`,
-        `  master:   ${result.dir}`,
-        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
-        `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`,
+        `  master:   ${d}`,
+        `  next:     read ${d}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
+        result.manifest.depth === "deep"
+          ? `            ultrasearch verify --run ${d}, adjudicate, ultrasearch verify --apply ${d} --run ${d} && ultrasearch check --semantic --require-verify --run ${d}`
+          : `            ultrasearch render --run ${d} && ultrasearch check --run ${d}`,
       ];
       process.stderr.write(lines.join("\n") + "\n");
       return;
@@ -1114,6 +1201,8 @@ async function dispatch(p: Parsed): Promise<void> {
         process.stderr.write(`ultrasearch: ${r.note ?? "not added"}\n`);
         if (r.id) process.stdout.write(`${r.id}\n`);
       }
+      const fetchHint = humanHint(resolve(dir));
+      if (fetchHint) process.stderr.write(`ultrasearch: ${fetchHint}\n`);
       if (!r.id) await exitClosed(1);
       return;
     }
@@ -1178,6 +1267,8 @@ async function dispatch(p: Parsed): Promise<void> {
         const fixed = repaired ? `, repaired ${repaired} in place` : "";
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
       }
+      const ingestHint = humanHint(resolve(dir));
+      if (ingestHint) process.stderr.write(`ultrasearch: ${ingestHint}\n`);
       // Nothing added (or repaired) at all is a failed acquisition, not a quiet success.
       if (!r.added && !repaired) await exitClosed(1);
       return;

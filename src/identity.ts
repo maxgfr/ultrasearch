@@ -1,11 +1,14 @@
 import type { SourceMeta } from "./types.js";
 import { ncbiDocument } from "./providers/ncbi.js";
+import { arxivIdFromUrl } from "./engine.js";
 
 // The identifiers that make two addresses one paper: its DOI, its PMID, its
-// PMCID. A run on the thesis banked the same article three times — through
-// Europe PMC's DOI, through its PubMed page, and through the publisher's page —
-// because URLs were the only thing compared. Keys are `doi:10.x/y` (lower-case),
-// `pmid:123`, `pmcid:PMC123`.
+// PMCID, its arXiv id. A run on the thesis banked the same article three times —
+// through Europe PMC's DOI, through its PubMed page, and through the publisher's
+// page — because URLs were the only thing compared; another ingested a paper's
+// arXiv /abs/ page beside its /html/ page. Keys are `doi:10.x/y` (lower-case),
+// `pmid:123`, `pmcid:PMC123`, `arxiv:2609.32209` (no version: v1 and v2 are one
+// paper).
 
 const DOI_IN_URL = /(?:doi\.org|\/doi(?:\/(?:abs|full|pdf|epdf|reader))?)\/(10\.\d{4,9}\/[^?#\s]+)/i;
 
@@ -21,7 +24,8 @@ function doiKey(doi: string): string {
 
 /**
  * The identifier keys of a source: from its URL (a DOI resolver or a /doi/
- * path, a PubMed or PMC page), from the DOI a backend recorded, and — for text
+ * path, a PubMed or PMC page, an arXiv page), from the DOI or arXiv id a backend
+ * recorded, and — for text
  * read from E-utilities, whose record ends in labelled `DOI:` / `PMID:` /
  * `PMCID:` lines — from the record itself. A page's own body is never mined:
  * a reference list is full of other papers' DOIs.
@@ -32,6 +36,8 @@ export function identityKeys(url: string, meta?: SourceMeta, ncbiText?: string):
   if (inUrl) keys.add(doiKey(inUrl[1]!));
   const doc = ncbiDocument(url);
   if (doc) keys.add(doc.kind === "pubmed" ? `pmid:${doc.id}` : `pmcid:${doc.id}`);
+  const arxiv = arxivIdFromUrl(url) ?? (typeof meta?.arxivId === "string" && meta.arxivId.trim() ? meta.arxivId : undefined);
+  if (arxiv) keys.add(`arxiv:${arxiv.trim().toLowerCase().replace(/v\d+$/, "")}`);
   if (typeof meta?.doi === "string" && meta.doi.trim()) keys.add(doiKey(meta.doi));
   if (ncbiText) {
     const doi = ncbiText.match(/^\s*DOI:\s*(10\.\d{4,9}\/\S+)/im);

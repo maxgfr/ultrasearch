@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from "no
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
+import { writeFixtureDossier } from "./dossierfix.js";
 
 // Drive main() IN-PROCESS (not spawned) so vitest's V8 coverage instruments the
 // whole command-dispatch surface of src/cli.ts. main() writes to stdout/stderr
@@ -150,6 +151,33 @@ describe("main() — merge (error paths)", () => {
   it("fails with no --runs and on a non-existent run dir", async () => {
     expect((await run(["merge"])).exit).toBe(1);
     expect((await run(["merge", "--runs", "/no/such/dir-xyz"])).exit).toBe(1);
+  });
+});
+
+describe("main() — merge (next step)", () => {
+  // SKILL.md forbids --semantic on route S: it fails closed without an
+  // adjudicated VERIFY.json. A standard-depth merge used to recommend it anyway.
+  async function mergeAt(depth: "standard" | "deep"): Promise<string> {
+    const root = mkdtempSync(join(tmpdir(), `us-cli-merge-${depth}-`));
+    writeFixtureDossier(join(root, "q1"), 2, { depth });
+    writeFixtureDossier(join(root, "q2"), 2, { depth, question: "how do token buckets work" });
+    const r = await run(["merge", "--runs", `${join(root, "q1")},${join(root, "q2")}`, "--master", root]);
+    expect(r.exit).toBeUndefined();
+    const notes = JSON.parse(readFileSync(join(root, "manifest.json"), "utf8")).notes.join("\n");
+    rmSync(root, { recursive: true, force: true });
+    return `${r.err}\n${notes}`;
+  }
+
+  it("points a standard-depth master at render + check, never verify or --semantic", async () => {
+    const said = await mergeAt("standard");
+    expect(said).toMatch(/ultrasearch render --run .* && ultrasearch check --run /);
+    expect(said).not.toMatch(/--semantic/);
+    expect(said).not.toMatch(/\bverify\b/);
+  });
+
+  it("points a deep master at verify + check --semantic", async () => {
+    const said = await mergeAt("deep");
+    expect(said).toMatch(/ultrasearch verify --run .*ultrasearch check --semantic --require-verify --run /);
   });
 });
 

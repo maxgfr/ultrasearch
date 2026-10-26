@@ -13,12 +13,13 @@ import { cachedFetchAndExtract } from "./cache.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import { resolveProvider } from "./providers.js";
 import { addressedIdCount, deriveCitableUrl, isCitableUrl } from "./citable.js";
-import { arxivIdFromUrl, canonicalizeUrl, titleFromText } from "./util.js";
+import { arxivIdFromUrl, titleFromText, urlIdentity } from "./util.js";
 import { arxivMeta, readArxivRecords, type ArxivRecord } from "./backends/arxiv.js";
 import { looksLikeWall, readPastCachedWall, wallPattern } from "./walls.js";
 import { ncbiDocument, readNcbiDocument } from "./providers/ncbi.js";
 import { redirectedHome, searchPageOf } from "./listing.js";
 import { identityKeys, readFromEutils } from "./identity.js";
+import type { BrowserHumanHandoff, BrowserHumanOutcome } from "./engine.js";
 
 export interface EnrichResult {
   id: string;
@@ -26,6 +27,8 @@ export interface EnrichResult {
   /** An existing wall or snippet-only source got its text, under its own id. */
   repaired?: true;
   note?: string;
+  /** Only on a read that handed its page to a human (`human`): how that went, when it did not end in a text. */
+  handoff?: BrowserHumanOutcome;
 }
 
 export interface IngestOutcome extends EnrichResult {
@@ -84,10 +87,18 @@ function loadState(dir: string): IngestState {
   // FIRST match wins, because `sources.find` returned the first match: a
   // dossier that somehow holds two sources on one canonical url has to keep
   // reporting the earlier [S#], or a re-ingest silently re-points at the other.
-  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  // Under the stored canonical url AND the url's identity (urlIdentity): a
+  // dossier written before the identity existed stored the engine's form, which
+  // keeps a percent-encoded path as it was written.
+  for (const s of sources) for (const k of urlKeys(s)) if (!byCanon.has(k)) byCanon.set(k, s);
   const byIdentity = new Map<string, Source>();
   for (const s of sources) for (const k of sourceKeys(dir, s)) if (!byIdentity.has(k)) byIdentity.set(k, s);
   return { dir, sources, manifest, byCanon, byIdentity, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+}
+
+/** The addresses a banked source is found under in `byCanon`. */
+function urlKeys(s: Source): string[] {
+  return [...new Set([s.canonicalUrl, urlIdentity(s.url)])];
 }
 
 // A banked source's identifier keys. Its extract is only read when its text
@@ -122,7 +133,7 @@ function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   const s = annotateExtras(p.text, buildSource(p.raw, id, new Date().toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
-  state.byCanon.set(s.canonicalUrl, s);
+  for (const k of urlKeys(s)) state.byCanon.set(k, s);
   remember(state, s, p.text);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [...new Set([...state.manifest.backendsUsed, p.backend])] };
   return { id, added: true, ...(p.note ? { note: p.note } : {}) };
@@ -142,7 +153,7 @@ function repair(dir: string, state: IngestState, p: Prepared, old: Source): Enri
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   const i = state.sources.findIndex((x) => x.id === old.id);
   state.sources[i] = s;
-  state.byCanon.set(s.canonicalUrl, s);
+  for (const k of urlKeys(s)) state.byCanon.set(k, s);
   for (const [k, v] of state.byIdentity) if (v === old) state.byIdentity.set(k, s);
   remember(state, s, p.text);
   return { id: old.id, added: false, repaired: true, ...(p.note ? { note: p.note } : {}) };
@@ -173,7 +184,7 @@ function flushIndex(dir: string, state: IngestState): void {
 export async function addSources(
   dir: string,
   hits: (string | WebSearchHit)[],
-  opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode } = {},
+  opts: { question?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode; human?: BrowserHumanHandoff } = {},
 ): Promise<IngestResult> {
   // Resolved once for the whole batch, not once per URL — and so is the browser
   // rescue's budget: each render is a serialized browser read of up to 30 s.
@@ -287,7 +298,7 @@ async function prepareFile(stateOf: () => IngestState, abs: string, opts: { ques
   const state = stateOf();
   const question = opts.question ?? state.manifest.question;
 
-  const existing = state.byCanon.get(canonicalizeUrl(url));
+  const existing = state.byCanon.get(urlIdentity(url));
   if (existing) return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
 
   const bytes = readFileSync(abs);
@@ -377,6 +388,8 @@ async function prepareSource(
     cache?: boolean;
     firecrawl?: string;
     browser?: BrowserMode;
+    /** Hand a walled page to the human at the browser window (`ultrasearch human`). */
+    human?: BrowserHumanHandoff;
     /** The batch's browser-rescue budget, shared across its URLs. */
     rescues?: { left: number };
   },
@@ -414,7 +427,7 @@ async function prepareSource(
   // page and once as the endpoint that carries its text. Against the batch's
   // in-memory index, so a URL repeated INSIDE one batch is caught by the id the
   // earlier occurrence just took.
-  const canon = canonicalizeUrl(citeUrl);
+  const canon = urlIdentity(citeUrl);
   const existing =
     state.byCanon.get(canon) ??
     identityKeys(citeUrl)
@@ -448,7 +461,12 @@ async function prepareSource(
   if (!p.ok) {
     return {
       ok: false,
-      result: { id: existing.id, added: false, note: `already in dossier as ${existing.id} (${weak}) — re-read it, still no text: ${p.result.note}` },
+      result: {
+        id: existing.id,
+        added: false,
+        note: `already in dossier as ${existing.id} (${weak}) — re-read it, still no text: ${p.result.note}`,
+        ...(p.result.handoff ? { handoff: p.result.handoff } : {}),
+      },
     };
   }
   return {
@@ -496,7 +514,16 @@ async function readSource(
   provider: ReturnType<typeof resolveProvider>,
   ncbi: ReturnType<typeof ncbiDocument>,
   question: string,
-  opts: { title?: string; backend?: BackendKind; cache?: boolean; firecrawl?: string; browser?: BrowserMode; rescues?: { left: number }; repairs?: string },
+  opts: {
+    title?: string;
+    backend?: BackendKind;
+    cache?: boolean;
+    firecrawl?: string;
+    browser?: BrowserMode;
+    human?: BrowserHumanHandoff;
+    rescues?: { left: number };
+    repairs?: string;
+  },
 ): Promise<PrepareResult> {
   let citeUrl = citeUrlIn;
   // The endpoint first, for PubMed and PMC: E-utilities for an abstract, Europe
@@ -540,7 +567,10 @@ async function readSource(
   const readUrl = supplied || readsEndpoint ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
-  const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
+  // A page handed to a human is the page's own read, and its pair's: never the rescues further down.
+  const pageOpts = opts.human ? { ...readOpts, human: opts.human } : readOpts;
+  const fetched = await readPastCachedWall(readUrl, pageOpts, !!opts.cache);
+  const handoff = fetched.handoff ? { handoff: fetched.handoff } : {};
   let { text, title } = fetched;
   // A deep link answered by the site's home page: a dead link that said 200.
   // Its text is the home page's, never the document's — treated as gone, so the
@@ -573,7 +603,8 @@ async function readSource(
   // came back empty (a paywalled or image-only PDF).
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await readPastCachedWall(fallbackUrl, readOpts, !!opts.cache);
+    // The human is asked once per source: a pair whose first page already waited on them is read without.
+    const alt = await readPastCachedWall(fallbackUrl, fetched.handoff ? readOpts : pageOpts, !!opts.cache);
     if (alt.text?.trim() && !looksLikeWall(alt.text)) {
       text = alt.text;
       title = title || alt.title;
@@ -637,6 +668,7 @@ async function readSource(
         note:
           `${readUrl} extracted to a ${wall}, not content — not added. Retry later, or pin a source that carries the text.` +
           (ncbiMiss ? ` (${ncbiMiss}.)` : ""),
+        ...handoff,
       },
     };
   }
@@ -644,7 +676,7 @@ async function readSource(
     const why = home
       ? `${readUrl} redirected to the site's home page (${home}) — the document is gone, and the archive has no copy; not added`
       : (fetched.note ?? `no readable content at ${readUrl}`);
-    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
+    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why, ...handoff } };
   }
 
   // We have the text; now settle what gets CITED. If the url we read is a
@@ -672,7 +704,7 @@ async function readSource(
     meta.textVia = citeUrl;
     via = citeUrl;
     citeUrl = derived;
-    const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
+    const dup = state.byCanon.get(urlIdentity(citeUrl));
     if (dup && dup.id !== opts.repairs) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
 

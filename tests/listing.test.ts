@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { redirectedHome, searchPageOf } from "../src/listing.js";
 import { identityKeys } from "../src/identity.js";
+import { urlIdentity } from "../src/util.js";
 import { addSource, addSources } from "../src/enrich.js";
 import { runGather } from "../src/gather.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -218,6 +219,116 @@ describe("one paper, several addresses", () => {
     });
     expect(r.sources.map((s) => s.url)).toEqual(["https://journal.test/carlevale"]);
     expect(r.manifest.notes.join("\n")).toMatch(/Dropped 1 search results page\(s\)/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// A real research run (v1.42.7) banked one Web of Science record four times
+// under one URL, and ingested a paper's arXiv /abs/ page as a new source while
+// its /html/ page was already on file.
+describe("one address, one source", () => {
+  const WOS = "https://www.webofscience.com/wos/woscc/full-record/10.1088%2F3049-4753%2FAE4982?SID=EUW1ED0F6B&fromWosSearch=1";
+  const GATHER: Omit<GatherOptions, "out" | "webResults"> = {
+    question: "Carlevale scleral fixation outcomes",
+    mode: "topic",
+    depth: "standard",
+    perSource: 6,
+    lang: "en",
+    webEngine: "auto",
+    excludeDomains: [],
+    json: false,
+    backends: ["host"],
+  };
+
+  it("keys a URL by its percent-decoded form: %2F, %2f and / in the path, any hex case in the query", () => {
+    const keys = [
+      WOS,
+      WOS.replace(/%2F/g, "%2f"),
+      WOS.replace(/%2F/g, "/"),
+      "https://webofscience.com/wos/woscc/full-record/10.1088%2f3049-4753%2fAE4982/?fromWosSearch=1&SID=EUW1ED0F6B#x",
+    ].map(urlIdentity);
+    expect(new Set(keys).size).toBe(1);
+    expect(urlIdentity("https://ex.test/a%7Eb?q=a%2Fb")).toBe(urlIdentity("https://ex.test/a~b?q=a/b"));
+    // A different record, or a different query value, is still another address.
+    expect(urlIdentity(WOS.replace("AE4982", "AE4983"))).not.toBe(urlIdentity(WOS));
+    expect(urlIdentity(WOS.replace("SID=EUW1ED0F6B", "SID=OTHER"))).not.toBe(urlIdentity(WOS));
+  });
+
+  it("gather: one Web of Science record reached four ways is one source", async () => {
+    const dir = scratch();
+    // Two hits redirect onto the record's page, the other two ARE that page,
+    // written with different percent-encodings. The page is a sign-in wall, so
+    // each hit keeps its own snippet: nothing but the address says they are one.
+    installFetchMock((url) => (url.includes("webofscience.com") ? { url: WOS, status: 403, body: "" } : undefined));
+    const hit = (url: string, n: number) => ({
+      url,
+      title: `Carlevale record ${n}`,
+      snippet: `Carlevale scleral fixation outcomes, listing ${n} of the record.`,
+    });
+    const r = await runGather({
+      ...GATHER,
+      out: dir,
+      webResults: [
+        hit(WOS, 1),
+        hit(WOS.replace(/%2F/g, "%2f"), 2),
+        hit("https://www.webofscience.com/api/gateway?KeyAID=10.1088%2F3049-4753%2FAE4982&DestApp=DOI", 3),
+        hit("https://www.webofscience.com/api/gateway?KeyAID=10.1088%2F3049-4753%2FAE4982&DestApp=WOS", 4),
+      ],
+    });
+    expect(r.sources.filter((s) => s.url.includes("webofscience"))).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ingest: the same URL under another percent-encoding is already in the dossier", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    installFetchMock(() => ({ body: ARTICLE }));
+    const first = await addSources(dir, [WOS]);
+    expect(first.added).toBe(1);
+    const again = await addSources(dir, [WOS.replace(/%2F/g, "%2f"), WOS.replace(/%2F/g, "/")]);
+    expect(again.added).toBe(0);
+    expect(again.results.map((x) => x.note)).toEqual(["already in dossier as S2", "already in dossier as S2"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("keys an arXiv paper by its id, whichever page and version", () => {
+    for (const u of [
+      "https://arxiv.org/abs/2609.32209",
+      "https://arxiv.org/abs/2609.32209v2",
+      "https://arxiv.org/html/2609.32209v1",
+      "https://arxiv.org/pdf/2609.32209",
+      "http://export.arxiv.org/abs/2609.32209",
+    ]) {
+      expect(identityKeys(u), u).toEqual(["arxiv:2609.32209"]);
+    }
+    expect(identityKeys("https://arxiv.org/abs/hep-th/9901001v3")).toEqual(["arxiv:hep-th/9901001"]);
+    expect(identityKeys("https://publisher.test/a", { arxivId: "2609.32209v4" })).toEqual(["arxiv:2609.32209"]);
+  });
+
+  it("ingest: the /abs/ page of a paper banked by its /html/ page is the same source", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    installFetchMock((url) => (url.includes("arxiv.org") ? { body: ARTICLE } : undefined));
+    const first = await addSources(dir, ["https://arxiv.org/html/2609.32209"]);
+    expect(first.added).toBe(1);
+    const again = await addSources(dir, ["https://arxiv.org/abs/2609.32209"]);
+    expect(again.added).toBe(0);
+    expect(again.results[0]!.note).toMatch(/already in dossier as S2/);
+    expect(sourcesOf(dir)).toHaveLength(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gather: merges the /abs/, /html/ and /pdf/ pages of one arXiv paper", async () => {
+    const dir = scratch();
+    // The abstract page and the full text read differently: only the id says they are one paper.
+    const ABS = `<article><h1>Carlevale lens outcomes</h1><p>${"Abstract: we report scleral fixation outcomes of the Carlevale lens in a retrospective series. ".repeat(5)}</p></article>`;
+    installFetchMock((url) => (url.includes("arxiv.org/html") ? { body: ARTICLE } : url.includes("arxiv.org/abs") ? { body: ABS } : undefined));
+    const r = await runGather({
+      ...GATHER,
+      out: dir,
+      webResults: [{ url: "https://arxiv.org/html/2609.32209" }, { url: "https://arxiv.org/abs/2609.32209v2" }, { url: "https://journal.test/carlevale" }],
+    });
+    expect(r.sources.filter((s) => s.url.includes("arxiv.org"))).toHaveLength(1);
     rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -1,0 +1,108 @@
+{
+ "status": "ok",
+ "message-type": "work-list",
+ "message": {
+  "items": [
+   {
+    "DOI": "10.1109/cvpr.2019.01253",
+    "URL": "https://doi.org/10.1109/cvpr.2019.01253",
+    "title": [
+     "Learning Parallax Attention for Stereo Image Super-Resolution"
+    ],
+    "abstract": "<jats:p>A parallax attention module handles the varying disparities of stereo images, and the parallax attention stereo super-resolution network is trained end to end.</jats:p>",
+    "issued": {
+     "date-parts": [
+      [
+       2019
+      ]
+     ]
+    },
+    "container-title": [
+     "CVPR"
+    ],
+    "author": [
+     {
+      "given": "B.",
+      "family": "Author"
+     }
+    ],
+    "type": "journal-article"
+   },
+   {
+    "DOI": "10.1145/97879.97884",
+    "URL": "https://doi.org/10.1145/97879.97884",
+    "title": [
+     "BITNET: An academic network, 1981-1990"
+    ],
+    "abstract": "<jats:p>BITNET linked university mainframes with store-and-forward file transfer. This history of the BITNET network covers its growth, its efficient mail service and its training of campus operators.</jats:p>",
+    "issued": {
+     "date-parts": [
+      [
+       1990
+      ]
+     ]
+    },
+    "container-title": [
+     "Communications of the ACM"
+    ],
+    "author": [
+     {
+      "given": "B.",
+      "family": "Author"
+     }
+    ],
+    "type": "journal-article"
+   },
+   {
+    "DOI": "10.1017/cisg.2016.12",
+    "URL": "https://doi.org/10.1017/cisg.2016.12",
+    "title": [
+     "Commentary on the UN Convention on Contracts for the International Sale of Goods (CISG)"
+    ],
+    "abstract": "<jats:p>The CISG governs international sales contracts. Article 35 sets the conformity of the goods, including their weights as stated in the contract.</jats:p>",
+    "issued": {
+     "date-parts": [
+      [
+       2016
+      ]
+     ]
+    },
+    "container-title": [
+     "Cambridge University Press"
+    ],
+    "author": [
+     {
+      "given": "B.",
+      "family": "Author"
+     }
+    ],
+    "type": "journal-article"
+   },
+   {
+    "DOI": "10.48550/bitnet.2310.11453",
+    "URL": "https://doi.org/10.48550/bitnet.2310.11453",
+    "title": [
+     "BitNet: Scaling 1-bit Transformers for Large Language Models"
+    ],
+    "abstract": "<jats:p>BitNet replaces linear layers with BitLinear and trains 1-bit weights from scratch, an efficient LLM training recipe whose loss scales like full-precision training.</jats:p>",
+    "issued": {
+     "date-parts": [
+      [
+       2023
+      ]
+     ]
+    },
+    "container-title": [
+     "arXiv"
+    ],
+    "author": [
+     {
+      "given": "B.",
+      "family": "Author"
+     }
+    ],
+    "type": "journal-article"
+   }
+  ]
+ }
+}

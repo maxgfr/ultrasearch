@@ -231,7 +231,12 @@ What to expect:
   check is reported in the run's notes with the command to open it:
   `ultrasearch browser open <url>` opens it in the same dedicated browser and
   leaves it open. Once the human has passed it there, the next read of that host
-  gets the page.
+  gets the page. For a whole dossier, `ultrasearch human --run <dir>` does the
+  open, the wait and the re-read in one go: each ⛔ or challenged snippet-only
+  source in turn comes up in the window, the command waits (`--timeout`, 300 s
+  per page by default) until the human is past the wall, and the page read there
+  repairs the source in place. `gather`, `ingest` and `fetch` end with
+  `N page(s) need a human: ultrasearch human --run <dir>` when there are any.
 - **Accounting.** `gather` notes `Rendered N page(s) in a real browser` and the
   `Helpers:` line counts `browser ✓ N page(s)`. `fetch` / `ingest` record
   `meta.extractor: "browser"` on a source the browser read.
@@ -292,7 +297,8 @@ around them:
 | `searxng` backend skipped although containers are running | A bare `docker compose up` on some other stack starts nothing here — every service is behind a profile | `ultrasearch searxng up` |
 | Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
 | A browser window opened during a run | The browser rung (`fallback` by default) rendered a walled or JS-only page | Expected; it closes when the command ends. `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not open one. |
-| A note says "challenge — open it with `ultrasearch browser open <url>`" | The page put a CAPTCHA / anti-bot check in front of the browser | Hand it to the human: `ultrasearch browser open <url>`, let them pass it, then re-read the page. Never try to solve it yourself. |
+| A note says "challenge — open it with `ultrasearch browser open <url>`" | The page put a CAPTCHA / anti-bot check in front of the browser | Hand it to the human: ask them, then `ultrasearch human --run <dir>` (or `browser open <url>` and a re-read). Never try to solve it yourself. |
+| `human` says `skipped — no window can be shown here` | No display (Linux without `DISPLAY` / `WAYLAND_DISPLAY`), a CI run, or no browser installed | Run it on a machine with a screen; nobody is waited for until then. |
 | `doctor`: `browser ✗ off — no Chrome, Brave, Chromium or Edge found` | No supported browser installed, or `ULTRASEARCH_BROWSER_BIN` points nowhere | Install one, or set `ULTRASEARCH_BROWSER_BIN`. The run is unaffected otherwise — walls fall back to Firecrawl / the snippet. |
 | Extracts look truncated since enabling Firecrawl | Its markdown is richer, so it reaches the 4k/8k `--depth` cap sooner | Use `--depth deep` (uncapped extracts), or read `sources/S#.md` directly. |
 | Thin dossier every time | Query too narrow, or a niche/commercial topic | Add `--queries` variants, raise `--web-breadth`/`--pages`, add `--seed-domains` for hosts you know. |

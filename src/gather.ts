@@ -34,9 +34,13 @@ function atNcbiPage(it: RawSource): RawSource {
   return doc && doc.citeUrl !== it.url ? { ...it, url: doc.citeUrl } : it;
 }
 
-// Fold items that share a DOI, PMID or PMCID into one: the copy holding real
-// text wins over a snippet, then the longer text, then the earlier (better-
-// fused) item; the losers' URLs are kept on the winner as `alsoAt`.
+// Fold items that share a DOI, PMID, PMCID or arXiv id — or, after hydration
+// followed their redirects, one address (urlIdentity) — into one: the copy
+// holding real text wins over a snippet, then the longer text, then the earlier
+// (better-fused) item; the losers' other URLs are kept on the winner as
+// `alsoAt`. Fusion already merged equal addresses, but only the ones the hits
+// were given under: four hits redirected onto one Web of Science record were
+// four sources.
 function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: number } {
   const owner = new Map<string, RawSource>();
   const keysOf = new Map<RawSource, string[]>();
@@ -45,7 +49,7 @@ function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: numbe
     (a.fullText !== false) !== (b.fullText !== false) ? a.fullText !== false : (a.text?.length ?? 0) > (b.text?.length ?? 0);
   let merged = 0;
   for (const it of items) {
-    const keys = identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : undefined);
+    const keys = [...identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : undefined), `url:${urlIdentity(it.url)}`];
     const prior = keys.map((k) => owner.get(k)).find(Boolean);
     if (!prior) {
       out.push(it);
@@ -55,8 +59,11 @@ function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: numbe
     }
     merged++;
     const [win, lose] = better(it, prior) ? [it, prior] : [prior, it];
-    const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])];
-    win.meta = { ...lose.meta, ...win.meta, alsoAt: also };
+    const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])].filter(
+      (u) => urlIdentity(u) !== urlIdentity(win.url),
+    );
+    win.meta = { ...lose.meta, ...win.meta, ...(also.length ? { alsoAt: also } : {}) };
+    if (!also.length) delete win.meta.alsoAt;
     if (win !== prior) out[out.indexOf(prior)] = win;
     const all = [...new Set([...(keysOf.get(prior) ?? []), ...keys])];
     keysOf.set(win, all);
@@ -95,6 +102,7 @@ import {
   mapLimit,
   RUN_SLUG,
   arxivIdFromUrl,
+  urlIdentity,
 } from "./util.js";
 import type { Bm25Doc } from "./util.js";
 import { arxivMeta, arxivText, readArxivRecords, type ArxivRecord } from "./backends/arxiv.js";
@@ -109,6 +117,7 @@ const HYDRATE_CONCURRENCY = 6;
 // single repeated term, is left alone. The share is weighted by each term's IDF
 // over the pool: on a long question, words every source shares ("results",
 // "data", "architecture") must not carry a page that has none of the rare ones.
+// Words no source shares are left out of it: they tell no two sources apart.
 const OFF_TOPIC_TERM_SHARE = 1 / 3;
 const OFF_TOPIC_CONTENT = 0.2;
 // A source that names none of the question's proper nouns or acronyms keeps
@@ -128,6 +137,54 @@ export function idfShare(matched: readonly string[], terms: readonly string[], i
   if (total <= 0) return terms.length ? matched.filter((t) => terms.includes(t)).length / terms.length : 0;
   const hit = new Set(matched);
   return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
+}
+
+// The scholarly search backends that rank on any ONE query word: arXiv's API
+// joins words with OR once its AND queries come back empty, Crossref ranks by
+// any-word relevance. A real research run on efficient LLM training banked ~25
+// of their records that shared a single ambiguous word with the question —
+// muon physics for "Muon optimizer", the 1990 BITNET network for "BitNet",
+// stellar parallax for "Parallax attention".
+const HOMONYM_BACKENDS = new Set<string>(["arxiv", "crossref"]);
+
+/**
+ * Drop, from the arXiv and Crossref lists, the records that match fewer than
+ * two DISTINCTIVE query terms — so a lone homonym cannot carry a record in.
+ * Distinctive is weighted as the off-topic flag weights it: by IDF, over the
+ * whole pool every backend returned (title, snippet, abstract). A term at or
+ * above the query's median IDF is distinctive; one every record shares
+ * ("efficient", "training") is not, so it cannot be the second word either.
+ * A question with fewer than two content words, or two of unequal weight,
+ * falls back to "two of its words"; a pool under three records is left
+ * alone. Returns the note, or undefined when nothing was dropped.
+ */
+export function dropHomonyms(results: BackendResult[], question: string): string | undefined {
+  const docOf = (it: RawSource): Bm25Doc => ({ id: it.url, title: it.title || "", headings: "", body: [it.snippet, it.text].filter(Boolean).join("\n") });
+  const docs = results.flatMap((r) => r.items.map(docOf));
+  const bm25 = buildBm25Index(question, docs);
+  // Only the words some record contains: one in none has the top IDF and would
+  // push the median past the words that do tell records apart.
+  const pooled = new Set(docs.flatMap((d) => bm25MatchedTerms(bm25, d)));
+  const terms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t) && pooled.has(t));
+  // Under three records there is no IDF to weigh by (the engine gives every term 1).
+  if (terms.length < 2 || bm25.N < 3) return undefined;
+  const idfOf = (t: string) => bm25.idf.get(t) ?? 0;
+  const sorted = terms.map(idfOf).sort((a, b) => a - b);
+  const median = sorted[Math.floor((sorted.length - 1) / 2)]!;
+  const distinctive = new Set(terms.filter((t) => idfOf(t) >= median));
+  let dropped = 0;
+  for (const r of results) {
+    if (!HOMONYM_BACKENDS.has(r.backend)) continue;
+    const before = r.items.length;
+    r.items = r.items.filter((it) => {
+      const matched = bm25MatchedTerms(bm25, docOf(it)).filter((t) => /\p{L}/u.test(t));
+      return distinctive.size >= 2 ? matched.filter((t) => distinctive.has(t)).length >= 2 : matched.length >= 2;
+    });
+    dropped += before - r.items.length;
+  }
+  return dropped
+    ? `Dropped ${dropped} arXiv/Crossref record(s) that matched only one distinctive word of the question — a homonym is not the subject.`
+    : undefined;
 }
 
 /** The question's named terms, tokenised as BM25 tokenises them: capitalised words past the first (and not mere function words), acronyms anywhere. */
@@ -878,7 +935,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // record) say which are the same record — and the best-read copy stays.
     const sameRecord = mergeSameRecord(withContent);
     withContent = sameRecord.kept;
-    if (sameRecord.merged) hydrateNotes.push(`Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID or PMCID).`);
+    if (sameRecord.merged)
+      hydrateNotes.push(
+        `Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID, PMCID or arXiv id, or the same page).`,
+      );
 
     const docs: Bm25Doc[] = withContent.map((it) => ({
       id: it.url,
@@ -946,6 +1006,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // with it). Those are FLAGGED, never dropped — the reader decides, and
     // `drop --where offtopic` acts on the decision in one call.
     const alphaTerms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t));
+    // The share is weighed over the terms SOME source in the pool contains. A
+    // word of the question no source uses ("best", "nowadays") has the highest
+    // IDF there is, and tells no two sources apart: counted, it outweighed the
+    // topic's own words in every share, and a secret-detection dataset paper was
+    // flagged off-topic for a question about secret detection.
+    const pooled = new Set([...matchedByUrl.values()].flat());
+    const shareTerms = alphaTerms.filter((t) => pooled.has(t));
     if (alphaTerms.length >= 2) {
       for (const it of kept) {
         const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => /\p{L}/u.test(t));
@@ -953,7 +1020,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const off =
           isDisambiguation(it) ||
           matched.length === 0 ||
-          (alphaTerms.length >= 3 && idfShare(matched, alphaTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
+          (alphaTerms.length >= 3 && idfShare(matched, shareTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
         if (off) it.offTopic = true;
         else delete it.offTopic;
       }
@@ -986,6 +1053,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     };
   }
 
+  const homonymNote = dropHomonyms(results, options.question);
   const lists = results.map((r) => [...r.items].sort((a, b) => b.score - a.score));
   let r = await assemble(lists);
 
@@ -1081,6 +1149,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...new Set(r.hydrateNotes),
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
+    ...(homonymNote ? [homonymNote] : []),
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
     ...(r.notFetched > 0
       ? [
