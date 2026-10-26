@@ -278,6 +278,52 @@ describe("gather — off-topic flag", () => {
   });
 });
 
+// A real run flagged SecretBench (a secret-detection dataset paper) as off-topic
+// for a question about secret detection. Words of the question that NO source
+// uses ("best", "against", "nowadays") had the highest IDF of all — a term in no
+// document is the rarest there is — so they outweighed the topic's own words in
+// every source's share, and the flag came down to the content score alone.
+describe("gather off-topic flag — question words no source uses", () => {
+  it("does not flag an on-topic page because the question also has words nothing in the pool contains", async () => {
+    const dir = scratch();
+    const guide = (n: number) =>
+      `<title>Secret detection tools for leaked credentials in git history ${n}</title><article><p>${[
+        "Secret detection tools scan the git history of repositories for leaked credentials.",
+        `Tool number ${n} ships its own detection rules for every secret pattern found in git history.`,
+        ["Entropy checks", "Regular expressions", "Verified matches", "Pre-commit hooks", "Push protection"][n - 1],
+        "decide which leaked credentials a detection tool reports from the git history.",
+      ]
+        .join(" ")
+        .repeat(6)}</p></article>`;
+    const secretBench =
+      `<title>SecretBench: A Dataset of Software Secrets</title><article><p>We present SecretBench, a dataset of 97,479 secrets extracted from 818 public repositories and labelled by hand, ` +
+      `of which 15,084 are true secrets of 311 types. It lets researchers evaluate secret detection tools on the leaked credentials they report and on the false positives they raise.</p>` +
+      `<p>${"The corpus was sampled from public repositories, annotated by two reviewers who resolved every disagreement, and split by file type, by programming language and by the age of the commit that introduced each candidate. ".repeat(24)}</p></article>`;
+    const hosts = ["sd-1", "sd-2", "sd-3", "sd-4", "sd-5"];
+    installFetchMock(
+      routes([...hosts.map((h, i): [string, { body: string }] => [`${h}.test`, { body: guide(i + 1) }]), ["secretbench.test", { body: secretBench }]]),
+    );
+    const r = await runGather({
+      question: "which secret detection tools work best against leaked credentials in git history nowadays",
+      mode: "topic",
+      depth: "standard",
+      perSource: 6,
+      lang: "en",
+      webEngine: "auto",
+      excludeDomains: [],
+      json: false,
+      backends: ["host"],
+      webResults: [...hosts.map((h) => ({ url: `https://${h}.test/` })), { url: "https://secretbench.test/" }],
+      out: dir,
+    });
+    const bench = r.sources.find((s) => s.url === "https://secretbench.test/")!;
+    // Short of the pool's best page on content: the share of the question's terms decides.
+    expect(bench.meta?.rank?.content).toBeLessThan(0.2);
+    expect(bench.offTopic).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("idfShare", () => {
   it("weights each term by its IDF, with equal weights as the fallback", () => {
     const idf = new Map([

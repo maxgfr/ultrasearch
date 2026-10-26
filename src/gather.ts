@@ -117,6 +117,7 @@ const HYDRATE_CONCURRENCY = 6;
 // single repeated term, is left alone. The share is weighted by each term's IDF
 // over the pool: on a long question, words every source shares ("results",
 // "data", "architecture") must not carry a page that has none of the rare ones.
+// Words no source shares are left out of it: they tell no two sources apart.
 const OFF_TOPIC_TERM_SHARE = 1 / 3;
 const OFF_TOPIC_CONTENT = 0.2;
 // A source that names none of the question's proper nouns or acronyms keeps
@@ -159,11 +160,12 @@ const HOMONYM_BACKENDS = new Set<string>(["arxiv", "crossref"]);
  */
 export function dropHomonyms(results: BackendResult[], question: string): string | undefined {
   const docOf = (it: RawSource): Bm25Doc => ({ id: it.url, title: it.title || "", headings: "", body: [it.snippet, it.text].filter(Boolean).join("\n") });
-  const bm25 = buildBm25Index(
-    question,
-    results.flatMap((r) => r.items.map(docOf)),
-  );
-  const terms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t));
+  const docs = results.flatMap((r) => r.items.map(docOf));
+  const bm25 = buildBm25Index(question, docs);
+  // Only the words some record contains: one in none has the top IDF and would
+  // push the median past the words that do tell records apart.
+  const pooled = new Set(docs.flatMap((d) => bm25MatchedTerms(bm25, d)));
+  const terms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t) && pooled.has(t));
   // Under three records there is no IDF to weigh by (the engine gives every term 1).
   if (terms.length < 2 || bm25.N < 3) return undefined;
   const idfOf = (t: string) => bm25.idf.get(t) ?? 0;
@@ -1004,6 +1006,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // with it). Those are FLAGGED, never dropped — the reader decides, and
     // `drop --where offtopic` acts on the decision in one call.
     const alphaTerms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t));
+    // The share is weighed over the terms SOME source in the pool contains. A
+    // word of the question no source uses ("best", "nowadays") has the highest
+    // IDF there is, and tells no two sources apart: counted, it outweighed the
+    // topic's own words in every share, and a secret-detection dataset paper was
+    // flagged off-topic for a question about secret detection.
+    const pooled = new Set([...matchedByUrl.values()].flat());
+    const shareTerms = alphaTerms.filter((t) => pooled.has(t));
     if (alphaTerms.length >= 2) {
       for (const it of kept) {
         const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => /\p{L}/u.test(t));
@@ -1011,7 +1020,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const off =
           isDisambiguation(it) ||
           matched.length === 0 ||
-          (alphaTerms.length >= 3 && idfShare(matched, alphaTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
+          (alphaTerms.length >= 3 && idfShare(matched, shareTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
         if (off) it.offTopic = true;
         else delete it.offTopic;
       }
