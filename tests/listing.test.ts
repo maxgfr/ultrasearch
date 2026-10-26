@@ -221,3 +221,60 @@ describe("one paper, several addresses", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// A real research run (v1.42.7) ingested a paper's arXiv /abs/ page as a new
+// source while its /html/ page was already on file.
+describe("one arXiv paper, one source", () => {
+  const GATHER: Omit<GatherOptions, "out" | "webResults"> = {
+    question: "Carlevale scleral fixation outcomes",
+    mode: "topic",
+    depth: "standard",
+    perSource: 6,
+    lang: "en",
+    webEngine: "auto",
+    excludeDomains: [],
+    json: false,
+    backends: ["host"],
+  };
+
+  it("keys an arXiv paper by its id, whichever page and version", () => {
+    for (const u of [
+      "https://arxiv.org/abs/2609.32209",
+      "https://arxiv.org/abs/2609.32209v2",
+      "https://arxiv.org/html/2609.32209v1",
+      "https://arxiv.org/pdf/2609.32209",
+      "http://export.arxiv.org/abs/2609.32209",
+    ]) {
+      expect(identityKeys(u), u).toEqual(["arxiv:2609.32209"]);
+    }
+    expect(identityKeys("https://arxiv.org/abs/hep-th/9901001v3")).toEqual(["arxiv:hep-th/9901001"]);
+    expect(identityKeys("https://publisher.test/a", { arxivId: "2609.32209v4" })).toEqual(["arxiv:2609.32209"]);
+  });
+
+  it("ingest: the /abs/ page of a paper banked by its /html/ page is the same source", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    installFetchMock((url) => (url.includes("arxiv.org") ? { body: ARTICLE } : undefined));
+    const first = await addSources(dir, ["https://arxiv.org/html/2609.32209"]);
+    expect(first.added).toBe(1);
+    const again = await addSources(dir, ["https://arxiv.org/abs/2609.32209"]);
+    expect(again.added).toBe(0);
+    expect(again.results[0]!.note).toMatch(/already in dossier as S2/);
+    expect(sourcesOf(dir)).toHaveLength(2);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gather: merges the /abs/, /html/ and /pdf/ pages of one arXiv paper", async () => {
+    const dir = scratch();
+    // The abstract page and the full text read differently: only the id says they are one paper.
+    const ABS = `<article><h1>Carlevale lens outcomes</h1><p>${"Abstract: we report scleral fixation outcomes of the Carlevale lens in a retrospective series. ".repeat(5)}</p></article>`;
+    installFetchMock((url) => (url.includes("arxiv.org/html") ? { body: ARTICLE } : url.includes("arxiv.org/abs") ? { body: ABS } : undefined));
+    const r = await runGather({
+      ...GATHER,
+      out: dir,
+      webResults: [{ url: "https://arxiv.org/html/2609.32209" }, { url: "https://arxiv.org/abs/2609.32209v2" }, { url: "https://journal.test/carlevale" }],
+    });
+    expect(r.sources.filter((s) => s.url.includes("arxiv.org"))).toHaveLength(1);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
