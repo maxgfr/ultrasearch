@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { BackendKind, GatherOptions, ModeName, RunContext } from "./types.js";
 import { getMode } from "./modes/registry.js";
 import { runBackends } from "./backends/registry.js";
-import { fuse } from "./gather.js";
+import { fuseSources } from "./gather.js";
 import { defaultRunDir } from "./gather.js";
 import { keywords, foldTerm, domainOf, extractIdentifiers } from "./util.js";
 import { facetQuestion, subjectOf } from "./plan.js";
@@ -163,7 +163,7 @@ export async function runBrainstorm(options: GatherOptions): Promise<BrainstormR
   const ctx: RunContext = { question: options.question, mode, options: { ...options, perSource: 5 }, variants: [options.question] };
   const backendResults = await runBackends(backends, ctx);
   const notes = backendResults.flatMap((r) => r.notes);
-  const fused = fuse(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
+  const fused = fuseSources(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
   const results: BrainstormProbeResult[] = fused.map((s) => ({ title: s.title, url: s.url, domain: domainOf(s.url) }));
 
   const clusters = clusterTitles(results);
