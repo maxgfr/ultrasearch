@@ -7985,6 +7985,10 @@ function browserFetchMode(explicit) {
   const m = (explicit ?? env("BROWSER_FETCH"))?.toLowerCase();
   return m === "always" || m === "fallback" ? m : "off";
 }
+function browserFetchModeFor(opts) {
+  const m = browserFetchMode(opts.browser);
+  return m === "off" && opts.human && opts.browser !== "off" ? "fallback" : m;
+}
 function worthRendering(res) {
   if (RENDER_STATUS.has(res.status)) return res.status ? `got HTTP ${res.status}` : "got no answer";
   if (res.status < 200 || res.status >= 300) return void 0;
@@ -7992,13 +7996,27 @@ function worthRendering(res) {
   if (junk) return `read a ${junk}`;
   return res.text.trim().length < 200 ? "found almost no text" : void 0;
 }
-var RENDER_STATUS;
+function canShowWindow(platform = process.platform, env2 = process.env) {
+  const ci = env2.CI?.trim().toLowerCase();
+  if (ci && ci !== "false" && ci !== "0") return false;
+  if (platform === "darwin" || platform === "win32") return true;
+  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
+}
+function humanWall(text) {
+  const junk = looksLikeJunkExtraction(text);
+  if (junk && !junk.startsWith("JavaScript")) return junk;
+  const t = text.trim();
+  return t && t.length < LOGIN_WALL_MAX && LOGIN_WALL.test(t.slice(0, 800)) ? "login wall" : void 0;
+}
+var RENDER_STATUS, LOGIN_WALL, LOGIN_WALL_MAX;
 var init_mode = __esm({
   "src/browser/mode.ts"() {
     "use strict";
     init_brand();
     init_junk();
     RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
+    LOGIN_WALL = /\b(?:sign|log) ?in (?:to (?:continue|read|view|see|access|keep reading)|or (?:sign up|register|create an account))\b|\byou (?:must|need to|have to) (?:be )?(?:signed|logged) ?in\b|\bplease (?:sign|log) ?in\b/i;
+    LOGIN_WALL_MAX = 1500;
   }
 });
 
@@ -8619,28 +8637,35 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
-  const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchMode(opts.browser);
+  const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchModeFor(opts);
+  const handoff = (got2) => got2.handoff ? { handoff: got2.handoff } : {};
   if (browser === "always") {
     const got2 = await renderInBrowser(url, opts);
     if (got2.result) return got2.result;
     const res2 = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, { page: false });
-    return { ...res2, note: [`${got2.note}; read without it.`, got2.detail, res2.note].filter(Boolean).join(" ") };
+    return { ...res2, note: [`${got2.note}; read without it.`, got2.detail, res2.note].filter(Boolean).join(" "), ...handoff(got2) };
   }
   const seen = { page: false };
   const res = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen);
-  const why = browser === "fallback" && seen.page && !opts.signal?.aborted ? worthRendering(res) : void 0;
+  const walled = opts.human && res.status >= 200 && res.status < 300 ? humanWall(res.text) : void 0;
+  const why = browser === "fallback" && seen.page && !opts.signal?.aborted ? worthRendering(res) ?? (walled ? `read a ${walled}` : void 0) : void 0;
   if (!why) return res;
   const got = await renderInBrowser(url, opts);
   if (got.result?.text.trim())
     return { ...got.result, note: [`Read ${url} in the browser: the built-in fetch ${why}.`, got.result.note].filter(Boolean).join(" ") };
-  return { ...res, note: [res.note, got.result ? got.result.note : `${got.note}.`, got.detail].filter(Boolean).join(" ") || void 0 };
+  return {
+    ...res,
+    note: [res.note, got.result ? got.result.note : `${got.note}.`, got.detail].filter(Boolean).join(" ") || void 0,
+    ...handoff(got.result ?? got)
+  };
 }
 async function renderInBrowser(url, opts) {
   try {
     const { readRenderedPage: readRenderedPage2 } = await Promise.resolve().then(() => (init_read(), read_exports));
-    const { format, fullPage, stripConsent, keepHtml, signal, timeoutMs } = opts;
-    const result = await readRenderedPage2(url, { format, fullPage, stripConsent, keepHtml, signal, timeoutMs });
-    if (result.status >= 400) return { note: `The browser got HTTP ${result.status} for ${url}`, detail: result.note };
+    const { format, fullPage, stripConsent, keepHtml, signal, timeoutMs, human } = opts;
+    const result = await readRenderedPage2(url, { format, fullPage, stripConsent, keepHtml, signal, timeoutMs, ...human ? { human } : {} });
+    if (result.status >= 400)
+      return { note: `The browser got HTTP ${result.status} for ${url}`, detail: result.note, ...result.handoff ? { handoff: result.handoff } : {} };
     return { result };
   } catch (e) {
     return { note: `The browser could not read ${url} (${e instanceof Error ? e.message : String(e)})` };
@@ -9861,31 +9886,86 @@ async function render(url, opts, deps, timeoutMs, run) {
       await waitFor(session, { idle: true }, { timeoutMs: idleMs, deps }).catch(() => {
       });
     }
+    const statusNow = () => status ?? nav.status ?? 200;
+    const code = statusNow();
+    const take = async () => {
+      const got = await page.send(
+        "Runtime.evaluate",
+        { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
+        { timeoutMs }
+      );
+      const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
+      const html = typeof got.result?.value?.html === "string" ? got.result.value.html : "";
+      return { ...extractFromHtml(html, finalUrl, opts), finalUrl, status: statusNow(), extractor: "browser" };
+    };
     const challenge = await detectChallenge(session);
-    const got = await page.send(
-      "Runtime.evaluate",
-      { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
-      { timeoutMs }
-    );
-    const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
-    const code = status ?? nav.status ?? 200;
-    if (challenge?.blocking) {
+    const first = await take();
+    const blocked = (c) => ({
+      text: "",
+      finalUrl: first.finalUrl,
+      status: code >= 400 ? code : 403,
+      extractor: "browser",
+      note: `${c.kind} challenge \u2014 open it with \`${brand().cli} browser open ${url}\` and let the human solve it`
+    });
+    const asIs = challenge?.blocking ? blocked(challenge) : first;
+    if (!opts.human) return asIs;
+    const found = challenge?.blocking ? `${challenge.kind} challenge` : humanWall(first.text);
+    if (!found) return first;
+    const wall = `${/^[aeiou]/i.test(found) ? "an" : "a"} ${found}`;
+    const nobody = session.headless ? "the browser runs headless" : canShowWindow(deps.platform) ? void 0 : "no window can be shown here";
+    if (nobody) return { ...asIs, note: [asIs.note, `It needs a human, and ${nobody}.`].filter(Boolean).join(" "), handoff: "no-window" };
+    const human = opts.human === true ? {} : opts.human;
+    const cleared = await handOff(session, url, wall, !!challenge?.blocking, human, deps, take, opts.signal);
+    if (cleared)
       return {
-        text: "",
-        finalUrl,
-        status: code >= 400 ? code : 403,
-        extractor: "browser",
-        note: `${challenge.kind} challenge \u2014 open it with \`${brand().cli} browser open ${url}\` and let the human solve it`
+        ...cleared,
+        status: cleared.status >= 400 ? 200 : cleared.status,
+        note: [cleared.note, `Read after a human got past ${wall}.`].filter(Boolean).join(" "),
+        handoff: "cleared"
       };
-    }
-    const html = typeof got.result?.value?.html === "string" ? got.result.value.html : "";
-    return { ...extractFromHtml(html, finalUrl, opts), finalUrl, status: code, extractor: "browser" };
+    const secs = Math.round((human.timeoutMs ?? HUMAN_TIMEOUT_MS) / 1e3);
+    return { ...asIs, note: [asIs.note, `Nobody got past it within ${secs} s.`].filter(Boolean).join(" "), handoff: "timeout" };
   } finally {
     page.off("Network.responseReceived", onResponse);
     await deps.discovery.closeTarget(session.port, session.targetId, session.host).catch(() => {
     });
     await session.detach();
   }
+}
+async function handOff(session, url, wall, challenged, human, deps, take, signal) {
+  const tell = human.tell ?? ((m) => void process.stderr.write(`${m}
+`));
+  const timeoutMs = human.timeoutMs ?? HUMAN_TIMEOUT_MS;
+  const start = deps.now();
+  const left = () => timeoutMs - (deps.now() - start);
+  const { cli, name } = brand();
+  await deps.discovery.activateTarget(session.port, session.targetId, session.host).catch(() => {
+  });
+  tell(
+    `${cli}: ${url} is behind ${wall}. It is open in the ${name} browser window (its own profile, not your browser): get past it there and the read goes on by itself \u2014 waiting up to ${Math.round(timeoutMs / 1e3)} s.`
+  );
+  try {
+    if (challenged) await waitFor(session, { clear: true }, { timeoutMs, deps, ...signal ? { signal } : {} });
+    for (; ; ) {
+      await waitFor(session, { load: true }, { timeoutMs: Math.max(1, Math.min(AFTER_WALL_LOAD_MS, left())), deps }).catch(() => {
+      });
+      const challenge = await detectChallenge(session);
+      if (!challenge?.blocking) {
+        const r = await take();
+        if (!humanWall(r.text)) {
+          tell(`${cli}: got past it \u2014 read ${url}.`);
+          return r;
+        }
+      }
+      if (left() <= 0) break;
+      if (signal?.aborted) throw new Error(`reading ${url} in the browser was cancelled`);
+      await deps.sleep(Math.min(WALL_POLL_MS, left()));
+    }
+  } catch (e) {
+    if (!(e instanceof WaitTimeoutError)) throw e;
+  }
+  tell(`${cli}: ${url} is still behind ${wall} after ${Math.round(timeoutMs / 1e3)} s \u2014 read without it.`);
+  return void 0;
 }
 function readRenderedPage(url, opts = {}) {
   return track(read(url, opts));
@@ -9896,6 +9976,7 @@ async function read(url, opts) {
   if (signal?.aborted) throw cancelled();
   const deps = browserDeps(opts.deps);
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
+  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? HUMAN_TIMEOUT_MS : 0;
   const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
     release();
@@ -9908,7 +9989,8 @@ async function read(url, opts) {
   const cut = new Promise((_, reject) => {
     stop = reject;
   });
-  const timer = setTimeout(() => stop(new Error(`reading ${url} in the browser did not finish within ${timeoutMs} ms`)), timeoutMs);
+  const budgetMs = humanMs ? 2 * timeoutMs + humanMs : timeoutMs;
+  const timer = setTimeout(() => stop(new Error(`reading ${url} in the browser did not finish within ${budgetMs} ms`)), budgetMs);
   const onAbort = () => stop(cancelled());
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
@@ -9924,7 +10006,7 @@ async function read(url, opts) {
     signal?.removeEventListener("abort", onAbort);
   }
 }
-var IDLE_CAP_MS, WEB_PAGE, active, queue, DRAIN_MS, launched, inflight, WHOLE_DOCUMENT;
+var IDLE_CAP_MS, WEB_PAGE, HUMAN_TIMEOUT_MS, WALL_POLL_MS, AFTER_WALL_LOAD_MS, active, queue, DRAIN_MS, launched, inflight, WHOLE_DOCUMENT;
 var init_read = __esm({
   "src/browser/read.ts"() {
     "use strict";
@@ -9934,12 +10016,16 @@ var init_read = __esm({
     init_deps();
     init_launch();
     init_discovery();
+    init_mode();
     init_overlay();
     init_session();
     init_state();
     init_wait();
     IDLE_CAP_MS = 3e3;
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
+    HUMAN_TIMEOUT_MS = 3e5;
+    WALL_POLL_MS = 1e3;
+    AFTER_WALL_LOAD_MS = 1e4;
     active = 0;
     queue = [];
     DRAIN_MS = 5e3;
@@ -9949,7 +10035,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.34.3";
+var ENGINE_VERSION = "1.35.0";
 
 // src/index.ts
 init_brand();
@@ -10243,6 +10329,7 @@ function unclearControls(controls) {
 
 // src/browser.ts
 init_challenge();
+init_mode();
 init_detect();
 init_profile();
 
@@ -12919,7 +13006,7 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     return { text: "", finalUrl: url, status: 0, note: `Offline: ${url} is not in the cache (drop --offline, or warm it with a normal run).` };
   }
   const ns = await currentExtractor(opts, url);
-  const fallback = browserFetchMode(opts.browser) === "fallback";
+  const fallback = browserFetchModeFor(opts) === "fallback";
   const store = (result, tried = false) => {
     const target = namespaceFor(result, ns);
     let entry = ns === "firecrawl" && target === "native" ? { ...result, fallbackFrom: "firecrawl" } : result;
@@ -15611,6 +15698,7 @@ export {
   cachePath,
   cacheStats,
   cachedFetchAndExtract,
+  canShowWindow as canShowBrowserWindow,
   canonicalRepo,
   canonicalRepoRef,
   canonicalizeUrl,
