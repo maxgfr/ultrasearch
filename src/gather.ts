@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH, UNDER_COVERED_MIN } from "./types.js";
+import { VERSION, RECALL_FLOORS, PAGES_PER_DEPTH, WEB_BREADTH_PER_DEPTH } from "./types.js";
 import type {
   BackendKind,
   BackendResult,
@@ -20,6 +20,7 @@ import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { templateFor } from "./templates.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
+import { fuse, termCoverage, UNDER_COVERED_MIN, underCovered } from "./engine.js";
 import { isWordedWall, looksLikeWall, MIN_USEFUL_CHARS, readPastCachedWall, usefulChars } from "./walls.js";
 import { redirectedHome, searchPageOf } from "./listing.js";
 import { identityKeys, readFromEutils } from "./identity.js";
@@ -83,7 +84,6 @@ import { describeServices } from "./services.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
   domainOf,
-  rrf,
   runId,
   slugify,
   planVariants,
@@ -348,32 +348,10 @@ export function resolveSearchProfile(options: GatherOptions): Exclude<SearchProf
   return "full";
 }
 
-/**
- * Per-term coverage of the question's BM25 query terms across the TOP kept
- * sources: how many of them actually contain each term. Pure and in-memory (the
- * extracts are already hydrated), so it runs on EVERY gather — not just the
- * `--rounds 2` gap round that used to be its only consumer and threw the answer
- * away. This is what turns "enrich the thin areas" from prose into a worklist.
- */
-export function termCoverage(items: RawSource[], queryTerms: string[], top = coverageWindow(queryTerms.length)): { term: string; sources: number }[] {
-  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
-  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
-}
-
-/**
- * How many of the top sources `termCoverage` reads: 10, or one per question term when the
- * question has more. A broad question ("early exits, Muon, looped transformers, DAgger…")
- * spreads its facets over the ranking, so a fixed top 10 held by one facet called every other
- * facet under-covered while several sources below rank 10 named it.
- */
-export function coverageWindow(nTerms: number): number {
-  return Math.max(10, nTerms);
-}
-
-/** The enrichment worklist: terms fewer than UNDER_COVERED_MIN of the top sources mention. */
-export function underCovered(cov: { term: string; sources: number }[]): string[] {
-  return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);
-}
+// Per-term coverage (`termCoverage`, `coverageWindow`, `underCovered`) lives
+// in the engine now (webindex ≥ 1.36); re-exported for the modules and tests
+// that import it from here.
+export { coverageWindow, termCoverage, underCovered } from "./engine.js";
 
 // Which backends a run uses: an explicit --backends override, else the mode's
 // profile (plus its deep-only backends at --depth deep), then the --web-engine
@@ -421,42 +399,13 @@ export function ignoredByMaxProfile(options: GatherOptions): string[] {
   return out;
 }
 
-// Merge each backend's ranked list into one ranking by Reciprocal Rank Fusion
-// over an IDENTITY key (DOI / arXiv id, else canonical URL), so the same work
-// surfaced by several backends collapses to one entry instead of eating several
-// source slots. On collision, prefer the copy that already carries text and
-// merge their metadata.
-export function fuse(lists: RawSource[][]): RawSource[] {
-  const fused = rrf(lists, identityKey);
-  const best = new Map<string, RawSource>();
-  // How many INDEPENDENT backend lists surfaced each identity. Cross-engine
-  // agreement is evidence no single engine can manufacture, and unlike a host
-  // list it needs nothing hardcoded — it falls out of the fusion we already do.
-  // Recorded, never scored: RRF already rewards agreement through rank.
-  const foundBy = new Map<string, number>();
-  for (const list of lists) {
-    const seenInList = new Set<string>();
-    for (const it of list) {
-      const key = identityKey(it);
-      if (!seenInList.has(key)) {
-        seenInList.add(key);
-        foundBy.set(key, (foundBy.get(key) ?? 0) + 1);
-      }
-      const prev = best.get(key);
-      if (!prev) {
-        best.set(key, { ...it });
-      } else if (!prev.text && it.text) {
-        best.set(key, { ...it, meta: { ...prev.meta, ...it.meta } });
-      } else if (it.meta) {
-        prev.meta = { ...it.meta, ...prev.meta };
-      }
-    }
-  }
-  for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
-  const merged = [...best.values()];
-  for (const it of merged) it.score = fused.get(identityKey(it)) ?? 0;
-  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  return merged;
+// Merge each backend's ranked list into one ranking: the engine's `fuse`
+// (Reciprocal Rank Fusion, text-carrying copy preferred, meta merged,
+// `meta.foundBy` recorded) over this skill's IDENTITY key — DOI / arXiv id,
+// else canonical URL — so the same work surfaced by several backends collapses
+// to one entry instead of eating several source slots.
+export function fuseSources(lists: RawSource[][]): RawSource[] {
+  return fuse(lists, identityKey);
 }
 
 // The query variants a run searches with: agent-supplied `--queries` take over
@@ -681,7 +630,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // the main pass and the gap round so both score identically.
   async function assemble(rawLists: RawSource[][]) {
     const hydrateNotes: string[] = [];
-    let merged = fuse(rawLists.map((l) => l.map(atNcbiPage)));
+    let merged = fuseSources(rawLists.map((l) => l.map(atNcbiPage)));
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged.length;
     if (options.excludeDomains.length) merged = merged.filter(excluded);
     // A results page is not a document: a web search hit pointing at PubMed's

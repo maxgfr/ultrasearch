@@ -5,423 +5,6 @@ import { basename as basename5, join as join29, relative as relative3, resolve a
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
 import { realpathSync as realpathSync4, existsSync as existsSync19, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync20 } from "fs";
 
-// src/types.ts
-var VERSION = "1.43.0";
-var ALL_BACKENDS = [
-  "searxng",
-  "firecrawl",
-  "duckduckgo",
-  "ddglite",
-  "mojeek",
-  "marginalia",
-  "wikipedia",
-  "stackexchange",
-  "hackernews",
-  "github",
-  "arxiv",
-  "crossref",
-  "openalex",
-  "semanticscholar",
-  "europepmc",
-  "pubmed",
-  "clinicaltrials",
-  "dblp",
-  "standards",
-  "reddit",
-  "pepper",
-  "generic",
-  "fixture",
-  "host"
-];
-var ALL_MODES = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
-var ALL_TEMPLATES = [...ALL_MODES, "verification"];
-var ALL_DEPTHS = ["summary", "standard", "deep"];
-var DEPTH_CAPS = {
-  summary: { maxSources: 10, perSource: 4, deepOnly: false },
-  standard: { maxSources: 25, perSource: 6, deepOnly: false },
-  deep: { maxSources: 60, perSource: 10, deepOnly: true }
-};
-var RECALL_FLOORS = {
-  summary: 3,
-  standard: 6,
-  deep: 12
-};
-var UNDER_COVERED_MIN = 2;
-var PAGES_PER_DEPTH = {
-  summary: 1,
-  standard: 2,
-  deep: 3
-};
-var WEB_BREADTH_PER_DEPTH = {
-  summary: 1,
-  standard: 2,
-  deep: 5
-};
-var DEEP_CAPS = {
-  maxSubQuestions: 6,
-  maxRounds: 3,
-  maxVerify: 40,
-  perSubQuestionSources: 60
-};
-var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "host"];
-var LEGACY_BACKEND_ALIASES = { claude: "host" };
-function canonicalBackend(name) {
-  return Object.hasOwn(LEGACY_BACKEND_ALIASES, name) ? LEGACY_BACKEND_ALIASES[name] : name;
-}
-var ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"];
-var ALL_BROWSER_MODES = ["fallback", "always", "off"];
-
-// src/backends/websearch.ts
-var URL_KEYS = ["url", "link", "href", "uri"];
-var TITLE_KEYS = ["title", "name", "heading"];
-var SNIPPET_KEYS = ["snippet", "description", "summary", "content", "text", "excerpt"];
-var CITE_KEYS = ["citeUrl", "cite_url", "citeURL", "cite"];
-function firstString(o, keys) {
-  for (const k of keys) {
-    const v = o[k];
-    if (typeof v === "string" && v.trim()) return v.trim();
-  }
-  return void 0;
-}
-function normalizeUrl(raw) {
-  const s = raw.trim();
-  if (!s) return void 0;
-  try {
-    const u = new URL(s);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return void 0;
-    return u.toString();
-  } catch {
-    return void 0;
-  }
-}
-function hitFrom(entry) {
-  if (typeof entry === "string") {
-    const url2 = normalizeUrl(entry);
-    return url2 ? { url: url2 } : void 0;
-  }
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return void 0;
-  const o = entry;
-  const raw = firstString(o, URL_KEYS);
-  if (!raw) return void 0;
-  const url = normalizeUrl(raw);
-  if (!url) return void 0;
-  const citeUrl = firstString(o, CITE_KEYS);
-  return {
-    url,
-    title: firstString(o, TITLE_KEYS),
-    snippet: firstString(o, SNIPPET_KEYS),
-    ...citeUrl ? { citeUrl } : {}
-  };
-}
-function entriesOf(parsed) {
-  if (Array.isArray(parsed)) return parsed;
-  if (parsed && typeof parsed === "object") {
-    for (const k of ["results", "hits", "items", "webResults", "web_results", "sources"]) {
-      const v = parsed[k];
-      if (Array.isArray(v)) return v;
-    }
-  }
-  return void 0;
-}
-function parseWebResults(raw) {
-  const text = raw.trim();
-  if (!text) return { hits: [], rejected: 0, notes: ["--web-results was empty."] };
-  const notes = [];
-  let entries;
-  try {
-    entries = entriesOf(JSON.parse(text));
-    if (!entries) {
-      return { hits: [], rejected: 0, notes: ["--web-results parsed as JSON but held no array of results (expected [{url,title,snippet}, \u2026])."] };
-    }
-  } catch {
-    entries = text.split(/\r?\n/).filter((l) => l.trim());
-    notes.push("--web-results was not JSON \u2014 read it as a newline-separated URL list.");
-  }
-  const hits = [];
-  const seen = /* @__PURE__ */ new Set();
-  let rejected = 0;
-  for (const entry of entries) {
-    const hit = hitFrom(entry);
-    if (!hit) {
-      rejected++;
-      continue;
-    }
-    if (seen.has(hit.url)) continue;
-    seen.add(hit.url);
-    hits.push(hit);
-  }
-  if (rejected) notes.push(`--web-results: ignored ${rejected} entr${rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`);
-  return { hits, rejected, notes };
-}
-var websearchBackend = async (ctx) => {
-  const hits = ctx.options.webResults ?? [];
-  if (!hits.length) {
-    return {
-      backend: "host",
-      items: [],
-      notes: ["Web-search lane: no hits supplied (pass --web-results <file.json|->)."]
-    };
-  }
-  const items = hits.map((h, i) => ({
-    url: h.url,
-    title: h.title || h.url,
-    backend: "host",
-    score: hits.length - i,
-    snippet: h.snippet ?? ""
-    // No `text`: the page is hydrated by the gatherer through the same rescue
-    // ladder as any other candidate, so a web search hit is held to the same
-    // evidentiary standard. The snippet is only the fallback when it fails.
-  }));
-  return {
-    backend: "host",
-    items,
-    notes: [`Web-search lane: ${items.length} hit(s) supplied by the agent.`]
-  };
-};
-
-// src/gather.ts
-import { join as join13 } from "path";
-import { tmpdir as tmpdir4 } from "os";
-
-// src/modes/topic.ts
-var topicMode = {
-  name: "topic",
-  description: "General briefing on any subject (Wikipedia + general web).",
-  backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
-  deepOnly: [],
-  extras: [],
-  searchAngles: [
-    "the subject itself, as a plain definition",
-    "how it works \u2014 mechanism, architecture, internals",
-    "the official/primary source: the vendor, project or standards body's own pages",
-    "criticism, limitations and open debates",
-    "current state: what changed most recently, and when",
-    "alternatives and how they compare",
-    "who actually runs it in production, and what they report",
-    "the numbers: benchmarks, costs, adoption figures with a date"
-  ],
-  template: [
-    "## TL;DR",
-    "## What it is",
-    "## How it works / key concepts",
-    "## History & evolution",
-    "## Current state (today)",
-    "## Notable variants / approaches",
-    "## Controversies & open debates",
-    "## Practical implications",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/bug.ts
-var bugMode = {
-  name: "bug",
-  description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
-  backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
-  deepOnly: ["searxng", "reddit"],
-  extras: [],
-  searchAngles: [
-    "the error text VERBATIM, in quotes",
-    "the error text with the volatile parts (paths, ids, ports) stripped out",
-    "the symptom described in plain words, without the stack trace",
-    "the library/tool name + the error + 'github issue'",
-    "the library/tool name + the version where it started",
-    "the fix phrasing: how people who solved it describe the workaround",
-    "the changelog or release notes around the version that broke it",
-    "the same symptom in a NEIGHBOURING tool \u2014 often the same root cause"
-  ],
-  template: [
-    "## TL;DR (likely cause + fastest fix)",
-    "## Symptom & reproduction",
-    "## Root cause analysis",
-    "## Candidate fixes (ranked)",
-    "### Fix A \u2014 <summary> [confidence]",
-    "### Fix B \u2014 <summary>",
-    "## Related issues & versions affected",
-    "## Workarounds",
-    "## If still stuck (next diagnostics)",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/research.ts
-var researchMode = {
-  name: "research",
-  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp at deep) + refs.bib.",
-  backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
-  deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
-  extras: ["bibtex"],
-  searchAngles: [
-    "the topic + 'survey' or 'systematic review'",
-    "the canonical method/model name, as the field spells it",
-    "the seminal paper: earliest work everyone cites",
-    "recent work: the topic + the current year",
-    "the counter-position: critiques, failed replications, negative results",
-    "the benchmark or dataset the field measures this on",
-    "the review article that maps the subfield's disagreements",
-    "who cites the seminal work and what they changed about it"
-  ],
-  template: [
-    "## Abstract / TL;DR",
-    "## Background & motivation",
-    "## Key papers (chronological)",
-    "## Methods & approaches compared",
-    "## Findings & consensus",
-    "## Gaps & open problems",
-    "## Future directions",
-    "## References (see refs.bib)",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/clinical.ts
-var clinicalMode = {
-  name: "clinical",
-  description: "Clinical / biomedical evidence review \u2014 PubMed (E-utilities), Europe PMC, ClinicalTrials.gov, Crossref; no arXiv (+OpenAlex/Semantic Scholar/web guidelines at deep) + refs.bib.",
-  backends: ["pubmed", "europepmc", "clinicaltrials", "crossref"],
-  deepOnly: ["openalex", "semanticscholar", "duckduckgo"],
-  extras: ["bibtex"],
-  searchAngles: [
-    "the condition + the intervention + 'randomized controlled trial'",
-    "'systematic review' OR 'meta-analysis' + the condition and the intervention",
-    "clinical practice guidelines and consensus statements (national agencies, learned societies) on the topic",
-    "the MeSH terms for the condition and the intervention, as PubMed spells them",
-    "cohort, registry or case-series outcomes + the topic",
-    "adverse events, complications and safety signals of the intervention",
-    "registered and ongoing trials (ClinicalTrials.gov, EU CTR) for the condition",
-    "the comparator: standard of care, placebo or the alternative intervention",
-    "long-term follow-up: survival, recurrence, revision or relapse",
-    "cost-effectiveness and health-economic evaluations"
-  ],
-  template: [
-    "## TL;DR (clinical bottom line)",
-    "## Clinical question (PICO)",
-    "## Evidence base (trials, systematic reviews, cohorts)",
-    "## Efficacy outcomes",
-    "## Safety & adverse events",
-    "## Guidelines & recommendations",
-    "## Certainty of evidence & limitations",
-    "## Ongoing & registered trials",
-    "## Gaps & open questions",
-    "## References (see refs.bib)",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/learn.ts
-var learnMode = {
-  name: "learn",
-  description: "Pedagogical lesson with glossary, worked examples and exercises (rich HTML).",
-  backends: ["wikipedia", "duckduckgo", "searxng"],
-  deepOnly: ["standards"],
-  extras: ["glossary", "exercises"],
-  searchAngles: [
-    "the topic + 'tutorial' or 'getting started'",
-    "the topic explained for a beginner ('explained', 'from scratch')",
-    "the official documentation's own introduction",
-    "worked examples and common exercises",
-    "the mistakes beginners make ('common pitfalls', 'gotchas')",
-    "the prerequisites: what you must know first",
-    "the mental model an expert uses (analogies, first principles)",
-    "what to learn NEXT once this is understood"
-  ],
-  template: [
-    "## Learning objectives",
-    "## Prerequisites",
-    "## Glossary (see glossary.md)",
-    "## Lesson",
-    "### Concept 1 \u2014 explanation + example",
-    "### Concept 2 \u2014 explanation + example",
-    "## Worked examples",
-    "## Exercises",
-    "## Solutions",
-    "## Further reading",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/startup.ts
-var startupMode = {
-  name: "startup",
-  description: "Market research \u2014 competitors, market sizing, pricing, GTM (general web + public sources).",
-  backends: ["duckduckgo", "searxng", "hackernews"],
-  deepOnly: ["wikipedia", "reddit"],
-  extras: [],
-  searchAngles: [
-    "the product category + 'alternatives' or 'vs'",
-    "each named competitor's own pricing page",
-    "market size / market share for the category, with a year",
-    "what customers complain about (reviews, forums, HN threads)",
-    "funding, acquisitions and who is actually shipping",
-    "the regulatory or distribution constraint the category lives under",
-    "how incumbents price and package, in their own words",
-    "who tried this and failed, and the post-mortem they wrote"
-  ],
-  template: [
-    "## Executive summary",
-    "## Problem & customer",
-    "## Market sizing (TAM / SAM / SOM)",
-    "## Competitive landscape",
-    "### Competitor table (name \xB7 positioning \xB7 pricing)",
-    "## Pricing & business models observed",
-    "## Go-to-market channels",
-    "## Trends & timing",
-    "## Risks & moats",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/deals.ts
-var dealsMode = {
-  name: "deals",
-  description: "Coupon & discount-code finder for a merchant \u2014 deal communities (Dealabs/hotukdeals/mydealz\u2026), Reddit, the web; codes extracted, ranked, marked UNVERIFIED (+codes.json).",
-  backends: ["pepper", "reddit", "duckduckgo", "searxng"],
-  deepOnly: [],
-  extras: ["codes"],
-  // Ordered by yield: `queries` keeps the first 2 / 4 / 8 by depth.
-  searchAngles: [
-    "the merchant + 'promo code' in the country's language + this month and year (e.g. 'code promo decathlon octobre 2026')",
-    "site: the country's Pepper deal community (dealabs.com, hotukdeals.com, mydealz.de, chollometro.com, pepper.pl, nl.pepper.com) + the merchant",
-    "the country's coupon aggregators + the merchant (RetailMeNot, Ma-Reduc, Radins, Picodi, Sparwelt, Groupon\u2026)",
-    "site:reddit.com + the merchant + 'code', and the country's consumer forums",
-    "the merchant's OWN offers: first-order / welcome discount, newsletter sign-up, app-only codes, loyalty programme",
-    "influencer, podcast and YouTube sponsor codes for the merchant",
-    "student, healthcare / key-worker, military and teacher discounts for the merchant",
-    "cashback portals and card-linked offers for the merchant",
-    "the merchant's referral (refer-a-friend) programme and discounted gift cards",
-    "the merchant's sales calendar: seasonal sales, Black Friday, its own event days",
-    "price matching, outlet, clearance and refurbished sections",
-    "'<merchant> code not working' / 'expired' \u2014 what people report failing"
-  ],
-  template: [
-    "## TL;DR",
-    "## Candidate codes",
-    "### Codes table (code \xB7 discount \xB7 conditions \xB7 expires \xB7 sources \xB7 confidence \xB7 tested)",
-    "## Merchant's own offers",
-    "## Other ways to save",
-    "## Sales calendar",
-    "## Expired, fake or unverifiable codes",
-    "## Sources"
-  ].join("\n")
-};
-
-// src/modes/registry.ts
-var MODES = {
-  topic: topicMode,
-  bug: bugMode,
-  research: researchMode,
-  clinical: clinicalMode,
-  learn: learnMode,
-  startup: startupMode,
-  deals: dealsMode
-};
-function getMode(name) {
-  return MODES[name];
-}
-function listModes() {
-  return Object.values(MODES);
-}
-
 // src/vendor/webindex-engine.mjs
 import { tmpdir } from "os";
 import { join } from "path";
@@ -4178,6 +3761,44 @@ function externalHosts(url, text) {
   }
   return out;
 }
+function fuse(lists, keyOf = (item) => canonicalizeUrl(item.url)) {
+  const fused = rrf(lists, keyOf);
+  const best = /* @__PURE__ */ new Map();
+  const foundBy = /* @__PURE__ */ new Map();
+  for (const list of lists) {
+    const seenInList = /* @__PURE__ */ new Set();
+    for (const it of list) {
+      const key = keyOf(it);
+      if (!seenInList.has(key)) {
+        seenInList.add(key);
+        foundBy.set(key, (foundBy.get(key) ?? 0) + 1);
+      }
+      const prev = best.get(key);
+      if (!prev) {
+        best.set(key, { ...it });
+      } else if (!prev.text && it.text) {
+        best.set(key, { ...it, meta: { ...prev.meta, ...it.meta } });
+      } else if (it.meta) {
+        prev.meta = { ...it.meta, ...prev.meta };
+      }
+    }
+  }
+  for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
+  const merged = [...best.values()];
+  for (const it of merged) it.score = fused.get(keyOf(it)) ?? 0;
+  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  return merged;
+}
+function coverageWindow(nTerms) {
+  return Math.max(10, nTerms);
+}
+function termCoverage(items, queryTerms, top = coverageWindow(queryTerms.length)) {
+  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
+  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+function underCovered(cov, min = UNDER_COVERED_MIN) {
+  return cov.filter((c) => c.sources < min).map((c) => c.term);
+}
 var byCodeUnit;
 var indexTokenCache;
 var WORD_SPLIT;
@@ -4197,6 +3818,7 @@ var MASK32;
 var unsigned64;
 var PAIR_CACHE_MAX;
 var URL_IN_TEXT;
+var UNDER_COVERED_MIN;
 var init_rank = __esm({
   "src/rank.ts"() {
     "use strict";
@@ -4223,6 +3845,7 @@ var init_rank = __esm({
     unsigned64 = (v) => v < 0n ? BigInt.asUintN(64, v) : v;
     PAIR_CACHE_MAX = 2048;
     URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
+    UNDER_COVERED_MIN = 2;
   }
 });
 var baseLang2;
@@ -10044,6 +9667,50 @@ init_firecrawl();
 init_text();
 init_url();
 init_rank();
+init_junk();
+var MIN_USEFUL_CHARS = 300;
+var LOCAL_WALLS = [
+  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
+  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
+  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
+  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
+  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
+  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
+  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
+];
+var WALL_MAX_CHARS = 2e3;
+function usefulChars(text) {
+  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
+}
+var ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
+var ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
+var IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
+function proseOutweighsWall(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(
+    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
+  );
+  if (lines.length < 3) return false;
+  const prose = lines.reduce((n, l) => n + l.length, 0);
+  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
+}
+function wallPattern(text) {
+  const t = text.trim();
+  if (!t) return void 0;
+  const junk = looksLikeJunkExtraction(t);
+  const local2 = junk || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
+  const wall = junk ?? local2;
+  return wall && !proseOutweighsWall(t) ? wall : void 0;
+}
+function looksLikeWall(text) {
+  const wall = wallPattern(text);
+  if (wall) return wall;
+  const n = usefulChars(text);
+  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
+}
+function isWordedWall(reason) {
+  return !!reason && !reason.startsWith("near-empty page");
+}
 var API_HOSTS = /* @__PURE__ */ new Set([
   "eutils.ncbi.nlm.nih.gov",
   "api.crossref.org",
@@ -12522,6 +12189,422 @@ configure({
   cli: "ultrasearch",
   contactUrl: "https://github.com/maxgfr/ultrasearch"
 });
+
+// src/types.ts
+var VERSION = "1.43.0";
+var ALL_BACKENDS = [
+  "searxng",
+  "firecrawl",
+  "duckduckgo",
+  "ddglite",
+  "mojeek",
+  "marginalia",
+  "wikipedia",
+  "stackexchange",
+  "hackernews",
+  "github",
+  "arxiv",
+  "crossref",
+  "openalex",
+  "semanticscholar",
+  "europepmc",
+  "pubmed",
+  "clinicaltrials",
+  "dblp",
+  "standards",
+  "reddit",
+  "pepper",
+  "generic",
+  "fixture",
+  "host"
+];
+var ALL_MODES = ["topic", "bug", "research", "clinical", "learn", "startup", "deals"];
+var ALL_TEMPLATES = [...ALL_MODES, "verification"];
+var ALL_DEPTHS = ["summary", "standard", "deep"];
+var DEPTH_CAPS = {
+  summary: { maxSources: 10, perSource: 4, deepOnly: false },
+  standard: { maxSources: 25, perSource: 6, deepOnly: false },
+  deep: { maxSources: 60, perSource: 10, deepOnly: true }
+};
+var RECALL_FLOORS = {
+  summary: 3,
+  standard: 6,
+  deep: 12
+};
+var PAGES_PER_DEPTH = {
+  summary: 1,
+  standard: 2,
+  deep: 3
+};
+var WEB_BREADTH_PER_DEPTH = {
+  summary: 1,
+  standard: 2,
+  deep: 5
+};
+var DEEP_CAPS = {
+  maxSubQuestions: 6,
+  maxRounds: 3,
+  maxVerify: 40,
+  perSubQuestionSources: 60
+};
+var ALL_WEB_ENGINES = ["auto", "searxng", "firecrawl", "ddg", "ddglite", "mojeek", "marginalia", "host"];
+var LEGACY_BACKEND_ALIASES = { claude: "host" };
+function canonicalBackend(name) {
+  return Object.hasOwn(LEGACY_BACKEND_ALIASES, name) ? LEGACY_BACKEND_ALIASES[name] : name;
+}
+var ALL_SEARCH_PROFILES = ["auto", "light", "full", "max"];
+var ALL_BROWSER_MODES = ["fallback", "always", "off"];
+
+// src/backends/websearch.ts
+var URL_KEYS = ["url", "link", "href", "uri"];
+var TITLE_KEYS = ["title", "name", "heading"];
+var SNIPPET_KEYS = ["snippet", "description", "summary", "content", "text", "excerpt"];
+var CITE_KEYS = ["citeUrl", "cite_url", "citeURL", "cite"];
+function firstString(o, keys) {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return void 0;
+}
+function normalizeUrl(raw) {
+  const s = raw.trim();
+  if (!s) return void 0;
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return void 0;
+    return u.toString();
+  } catch {
+    return void 0;
+  }
+}
+function hitFrom(entry) {
+  if (typeof entry === "string") {
+    const url2 = normalizeUrl(entry);
+    return url2 ? { url: url2 } : void 0;
+  }
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return void 0;
+  const o = entry;
+  const raw = firstString(o, URL_KEYS);
+  if (!raw) return void 0;
+  const url = normalizeUrl(raw);
+  if (!url) return void 0;
+  const citeUrl = firstString(o, CITE_KEYS);
+  return {
+    url,
+    title: firstString(o, TITLE_KEYS),
+    snippet: firstString(o, SNIPPET_KEYS),
+    ...citeUrl ? { citeUrl } : {}
+  };
+}
+function entriesOf(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    for (const k of ["results", "hits", "items", "webResults", "web_results", "sources"]) {
+      const v = parsed[k];
+      if (Array.isArray(v)) return v;
+    }
+  }
+  return void 0;
+}
+function parseWebResults(raw) {
+  const text = raw.trim();
+  if (!text) return { hits: [], rejected: 0, notes: ["--web-results was empty."] };
+  const notes = [];
+  let entries;
+  try {
+    entries = entriesOf(JSON.parse(text));
+    if (!entries) {
+      return { hits: [], rejected: 0, notes: ["--web-results parsed as JSON but held no array of results (expected [{url,title,snippet}, \u2026])."] };
+    }
+  } catch {
+    entries = text.split(/\r?\n/).filter((l) => l.trim());
+    notes.push("--web-results was not JSON \u2014 read it as a newline-separated URL list.");
+  }
+  const hits = [];
+  const seen = /* @__PURE__ */ new Set();
+  let rejected = 0;
+  for (const entry of entries) {
+    const hit = hitFrom(entry);
+    if (!hit) {
+      rejected++;
+      continue;
+    }
+    if (seen.has(hit.url)) continue;
+    seen.add(hit.url);
+    hits.push(hit);
+  }
+  if (rejected) notes.push(`--web-results: ignored ${rejected} entr${rejected === 1 ? "y" : "ies"} with no usable http(s) URL.`);
+  return { hits, rejected, notes };
+}
+var websearchBackend = async (ctx) => {
+  const hits = ctx.options.webResults ?? [];
+  if (!hits.length) {
+    return {
+      backend: "host",
+      items: [],
+      notes: ["Web-search lane: no hits supplied (pass --web-results <file.json|->)."]
+    };
+  }
+  const items = hits.map((h, i) => ({
+    url: h.url,
+    title: h.title || h.url,
+    backend: "host",
+    score: hits.length - i,
+    snippet: h.snippet ?? ""
+    // No `text`: the page is hydrated by the gatherer through the same rescue
+    // ladder as any other candidate, so a web search hit is held to the same
+    // evidentiary standard. The snippet is only the fallback when it fails.
+  }));
+  return {
+    backend: "host",
+    items,
+    notes: [`Web-search lane: ${items.length} hit(s) supplied by the agent.`]
+  };
+};
+
+// src/gather.ts
+import { join as join13 } from "path";
+import { tmpdir as tmpdir4 } from "os";
+
+// src/modes/topic.ts
+var topicMode = {
+  name: "topic",
+  description: "General briefing on any subject (Wikipedia + general web).",
+  backends: ["wikipedia", "searxng", "duckduckgo", "standards"],
+  deepOnly: [],
+  extras: [],
+  searchAngles: [
+    "the subject itself, as a plain definition",
+    "how it works \u2014 mechanism, architecture, internals",
+    "the official/primary source: the vendor, project or standards body's own pages",
+    "criticism, limitations and open debates",
+    "current state: what changed most recently, and when",
+    "alternatives and how they compare",
+    "who actually runs it in production, and what they report",
+    "the numbers: benchmarks, costs, adoption figures with a date"
+  ],
+  template: [
+    "## TL;DR",
+    "## What it is",
+    "## How it works / key concepts",
+    "## History & evolution",
+    "## Current state (today)",
+    "## Notable variants / approaches",
+    "## Controversies & open debates",
+    "## Practical implications",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/bug.ts
+var bugMode = {
+  name: "bug",
+  description: "Error & debugging research (Stack Overflow, GitHub issues, Hacker News, changelogs).",
+  backends: ["stackexchange", "github", "duckduckgo", "hackernews", "standards"],
+  deepOnly: ["searxng", "reddit"],
+  extras: [],
+  searchAngles: [
+    "the error text VERBATIM, in quotes",
+    "the error text with the volatile parts (paths, ids, ports) stripped out",
+    "the symptom described in plain words, without the stack trace",
+    "the library/tool name + the error + 'github issue'",
+    "the library/tool name + the version where it started",
+    "the fix phrasing: how people who solved it describe the workaround",
+    "the changelog or release notes around the version that broke it",
+    "the same symptom in a NEIGHBOURING tool \u2014 often the same root cause"
+  ],
+  template: [
+    "## TL;DR (likely cause + fastest fix)",
+    "## Symptom & reproduction",
+    "## Root cause analysis",
+    "## Candidate fixes (ranked)",
+    "### Fix A \u2014 <summary> [confidence]",
+    "### Fix B \u2014 <summary>",
+    "## Related issues & versions affected",
+    "## Workarounds",
+    "## If still stuck (next diagnostics)",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/research.ts
+var researchMode = {
+  name: "research",
+  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp at deep) + refs.bib.",
+  backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
+  deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
+  extras: ["bibtex"],
+  searchAngles: [
+    "the topic + 'survey' or 'systematic review'",
+    "the canonical method/model name, as the field spells it",
+    "the seminal paper: earliest work everyone cites",
+    "recent work: the topic + the current year",
+    "the counter-position: critiques, failed replications, negative results",
+    "the benchmark or dataset the field measures this on",
+    "the review article that maps the subfield's disagreements",
+    "who cites the seminal work and what they changed about it"
+  ],
+  template: [
+    "## Abstract / TL;DR",
+    "## Background & motivation",
+    "## Key papers (chronological)",
+    "## Methods & approaches compared",
+    "## Findings & consensus",
+    "## Gaps & open problems",
+    "## Future directions",
+    "## References (see refs.bib)",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/clinical.ts
+var clinicalMode = {
+  name: "clinical",
+  description: "Clinical / biomedical evidence review \u2014 PubMed (E-utilities), Europe PMC, ClinicalTrials.gov, Crossref; no arXiv (+OpenAlex/Semantic Scholar/web guidelines at deep) + refs.bib.",
+  backends: ["pubmed", "europepmc", "clinicaltrials", "crossref"],
+  deepOnly: ["openalex", "semanticscholar", "duckduckgo"],
+  extras: ["bibtex"],
+  searchAngles: [
+    "the condition + the intervention + 'randomized controlled trial'",
+    "'systematic review' OR 'meta-analysis' + the condition and the intervention",
+    "clinical practice guidelines and consensus statements (national agencies, learned societies) on the topic",
+    "the MeSH terms for the condition and the intervention, as PubMed spells them",
+    "cohort, registry or case-series outcomes + the topic",
+    "adverse events, complications and safety signals of the intervention",
+    "registered and ongoing trials (ClinicalTrials.gov, EU CTR) for the condition",
+    "the comparator: standard of care, placebo or the alternative intervention",
+    "long-term follow-up: survival, recurrence, revision or relapse",
+    "cost-effectiveness and health-economic evaluations"
+  ],
+  template: [
+    "## TL;DR (clinical bottom line)",
+    "## Clinical question (PICO)",
+    "## Evidence base (trials, systematic reviews, cohorts)",
+    "## Efficacy outcomes",
+    "## Safety & adverse events",
+    "## Guidelines & recommendations",
+    "## Certainty of evidence & limitations",
+    "## Ongoing & registered trials",
+    "## Gaps & open questions",
+    "## References (see refs.bib)",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/learn.ts
+var learnMode = {
+  name: "learn",
+  description: "Pedagogical lesson with glossary, worked examples and exercises (rich HTML).",
+  backends: ["wikipedia", "duckduckgo", "searxng"],
+  deepOnly: ["standards"],
+  extras: ["glossary", "exercises"],
+  searchAngles: [
+    "the topic + 'tutorial' or 'getting started'",
+    "the topic explained for a beginner ('explained', 'from scratch')",
+    "the official documentation's own introduction",
+    "worked examples and common exercises",
+    "the mistakes beginners make ('common pitfalls', 'gotchas')",
+    "the prerequisites: what you must know first",
+    "the mental model an expert uses (analogies, first principles)",
+    "what to learn NEXT once this is understood"
+  ],
+  template: [
+    "## Learning objectives",
+    "## Prerequisites",
+    "## Glossary (see glossary.md)",
+    "## Lesson",
+    "### Concept 1 \u2014 explanation + example",
+    "### Concept 2 \u2014 explanation + example",
+    "## Worked examples",
+    "## Exercises",
+    "## Solutions",
+    "## Further reading",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/startup.ts
+var startupMode = {
+  name: "startup",
+  description: "Market research \u2014 competitors, market sizing, pricing, GTM (general web + public sources).",
+  backends: ["duckduckgo", "searxng", "hackernews"],
+  deepOnly: ["wikipedia", "reddit"],
+  extras: [],
+  searchAngles: [
+    "the product category + 'alternatives' or 'vs'",
+    "each named competitor's own pricing page",
+    "market size / market share for the category, with a year",
+    "what customers complain about (reviews, forums, HN threads)",
+    "funding, acquisitions and who is actually shipping",
+    "the regulatory or distribution constraint the category lives under",
+    "how incumbents price and package, in their own words",
+    "who tried this and failed, and the post-mortem they wrote"
+  ],
+  template: [
+    "## Executive summary",
+    "## Problem & customer",
+    "## Market sizing (TAM / SAM / SOM)",
+    "## Competitive landscape",
+    "### Competitor table (name \xB7 positioning \xB7 pricing)",
+    "## Pricing & business models observed",
+    "## Go-to-market channels",
+    "## Trends & timing",
+    "## Risks & moats",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/deals.ts
+var dealsMode = {
+  name: "deals",
+  description: "Coupon & discount-code finder for a merchant \u2014 deal communities (Dealabs/hotukdeals/mydealz\u2026), Reddit, the web; codes extracted, ranked, marked UNVERIFIED (+codes.json).",
+  backends: ["pepper", "reddit", "duckduckgo", "searxng"],
+  deepOnly: [],
+  extras: ["codes"],
+  // Ordered by yield: `queries` keeps the first 2 / 4 / 8 by depth.
+  searchAngles: [
+    "the merchant + 'promo code' in the country's language + this month and year (e.g. 'code promo decathlon octobre 2026')",
+    "site: the country's Pepper deal community (dealabs.com, hotukdeals.com, mydealz.de, chollometro.com, pepper.pl, nl.pepper.com) + the merchant",
+    "the country's coupon aggregators + the merchant (RetailMeNot, Ma-Reduc, Radins, Picodi, Sparwelt, Groupon\u2026)",
+    "site:reddit.com + the merchant + 'code', and the country's consumer forums",
+    "the merchant's OWN offers: first-order / welcome discount, newsletter sign-up, app-only codes, loyalty programme",
+    "influencer, podcast and YouTube sponsor codes for the merchant",
+    "student, healthcare / key-worker, military and teacher discounts for the merchant",
+    "cashback portals and card-linked offers for the merchant",
+    "the merchant's referral (refer-a-friend) programme and discounted gift cards",
+    "the merchant's sales calendar: seasonal sales, Black Friday, its own event days",
+    "price matching, outlet, clearance and refurbished sections",
+    "'<merchant> code not working' / 'expired' \u2014 what people report failing"
+  ],
+  template: [
+    "## TL;DR",
+    "## Candidate codes",
+    "### Codes table (code \xB7 discount \xB7 conditions \xB7 expires \xB7 sources \xB7 confidence \xB7 tested)",
+    "## Merchant's own offers",
+    "## Other ways to save",
+    "## Sales calendar",
+    "## Expired, fake or unverifiable codes",
+    "## Sources"
+  ].join("\n")
+};
+
+// src/modes/registry.ts
+var MODES = {
+  topic: topicMode,
+  bug: bugMode,
+  research: researchMode,
+  clinical: clinicalMode,
+  learn: learnMode,
+  startup: startupMode,
+  deals: dealsMode
+};
+function getMode(name) {
+  return MODES[name];
+}
+function listModes() {
+  return Object.values(MODES);
+}
 
 // src/util.ts
 function titleFromText(text) {
@@ -15368,49 +15451,6 @@ function hasOpenQuestions(markdown) {
 }
 
 // src/walls.ts
-var MIN_USEFUL_CHARS = 300;
-var LOCAL_WALLS = [
-  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
-  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
-  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
-  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
-  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
-  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
-  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
-  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
-];
-var WALL_MAX_CHARS = 2e3;
-function usefulChars(text) {
-  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
-}
-var ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
-var ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
-var IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
-function proseOutweighsWall(text) {
-  const lines = text.split("\n").map((l) => l.trim()).filter(
-    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
-  );
-  if (lines.length < 3) return false;
-  const prose = lines.reduce((n, l) => n + l.length, 0);
-  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
-}
-function wallPattern(text) {
-  const t = text.trim();
-  if (!t) return void 0;
-  const engine = looksLikeJunkExtraction(t);
-  const local2 = engine || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
-  const wall = engine ?? local2;
-  return wall && !proseOutweighsWall(t) ? wall : void 0;
-}
-function looksLikeWall(text) {
-  const wall = wallPattern(text);
-  if (wall) return wall;
-  const n = usefulChars(text);
-  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
-}
-function isWordedWall(reason) {
-  return !!reason && !reason.startsWith("near-empty page");
-}
 var bypassing = 0;
 var saved;
 async function readPastCachedWall(url, opts, enabled) {
@@ -15936,16 +15976,6 @@ function resolveSearchProfile(options) {
   if (options.webResults?.length && options.webEngine === "auto") return "light";
   return "full";
 }
-function termCoverage(items, queryTerms, top = coverageWindow(queryTerms.length)) {
-  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
-  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
-}
-function coverageWindow(nTerms) {
-  return Math.max(10, nTerms);
-}
-function underCovered(cov) {
-  return cov.filter((c) => c.sources < UNDER_COVERED_MIN).map((c) => c.term);
-}
 function resolveBackends(options, mode2) {
   if (options.backends?.length) return [...new Set(options.backends)];
   const base2 = options.depth === "deep" ? [...mode2.backends, ...mode2.deepOnly] : [...mode2.backends];
@@ -15963,33 +15993,8 @@ function ignoredByMaxProfile(options) {
   if (options.webEngine !== "auto") out.push("--web-engine");
   return out;
 }
-function fuse(lists) {
-  const fused = rrf(lists, identityKey);
-  const best = /* @__PURE__ */ new Map();
-  const foundBy = /* @__PURE__ */ new Map();
-  for (const list of lists) {
-    const seenInList = /* @__PURE__ */ new Set();
-    for (const it of list) {
-      const key = identityKey(it);
-      if (!seenInList.has(key)) {
-        seenInList.add(key);
-        foundBy.set(key, (foundBy.get(key) ?? 0) + 1);
-      }
-      const prev = best.get(key);
-      if (!prev) {
-        best.set(key, { ...it });
-      } else if (!prev.text && it.text) {
-        best.set(key, { ...it, meta: { ...prev.meta, ...it.meta } });
-      } else if (it.meta) {
-        prev.meta = { ...it.meta, ...prev.meta };
-      }
-    }
-  }
-  for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
-  const merged = [...best.values()];
-  for (const it of merged) it.score = fused.get(identityKey(it)) ?? 0;
-  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
-  return merged;
+function fuseSources(lists) {
+  return fuse(lists, identityKey);
 }
 function resolveVariants(options) {
   if (options.queries?.length) {
@@ -16114,7 +16119,7 @@ async function runGather(options) {
   };
   async function assemble(rawLists) {
     const hydrateNotes = [];
-    let merged2 = fuse(rawLists.map((l) => l.map(atNcbiPage)));
+    let merged2 = fuseSources(rawLists.map((l) => l.map(atNcbiPage)));
     const droppedDup = rawLists.reduce((n, l) => n + l.length, 0) - merged2.length;
     if (options.excludeDomains.length) merged2 = merged2.filter(excluded);
     const searchPages = merged2.filter((it) => searchPageOf(it.url));
@@ -18782,7 +18787,7 @@ async function runBrainstorm(options) {
   const ctx = { question: options.question, mode: mode2, options: { ...options, perSource: 5 }, variants: [options.question] };
   const backendResults = await runBackends(backends, ctx);
   const notes = backendResults.flatMap((r) => r.notes);
-  const fused = fuse(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
+  const fused = fuseSources(backendResults.map((r) => r.items)).slice(0, PROBE_CAP);
   const results = fused.map((s) => ({ title: s.title, url: s.url, domain: domainOf(s.url) }));
   const clusters = clusterTitles(results);
   const angles = clusters.slice().sort((a, b) => b.titles.length - a.titles.length).slice(0, 4).map((c) => {
@@ -18873,7 +18878,7 @@ function runMerge(options) {
     }
     lists.push(list);
   }
-  const fused = fuse(lists);
+  const fused = fuseSources(lists);
   const deduped = dedupeNearDuplicates(fused);
   const merged = deduped.items;
   for (const it of merged) {

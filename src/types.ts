@@ -114,11 +114,11 @@ export const RECALL_FLOORS: Record<Depth, number> = {
   deep: 12,
 };
 
-// A question term is "under-covered" when fewer than this many of the top kept
-// sources mention it. Long the private threshold of the `--rounds 2` gap round;
-// hoisted here now that EVERY gather reports its coverage map, so the gap round
-// and the reported worklist can never disagree about what "under-covered" means.
-export const UNDER_COVERED_MIN = 2;
+// A question term is "under-covered" when fewer than UNDER_COVERED_MIN of the top
+// kept sources mention it. The engine owns the threshold now, with `underCovered`
+// itself (webindex ≥ 1.36), so the gap round and the reported worklist can never
+// disagree about what "under-covered" means.
+export { UNDER_COVERED_MIN } from "./engine.js";
 
 // How many result PAGES each web discovery engine fetches per query (default by
 // depth; override with --pages). Page 1 emits the engine's URL unchanged, so a

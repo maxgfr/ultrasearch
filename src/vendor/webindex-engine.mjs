@@ -3804,7 +3804,45 @@ function externalHosts(url, text) {
   }
   return out;
 }
-var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, STEM_CACHE_MAX, stemCache, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT;
+function fuse(lists, keyOf = (item) => canonicalizeUrl(item.url)) {
+  const fused = rrf(lists, keyOf);
+  const best = /* @__PURE__ */ new Map();
+  const foundBy = /* @__PURE__ */ new Map();
+  for (const list of lists) {
+    const seenInList = /* @__PURE__ */ new Set();
+    for (const it of list) {
+      const key = keyOf(it);
+      if (!seenInList.has(key)) {
+        seenInList.add(key);
+        foundBy.set(key, (foundBy.get(key) ?? 0) + 1);
+      }
+      const prev = best.get(key);
+      if (!prev) {
+        best.set(key, { ...it });
+      } else if (!prev.text && it.text) {
+        best.set(key, { ...it, meta: { ...prev.meta, ...it.meta } });
+      } else if (it.meta) {
+        prev.meta = { ...it.meta, ...prev.meta };
+      }
+    }
+  }
+  for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
+  const merged = [...best.values()];
+  for (const it of merged) it.score = fused.get(keyOf(it)) ?? 0;
+  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  return merged;
+}
+function coverageWindow(nTerms) {
+  return Math.max(10, nTerms);
+}
+function termCoverage(items, queryTerms, top = coverageWindow(queryTerms.length)) {
+  const toks = items.slice(0, Math.min(top, items.length)).map((it) => new Set(bm25Tokenize(it.text || it.snippet || "")));
+  return queryTerms.map((term) => ({ term, sources: toks.reduce((n, t) => n + (t.has(term) ? 1 : 0), 0) }));
+}
+function underCovered(cov, min = UNDER_COVERED_MIN) {
+  return cov.filter((c) => c.sources < min).map((c) => c.term);
+}
+var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, STEM_CACHE_MAX, stemCache, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT, UNDER_COVERED_MIN;
 var init_rank = __esm({
   "src/rank.ts"() {
     "use strict";
@@ -3831,6 +3869,7 @@ var init_rank = __esm({
     unsigned64 = (v) => v < 0n ? BigInt.asUintN(64, v) : v;
     PAIR_CACHE_MAX = 2048;
     URL_IN_TEXT = /https?:\/\/(?:[^\s/@?#]+@)?[\p{L}\p{N}.-]+/giu;
+    UNDER_COVERED_MIN = 2;
   }
 });
 
@@ -10035,7 +10074,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.35.0";
+var ENGINE_VERSION = "1.36.0";
 
 // src/index.ts
 init_brand();
@@ -10341,6 +10380,52 @@ init_firecrawl();
 init_text();
 init_url();
 init_rank();
+
+// src/walls.ts
+init_junk();
+var MIN_USEFUL_CHARS = 300;
+var LOCAL_WALLS = [
+  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
+  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
+  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
+  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
+  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
+  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
+  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
+  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
+];
+var WALL_MAX_CHARS = 2e3;
+function usefulChars(text) {
+  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
+}
+var ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
+var ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
+var IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
+function proseOutweighsWall(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(
+    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
+  );
+  if (lines.length < 3) return false;
+  const prose = lines.reduce((n, l) => n + l.length, 0);
+  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
+}
+function wallPattern(text) {
+  const t = text.trim();
+  if (!t) return void 0;
+  const junk = looksLikeJunkExtraction(t);
+  const local2 = junk || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
+  const wall = junk ?? local2;
+  return wall && !proseOutweighsWall(t) ? wall : void 0;
+}
+function looksLikeWall(text) {
+  const wall = wallPattern(text);
+  if (wall) return wall;
+  const n = usefulChars(text);
+  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
+}
+function isWordedWall(reason) {
+  return !!reason && !reason.startsWith("near-empty page");
+}
 
 // src/citable.ts
 var API_HOSTS = /* @__PURE__ */ new Set([
@@ -15643,6 +15728,7 @@ export {
   KEYLESS_ENGINES,
   LATEST_PROTOCOL,
   LOCAL_FILE_DOMAIN,
+  MIN_USEFUL_CHARS,
   PDF_EXTRACTORS,
   PDF_INSPECTOR_SPEC,
   PDF_URL_RE,
@@ -15659,6 +15745,7 @@ export {
   STACK_SERVICES,
   TOKEN_RE2 as TOKEN_RE,
   ToolError,
+  UNDER_COVERED_MIN,
   UsageError,
   VIDEO_TRANSCRIBERS,
   WORKFLOW_FORBIDDEN,
@@ -15720,6 +15807,7 @@ export {
   corpusLabels,
   corpusMarkdown,
   cosine,
+  coverageWindow,
   crawlConcurrency,
   crawlSite,
   createServer,
@@ -15795,6 +15883,7 @@ export {
   forgeKind,
   forgeRef,
   formatStamp,
+  fuse,
   hammingDistance,
   hasChanged,
   have,
@@ -15818,6 +15907,7 @@ export {
   isOriginAllowed,
   isProtocolVersion,
   isStopword,
+  isWordedWall,
   jsonLine,
   keylessEngines,
   keywords,
@@ -15833,6 +15923,7 @@ export {
   looksLikeFirecrawl,
   looksLikeJunkExtraction,
   looksLikePdfUrl,
+  looksLikeWall,
   lookupPackage,
   lookupPackageResult,
   mapGithubIssues,
@@ -15883,6 +15974,7 @@ export {
   probeQdrant,
   probeSearxng,
   probeVideo,
+  proseOutweighsWall,
   pubmedAbstractUrl,
   qdrantBase,
   rankedKeywords,
@@ -15965,21 +16057,25 @@ export {
   subtokens,
   tableToMarkdown,
   takeArtifacts,
+  termCoverage,
   throttleReason,
   toBatches,
   transcribeVideo,
   transcriptMarkdown,
   uncitedIds,
+  underCovered,
   unitTexts,
   unknownEngines,
   upsert,
   urlDeclaresIdentity,
+  usefulChars,
   validateArgs,
   videoMetaFromInfo,
   videoRoot,
   videoRunKey,
   videoSource,
   videoUrlAt,
+  wallPattern,
   whisperBudgetLeft,
   whisperModel,
   withRunLock,

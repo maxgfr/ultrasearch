@@ -14,7 +14,7 @@ import {
   bm25MatchedTerms,
   applyRelevanceFloor,
 } from "../src/util.js";
-import { fuse, runGather } from "../src/gather.js";
+import { fuseSources, runGather } from "../src/gather.js";
 import type { GatherOptions, RawSource, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
 
@@ -159,11 +159,11 @@ describe("applyRelevanceFloor", () => {
   });
 });
 
-describe("fuse (identity dedup + meta merge)", () => {
+describe("fuseSources (identity dedup + meta merge)", () => {
   it("collapses the same DOI across two backends into one entry, preferring text and merging meta", () => {
     const a = raw({ url: "https://arxiv.org/abs/1", backend: "arxiv", score: 3, text: "the abstract", meta: { doi: "10.1/x" } });
     const b = raw({ url: "https://doi.org/10.1/X", backend: "crossref", score: 2, meta: { doi: "https://doi.org/10.1/x", year: 2020 } });
-    const out = fuse([[a], [b]]);
+    const out = fuseSources([[a], [b]]);
     expect(out).toHaveLength(1);
     expect(out[0]!.text).toBe("the abstract"); // text-bearing copy preferred
     expect(out[0]!.meta?.year).toBe(2020); // metadata merged from the other copy

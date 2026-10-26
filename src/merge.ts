@@ -1,7 +1,7 @@
 import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
 import { ALL_DEPTHS, VERSION } from "./types.js";
 import { readDossier, readSourceText, writeDossier } from "./dossier.js";
-import { fuse, defaultRunDir } from "./gather.js";
+import { fuseSources, defaultRunDir } from "./gather.js";
 import { dedupeNearDuplicates, identityKey, slugify, RUN_SLUG } from "./util.js";
 import { getMode } from "./modes/registry.js";
 
@@ -72,7 +72,7 @@ export function runMerge(options: MergeOptions): MergeResult {
   // Fuse across the combined pool (RRF over identity), then collapse near-dup
   // content. Both are deterministic and preserve a best-first order, which
   // writeDossier turns into S1..Sn.
-  const fused = fuse(lists);
+  const fused = fuseSources(lists);
   const deduped = dedupeNearDuplicates(fused);
   const merged = deduped.items;
   for (const it of merged) {
