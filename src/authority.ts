@@ -1,4 +1,3 @@
-
 import { deriveCitableUrl, urlDeclaresIdentity } from "./citable.js";
 
 // How much a source looks like a document of RECORD, judged without a list.
