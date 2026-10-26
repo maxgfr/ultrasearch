@@ -1080,11 +1080,17 @@ async function dispatch(p: Parsed): Promise<void> {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
         return;
       }
+      // The gate follows the master's recorded depth: only a deep (route D)
+      // master has the adjudicated VERIFY.json `--semantic` needs. On a standard
+      // one it can only fail closed, which is why SKILL.md forbids it there.
+      const d = result.dir;
       const lines = [
         `ultrasearch: merged ${runs.length} sub-dossier(s) → ${result.sources.length} source(s)`,
-        `  master:   ${result.dir}`,
-        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
-        `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`,
+        `  master:   ${d}`,
+        `  next:     read ${d}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
+        result.manifest.depth === "deep"
+          ? `            ultrasearch verify --run ${d}, adjudicate, ultrasearch verify --apply ${d} --run ${d} && ultrasearch check --semantic --require-verify --run ${d}`
+          : `            ultrasearch render --run ${d} && ultrasearch check --run ${d}`,
       ];
       process.stderr.write(lines.join("\n") + "\n");
       return;
