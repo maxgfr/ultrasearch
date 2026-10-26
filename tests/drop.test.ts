@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dropSources, formatDropReport } from "../src/drop.js";
 import { addSource } from "../src/enrich.js";
 import { runCheck } from "../src/check.js";
-import { runGather } from "../src/gather.js";
+import { idfShare, runGather } from "../src/gather.js";
 import { gatherReport, main } from "../src/cli.js";
 import { callTool } from "../src/mcp/handlers.js";
 import { setNoWrite } from "../src/no-write.js";
@@ -245,5 +245,47 @@ describe("gather — off-topic flag", () => {
     expect(md).toMatch(/ultrasearch drop --run <dir> --where offtopic/);
     expect(gatherReport(r, options).lines.join("\n")).toMatch(new RegExp(`offtopic: ${offId} — probably unrelated; clear them: ultrasearch drop --run`));
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("weights the shared terms by IDF: a page with only the question's common words is flagged", async () => {
+    const dir = scratch();
+    const forecast = (n: number) =>
+      `<title>Quantile forecaster ${n}</title><article><p>${"A quantile forecaster for time series: the architecture, the data and the results of a tiny quantile forecaster on time series. ".repeat(6)}</p></article>`;
+    installFetchMock(
+      routes([
+        ["ts-a.test", { body: forecast(1) }],
+        ["ts-b.test", { body: forecast(2) }],
+        ["ts-c.test", { body: forecast(3) }],
+        [
+          "llm-eval.test",
+          {
+            body: `<title>A multilingual benchmark</title><article><p>${"We release a benchmark for minority languages: its architecture, its data and the results of large language models. ".repeat(4)}</p></article>`,
+          },
+        ],
+      ]),
+    );
+    const options = opts({
+      question: "quantile forecaster time series architecture data results",
+      backends: ["host"],
+      webResults: [{ url: "https://ts-a.test/" }, { url: "https://ts-b.test/" }, { url: "https://ts-c.test/" }, { url: "https://llm-eval.test/" }],
+      out: dir,
+    });
+    const r = await runGather(options);
+    // It shares 3 of the 7 terms (over the 1/3 an unweighted share needs), but only the ones
+    // every source has.
+    expect(r.sources.filter((s) => s.offTopic).map((s) => s.url)).toEqual(["https://llm-eval.test/"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("idfShare", () => {
+  it("weights each term by its IDF, with equal weights as the fallback", () => {
+    const idf = new Map([
+      ["rare", 3],
+      ["common", 0.1],
+    ]);
+    expect(idfShare(["common"], ["rare", "common"], idf)).toBeCloseTo(0.1 / 3.1);
+    expect(idfShare(["rare"], ["rare", "common"], idf)).toBeCloseTo(3 / 3.1);
+    expect(idfShare(["a"], ["a", "b"], new Map())).toBe(0.5);
   });
 });

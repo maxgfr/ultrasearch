@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { oneWriterFooter, type PhaseInfo, shq } from "./engine.js";
+import { type PhaseInfo, shq } from "./engine.js";
 import type { BrowserMode, PlanResult } from "./types.js";
 
 // ---------------------------------------------------------------------------

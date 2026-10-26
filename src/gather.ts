@@ -106,7 +106,9 @@ const HYDRATE_CONCURRENCY = 6;
 // A kept source is flagged off-topic when it matches under this share of the
 // question's word terms AND scores under this on content (BM25, pool-relative).
 // Both, so a short page that names every term, or a long one that scores on a
-// single repeated term, is left alone.
+// single repeated term, is left alone. The share is weighted by each term's IDF
+// over the pool: on a long question, words every source shares ("results",
+// "data", "architecture") must not carry a page that has none of the rare ones.
 const OFF_TOPIC_TERM_SHARE = 1 / 3;
 const OFF_TOPIC_CONTENT = 0.2;
 // A source that names none of the question's proper nouns or acronyms keeps
@@ -118,6 +120,15 @@ const QUESTION_OPENERS = new Set(
     " ",
   ),
 );
+
+/** Share of the question's `terms` that `matched` covers, each term weighted by its IDF over the pool (equal weights if the pool gives none). */
+export function idfShare(matched: readonly string[], terms: readonly string[], idf: ReadonlyMap<string, number>): number {
+  const weight = (t: string) => Math.max(idf.get(t) ?? 0, 0);
+  const total = terms.reduce((sum, t) => sum + weight(t), 0);
+  if (total <= 0) return terms.length ? matched.filter((t) => terms.includes(t)).length / terms.length : 0;
+  const hit = new Set(matched);
+  return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
+}
 
 /** The question's named terms, tokenised as BM25 tokenises them: capitalised words past the first (and not mere function words), acronyms anywhere. */
 export function namedTerms(question: string): string[] {
@@ -942,7 +953,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         const off =
           isDisambiguation(it) ||
           matched.length === 0 ||
-          (alphaTerms.length >= 3 && matched.length / alphaTerms.length < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
+          (alphaTerms.length >= 3 && idfShare(matched, alphaTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT);
         if (off) it.offTopic = true;
         else delete it.offTopic;
       }

@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpGet, decodeEntities, sleep, pageDelayMs } from "./fetch.js";
+import { httpGet, sleep, pageDelayMs } from "./fetch.js";
 import { canonicalizeUrl } from "../util.js";
 import { ddgRegion, acceptLanguageHeader } from "../locale.js";
 

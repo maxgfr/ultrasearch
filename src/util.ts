@@ -1,4 +1,4 @@
-import type { BackendKind, Depth, RawSource, SourceMeta } from "./types.js";
+import type { BackendKind, Depth, RawSource, } from "./types.js";
 
 // URL identity, keyword extraction and matching, the FNV hash — and, since
 // webindex v1.13, the whole RANKING layer — live in the vendored engine. They

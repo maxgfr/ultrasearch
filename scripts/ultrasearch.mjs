@@ -15683,6 +15683,13 @@ var QUESTION_OPENERS = new Set(
     " "
   )
 );
+function idfShare(matched, terms, idf) {
+  const weight = (t) => Math.max(idf.get(t) ?? 0, 0);
+  const total = terms.reduce((sum, t) => sum + weight(t), 0);
+  if (total <= 0) return terms.length ? matched.filter((t) => terms.includes(t)).length / terms.length : 0;
+  const hit = new Set(matched);
+  return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
+}
 function namedTerms(question) {
   const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
   const titleCased = words.filter((w) => new RegExp("^\\p{Lu}", "u").test(w)).length > words.length / 2;
@@ -16139,7 +16146,7 @@ async function runGather(options) {
       for (const it of kept) {
         const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => new RegExp("\\p{L}", "u").test(t));
         const content = it.meta?.rank?.content ?? 0;
-        const off = isDisambiguation(it) || matched.length === 0 || alphaTerms.length >= 3 && matched.length / alphaTerms.length < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT;
+        const off = isDisambiguation(it) || matched.length === 0 || alphaTerms.length >= 3 && idfShare(matched, alphaTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT;
         if (off) it.offTopic = true;
         else delete it.offTopic;
       }
