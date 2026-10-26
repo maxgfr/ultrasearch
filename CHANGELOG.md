@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.42.6](https://github.com/maxgfr/ultrasearch/compare/v1.42.5...v1.42.6) (2026-10-26)
+
+
+### Bug Fixes
+
+* **gather:** weight the off-topic term share by IDF ([d62ad7d](https://github.com/maxgfr/ultrasearch/commit/d62ad7da203ab8bb3b84980984e8694716e988c5))
+
 ## [1.42.5](https://github.com/maxgfr/ultrasearch/compare/v1.42.4...v1.42.5) (2026-10-25)
 
 
