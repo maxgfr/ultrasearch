@@ -138,6 +138,53 @@ export function idfShare(matched: readonly string[], terms: readonly string[], i
   return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
 }
 
+// The scholarly search backends that rank on any ONE query word: arXiv's API
+// joins words with OR once its AND queries come back empty, Crossref ranks by
+// any-word relevance. A real research run on efficient LLM training banked ~25
+// of their records that shared a single ambiguous word with the question —
+// muon physics for "Muon optimizer", the 1990 BITNET network for "BitNet",
+// stellar parallax for "Parallax attention".
+const HOMONYM_BACKENDS = new Set<string>(["arxiv", "crossref"]);
+
+/**
+ * Drop, from the arXiv and Crossref lists, the records that match fewer than
+ * two DISTINCTIVE query terms — so a lone homonym cannot carry a record in.
+ * Distinctive is weighted as the off-topic flag weights it: by IDF, over the
+ * whole pool every backend returned (title, snippet, abstract). A term at or
+ * above the query's median IDF is distinctive; one every record shares
+ * ("efficient", "training") is not, so it cannot be the second word either.
+ * A question with fewer than two content words, or two of unequal weight,
+ * falls back to "two of its words"; a pool under three records is left
+ * alone. Returns the note, or undefined when nothing was dropped.
+ */
+export function dropHomonyms(results: BackendResult[], question: string): string | undefined {
+  const docOf = (it: RawSource): Bm25Doc => ({ id: it.url, title: it.title || "", headings: "", body: [it.snippet, it.text].filter(Boolean).join("\n") });
+  const bm25 = buildBm25Index(
+    question,
+    results.flatMap((r) => r.items.map(docOf)),
+  );
+  const terms = bm25.queryTerms.filter((t) => /\p{L}/u.test(t));
+  // Under three records there is no IDF to weigh by (the engine gives every term 1).
+  if (terms.length < 2 || bm25.N < 3) return undefined;
+  const idfOf = (t: string) => bm25.idf.get(t) ?? 0;
+  const sorted = terms.map(idfOf).sort((a, b) => a - b);
+  const median = sorted[Math.floor((sorted.length - 1) / 2)]!;
+  const distinctive = new Set(terms.filter((t) => idfOf(t) >= median));
+  let dropped = 0;
+  for (const r of results) {
+    if (!HOMONYM_BACKENDS.has(r.backend)) continue;
+    const before = r.items.length;
+    r.items = r.items.filter((it) => {
+      const matched = bm25MatchedTerms(bm25, docOf(it)).filter((t) => /\p{L}/u.test(t));
+      return distinctive.size >= 2 ? matched.filter((t) => distinctive.has(t)).length >= 2 : matched.length >= 2;
+    });
+    dropped += before - r.items.length;
+  }
+  return dropped
+    ? `Dropped ${dropped} arXiv/Crossref record(s) that matched only one distinctive word of the question — a homonym is not the subject.`
+    : undefined;
+}
+
 /** The question's named terms, tokenised as BM25 tokenises them: capitalised words past the first (and not mere function words), acronyms anywhere. */
 export function namedTerms(question: string): string[] {
   const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
@@ -997,6 +1044,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     };
   }
 
+  const homonymNote = dropHomonyms(results, options.question);
   const lists = results.map((r) => [...r.items].sort((a, b) => b.score - a.score));
   let r = await assemble(lists);
 
@@ -1092,6 +1140,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...new Set(r.hydrateNotes),
     ...(r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : []),
     ...(r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : []),
+    ...(homonymNote ? [homonymNote] : []),
     ...(r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : []),
     ...(r.notFetched > 0
       ? [

@@ -1,0 +1,50 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<feed xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns="http://www.w3.org/2005/Atom">
+  <id>https://arxiv.org/api/homonyms</id>
+  <title>arXiv Query: muon OR optimizer OR bitnet OR parallax</title>
+  <entry>
+    <id>http://arxiv.org/abs/2502.16982v1</id>
+    <title>Muon is Scalable for LLM Training</title>
+    <updated>2025-02-01T00:00:00Z</updated>
+    <published>2025-02-01T00:00:00Z</published>
+    <summary>We scale the Muon optimizer to large language model training. With weight decay and a per-parameter update scale, Muon trains a 16B mixture-of-experts LLM with about half the compute of AdamW, which makes LLM training markedly more efficient.</summary>
+    <author><name>A. Author</name></author>
+    <link href="https://arxiv.org/abs/2502.16982v1" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2402.17764v1</id>
+    <title>The Era of 1-bit LLMs: BitNet b1.58 and ternary weights</title>
+    <updated>2025-02-01T00:00:00Z</updated>
+    <published>2025-02-01T00:00:00Z</published>
+    <summary>BitNet b1.58 trains every LLM weight as a ternary value in {-1, 0, 1}. The ternary weights match full-precision LLM training quality while making inference far more efficient in memory, latency and energy.</summary>
+    <author><name>A. Author</name></author>
+    <link href="https://arxiv.org/abs/2402.17764v1" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2004.12345v1</id>
+    <title>Parallax attention for unsupervised stereo correspondence learning</title>
+    <updated>2025-02-01T00:00:00Z</updated>
+    <published>2025-02-01T00:00:00Z</published>
+    <summary>A parallax attention mechanism captures stereo correspondence along epipolar lines. Parallax attention is trained without ground-truth disparity and handles large disparity variations.</summary>
+    <author><name>A. Author</name></author>
+    <link href="https://arxiv.org/abs/2004.12345v1" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2104.03281v1</id>
+    <title>Measurement of the positive muon anomalous magnetic moment to 0.46 ppm</title>
+    <updated>2021-02-01T00:00:00Z</updated>
+    <published>2021-02-01T00:00:00Z</published>
+    <summary>We report a measurement of the anomalous precession frequency of the positive muon in a storage ring. The muon spin precession was recorded with an efficient calorimeter system and its training data set of calibration pulses.</summary>
+    <author><name>A. Author</name></author>
+    <link href="https://arxiv.org/abs/2104.03281v1" rel="alternate" type="text/html"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/1804.09365v1</id>
+    <title>Gaia Data Release 2: stellar parallax and proper motions</title>
+    <updated>2018-02-01T00:00:00Z</updated>
+    <published>2018-02-01T00:00:00Z</published>
+    <summary>Gaia DR2 provides the parallax of 1.3 billion sources. We describe the astrometric solution and the validation of each parallax against quasars, an efficient reference frame for the whole catalogue.</summary>
+    <author><name>A. Author</name></author>
+    <link href="https://arxiv.org/abs/1804.09365v1" rel="alternate" type="text/html"/>
+  </entry>
+</feed>

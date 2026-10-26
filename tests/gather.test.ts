@@ -252,3 +252,50 @@ describe("runGather (nothing leaves the pool silently)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+// A real `--mode research` run on efficient LLM training banked ~25 papers that
+// shared ONE ambiguous word with the question: muon physics for "Muon
+// optimizer", the 1990 BITNET network for "BitNet", stellar parallax for
+// "Parallax attention", a CISG law text. Those backends rank on any one word.
+describe("runGather (research mode: a lone homonym cannot carry a scholarly result)", () => {
+  const fx = (n: string) => readFileSync(new URL(`./fixtures/api/${n}`, import.meta.url), "utf8");
+  it("drops the arXiv and Crossref records that match a single distinctive query word, keeps the on-topic ones", async () => {
+    const dir = join(tmpdir(), "us-gather-homonyms");
+    rmSync(dir, { recursive: true, force: true });
+    installFetchMock(
+      routes([
+        ["export.arxiv.org", { body: fx("arxiv-homonyms.xml"), contentType: "application/atom+xml" }],
+        ["api.crossref.org", { body: fx("crossref-homonyms.json"), contentType: "application/json" }],
+      ]),
+    );
+    const r = await runGather(
+      opts({
+        question: "efficient LLM training with the Muon optimizer, BitNet ternary weights and parallax attention",
+        mode: "research",
+        backends: ["arxiv", "crossref"],
+        out: dir,
+      }),
+    );
+    const titles = r.sources.map((s) => s.title);
+    for (const homonym of [/anomalous magnetic moment/, /stellar parallax/, /BITNET: An academic network/, /International Sale of Goods/]) {
+      expect(
+        titles.some((t) => homonym.test(t)),
+        String(homonym),
+      ).toBe(false);
+    }
+    for (const kept of [
+      /Muon is Scalable/,
+      /BitNet b1\.58/,
+      /Parallax attention for unsupervised stereo/,
+      /Learning Parallax Attention/,
+      /Scaling 1-bit Transformers/,
+    ]) {
+      expect(
+        titles.some((t) => kept.test(t)),
+        String(kept),
+      ).toBe(true);
+    }
+    expect(r.manifest.notes.join("\n")).toMatch(/Dropped 4 arXiv\/Crossref record\(s\) that matched only one distinctive word of the question/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
