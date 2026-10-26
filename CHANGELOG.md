@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.42.7](https://github.com/maxgfr/ultrasearch/compare/v1.42.6...v1.42.7) (2026-10-26)
+
+
+### Bug Fixes
+
+* **arxiv:** widen the query step by step, skip digit terms, cite abstracts over https ([cefd9ed](https://github.com/maxgfr/ultrasearch/commit/cefd9ed570932ae4dee264f50961d5d2e3941fdd))
+
 ## [1.42.6](https://github.com/maxgfr/ultrasearch/compare/v1.42.5...v1.42.6) (2026-10-26)
 
 
