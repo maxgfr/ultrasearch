@@ -34,9 +34,13 @@ function atNcbiPage(it: RawSource): RawSource {
   return doc && doc.citeUrl !== it.url ? { ...it, url: doc.citeUrl } : it;
 }
 
-// Fold items that share a DOI, PMID or PMCID into one: the copy holding real
-// text wins over a snippet, then the longer text, then the earlier (better-
-// fused) item; the losers' URLs are kept on the winner as `alsoAt`.
+// Fold items that share a DOI, PMID, PMCID or arXiv id — or, after hydration
+// followed their redirects, one address (urlIdentity) — into one: the copy
+// holding real text wins over a snippet, then the longer text, then the earlier
+// (better-fused) item; the losers' other URLs are kept on the winner as
+// `alsoAt`. Fusion already merged equal addresses, but only the ones the hits
+// were given under: four hits redirected onto one Web of Science record were
+// four sources.
 function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: number } {
   const owner = new Map<string, RawSource>();
   const keysOf = new Map<RawSource, string[]>();
@@ -45,7 +49,7 @@ function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: numbe
     (a.fullText !== false) !== (b.fullText !== false) ? a.fullText !== false : (a.text?.length ?? 0) > (b.text?.length ?? 0);
   let merged = 0;
   for (const it of items) {
-    const keys = identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : undefined);
+    const keys = [...identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : undefined), `url:${urlIdentity(it.url)}`];
     const prior = keys.map((k) => owner.get(k)).find(Boolean);
     if (!prior) {
       out.push(it);
@@ -55,8 +59,11 @@ function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: numbe
     }
     merged++;
     const [win, lose] = better(it, prior) ? [it, prior] : [prior, it];
-    const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])];
-    win.meta = { ...lose.meta, ...win.meta, alsoAt: also };
+    const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])].filter(
+      (u) => urlIdentity(u) !== urlIdentity(win.url),
+    );
+    win.meta = { ...lose.meta, ...win.meta, ...(also.length ? { alsoAt: also } : {}) };
+    if (!also.length) delete win.meta.alsoAt;
     if (win !== prior) out[out.indexOf(prior)] = win;
     const all = [...new Set([...(keysOf.get(prior) ?? []), ...keys])];
     keysOf.set(win, all);
@@ -95,6 +102,7 @@ import {
   mapLimit,
   RUN_SLUG,
   arxivIdFromUrl,
+  urlIdentity,
 } from "./util.js";
 import type { Bm25Doc } from "./util.js";
 import { arxivMeta, arxivText, readArxivRecords, type ArxivRecord } from "./backends/arxiv.js";
@@ -878,7 +886,10 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     // record) say which are the same record — and the best-read copy stays.
     const sameRecord = mergeSameRecord(withContent);
     withContent = sameRecord.kept;
-    if (sameRecord.merged) hydrateNotes.push(`Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID or PMCID).`);
+    if (sameRecord.merged)
+      hydrateNotes.push(
+        `Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID, PMCID or arXiv id, or the same page).`,
+      );
 
     const docs: Bm25Doc[] = withContent.map((it) => ({
       id: it.url,

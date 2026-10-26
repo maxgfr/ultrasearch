@@ -87,6 +87,31 @@ export function titleFromText(text: string): string {
 // URL canonicalization, deduplication, and trust scoring.
 // ---------------------------------------------------------------------------
 
+// The address a source is deduplicated under: the engine's canonical URL, with
+// its path percent-decoded and re-encoded one way. The engine keeps the path as
+// it was written, so `…/10.1088%2F3049-4753%2FAE4982`, the same with `%2f`,
+// and the same with plain slashes were three sources — and a real run banked
+// one Web of Science record four times. The query needs nothing more: the
+// engine already decodes and re-encodes each value. A key, never an address to
+// fetch: an encoded slash is not always a slash to a server, but two pages that
+// differ only by one are, in practice, the same page.
+export function urlIdentity(url: string): string {
+  const canon = canonicalizeUrl(url);
+  let u: URL;
+  try {
+    u = new URL(canon);
+  } catch {
+    return canon;
+  }
+  let path = u.pathname;
+  try {
+    path = encodeURI(decodeURIComponent(path));
+  } catch {
+    /* a malformed escape: keep the path as given */
+  }
+  return `${u.protocol}//${u.host}${path}${u.search}`.replace(/\/+$/, "");
+}
+
 // Provenance floor — how much a source is trusted for the ROUTE it arrived by.
 //
 // This is deliberately the only trust table left, and it is a statement about
@@ -176,7 +201,7 @@ export function identityKey(item: RawSource): string {
   if (urlDoi) return "doi:" + urlDoi;
   const urlArxiv = arxivIdFromUrl(item.url);
   if (urlArxiv) return "arxiv:" + urlArxiv;
-  return canonicalizeUrl(item.url);
+  return urlIdentity(item.url);
 }
 
 // Pull distinctive identifiers out of a question — versions (v1.2.3), status
