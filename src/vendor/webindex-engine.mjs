@@ -3472,12 +3472,30 @@ function subtermsCached(raw, folded) {
   subtermCache.set(raw, subs);
   return subs;
 }
+function bm25Stem(t) {
+  if (t.length < 7) return t;
+  const hit = stemCache.get(t);
+  if (hit !== void 0) return hit;
+  let out = t;
+  if (/^[a-z]+$/.test(t)) {
+    for (const suffix of ["ing", "er", "ed"]) {
+      if (t.endsWith(suffix) && t.length - suffix.length >= 5) {
+        out = t.slice(0, -suffix.length);
+        break;
+      }
+    }
+  }
+  if (stemCache.size >= STEM_CACHE_MAX) stemCache.clear();
+  stemCache.set(t, out);
+  return out;
+}
 function docTokens(doc, titleWeight, headingWeight, body) {
   const out = body ? [...body] : bm25Tokenize(doc.body);
   const headings = bm25Tokenize(doc.headings);
   for (let r = 0; r < headingWeight; r++) out.push(...headings);
   const title = bm25Tokenize(doc.title);
   for (let r = 0; r < titleWeight; r++) out.push(...title);
+  for (let i = 0; i < out.length; i++) out[i] = bm25Stem(out[i]);
   return out;
 }
 function proximityBonus(tokens, queryTerms, window = 6, cap = 0.1) {
@@ -3518,7 +3536,7 @@ function buildBm25Index(question, docs, opts = {}) {
       idf.set(t, 1);
       continue;
     }
-    const dfi = df.get(t) ?? 0;
+    const dfi = df.get(bm25Stem(t)) ?? 0;
     idf.set(t, Math.log(1 + (N - dfi + 0.5) / (dfi + 0.5)));
   }
   const index = { idf, avgdl, N, queryTerms, k1, b, titleWeight, headingWeight };
@@ -3543,18 +3561,19 @@ function bm25Score(index, doc) {
   const { k1, b, avgdl } = index;
   const lenNorm = 1 - b + b * (avgdl ? dl / avgdl : 1);
   let score = 0;
-  for (const term of index.queryTerms) {
-    const f = tf.get(term);
-    if (!f) continue;
+  const stems = index.queryTerms.map(bm25Stem);
+  index.queryTerms.forEach((term, i) => {
+    const f = tf.get(stems[i]);
+    if (!f) return;
     const idf = index.idf.get(term) ?? 0;
     score += idf * (f * (k1 + 1)) / (f + k1 * lenNorm);
-  }
-  return score * (1 + proximityBonus(toks, index.queryTerms));
+  });
+  return score * (1 + proximityBonus(toks, stems));
 }
 function bm25MatchedTerms(index, doc) {
   if (!index.queryTerms.length) return [];
   const present = new Set(indexedDocTokens(index, doc));
-  return index.queryTerms.filter((t) => present.has(t));
+  return index.queryTerms.filter((t) => present.has(bm25Stem(t)));
 }
 function applyRelevanceFloor(ranked, matchedOf, queryTerms, floor) {
   const isAlpha = (t) => new RegExp("\\p{L}", "u").test(t);
@@ -3785,7 +3804,7 @@ function externalHosts(url, text) {
   }
   return out;
 }
-var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT;
+var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, STEM_CACHE_MAX, stemCache, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT;
 var init_rank = __esm({
   "src/rank.ts"() {
     "use strict";
@@ -3806,6 +3825,8 @@ var init_rank = __esm({
     NO_SUBTERMS = [];
     subtermCache = /* @__PURE__ */ new Map();
     subtermExtras = { list: void 0, length: 0 };
+    STEM_CACHE_MAX = 5e4;
+    stemCache = /* @__PURE__ */ new Map();
     MASK32 = 0xffffffffn;
     unsigned64 = (v) => v < 0n ? BigInt.asUintN(64, v) : v;
     PAIR_CACHE_MAX = 2048;
@@ -9928,7 +9949,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.34.2";
+var ENGINE_VERSION = "1.34.3";
 
 // src/index.ts
 init_brand();

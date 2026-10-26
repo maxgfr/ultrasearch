@@ -95,16 +95,23 @@ export async function readArxivRecords(ids: string[]): Promise<{ records: Map<st
 
 /**
  * arXiv's API joins bare words with OR, so "Muon optimizer learning rate" ranks
- * particle-physics muon papers first. Ask for the four most distinctive words (AND),
- * keeping the any-word query (OR) as the fallback.
+ * particle-physics muon papers first. The queries, tried in order until one matches:
+ * the four most distinctive words (AND), the two most distinctive (AND), then any of them
+ * (OR). Words with a digit ("5M", "2048") or under three letters are left out: an
+ * abstract rarely spells them the same way, and one of them in an AND matched nothing,
+ * so the OR fallback brought back every paper that shared a single common word.
  */
-export function arxivQueries(question: string): [string, string] {
+export function arxivQueries(question: string): string[] {
   const terms = rankedKeywords(question)
     .map((t) => t.replace(/[^\p{L}\p{N}-]/gu, ""))
-    .filter(Boolean)
+    .filter((t) => t.length >= 3 && !/\p{N}/u.test(t))
     .slice(0, 4);
-  if (!terms.length) return [`all:${question}`, `all:${question}`];
-  return [terms.map((t) => `all:${t}`).join(" AND "), terms.map((t) => `all:${t}`).join(" OR ")];
+  if (!terms.length) return [`all:${question}`];
+  const and = (ts: string[]) => ts.map((t) => `all:${t}`).join(" AND ");
+  const out = [and(terms)];
+  if (terms.length > 2) out.push(and(terms.slice(0, 2)));
+  if (terms.length > 1) out.push(terms.map((t) => `all:${t}`).join(" OR "));
+  return out;
 }
 
 // arXiv via its keyless Atom API. Returns each paper's abstract as text, with
@@ -117,13 +124,13 @@ export const arxivBackend: Backend = async (ctx): Promise<BackendResult> => {
       timeoutMs: 12000,
       userAgent: contactUa(),
     });
-  const [all, any] = arxivQueries(ctx.question);
-  let r = await get(all);
-  let entries = r.ok && r.body ? r.body.split(/<entry>/).slice(1) : [];
-  // Every term at once can match nothing on a long question: widen to any term.
-  if (r.ok && !entries.length && any !== all) {
-    r = await get(any);
+  // Every term at once can match nothing on a long question: widen step by step.
+  let r = { ok: false, status: 0, body: "" } as Awaited<ReturnType<typeof get>>;
+  let entries: string[] = [];
+  for (const q of arxivQueries(ctx.question)) {
+    r = await get(q);
     entries = r.ok && r.body ? r.body.split(/<entry>/).slice(1) : [];
+    if (!r.ok || entries.length) break;
   }
   if (!r.ok || !r.body) {
     const why = r.status === 429 || r.status === 503 ? `rate-limited (HTTP ${r.status})` : `failed (status ${r.status})`;
@@ -142,7 +149,7 @@ export const arxivBackend: Backend = async (ctx): Promise<BackendResult> => {
       backend: "arxiv",
       score: n - i,
       snippet: rec.summary.slice(0, 360),
-      meta: { ...arxivMeta(rec), htmlUrl, absUrl: tag(block, "id") || `https://arxiv.org/abs/${rec.arxivId}` },
+      meta: { ...arxivMeta(rec), htmlUrl, absUrl: (tag(block, "id") || `https://arxiv.org/abs/${rec.arxivId}`).replace(/^http:\/\//, "https://") },
     };
   });
   return {

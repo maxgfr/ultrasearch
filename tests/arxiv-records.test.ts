@@ -97,11 +97,18 @@ describe("arXiv records", () => {
 });
 
 describe("arxivQueries", () => {
-  it("asks for every content word, with an any-word fallback", () => {
-    const [all, any] = arxivQueries("What is the best learning rate for the Muon optimizer?");
-    expect(all.toLowerCase()).toContain("all:muon");
+  it("asks for the distinctive words, then two of them, then any of them", () => {
+    const [all, two, any] = arxivQueries("What is the best learning rate for the Muon optimizer?");
+    expect(all!.toLowerCase()).toContain("all:muon");
     expect(all).toContain(" AND ");
     expect(all).not.toMatch(/all:(what|the|for)\b/);
-    expect(any).toBe(all.replaceAll(" AND ", " OR "));
+    expect(two!.split(" AND ")).toHaveLength(2);
+    expect(any).toBe(all!.replaceAll(" AND ", " OR "));
+  });
+
+  it("leaves out words with digits and short ones", () => {
+    const qs = arxivQueries("tiny zero-shot time series forecaster under 5M parameters, GIFT-Eval results");
+    for (const q of qs) expect(q).not.toMatch(/all:(5M|\w{1,2})\b/);
+    expect(arxivQueries("5M")).toEqual(["all:5M"]);
   });
 });
