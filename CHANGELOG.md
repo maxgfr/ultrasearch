@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.43.0](https://github.com/maxgfr/ultrasearch/compare/v1.42.7...v1.43.0) (2026-10-26)
+
+
+### Features
+
+* **human:** hand walled pages to the person, plus five fixes from a real research run ([#57](https://github.com/maxgfr/ultrasearch/issues/57)) ([64e861f](https://github.com/maxgfr/ultrasearch/commit/64e861f5f8c7de6f84a54c79e40ccc37b0306064))
+
 ## [1.42.7](https://github.com/maxgfr/ultrasearch/compare/v1.42.6...v1.42.7) (2026-10-26)
 
 
