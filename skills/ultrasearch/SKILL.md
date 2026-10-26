@@ -206,6 +206,7 @@ node <skill-dir>/scripts/ultrasearch.mjs render --run <dir>
 node <skill-dir>/scripts/ultrasearch.mjs check --run <dir> [--semantic] [--require-verify] [--strict-numerals] [--fail-on-wall] [--min-sources <n>]
 node <skill-dir>/scripts/ultrasearch.mjs relink --run <dir> [--id <S#> --url "<page>"]
 node <skill-dir>/scripts/ultrasearch.mjs drop --run <dir> (--id S43,S44 | --where wall|snippet|offtopic) [--dry-run]
+node <skill-dir>/scripts/ultrasearch.mjs human --run <dir> [--id S3,S7] [--timeout <s>] [--list]
 node <skill-dir>/scripts/ultrasearch.mjs orchestrate --run <RUN> [--phase gather|verify] [--eco] [--list]
 node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <list.txt|thesis.docx|refs.bib> [--citing <text.md|.docx>] --out <RUN>/refcheck
 ```
@@ -225,6 +226,7 @@ node <skill-dir>/scripts/ultrasearch.mjs refcheck --refs <list.txt|thesis.docx|r
 | `doctor` | nothing (prints) | `--json`. Which optional helpers are live: the SearXNG / Firecrawl containers, the browser rung (which binary, which mode, why it is off) and the PDF ladder. They are skipped in SILENCE when absent, so this is how you learn a container is up but unused, or that a stronger PDF reader is missing. |
 | `searxng` · `firecrawl` | containers | `up` · `down` · `status`. Both are auto-detected on localhost, so a plain `gather` uses them with no flag once they are up. |
 | `browser open <url>` | nothing (opens a window) | Hands a CAPTCHA / anti-bot check a read reported to the **human**: opens the page in the rung's dedicated browser and leaves it open. Never solve it yourself. |
+| `human` | repairs sources in place, same `S#` — exit 2 under `--stdout` | `--run` · `--list` (dry run: the pages that need a person, nothing opened) · `--id S3,S7` · `--timeout <s>` (per page, default 300) · `--json`. Every ⛔ wall and every snippet-only source whose read met a challenge or a sign-in wall, one at a time: the page comes up in the dedicated browser's window, and once the user is past it the text read there repairs the source like `fetch` of a ⛔ source. Prints `repaired` / `still walled` / `timed out` / `skipped` per source. See [Human handoff](#human-handoff). |
 | `brainstorm` | `BRAINSTORM.md` + `.json` (`--stdout`: streams the `.md`) | `--q` · `--mode` · `--out` · `--json`. Route C only. |
 | `plan` | `PLAN.json` + the `<RUN>/q#` dirs (`--stdout`: JSON only, no dirs) | `--q` · `--mode` · `--depth` (recorded, so the emitted fan-out inherits it) · `--run-root <RUN>` · `--max-subquestions <n>` · `--subquestions "a\|b\|c"` |
 | `merge` | the master dossier, stable `[S#]` — exit 2 under `--stdout` | `--runs "<d1,d2,…>"` · `--master <RUN>` · `--q` · `--mode`. After this, MASTER ids only. |
@@ -374,6 +376,19 @@ not hand control back mid-retrieval.
 
 7. **Present.** Give the user the SUMMARY, the run folder path, `index.html` and
    `index.md`, the source count, and any gaps or contradictions you found.
+
+## Human handoff
+
+When a run ends with `N page(s) need a human: ultrasearch human --run <dir>`
+(gather, ingest and fetch print it), some sources sit behind a CAPTCHA, an
+anti-bot check or a sign-in only the user can pass. Ask the user — with your
+host's ask-the-user tool if it has one — whether they can solve them now. If
+yes, run `human --run <dir>` (`--list` first to name the pages) and tell them
+the browser window is open on the page that needs them; it waits up to
+`--timeout` seconds per page, then reads the page and repairs the source under
+its own `[S#]`. If no, carry on without those sources. **Never solve, click
+through or script past a challenge yourself.** With no window to show (no
+display, a CI run) every page is skipped and nobody is waited for.
 
 ## Deals — discount codes for a merchant
 
@@ -543,7 +558,8 @@ in `references/operations.md`.
   and a page still walled stays refused. A CAPTCHA or anti-bot **challenge is
   handed to the human, never bypassed**: the note names
   `ultrasearch browser open <url>`; tell the user, and re-read once they have
-  passed it. `--browser off` for a run that must open nothing; under `--stdout`
+  passed it — or let `human --run <dir>` open each such page, wait for them and
+  repair the source ([Human handoff](#human-handoff)). `--browser off` for a run that must open nothing; under `--stdout`
   it is off unless you ask for it.
 - **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine —
   going through an API to get past a wall is the smart move. It records the URL

@@ -7902,6 +7902,10 @@ function browserFetchMode(explicit) {
   const m = (explicit ?? env("BROWSER_FETCH"))?.toLowerCase();
   return m === "always" || m === "fallback" ? m : "off";
 }
+function browserFetchModeFor(opts) {
+  const m = browserFetchMode(opts.browser);
+  return m === "off" && opts.human && opts.browser !== "off" ? "fallback" : m;
+}
 function worthRendering(res) {
   if (RENDER_STATUS.has(res.status)) return res.status ? `got HTTP ${res.status}` : "got no answer";
   if (res.status < 200 || res.status >= 300) return void 0;
@@ -7909,13 +7913,29 @@ function worthRendering(res) {
   if (junk) return `read a ${junk}`;
   return res.text.trim().length < 200 ? "found almost no text" : void 0;
 }
+function canShowWindow(platform = process.platform, env2 = process.env) {
+  const ci = env2.CI?.trim().toLowerCase();
+  if (ci && ci !== "false" && ci !== "0") return false;
+  if (platform === "darwin" || platform === "win32") return true;
+  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
+}
+function humanWall(text) {
+  const junk = looksLikeJunkExtraction(text);
+  if (junk && !junk.startsWith("JavaScript")) return junk;
+  const t = text.trim();
+  return t && t.length < LOGIN_WALL_MAX && LOGIN_WALL.test(t.slice(0, 800)) ? "login wall" : void 0;
+}
 var RENDER_STATUS;
+var LOGIN_WALL;
+var LOGIN_WALL_MAX;
 var init_mode = __esm({
   "src/browser/mode.ts"() {
     "use strict";
     init_brand();
     init_junk();
     RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
+    LOGIN_WALL = /\b(?:sign|log) ?in (?:to (?:continue|read|view|see|access|keep reading)|or (?:sign up|register|create an account))\b|\byou (?:must|need to|have to) (?:be )?(?:signed|logged) ?in\b|\bplease (?:sign|log) ?in\b/i;
+    LOGIN_WALL_MAX = 1500;
   }
 });
 function browserUa() {
@@ -8525,28 +8545,35 @@ async function fetchAndExtract(url, opts = {}) {
   }
   const wantsPdf = looksLikePdfUrl(url);
   const wantsDoc = wantsPdf ? void 0 : docFormatForUrl(url);
-  const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchMode(opts.browser);
+  const browser = opts.authorizeUrl || opts.headers || wantsPdf || wantsDoc ? "off" : browserFetchModeFor(opts);
+  const handoff = (got2) => got2.handoff ? { handoff: got2.handoff } : {};
   if (browser === "always") {
     const got2 = await renderInBrowser(url, opts);
     if (got2.result) return got2.result;
     const res2 = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, { page: false });
-    return { ...res2, note: [`${got2.note}; read without it.`, got2.detail, res2.note].filter(Boolean).join(" ") };
+    return { ...res2, note: [`${got2.note}; read without it.`, got2.detail, res2.note].filter(Boolean).join(" "), ...handoff(got2) };
   }
   const seen = { page: false };
   const res = await readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen);
-  const why = browser === "fallback" && seen.page && !opts.signal?.aborted ? worthRendering(res) : void 0;
+  const walled = opts.human && res.status >= 200 && res.status < 300 ? humanWall(res.text) : void 0;
+  const why = browser === "fallback" && seen.page && !opts.signal?.aborted ? worthRendering(res) ?? (walled ? `read a ${walled}` : void 0) : void 0;
   if (!why) return res;
   const got = await renderInBrowser(url, opts);
   if (got.result?.text.trim())
     return { ...got.result, note: [`Read ${url} in the browser: the built-in fetch ${why}.`, got.result.note].filter(Boolean).join(" ") };
-  return { ...res, note: [res.note, got.result ? got.result.note : `${got.note}.`, got.detail].filter(Boolean).join(" ") || void 0 };
+  return {
+    ...res,
+    note: [res.note, got.result ? got.result.note : `${got.note}.`, got.detail].filter(Boolean).join(" ") || void 0,
+    ...handoff(got.result ?? got)
+  };
 }
 async function renderInBrowser(url, opts) {
   try {
     const { readRenderedPage: readRenderedPage2 } = await Promise.resolve().then(() => (init_read(), read_exports));
-    const { format, fullPage, stripConsent, keepHtml, signal, timeoutMs } = opts;
-    const result = await readRenderedPage2(url, { format, fullPage, stripConsent, keepHtml, signal, timeoutMs });
-    if (result.status >= 400) return { note: `The browser got HTTP ${result.status} for ${url}`, detail: result.note };
+    const { format, fullPage, stripConsent, keepHtml, signal, timeoutMs, human } = opts;
+    const result = await readRenderedPage2(url, { format, fullPage, stripConsent, keepHtml, signal, timeoutMs, ...human ? { human } : {} });
+    if (result.status >= 400)
+      return { note: `The browser got HTTP ${result.status} for ${url}`, detail: result.note, ...result.handoff ? { handoff: result.handoff } : {} };
     return { result };
   } catch (e) {
     return { note: `The browser could not read ${url} (${e instanceof Error ? e.message : String(e)})` };
@@ -9839,31 +9866,86 @@ async function render(url, opts, deps, timeoutMs, run) {
       await waitFor(session, { idle: true }, { timeoutMs: idleMs, deps }).catch(() => {
       });
     }
+    const statusNow = () => status ?? nav.status ?? 200;
+    const code = statusNow();
+    const take = async () => {
+      const got = await page.send(
+        "Runtime.evaluate",
+        { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
+        { timeoutMs }
+      );
+      const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
+      const html = typeof got.result?.value?.html === "string" ? got.result.value.html : "";
+      return { ...extractFromHtml(html, finalUrl, opts), finalUrl, status: statusNow(), extractor: "browser" };
+    };
     const challenge = await detectChallenge(session);
-    const got = await page.send(
-      "Runtime.evaluate",
-      { expression: opts.fullPage ? WHOLE_DOCUMENT : READ_DOCUMENT, returnByValue: true },
-      { timeoutMs }
-    );
-    const finalUrl = typeof got.result?.value?.url === "string" ? got.result.value.url : nav.url;
-    const code = status ?? nav.status ?? 200;
-    if (challenge?.blocking) {
+    const first = await take();
+    const blocked = (c) => ({
+      text: "",
+      finalUrl: first.finalUrl,
+      status: code >= 400 ? code : 403,
+      extractor: "browser",
+      note: `${c.kind} challenge \u2014 open it with \`${brand().cli} browser open ${url}\` and let the human solve it`
+    });
+    const asIs = challenge?.blocking ? blocked(challenge) : first;
+    if (!opts.human) return asIs;
+    const found = challenge?.blocking ? `${challenge.kind} challenge` : humanWall(first.text);
+    if (!found) return first;
+    const wall = `${/^[aeiou]/i.test(found) ? "an" : "a"} ${found}`;
+    const nobody = session.headless ? "the browser runs headless" : canShowWindow(deps.platform) ? void 0 : "no window can be shown here";
+    if (nobody) return { ...asIs, note: [asIs.note, `It needs a human, and ${nobody}.`].filter(Boolean).join(" "), handoff: "no-window" };
+    const human = opts.human === true ? {} : opts.human;
+    const cleared = await handOff(session, url, wall, !!challenge?.blocking, human, deps, take, opts.signal);
+    if (cleared)
       return {
-        text: "",
-        finalUrl,
-        status: code >= 400 ? code : 403,
-        extractor: "browser",
-        note: `${challenge.kind} challenge \u2014 open it with \`${brand().cli} browser open ${url}\` and let the human solve it`
+        ...cleared,
+        status: cleared.status >= 400 ? 200 : cleared.status,
+        note: [cleared.note, `Read after a human got past ${wall}.`].filter(Boolean).join(" "),
+        handoff: "cleared"
       };
-    }
-    const html = typeof got.result?.value?.html === "string" ? got.result.value.html : "";
-    return { ...extractFromHtml(html, finalUrl, opts), finalUrl, status: code, extractor: "browser" };
+    const secs = Math.round((human.timeoutMs ?? HUMAN_TIMEOUT_MS) / 1e3);
+    return { ...asIs, note: [asIs.note, `Nobody got past it within ${secs} s.`].filter(Boolean).join(" "), handoff: "timeout" };
   } finally {
     page.off("Network.responseReceived", onResponse);
     await deps.discovery.closeTarget(session.port, session.targetId, session.host).catch(() => {
     });
     await session.detach();
   }
+}
+async function handOff(session, url, wall, challenged, human, deps, take, signal) {
+  const tell = human.tell ?? ((m) => void process.stderr.write(`${m}
+`));
+  const timeoutMs = human.timeoutMs ?? HUMAN_TIMEOUT_MS;
+  const start = deps.now();
+  const left = () => timeoutMs - (deps.now() - start);
+  const { cli, name } = brand();
+  await deps.discovery.activateTarget(session.port, session.targetId, session.host).catch(() => {
+  });
+  tell(
+    `${cli}: ${url} is behind ${wall}. It is open in the ${name} browser window (its own profile, not your browser): get past it there and the read goes on by itself \u2014 waiting up to ${Math.round(timeoutMs / 1e3)} s.`
+  );
+  try {
+    if (challenged) await waitFor(session, { clear: true }, { timeoutMs, deps, ...signal ? { signal } : {} });
+    for (; ; ) {
+      await waitFor(session, { load: true }, { timeoutMs: Math.max(1, Math.min(AFTER_WALL_LOAD_MS, left())), deps }).catch(() => {
+      });
+      const challenge = await detectChallenge(session);
+      if (!challenge?.blocking) {
+        const r = await take();
+        if (!humanWall(r.text)) {
+          tell(`${cli}: got past it \u2014 read ${url}.`);
+          return r;
+        }
+      }
+      if (left() <= 0) break;
+      if (signal?.aborted) throw new Error(`reading ${url} in the browser was cancelled`);
+      await deps.sleep(Math.min(WALL_POLL_MS, left()));
+    }
+  } catch (e) {
+    if (!(e instanceof WaitTimeoutError)) throw e;
+  }
+  tell(`${cli}: ${url} is still behind ${wall} after ${Math.round(timeoutMs / 1e3)} s \u2014 read without it.`);
+  return void 0;
 }
 function readRenderedPage(url, opts = {}) {
   return track(read(url, opts));
@@ -9874,6 +9956,7 @@ async function read(url, opts) {
   if (signal?.aborted) throw cancelled();
   const deps = browserDeps(opts.deps);
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
+  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? HUMAN_TIMEOUT_MS : 0;
   const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
     release();
@@ -9886,7 +9969,8 @@ async function read(url, opts) {
   const cut = new Promise((_, reject) => {
     stop = reject;
   });
-  const timer = setTimeout(() => stop(new Error(`reading ${url} in the browser did not finish within ${timeoutMs} ms`)), timeoutMs);
+  const budgetMs = humanMs ? 2 * timeoutMs + humanMs : timeoutMs;
+  const timer = setTimeout(() => stop(new Error(`reading ${url} in the browser did not finish within ${budgetMs} ms`)), budgetMs);
   const onAbort = () => stop(cancelled());
   signal?.addEventListener("abort", onAbort, { once: true });
   try {
@@ -9904,6 +9988,9 @@ async function read(url, opts) {
 }
 var IDLE_CAP_MS;
 var WEB_PAGE;
+var HUMAN_TIMEOUT_MS;
+var WALL_POLL_MS;
+var AFTER_WALL_LOAD_MS;
 var active;
 var queue;
 var DRAIN_MS;
@@ -9919,12 +10006,16 @@ var init_read = __esm({
     init_deps();
     init_launch();
     init_discovery();
+    init_mode();
     init_overlay();
     init_session();
     init_state();
     init_wait();
     IDLE_CAP_MS = 3e3;
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
+    HUMAN_TIMEOUT_MS = 3e5;
+    WALL_POLL_MS = 1e3;
+    AFTER_WALL_LOAD_MS = 1e4;
     active = 0;
     queue = [];
     DRAIN_MS = 5e3;
@@ -9943,6 +10034,7 @@ init_cdp();
 init_overlay();
 init_state();
 init_challenge();
+init_mode();
 init_detect();
 init_profile();
 init_exec();
@@ -10755,7 +10847,7 @@ async function cachedFetchAndExtract(url, opts = {}, enabled = false, now = Date
     return { text: "", finalUrl: url, status: 0, note: `Offline: ${url} is not in the cache (drop --offline, or warm it with a normal run).` };
   }
   const ns = await currentExtractor(opts, url);
-  const fallback2 = browserFetchMode(opts.browser) === "fallback";
+  const fallback2 = browserFetchModeFor(opts) === "fallback";
   const store = (result, tried = false) => {
     const target = namespaceFor(result, ns);
     let entry = ns === "firecrawl" && target === "native" ? { ...result, fallbackFrom: "firecrawl" } : result;
@@ -12441,6 +12533,21 @@ function titleFromText(text) {
   const pick2 = (bibliographic ? paras[1] : lead) || lead;
   return pick2.slice(0, 200) || text.trim().replace(/\s+/g, " ").slice(0, 200);
 }
+function urlIdentity(url) {
+  const canon = canonicalizeUrl(url);
+  let u;
+  try {
+    u = new URL(canon);
+  } catch {
+    return canon;
+  }
+  let path = u.pathname;
+  try {
+    path = encodeURI(decodeURIComponent(path));
+  } catch {
+  }
+  return `${u.protocol}//${u.host}${path}${u.search}`.replace(/\/+$/, "");
+}
 var BACKEND_TRUST = {
   arxiv: 0.9,
   crossref: 0.9,
@@ -12485,7 +12592,7 @@ function identityKey(item) {
   if (urlDoi) return "doi:" + urlDoi;
   const urlArxiv = arxivIdFromUrl(item.url);
   if (urlArxiv) return "arxiv:" + urlArxiv;
-  return canonicalizeUrl(item.url);
+  return urlIdentity(item.url);
 }
 function extractIdentifiers(question) {
   const out = /* @__PURE__ */ new Set();
@@ -12894,7 +13001,7 @@ var wikipediaBackend = async (ctx) => {
 // src/browser.ts
 var ENV = "ULTRASEARCH_BROWSER_FETCH";
 var NO_BINARY = "no Chrome, Brave, Chromium or Edge found (install one, or point ULTRASEARCH_BROWSER_BIN at it)";
-function canShowWindow(platform, env2) {
+function canShowWindow2(platform, env2) {
   if (platform === "darwin" || platform === "win32") return true;
   return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
 }
@@ -12924,7 +13031,7 @@ function resolveBrowserRung(opts = {}) {
   }
   const { binary, missing } = detect();
   if (!binary) return { mode: "off", source: "default", reason: missing };
-  if (!canShowWindow(platform, env2)) {
+  if (!canShowWindow2(platform, env2)) {
     return { mode: "off", source: "default", binary, reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" };
   }
   return { mode: "fallback", source: "default", binary };
@@ -12940,7 +13047,7 @@ function describeBrowserRung(r) {
   return {
     name: "browser",
     ok: true,
-    detail: `${r.mode} (${originOf(r)}) \u2014 ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). A window may open during a run. \`--browser off\` to disable.`
+    detail: `${r.mode} (${originOf(r)}) \u2014 ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). A window may open during a run. \`--browser off\` to disable. A page only you can get past (a CAPTCHA, a sign-in) is handed to you in that window by \`ultrasearch human --run <dir>\`.`
   };
 }
 function originOf(r) {
@@ -15491,6 +15598,8 @@ function identityKeys(url, meta, ncbiText) {
   if (inUrl) keys.add(doiKey(inUrl[1]));
   const doc = ncbiDocument(url);
   if (doc) keys.add(doc.kind === "pubmed" ? `pmid:${doc.id}` : `pmcid:${doc.id}`);
+  const arxiv = arxivIdFromUrl(url) ?? (typeof meta?.arxivId === "string" && meta.arxivId.trim() ? meta.arxivId : void 0);
+  if (arxiv) keys.add(`arxiv:${arxiv.trim().toLowerCase().replace(/v\d+$/, "")}`);
   if (typeof meta?.doi === "string" && meta.doi.trim()) keys.add(doiKey(meta.doi));
   if (ncbiText) {
     const doi = ncbiText.match(/^\s*DOI:\s*(10\.\d{4,9}\/\S+)/im);
@@ -15680,7 +15789,7 @@ function mergeSameRecord(items) {
   const better = (a, b) => a.fullText !== false !== (b.fullText !== false) ? a.fullText !== false : (a.text?.length ?? 0) > (b.text?.length ?? 0);
   let merged = 0;
   for (const it of items) {
-    const keys = identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : void 0);
+    const keys = [...identityKeys(it.url, it.meta, readFromEutils(it.meta?.textVia) ? it.text : void 0), `url:${urlIdentity(it.url)}`];
     const prior = keys.map((k) => owner.get(k)).find(Boolean);
     if (!prior) {
       out.push(it);
@@ -15690,8 +15799,11 @@ function mergeSameRecord(items) {
     }
     merged++;
     const [win, lose] = better(it, prior) ? [it, prior] : [prior, it];
-    const also = [.../* @__PURE__ */ new Set([...win.meta?.alsoAt ?? [], lose.url, ...lose.meta?.alsoAt ?? []])];
-    win.meta = { ...lose.meta, ...win.meta, alsoAt: also };
+    const also = [.../* @__PURE__ */ new Set([...win.meta?.alsoAt ?? [], lose.url, ...lose.meta?.alsoAt ?? []])].filter(
+      (u) => urlIdentity(u) !== urlIdentity(win.url)
+    );
+    win.meta = { ...lose.meta, ...win.meta, ...also.length ? { alsoAt: also } : {} };
+    if (!also.length) delete win.meta.alsoAt;
     if (win !== prior) out[out.indexOf(prior)] = win;
     const all = [.../* @__PURE__ */ new Set([...keysOf.get(prior) ?? [], ...keys])];
     keysOf.set(win, all);
@@ -15716,6 +15828,30 @@ function idfShare(matched, terms, idf) {
   if (total <= 0) return terms.length ? matched.filter((t) => terms.includes(t)).length / terms.length : 0;
   const hit = new Set(matched);
   return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
+}
+var HOMONYM_BACKENDS = /* @__PURE__ */ new Set(["arxiv", "crossref"]);
+function dropHomonyms(results, question) {
+  const docOf = (it) => ({ id: it.url, title: it.title || "", headings: "", body: [it.snippet, it.text].filter(Boolean).join("\n") });
+  const docs = results.flatMap((r) => r.items.map(docOf));
+  const bm25 = buildBm25Index(question, docs);
+  const pooled = new Set(docs.flatMap((d) => bm25MatchedTerms(bm25, d)));
+  const terms = bm25.queryTerms.filter((t) => new RegExp("\\p{L}", "u").test(t) && pooled.has(t));
+  if (terms.length < 2 || bm25.N < 3) return void 0;
+  const idfOf = (t) => bm25.idf.get(t) ?? 0;
+  const sorted = terms.map(idfOf).sort((a, b) => a - b);
+  const median = sorted[Math.floor((sorted.length - 1) / 2)];
+  const distinctive = new Set(terms.filter((t) => idfOf(t) >= median));
+  let dropped = 0;
+  for (const r of results) {
+    if (!HOMONYM_BACKENDS.has(r.backend)) continue;
+    const before = r.items.length;
+    r.items = r.items.filter((it) => {
+      const matched = bm25MatchedTerms(bm25, docOf(it)).filter((t) => new RegExp("\\p{L}", "u").test(t));
+      return distinctive.size >= 2 ? matched.filter((t) => distinctive.has(t)).length >= 2 : matched.length >= 2;
+    });
+    dropped += before - r.items.length;
+  }
+  return dropped ? `Dropped ${dropped} arXiv/Crossref record(s) that matched only one distinctive word of the question \u2014 a homonym is not the subject.` : void 0;
 }
 function namedTerms(question) {
   const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
@@ -16125,7 +16261,10 @@ async function runGather(options) {
     if (options.excludeDomains.length) withContent = withContent.filter(excluded);
     const sameRecord = mergeSameRecord(withContent);
     withContent = sameRecord.kept;
-    if (sameRecord.merged) hydrateNotes.push(`Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID or PMCID).`);
+    if (sameRecord.merged)
+      hydrateNotes.push(
+        `Merged ${sameRecord.merged} source(s) that were the same paper under another address (same DOI, PMID, PMCID or arXiv id, or the same page).`
+      );
     const docs = withContent.map((it) => ({
       id: it.url,
       title: it.title || "",
@@ -16169,11 +16308,13 @@ async function runGather(options) {
     const { kept, dropped } = applyRelevanceFloor(withContent, (it) => isDisambiguation(it) ? [] : matchedByUrl.get(it.url) ?? [], bm25.queryTerms, floor2);
     const floorDropped = dropped.length;
     const alphaTerms = bm25.queryTerms.filter((t) => new RegExp("\\p{L}", "u").test(t));
+    const pooled = new Set([...matchedByUrl.values()].flat());
+    const shareTerms = alphaTerms.filter((t) => pooled.has(t));
     if (alphaTerms.length >= 2) {
       for (const it of kept) {
         const matched = (matchedByUrl.get(it.url) ?? []).filter((t) => new RegExp("\\p{L}", "u").test(t));
         const content = it.meta?.rank?.content ?? 0;
-        const off = isDisambiguation(it) || matched.length === 0 || alphaTerms.length >= 3 && idfShare(matched, alphaTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT;
+        const off = isDisambiguation(it) || matched.length === 0 || alphaTerms.length >= 3 && idfShare(matched, shareTerms, bm25.idf) < OFF_TOPIC_TERM_SHARE && content < OFF_TOPIC_CONTENT;
         if (off) it.offTopic = true;
         else delete it.offTopic;
       }
@@ -16191,6 +16332,7 @@ async function runGather(options) {
       queryTerms: bm25.queryTerms
     };
   }
+  const homonymNote = dropHomonyms(results, options.question);
   const lists = results.map((r2) => [...r2.items].sort((a, b) => b.score - a.score));
   let r = await assemble(lists);
   let gapNote;
@@ -16249,6 +16391,7 @@ async function runGather(options) {
     ...new Set(r.hydrateNotes),
     ...r.droppedDup > 0 ? [`Dropped ${r.droppedDup} duplicate result(s) across backends.`] : [],
     ...r.nearDropped > 0 ? [`Collapsed ${r.nearDropped} near-duplicate (syndicated) page(s).`] : [],
+    ...homonymNote ? [homonymNote] : [],
     ...r.floorDropped > 0 ? [`Relevance floor dropped ${r.floorDropped} off-topic result(s) with no meaningful query-term overlap.`] : [],
     ...r.notFetched > 0 ? [
       `Discovery found ${r.notFetched} more candidate(s) than this run fetched \u2014 \`--max-sources ${options.maxSources}\` is the FETCH budget (+${OVERSHOOT[options.depth] ?? 10} overshoot). They were never retrieved, so they are not in this dossier: raise --max-sources or --depth to reach them.`
@@ -16348,10 +16491,13 @@ import { pathToFileURL } from "url";
 function loadState(dir) {
   const { sources, manifest } = readDossier(dir);
   const byCanon = /* @__PURE__ */ new Map();
-  for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
+  for (const s of sources) for (const k of urlKeys(s)) if (!byCanon.has(k)) byCanon.set(k, s);
   const byIdentity = /* @__PURE__ */ new Map();
   for (const s of sources) for (const k of sourceKeys(dir, s)) if (!byIdentity.has(k)) byIdentity.set(k, s);
   return { dir, sources, manifest, byCanon, byIdentity, maxId: maxSourceId(sources, manifest.droppedIds), template: templateFor(manifest) };
+}
+function urlKeys(s) {
+  return [.../* @__PURE__ */ new Set([s.canonicalUrl, urlIdentity(s.url)])];
 }
 function sourceKeys(dir, s) {
   let text;
@@ -16373,7 +16519,7 @@ function commit(dir, state, p) {
   const s = annotateExtras(p.text, buildSource(p.raw, id, (/* @__PURE__ */ new Date()).toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   state.sources.push(s);
-  state.byCanon.set(s.canonicalUrl, s);
+  for (const k of urlKeys(s)) state.byCanon.set(k, s);
   remember(state, s, p.text);
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
   return { id, added: true, ...p.note ? { note: p.note } : {} };
@@ -16390,7 +16536,7 @@ function repair(dir, state, p, old) {
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
   const i = state.sources.findIndex((x) => x.id === old.id);
   state.sources[i] = s;
-  state.byCanon.set(s.canonicalUrl, s);
+  for (const k of urlKeys(s)) state.byCanon.set(k, s);
   for (const [k, v] of state.byIdentity) if (v === old) state.byIdentity.set(k, s);
   remember(state, s, p.text);
   return { id: old.id, added: false, repaired: true, ...p.note ? { note: p.note } : {} };
@@ -16471,7 +16617,7 @@ async function prepareFile(stateOf, abs, opts) {
   }
   const state = stateOf();
   const question = opts.question ?? state.manifest.question;
-  const existing = state.byCanon.get(canonicalizeUrl(url));
+  const existing = state.byCanon.get(urlIdentity(url));
   if (existing) return { ok: false, result: { id: existing.id, added: false, note: `already in dossier as ${existing.id}` } };
   const bytes = readFileSync13(abs);
   const name = basename(abs);
@@ -16541,7 +16687,7 @@ async function prepareSource(stateOf, url, opts) {
   if (provider.reject && !supplied) return { ok: false, result: { id: "", added: false, note: provider.reject } };
   const ncbi = ncbiDocument(url);
   const citeUrl = supplied || ncbi?.citeUrl || provider.citeUrl;
-  const canon = canonicalizeUrl(citeUrl);
+  const canon = urlIdentity(citeUrl);
   const existing = state.byCanon.get(canon) ?? identityKeys(citeUrl).map((k) => state.byIdentity.get(k)).find(Boolean);
   const weak = existing ? weakness(state.dir, existing) : void 0;
   if (existing && !weak) {
@@ -16565,7 +16711,12 @@ async function prepareSource(stateOf, url, opts) {
   if (!p.ok) {
     return {
       ok: false,
-      result: { id: existing.id, added: false, note: `already in dossier as ${existing.id} (${weak}) \u2014 re-read it, still no text: ${p.result.note}` }
+      result: {
+        id: existing.id,
+        added: false,
+        note: `already in dossier as ${existing.id} (${weak}) \u2014 re-read it, still no text: ${p.result.note}`,
+        ...p.result.handoff ? { handoff: p.result.handoff } : {}
+      }
     };
   }
   return {
@@ -16620,7 +16771,9 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
   const readUrl = supplied || readsEndpoint ? url : preferred;
   const browser = opts.browser ?? resolveBrowserRung().mode;
   const readOpts = { firecrawl: opts.firecrawl, browser };
-  const fetched = await readPastCachedWall(readUrl, readOpts, !!opts.cache);
+  const pageOpts = opts.human ? { ...readOpts, human: opts.human } : readOpts;
+  const fetched = await readPastCachedWall(readUrl, pageOpts, !!opts.cache);
+  const handoff = fetched.handoff ? { handoff: fetched.handoff } : {};
   let { text, title } = fetched;
   const home = redirectedHome(readUrl, fetched.finalUrl) ? fetched.finalUrl : void 0;
   if (home) {
@@ -16638,7 +16791,7 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
   }
   const fallbackUrl = readUrl === citeUrl ? provider.textUrl : citeUrl;
   if ((!text?.trim() || wall) && fallbackUrl && fallbackUrl !== readUrl) {
-    const alt = await readPastCachedWall(fallbackUrl, readOpts, !!opts.cache);
+    const alt = await readPastCachedWall(fallbackUrl, fetched.handoff ? readOpts : pageOpts, !!opts.cache);
     if (alt.text?.trim() && !looksLikeWall(alt.text)) {
       text = alt.text;
       title = title || alt.title;
@@ -16687,13 +16840,14 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
       result: {
         id: "",
         added: false,
-        note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.` + (ncbiMiss ? ` (${ncbiMiss}.)` : "")
+        note: `${readUrl} extracted to a ${wall}, not content \u2014 not added. Retry later, or pin a source that carries the text.` + (ncbiMiss ? ` (${ncbiMiss}.)` : ""),
+        ...handoff
       }
     };
   }
   if (!text?.trim()) {
     const why = home ? `${readUrl} redirected to the site's home page (${home}) \u2014 the document is gone, and the archive has no copy; not added` : fetched.note ?? `no readable content at ${readUrl}`;
-    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why } };
+    return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why, ...handoff } };
   }
   if (supplied && supplied !== url) {
     meta.textVia = url;
@@ -16713,7 +16867,7 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
     meta.textVia = citeUrl;
     via = citeUrl;
     citeUrl = derived;
-    const dup = state.byCanon.get(canonicalizeUrl(citeUrl));
+    const dup = state.byCanon.get(urlIdentity(citeUrl));
     if (dup && dup.id !== opts.repairs) return { ok: false, result: { id: dup.id, added: false, note: `already in dossier as ${dup.id} (${citeUrl})` } };
   }
   if (rendered) meta.extractor = "browser";
@@ -18749,7 +18903,9 @@ function runMerge(options) {
     extras: mode2.extras,
     notes: [
       `Merged ${dossiers.length} sub-dossier(s) \u2192 ${merged.length} source(s) (${deduped.dropped} near-duplicate(s) collapsed).`,
-      "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic."
+      // Route D's gate on a deep master; route S's on a standard one, where
+      // `--semantic` can only fail closed (no adjudicated VERIFY.json).
+      depth === "deep" ? "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic --require-verify." : "agent: write the report against THIS master dossier's [S#] ids; then render + check."
     ],
     timings: {},
     mergedFrom: options.runs.slice(),
@@ -18963,6 +19119,82 @@ function emitOrchestration(runDir, engineAbs, { browser, ...opts } = {}) {
 }
 function listPhasesFor(runDir, engineAbs) {
   return listPhases(runDir, engineAbs, PHASE_DEFS);
+}
+
+// src/human.ts
+var HUMAN_NOTE = /\b(?:[a-z]+ )?challenge\b|\b(?:re)?captcha\b|\banti-bot\b|\bbot check\b|\b(?:login|log-in|sign-in|signin) wall\b/i;
+function mentions(note, url) {
+  for (let i = note.indexOf(url); i >= 0; i = note.indexOf(url, i + 1)) {
+    const next = note.slice(i + url.length, i + url.length + 2);
+    if (next === "" || /^[\s`'"),;]/.test(next) || /^\.(?:\s|$)/.test(next)) return true;
+  }
+  return false;
+}
+function humanCandidates(sources, manifest) {
+  const out = [];
+  for (const s of sources) {
+    if (s.wall) {
+      out.push({ id: s.id, url: s.url, why: "\u26D4 wall" });
+      continue;
+    }
+    if (s.fullText !== false) continue;
+    const said = (manifest.notes ?? []).find((n) => mentions(n, s.url) && HUMAN_NOTE.test(n));
+    if (said) out.push({ id: s.id, url: s.url, why: `snippet only \u2014 ${HUMAN_NOTE.exec(said)?.[0] ?? "walled"}` });
+  }
+  return out;
+}
+function humanHint(dir) {
+  try {
+    const { sources, manifest } = readDossier(dir);
+    const n = humanCandidates(sources, manifest).length;
+    return n ? `${n} page(s) need a human: ultrasearch human --run ${dir}` : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function selectForHuman(dir, ids) {
+  const { sources, manifest } = readDossier(dir);
+  const flagged2 = humanCandidates(sources, manifest);
+  if (!ids?.length) return { chosen: flagged2, skipped: [], missing: [] };
+  const want = new Set(ids.map((id) => id.trim().toUpperCase()));
+  const chosen = [];
+  const skipped = [];
+  for (const s of sources) {
+    if (!want.has(s.id)) continue;
+    const c = flagged2.find((f) => f.id === s.id);
+    if (c) chosen.push(c);
+    else if (s.fullText === false) chosen.push({ id: s.id, url: s.url, why: "snippet only" });
+    else skipped.push({ id: s.id, url: s.url, why: "holds its text", outcome: "skipped", note: `${s.id} already holds its page's text` });
+  }
+  const known = new Set(sources.map((s) => s.id));
+  return { chosen, skipped, missing: [...want].filter((id) => !known.has(id)) };
+}
+async function runHuman(dir, chosen, opts = {}) {
+  const results = [];
+  const done = (r) => {
+    results.push(r);
+    opts.onResult?.(r);
+  };
+  if (!chosen.length) return results;
+  const { manifest } = readDossier(dir);
+  for (const c of chosen) {
+    if (opts.noWindow) {
+      done({ ...c, outcome: "skipped", note: opts.noWindow });
+      continue;
+    }
+    opts.onStart?.(c);
+    const got = await addSources(dir, [c.url], {
+      question: manifest.question,
+      cache: false,
+      browser: "always",
+      human: opts.timeoutMs !== void 0 ? { timeoutMs: opts.timeoutMs } : {},
+      ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {}
+    });
+    const r = got.results[0];
+    const outcome2 = r?.repaired ? "repaired" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
+    done({ ...c, outcome: outcome2, ...r?.note ? { note: r.note } : {} });
+  }
+  return results;
 }
 
 // src/mcp/handlers.ts
@@ -21037,6 +21269,7 @@ Usage:
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
   ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
   ultrasearch browser open <url>
+  ultrasearch human  --run <dossier-dir> [--id <S#,...>] [--timeout <s>] [--list] [--json]
 
 Commands:
   gather   Fan out the mode's backends, fetch + dedupe, write the evidence
@@ -21091,6 +21324,16 @@ Commands:
   browser  open <url>: open a page in the dedicated browser (~/.ultrasearch/browser)
            for YOU to deal with \u2014 the CAPTCHA or anti-bot check a read reported.
            The engine never solves one; once you have, the next read gets the page.
+  human    Hand the pages of a dossier that need a person to the person: every
+           \u26D4 wall, and every snippet-only source whose read met a CAPTCHA, an
+           anti-bot check or a sign-in wall. One at a time, each page comes up
+           in the dedicated browser's window; once you are past the wall, the
+           page is read from that window and repairs its source in place (same
+           S#, like 'fetch' of a \u26D4 source). Prints repaired / still walled /
+           timed out / skipped per source. --list is the dry run; --id picks
+           sources; --timeout is how long you have per page (default 300 s).
+           Nothing is ever solved for you, and with no window to show (no
+           display, a CI run) every page is skipped.
   brainstorm  Probe a vague/ambiguous question with a shallow keyless search and
            propose candidate angles + clarifying questions before a full run
            (writes BRAINSTORM.md / BRAINSTORM.json). Use when the ask is unclear.
@@ -21192,7 +21435,10 @@ Options:
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
-                       source(s) to remove (comma-separated)
+                       source(s) to remove (comma-separated). For 'human': the
+                       source(s) to hand over (comma-separated)
+  --timeout <s>        For 'human': how long you have to get past each page's
+                       wall, in seconds                         (default: 300)
   --where <kind>       For 'drop': remove every source of a kind \u2014 wall (the
                        page was a cookie/consent/anti-bot wall), snippet (only
                        the search snippet is on file), offtopic (flagged by
@@ -21219,7 +21465,8 @@ Options:
                        (exit 2 when its worklist does not exist yet)
   --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md \u2014
                        the explicit sequential low-token path
-  --list               For 'orchestrate': print the phases + readiness as JSON
+  --list               For 'orchestrate': print the phases + readiness as JSON.
+                       For 'human': list the pages that need you, open nothing
   --no-html / --no-md  For 'render': skip index.html / the consolidated index.md
   --semantic           For 'check': also gate on the verify verdicts
   --require-verify     For 'check': fail if no adjudicated VERIFY.json (deep gate)
@@ -21234,7 +21481,8 @@ Options:
                        read-only phase. gather \u2192 DOSSIER.md + every source
                        extract \xB7 brainstorm \u2192 BRAINSTORM.md \xB7 plan \u2192 PLAN.json \xB7
                        render \u2192 index.md (no HTML). merge / fetch / verify /
-                       orchestrate / drop exit 2: they exist to leave files behind.
+                       orchestrate / drop / human exit 2: they exist to leave
+                       files behind.
                        No 'check' gate is possible without files \u2014 cite carefully.
   --json               Machine-readable output
   -h, --help           Show this help
@@ -21278,7 +21526,8 @@ var COMMANDS = /* @__PURE__ */ new Set([
   "doctor",
   "searxng",
   "firecrawl",
-  "browser"
+  "browser",
+  "human"
 ]);
 var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "q",
@@ -21328,6 +21577,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "template",
   "refs",
   "citing",
+  "timeout",
   // `mcp` only. The flag sets are global, so these are accepted (and ignored)
   // on every command — the same as --phase and --list already are.
   "transport",
@@ -21459,7 +21709,8 @@ var NO_WRITE_REFUSED = {
   drop: "it removes sources from a dossier on disk",
   verify: "it emits a worklist for skeptics to read from disk (and --apply folds their verdicts back into it)",
   orchestrate: "it emits workflow scripts and agent contracts the harness opens by path",
-  refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references"
+  refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references",
+  human: "it repairs sources in a dossier on disk, and opens a browser that writes its profile"
 };
 var STDOUT_BRIEF = ["DOSSIER.md", "BRAINSTORM.md", "PLAN.json", "index.md"];
 function sourceNum(rel) {
@@ -21515,6 +21766,7 @@ function gatherReport(r, options) {
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
   const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
+  const needHuman = options.stdout ? 0 : humanCandidates(r.sources, r.manifest).length;
   const ws = r.manifest.webSearch;
   const laneLine = ws?.supplied ? `  websearch: ${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}` : `  websearch: none supplied \u2014 pass your own hits with --web-results <f.json> for the strongest lane`;
   return {
@@ -21531,6 +21783,7 @@ function gatherReport(r, options) {
       ...offTopicIds.length ? [
         `  offtopic: ${offTopicIds.slice(0, 8).join(", ")}${offTopicIds.length > 8 ? ", \u2026" : ""} \u2014 probably unrelated` + (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`)
       ] : [],
+      ...needHuman ? [`  human:    ${needHuman} page(s) need a human: ultrasearch human --run ${r.dir}`] : [],
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
       ...options.stdout ? [
@@ -21547,7 +21800,7 @@ function browserMode(p) {
   const flag = p.values.browser === void 0 ? void 0 : oneOf2("browser", p.values.browser, ALL_BROWSER_MODES);
   return resolveBrowserRung({ flag }).mode;
 }
-var PAGE_COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm"]);
+var PAGE_COMMANDS = /* @__PURE__ */ new Set(["gather", "search", "fetch", "add-source", "ingest", "brainstorm", "human"]);
 async function exitClosed(code) {
   await closeBrowserReads();
   process.exit(code);
@@ -21790,6 +22043,53 @@ ${formatServices(rows)}
 `);
       return;
     }
+    // The same handoff, for a whole dossier: each page that needs a person comes
+    // up in the dedicated browser's window, one at a time, and the text read
+    // once they are past it repairs its source in place.
+    case "human": {
+      const dir = p.values.run ?? p.values.out;
+      if (!dir) fail("missing --run <dossier-dir>");
+      const rdir = resolve5(dir);
+      if (!existsSync19(join29(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
+      const secs = p.values.timeout === void 0 ? void 0 : num4("timeout", p.values.timeout, 300);
+      if (secs !== void 0 && secs < 1) fail(`invalid --timeout "${p.values.timeout}" (expected seconds \u2265 1)`);
+      const { chosen, skipped, missing } = selectForHuman(rdir, p.values.id ? parseList(p.values.id) : void 0);
+      const json2 = p.bools.has("json");
+      if (p.bools.has("list")) {
+        if (json2) process.stdout.write(JSON.stringify({ chosen, skipped, missing }, null, 2) + "\n");
+        else if (!chosen.length) process.stdout.write("ultrasearch human: no page in this dossier needs a human.\n");
+        else for (const c of chosen) process.stdout.write(`${c.id}	${c.url}	${c.why}
+`);
+        for (const id of missing) process.stderr.write(`ultrasearch: ${id} is not in this dossier
+`);
+        if (missing.length) process.exitCode = 1;
+        return;
+      }
+      const rung = resolveBrowserRung({ flag: "always" });
+      const noWindow = !rung.binary ? rung.reason ?? "no browser to show the page in" : canShowWindow() ? void 0 : "no window can be shown here (no display, or a CI run)";
+      const line = (r) => `${r.id}	${r.url}	${r.outcome}${r.note ? `	${r.note}` : ""}`;
+      if (!json2) for (const r of skipped) process.stdout.write(line(r) + "\n");
+      const results = await runHuman(rdir, chosen, {
+        ...secs !== void 0 ? { timeoutMs: secs * 1e3 } : {},
+        ...p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {},
+        ...noWindow ? { noWindow } : {},
+        onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) \u2014 handing ${c.url} to you in the browser window
+`),
+        onResult: (r) => {
+          if (!json2) process.stdout.write(line(r) + "\n");
+        }
+      });
+      const all = [...skipped, ...results];
+      if (json2) process.stdout.write(JSON.stringify({ results: all, missing }, null, 2) + "\n");
+      for (const id of missing) process.stderr.write(`ultrasearch: ${id} is not in this dossier
+`);
+      const repaired = results.filter((r) => r.outcome === "repaired").length;
+      if (!chosen.length) process.stderr.write("ultrasearch human: no page in this dossier needs a human.\n");
+      else process.stderr.write(`ultrasearch human: repaired ${repaired} of ${chosen.length} page(s) \u2192 ${rdir}
+`);
+      if (missing.length || chosen.length > 0 && repaired === 0) await exitClosed(1);
+      return;
+    }
     case "searxng":
     case "firecrawl": {
       const action = p.positional[0] ?? "status";
@@ -21857,9 +22157,9 @@ ${formatServices(rows)}
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d) => resolve5(d)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d2) => resolve5(d2)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d of runs) if (!existsSync19(d)) fail(`run dir not found: ${d}`);
+      for (const d2 of runs) if (!existsSync19(d2)) fail(`run dir not found: ${d2}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
@@ -21871,11 +22171,12 @@ ${formatServices(rows)}
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
         return;
       }
+      const d = result.dir;
       const lines = [
         `ultrasearch: merged ${runs.length} sub-dossier(s) \u2192 ${result.sources.length} source(s)`,
-        `  master:   ${result.dir}`,
-        `  next:     read ${result.dir}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
-        `            ultrasearch verify --run ${result.dir} && ultrasearch check --semantic --run ${result.dir}`
+        `  master:   ${d}`,
+        `  next:     read ${d}/DOSSIER.md, write SUMMARY/REPORT.md citing the MASTER [S#] ids, then:`,
+        result.manifest.depth === "deep" ? `            ultrasearch verify --run ${d}, adjudicate, ultrasearch verify --apply ${d} --run ${d} && ultrasearch check --semantic --require-verify --run ${d}` : `            ultrasearch render --run ${d} && ultrasearch check --run ${d}`
       ];
       process.stderr.write(lines.join("\n") + "\n");
       return;
@@ -21910,6 +22211,9 @@ ${formatServices(rows)}
         if (r.id) process.stdout.write(`${r.id}
 `);
       }
+      const fetchHint = humanHint(resolve5(dir));
+      if (fetchHint) process.stderr.write(`ultrasearch: ${fetchHint}
+`);
       if (!r.id) await exitClosed(1);
       return;
     }
@@ -21968,6 +22272,9 @@ ${formatServices(rows)}
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve5(dir)}
 `);
       }
+      const ingestHint = humanHint(resolve5(dir));
+      if (ingestHint) process.stderr.write(`ultrasearch: ${ingestHint}
+`);
       if (!r.added && !repaired) await exitClosed(1);
       return;
     }
