@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.43.2](https://github.com/maxgfr/ultrasearch/compare/v1.43.1...v1.43.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **gather:** never bank an anti-bot challenge as a source, on webindex 1.36.1 ([08b8fb5](https://github.com/maxgfr/ultrasearch/commit/08b8fb57df5f0a9eb91bef1072bd779011c0bd9e))
+
 ## [1.43.1](https://github.com/maxgfr/ultrasearch/compare/v1.43.0...v1.43.1) (2026-10-29)
 
 
