@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.43.1](https://github.com/maxgfr/ultrasearch/compare/v1.43.0...v1.43.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **plan:** create the sub-question folders under --run-root ([2520a09](https://github.com/maxgfr/ultrasearch/commit/2520a099c98b3e9695f58ef44b8be80657ecd374))
+* **verify:** say when the pair cap cut the worklist, and gate on every pair ([d9a7740](https://github.com/maxgfr/ultrasearch/commit/d9a7740e78b10041c3d2fd5a71328e58a59277f7))
+
 # [1.43.0](https://github.com/maxgfr/ultrasearch/compare/v1.42.7...v1.43.0) (2026-10-26)
 
 
