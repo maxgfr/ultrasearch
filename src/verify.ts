@@ -31,7 +31,29 @@ export interface BuiltWorklist {
   worklist: VerifyWorklist;
   total: number; // pairs derivable from REPORT before the cap
   kept: number; // pairs in this (possibly capped/sharded) worklist
+  capped: number; // pairs the cap kept, before any shard stripe (< total ⇒ the list was cut)
 }
+
+/**
+ * The line that says a worklist was cut, or undefined when every pair fits.
+ * A capped worklist is not a verified report: the pairs past the cap are never
+ * shown to a skeptic, and `check --require-verify` fails on them.
+ */
+export function capNotice(b: Pick<BuiltWorklist, "total" | "capped">, raise = (n: number) => `--max-verify ${n}`): string | undefined {
+  if (b.capped >= b.total) return undefined;
+  return (
+    `capped at ${b.capped} of ${b.total} claim↔source pair(s) (highest-trust sources first) — ` +
+    `${b.total - b.capped} pair(s) are left unverified and \`check --require-verify\` will fail on them. ` +
+    `Re-run with \`${raise(b.total)}\` to verify them all.`
+  );
+}
+
+/**
+ * Every pair REPORT derives — the cap does not apply. What the binding and the
+ * deep exit gate measure against: a pair the cap left out is still a claim the
+ * report makes, so it is still a pair the gate must see adjudicated.
+ */
+const UNCAPPED = Number.POSITIVE_INFINITY;
 
 // Flatten a hard file's claim units into individual claim strings: a text unit
 // is one claim; each list item is its own claim — the same granularity `check`
@@ -58,9 +80,9 @@ function claimStrings(text: string): { claim: string; noNumerals: boolean }[] {
 // `verify --apply` reassembles them. The default (no-shard) path is unchanged.
 //
 // PURE (no file writes): `runVerify` persists the result; the `check
-// --require-verify` coverage gate re-derives it to detect dropped verdicts. Same
-// claim granularity + cap + optional shard as before, so the re-derived pairs
-// line up with what `verify --run` emitted.
+// --require-verify` coverage gate re-derives it UNCAPPED to detect dropped
+// verdicts and pairs the cap left out. Same claim granularity as `verify --run`,
+// so the re-derived pairs line up with what it emitted.
 //
 // The digests are DEFERRED: pairs are derived with their identity keys only,
 // the cap and the shard stripe are applied to those light pairs, and
@@ -190,14 +212,20 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
     };
   };
   const worklist: VerifyWorklist = { run: dir, pairs: shaped.map(emit) };
-  return { worklist, total: pairs.length, kept: shaped.length };
+  return { worklist, total: pairs.length, kept: shaped.length, capped: kept.length };
 }
 
 // Phase A — build the claim↔source verification worklist AND persist it
 // (VERIFY.todo.json machine worklist + VERIFY.md human checklist). Thin wrapper
 // over `buildWorklist`; see its comment for the derivation + sharding contract.
 export function runVerify(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): VerifyWorklist {
-  const { worklist, total, kept } = buildWorklist(dir, opts);
+  return runVerifyCounted(dir, opts).worklist;
+}
+
+/** `runVerify`, also returning the counts — so a caller can say when the cap cut the list. */
+export function runVerifyCounted(dir: string, opts: { maxVerify?: number; shards?: number; shard?: number } = {}): BuiltWorklist {
+  const built = buildWorklist(dir, opts);
+  const { worklist } = built;
   const shards = opts.shards !== undefined ? Math.max(1, Math.floor(opts.shards)) : undefined;
   const shard = shards !== undefined ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
 
@@ -208,11 +236,11 @@ export function runVerify(dir: string, opts: { maxVerify?: number; shards?: numb
   const todoName = shards !== undefined ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== undefined ? `VERIFY.${shard}.md` : "VERIFY.md";
   writeArtifact(join(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join(dir, mdName), renderWorklistMd(worklist, total, kept));
-  return worklist;
+  writeArtifact(join(dir, mdName), renderWorklistMd(worklist, built));
+  return built;
 }
 
-function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): string {
+function renderWorklistMd(wl: VerifyWorklist, counts: BuiltWorklist): string {
   const out: string[] = [];
   out.push(`# Verification worklist`);
   out.push("");
@@ -224,7 +252,8 @@ function renderWorklistMd(wl: VerifyWorklist, total: number, kept: number): stri
       `A specific numeral/date/quantity asserted by the claim but absent from the cited extract caps the ` +
       `verdict at **partial** — never \`supported\` (flagged pairs carry a precomputed warning).`,
   );
-  if (kept < total) out.push(`\n_Showing ${kept} of ${total} pair(s) — capped at the highest-trust sources._`);
+  const cut = capNotice(counts);
+  if (cut) out.push(`\n_Showing ${counts.kept} pair(s): ${cut}_`);
   out.push("");
   for (const p of wl.pairs) {
     out.push(`## ${p.claimId} · ${p.sourceId}`);
@@ -298,7 +327,8 @@ export interface BindingReport {
 // worklist (including shards), after comparing it with the full current text.
 // Display snippets cannot prove identity: both claim and extract are truncated.
 //
-// Rows naming a pair outside the current worklist (e.g. a capped-out or foreign
+// The derivation is UNCAPPED: a pair `verify` left out under the default cap is
+// still a claim the report makes. Rows naming a pair outside it (a foreign
 // pair) are left untouched: the coverage gate, not the binding, decides whether
 // the worklist is fully adjudicated.
 //
@@ -310,7 +340,7 @@ export interface BindingReport {
 export function bindToWorklist(dir: string, verdicts: Verdict[], opts: { strict?: boolean } = {}): BindingReport {
   let expected: ClaimEvidencePair[];
   try {
-    expected = buildWorklist(dir).worklist.pairs;
+    expected = buildWorklist(dir, { maxVerify: UNCAPPED }).worklist.pairs;
   } catch {
     // No derivable worklist (no sources.json / unreadable extract): nothing can
     // be vouched for here. Callers fail closed on `derivable === false` where a

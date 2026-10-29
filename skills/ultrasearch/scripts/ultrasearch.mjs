@@ -17475,6 +17475,11 @@ var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
 function pairFingerprint(claim, extract) {
   return createHash2("sha256").update(String(claim.length)).update("|").update(claim).update(extract).digest("hex").slice(0, 32);
 }
+function capNotice(b, raise = (n) => `--max-verify ${n}`) {
+  if (b.capped >= b.total) return void 0;
+  return `capped at ${b.capped} of ${b.total} claim\u2194source pair(s) (highest-trust sources first) \u2014 ${b.total - b.capped} pair(s) are left unverified and \`check --require-verify\` will fail on them. Re-run with \`${raise(b.total)}\` to verify them all.`;
+}
+var UNCAPPED = Number.POSITIVE_INFINITY;
 function claimStrings(text) {
   const out = [];
   for (const u of unitsOfFile(text)) {
@@ -17560,10 +17565,11 @@ function buildWorklist(dir, opts = {}) {
     };
   };
   const worklist = { run: dir, pairs: shaped.map(emit) };
-  return { worklist, total: pairs.length, kept: shaped.length };
+  return { worklist, total: pairs.length, kept: shaped.length, capped: kept.length };
 }
-function runVerify(dir, opts = {}) {
-  const { worklist, total, kept } = buildWorklist(dir, opts);
+function runVerifyCounted(dir, opts = {}) {
+  const built = buildWorklist(dir, opts);
+  const { worklist } = built;
   const shards = opts.shards !== void 0 ? Math.max(1, Math.floor(opts.shards)) : void 0;
   const shard = shards !== void 0 ? Math.min(Math.max(0, Math.floor(opts.shard ?? 0)), shards - 1) : 0;
   const todo = {
@@ -17573,18 +17579,19 @@ function runVerify(dir, opts = {}) {
   const todoName = shards !== void 0 ? `VERIFY.todo.${shard}.json` : "VERIFY.todo.json";
   const mdName = shards !== void 0 ? `VERIFY.${shard}.md` : "VERIFY.md";
   writeArtifact(join20(dir, todoName), JSON.stringify(todo, null, 2));
-  writeArtifact(join20(dir, mdName), renderWorklistMd(worklist, total, kept));
-  return worklist;
+  writeArtifact(join20(dir, mdName), renderWorklistMd(worklist, built));
+  return built;
 }
-function renderWorklistMd(wl, total, kept) {
+function renderWorklistMd(wl, counts) {
   const out = [];
   out.push(`# Verification worklist`);
   out.push("");
   out.push(
     `For each pair below, open the cited extract and judge whether it **supports** the claim. In \`VERIFY.todo.json\`, set each \`verdict\` to one of supported \xB7 partial \xB7 refuted \xB7 unsupported, add a short \`note\`, save it (e.g. as \`verdicts.json\`), then run \`ultrasearch verify --apply verdicts.json --run <dir>\`. A specific numeral/date/quantity asserted by the claim but absent from the cited extract caps the verdict at **partial** \u2014 never \`supported\` (flagged pairs carry a precomputed warning).`
   );
-  if (kept < total) out.push(`
-_Showing ${kept} of ${total} pair(s) \u2014 capped at the highest-trust sources._`);
+  const cut = capNotice(counts);
+  if (cut) out.push(`
+_Showing ${counts.kept} pair(s): ${cut}_`);
   out.push("");
   for (const p of wl.pairs) {
     out.push(`## ${p.claimId} \xB7 ${p.sourceId}`);
@@ -17630,7 +17637,7 @@ var pairKey = (p) => `${p.claimId}/${p.sourceId}`;
 function bindToWorklist(dir, verdicts, opts = {}) {
   let expected;
   try {
-    expected = buildWorklist(dir).worklist.pairs;
+    expected = buildWorklist(dir, { maxVerify: UNCAPPED }).worklist.pairs;
   } catch {
     return { derivable: false, stale: [], unbound: [], bound: verdicts, expected: [] };
   }
@@ -17893,7 +17900,8 @@ function applySemantic(dir, result, requireVerify) {
       result.ok = false;
       const claims = [...new Set(uncovered.map((p2) => p2.claimId))];
       result.errors.push(
-        `${flag}: ${uncovered.length} claim\u2194source pair(s) in REPORT have no verdict in VERIFY.json (${claims.slice(0, 6).join(", ")}${claims.length > 6 ? ", \u2026" : ""}) \u2014 re-run \`verify\` + \`verify --apply\` so every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).`
+        `${flag}: ${uncovered.length} claim\u2194source pair(s) in REPORT have no verdict in VERIFY.json (${claims.slice(0, 6).join(", ")}${claims.length > 6 ? ", \u2026" : ""}) \u2014 re-run \`verify\` + \`verify --apply\` so every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).` + // The likeliest cause on a long report: `verify` stopped at its cap.
+        (expected.length > DEEP_CAPS.maxVerify ? ` REPORT has ${expected.length} pair(s) and \`verify\` emits ${DEEP_CAPS.maxVerify} by default \u2014 re-run it with \`--max-verify ${expected.length}\`.` : "")
       );
     }
   }
@@ -20631,10 +20639,12 @@ function handleVerify(args, run) {
   if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
     throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
   }
-  const res = runVerify(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  const built = runVerifyCounted(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  const cut = capNotice(built, (n) => `max_verify: ${n}`);
   return {
-    ...res,
+    ...built.worklist,
     run,
+    ...cut ? { warning: cut } : {},
     next: "For each pair, read the cited source and judge it supported / partial / refuted / unsupported. Rewrite any claim its source does not carry."
   };
 }
@@ -22364,7 +22374,11 @@ ${formatServices(rows)}
       const maxVerify = p.values["max-verify"] ? num4("max-verify", p.values["max-verify"], DEEP_CAPS.maxVerify) : void 0;
       const sh = parseShardArgs(p.values.shards, p.values.shard);
       if (!sh.ok) fail(sh.error);
-      const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
+      const built = runVerifyCounted(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
+      const wl = built.worklist;
+      const cut = capNotice(built);
+      if (cut) process.stderr.write(`ultrasearch: warning: verify ${cut}
+`);
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
         return;

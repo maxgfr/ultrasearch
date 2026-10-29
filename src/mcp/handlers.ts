@@ -34,7 +34,7 @@ import {
   type WebEngine,
   type WebSearchHit,
 } from "../types.js";
-import { runVerify } from "../verify.js";
+import { capNotice, runVerifyCounted } from "../verify.js";
 import { runRefcheck } from "../refcheck/index.js";
 import { setDossierTemplate } from "../templates.js";
 import { withRunLock } from "../run-lock.js";
@@ -566,10 +566,12 @@ function handleVerify(args: Record<string, unknown>, run: string): unknown {
   if (shards !== undefined && shard !== undefined && (shard < 0 || shard >= shards)) {
     throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
   }
-  const res = runVerify(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  const built = runVerifyCounted(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  const cut = capNotice(built, (n) => `max_verify: ${n}`);
   return {
-    ...res,
+    ...built.worklist,
     run,
+    ...(cut ? { warning: cut } : {}),
     next: "For each pair, read the cited source and judge it supported / partial / refuted / unsupported. Rewrite any claim its source does not carry.",
   };
 }

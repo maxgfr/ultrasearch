@@ -117,7 +117,9 @@ the verification worklist.
    figure in the full source, re-cite the page that carries it, or downgrade.
 
    Fill each `verdict` (+ a short `note`) and save as `verdicts.json`. Capped at
-   `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first. To fan the
+   `DEEP_CAPS.maxVerify` (40) pairs, highest-trust sources first; a cut list is
+   announced on stderr with the total, and `check --require-verify` fails on
+   every pair left out — re-run with `--max-verify <total>` to cover them. To fan the
    adjudication out, `verify --shards <N> --shard <i>` writes only shard `i`
    (`VERIFY.todo.<i>.json`) — a disjoint, deterministic slice — one per skeptic
    subagent ("Parallel verification" below).
@@ -247,7 +249,7 @@ enforces versus which **you** have to honour:
 | Cap | Value | Enforced by |
 |---|---|---|
 | `maxSubQuestions` | 6 | **The engine** — `plan` truncates the decomposition (`--max-subquestions` overrides). |
-| `maxVerify` | 40 | **The engine** — `verify` caps the worklist, highest-trust sources first (`--max-verify` overrides). |
+| `maxVerify` | 40 | **The engine** — `verify` caps the worklist, highest-trust sources first, and warns when it cut one (`--max-verify` overrides). `check --require-verify` still counts every pair, so a capped run fails the gate. |
 | `maxRounds` | 3 | **You.** Nothing counts rounds; the loop-until-dry cycle is agent-driven. Stop yourself. |
 | `perSubQuestionSources` | 60 | **Nobody, and it needs nobody** — it equals `DEPTH_CAPS.deep.maxSources`, which a `--depth deep` fan-out gather already resolves to. Passing it as `--max-sources` would be a no-op. |
 

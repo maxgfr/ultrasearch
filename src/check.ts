@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { CheckResult, Manifest, Source, VerifyResult } from "./types.js";
+import { DEEP_CAPS } from "./types.js";
 import {
   maskedFile,
   unitsOfMasked,
@@ -233,7 +234,12 @@ function applySemantic(dir: string, result: CheckResult, requireVerify: boolean)
       result.errors.push(
         `${flag}: ${uncovered.length} claim↔source pair(s) in REPORT have no verdict in VERIFY.json ` +
           `(${claims.slice(0, 6).join(", ")}${claims.length > 6 ? ", …" : ""}) — re-run \`verify\` + \`verify --apply\` so ` +
-          `every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).`,
+          `every cited claim is adjudicated (the exit gate must not pass on dropped verdicts).` +
+          // The likeliest cause on a long report: `verify` stopped at its cap.
+          (expected.length > DEEP_CAPS.maxVerify
+            ? ` REPORT has ${expected.length} pair(s) and \`verify\` emits ${DEEP_CAPS.maxVerify} by default — ` +
+              `re-run it with \`--max-verify ${expected.length}\`.`
+            : ""),
       );
     }
   }

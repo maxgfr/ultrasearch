@@ -34,7 +34,7 @@ import { runPlan } from "./plan.js";
 import { planQueries, formatQueryPlan } from "./queries.js";
 import { runBrainstorm } from "./brainstorm.js";
 import { runMerge } from "./merge.js";
-import { runVerify, applyVerdicts, formatVerifyReport } from "./verify.js";
+import { applyVerdicts, capNotice, formatVerifyReport, runVerifyCounted } from "./verify.js";
 import { PHASES, emitOrchestration, listPhasesFor } from "./orchestrate.js";
 import {
   type CommandArgs,
@@ -1372,7 +1372,12 @@ async function dispatch(p: Parsed): Promise<void> {
       // Optional sharding for parallel skeptics: --shards N --shard I (0-based).
       const sh = parseShardArgs(p.values.shards, p.values.shard);
       if (!sh.ok) fail(sh.error);
-      const wl = runVerify(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
+      const built = runVerifyCounted(rdir, { maxVerify, shards: sh.shards, shard: sh.shard });
+      const wl = built.worklist;
+      // Said even under --json: a cut list read as the whole report is how 82 of
+      // 122 pairs once went unverified behind a passing gate.
+      const cut = capNotice(built);
+      if (cut) process.stderr.write(`ultrasearch: warning: verify ${cut}\n`);
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(wl, null, 2) + "\n");
         return;
