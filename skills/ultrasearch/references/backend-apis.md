@@ -161,6 +161,14 @@ no request.
   only its search snippet and is marked `⚠ snippet only`. When Firecrawl is up,
   the page is **re-extracted through it first** — a browser gets past most walls
   — and only demoted to snippet-only if that also comes back as boilerplate.
+  A challenge template (Anubis's "Making sure you're not a bot!" proof-of-work
+  page) is a wall whatever prose it carries.
+- A read **redirected to an anti-bot challenge** (an abuse-detection apology
+  page, `/verify-human/`, Cloudflare's challenge platform) is asked once more
+  under the other User-Agent; if it still lands there, the source keeps its own
+  URL and its snippet and is flagged a wall — the challenge's address and text
+  are never banked. A redirect that ends on a 404/410 is not followed either:
+  the archive is asked for the address the document had.
 - A **dead link** (404/410/451/403) is retried against the **Wayback Machine**'s
   closest snapshot before it's dropped; the recovered text is used, the original
   URL is kept, and a note records the snapshot (disable with

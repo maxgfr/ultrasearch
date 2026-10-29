@@ -7977,8 +7977,16 @@ var init_forge_host = __esm({
 });
 
 // src/junk.ts
+function challengePage(text) {
+  const t = text.trim();
+  if (!t || t.length >= CHALLENGE_MAX_CHARS) return void 0;
+  const head = t.slice(0, 800);
+  return CHALLENGE_PAGES.find(([re]) => re.test(head))?.[1];
+}
 function looksLikeJunkExtraction(text) {
   const t = text.trim();
+  const challenge = challengePage(t);
+  if (challenge) return challenge;
   if (t.length >= 2e3) return void 0;
   const head = t.slice(0, 800);
   const hits = JUNK_PATTERNS.filter(([re]) => re.test(head));
@@ -7988,7 +7996,7 @@ function looksLikeJunkExtraction(text) {
   const prose = t.split("\n").filter((l) => l.trim().length >= 60 && !JUNK_PATTERNS.some(([re]) => re.test(l))).length;
   return prose < 3 ? strong[1] : void 0;
 }
-var JUNK_PATTERNS;
+var JUNK_PATTERNS, CHALLENGE_PAGES, CHALLENGE_MAX_CHARS;
 var init_junk = __esm({
   "src/junk.ts"() {
     "use strict";
@@ -8000,7 +8008,7 @@ var init_junk = __esm({
       [/\b(please )?enable javascript\b/i, "JavaScript-required shell", "strong"],
       [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell", "strong"],
       [
-        /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
+        /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bmaking sure (you are|you're) not a (ro)?bot\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
         "anti-bot interstitial",
         "strong"
       ],
@@ -8016,6 +8024,14 @@ var init_junk = __esm({
       [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)", "strong"],
       [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)", "strong"]
     ];
+    CHALLENGE_PAGES = [
+      // Anubis (TecharoHQ): its <h1>, and its explanation of itself.
+      [/^\W*(?:#+\s*)?making sure you(?:'|’| a)re not a bot\b/i, "anti-bot proof-of-work challenge"],
+      [/\bset up anubis to protect (?:the|this) server\b|\bprotected by anubis\b/i, "anti-bot proof-of-work challenge"],
+      // Apple's forums interstitial and its kin.
+      [/^\W*(?:#+\s*)?security verification in progress\b|\bplease wait while we verify your browser\b/i, "anti-bot interstitial"]
+    ];
+    CHALLENGE_MAX_CHARS = 4e3;
   }
 });
 
@@ -8056,6 +8072,90 @@ var init_mode = __esm({
     RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
     LOGIN_WALL = /\b(?:sign|log) ?in (?:to (?:continue|read|view|see|access|keep reading)|or (?:sign up|register|create an account))\b|\byou (?:must|need to|have to) (?:be )?(?:signed|logged) ?in\b|\bplease (?:sign|log) ?in\b/i;
     LOGIN_WALL_MAX = 1500;
+  }
+});
+
+// src/walls.ts
+function usefulChars(text) {
+  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
+}
+function proseOutweighsWall(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter(
+    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
+  );
+  if (lines.length < 3) return false;
+  const prose = lines.reduce((n, l) => n + l.length, 0);
+  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
+}
+function wallPattern(text) {
+  const t = text.trim();
+  if (!t) return void 0;
+  const challenge = challengePage(t);
+  if (challenge) return challenge;
+  const junk = looksLikeJunkExtraction(t);
+  const local2 = junk || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
+  const wall = junk ?? local2;
+  return wall && !proseOutweighsWall(t) ? wall : void 0;
+}
+function looksLikeWall(text) {
+  const wall = wallPattern(text);
+  if (wall) return wall;
+  const n = usefulChars(text);
+  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
+}
+function isWordedWall(reason) {
+  return !!reason && !reason.startsWith("near-empty page");
+}
+function challengeUrl(url) {
+  let target;
+  try {
+    const u = new URL(url);
+    target = `${u.pathname}${u.search}`;
+  } catch {
+    return void 0;
+  }
+  return CHALLENGE_URLS.some((re) => re.test(target)) ? "anti-bot challenge page" : void 0;
+}
+var MIN_USEFUL_CHARS, LOCAL_WALLS, WALL_MAX_CHARS, ADDRESSES_READER, ADDRESSES_READER_DE, IMPERATIVE, CHALLENGE_URLS;
+var init_walls = __esm({
+  "src/walls.ts"() {
+    "use strict";
+    init_junk();
+    MIN_USEFUL_CHARS = 300;
+    LOCAL_WALLS = [
+      [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
+      [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
+      [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
+      [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
+      [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
+      [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
+      [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
+      [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
+    ];
+    WALL_MAX_CHARS = 2e3;
+    ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
+    ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
+    IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
+    CHALLENGE_URLS = [
+      /\/apology_objects?\//i,
+      // fda.gov and other Akamai-fronted sites: abuse-detection-apology.html
+      /\/abuse[-_]detection\b/i,
+      /\/verify[-_]human\//i,
+      // developer.apple.com/forums/verify-human/verify.html
+      /\/cdn-cgi\/challenge-platform\//i,
+      // Cloudflare
+      /[?&]__cf_chl_\w*=/i,
+      /\/\.within\.website\/x\/cmd\/anubis\//i,
+      // Anubis
+      /\/\.well-known\/sgcaptcha\b/i,
+      // SiteGround
+      /\/_incapsula_resource\b/i,
+      // Imperva
+      /\/distil_r_(?:captcha|blocked)\b/i,
+      // Distil
+      // A gate at the site's root; anywhere deeper (/wiki/CAPTCHA) it is a topic.
+      /^\/(?:captcha|bot[-_]?check|are[-_]you[-_](?:a[-_])?(?:human|robot))(?:\/|\.html?\b|$|\?)/i
+    ];
   }
 });
 
@@ -8741,8 +8841,22 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
   let res = await httpGet(url, fetchOpts);
   if (opts.signal?.aborted) return cancelled();
   const toldToWait = (res.retryAfterMs ?? 0) > RETRY_AFTER_CAP_MS;
-  if (!res.ok && !toldToWait && brand().defaultUa === "contact" && (res.status === 403 || res.status === 429)) {
+  let asBrowser = brand().defaultUa !== "contact";
+  if (!res.ok && !toldToWait && !asBrowser && (res.status === 403 || res.status === 429)) {
     res = await httpGet(url, { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" });
+    asBrowser = true;
+  }
+  if (!toldToWait && challengeUrl(res.url) && !challengeUrl(url)) {
+    const again = await httpGet(
+      url,
+      asBrowser ? { ...fetchOpts, userAgent: contactUa() } : { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" }
+    );
+    if (opts.signal?.aborted) return cancelled();
+    if (!challengeUrl(again.url)) res = again;
+  }
+  if (challengeUrl(res.url)) {
+    seen.page = true;
+    return { text: "", finalUrl: res.url, status: res.status, note: `Could not read ${url}: it was redirected to an anti-bot challenge (${res.url}).` };
   }
   if (res.status === 304) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
@@ -9017,6 +9131,7 @@ var init_fetch = __esm({
     init_video();
     init_mode();
     init_junk();
+    init_walls();
     DEFAULT_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
     RETRY_STATUS = /* @__PURE__ */ new Set([429, 503, 502, 504]);
     defaultTimeoutMs2 = () => envInt("TIMEOUT_MS", 2e4, 1e3, 3e5);
@@ -10074,7 +10189,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.36.0";
+var ENGINE_VERSION = "1.36.1";
 
 // src/index.ts
 init_brand();
@@ -10380,52 +10495,7 @@ init_firecrawl();
 init_text();
 init_url();
 init_rank();
-
-// src/walls.ts
-init_junk();
-var MIN_USEFUL_CHARS = 300;
-var LOCAL_WALLS = [
-  [/\bcookies? (must|need to|have to|should) be (enabled|turned on|allowed)\b/i, "cookie wall"],
-  [/\benable cookies (for|on|in)\b[\s\S]{0,160}?\b(reload|refresh|continue)\b/i, "cookie wall"],
-  [/\b(your browser|this browser) (does not|doesn't) (accept|support) cookies\b/i, "cookie wall"],
-  [/\bwe value your privacy\b[\s\S]{0,600}?\b(accept|agree|consent)\b/i, "cookie/consent wall"],
-  [/\b(accept|allow) all cookies\b[\s\S]{0,400}?\b(reject|decline|manage|settings|preferences)\b/i, "cookie/consent wall"],
-  [/\b(please )?(enable|turn on) javascript\b[\s\S]{0,120}?\b(to continue|to proceed|and reload|and refresh|to view|to use)\b/i, "JavaScript-required shell"],
-  [/\byou need to enable javascript to run this app\b/i, "JavaScript-required shell"],
-  [/\bpour continuer,? (veuillez )?activer (les cookies|javascript)\b|\bles cookies doivent être activés\b/i, "cookie wall (fr)"]
-];
-var WALL_MAX_CHARS = 2e3;
-function usefulChars(text) {
-  return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
-}
-var ADDRESSES_READER = /\b(you|your|yours|vous|votre|vos)\b/i;
-var ADDRESSES_READER_DE = /\b(Sie|Ihr|Ihre|Ihnen)\b/;
-var IMPERATIVE = /^\W*(please\s+)?(accept|allow|agree|enable|turn on|reload|refresh|click|tap|continue|manage|reject|decline|sign in|log in|subscribe|veuillez|acceptez|activez|cliquez|continuer)\b/i;
-function proseOutweighsWall(text) {
-  const lines = text.split("\n").map((l) => l.trim()).filter(
-    (l) => l.length >= 60 && !ADDRESSES_READER.test(l) && !ADDRESSES_READER_DE.test(l) && !IMPERATIVE.test(l) && !LOCAL_WALLS.some(([re]) => re.test(l))
-  );
-  if (lines.length < 3) return false;
-  const prose = lines.reduce((n, l) => n + l.length, 0);
-  return prose >= 0.6 * text.replace(/\s+/g, " ").trim().length;
-}
-function wallPattern(text) {
-  const t = text.trim();
-  if (!t) return void 0;
-  const junk = looksLikeJunkExtraction(t);
-  const local2 = junk || t.length >= WALL_MAX_CHARS ? void 0 : LOCAL_WALLS.find(([re]) => re.test(t.slice(0, 800)))?.[1];
-  const wall = junk ?? local2;
-  return wall && !proseOutweighsWall(t) ? wall : void 0;
-}
-function looksLikeWall(text) {
-  const wall = wallPattern(text);
-  if (wall) return wall;
-  const n = usefulChars(text);
-  return n < MIN_USEFUL_CHARS ? `near-empty page (${n} useful characters)` : void 0;
-}
-function isWordedWall(reason) {
-  return !!reason && !reason.startsWith("near-empty page");
-}
+init_walls();
 
 // src/citable.ts
 var API_HOSTS = /* @__PURE__ */ new Set([
@@ -15791,6 +15861,8 @@ export {
   canonicalizeUrl,
   capExtract,
   capResponse,
+  challengePage,
+  challengeUrl,
   charsetFromContentType,
   charsetFromHtml,
   citationTokensIn,

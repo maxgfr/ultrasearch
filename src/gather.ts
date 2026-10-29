@@ -20,7 +20,7 @@ import { scrapeViaFirecrawl } from "./backends/firecrawl.js";
 import { templateFor } from "./templates.js";
 import { docFormatForUrl } from "./backends/doc.js";
 import { cachedFetchAndExtract } from "./cache.js";
-import { fuse, termCoverage, UNDER_COVERED_MIN, underCovered } from "./engine.js";
+import { challengeUrl, fuse, termCoverage, UNDER_COVERED_MIN, underCovered } from "./engine.js";
 import { isWordedWall, looksLikeWall, MIN_USEFUL_CHARS, readPastCachedWall, usefulChars } from "./walls.js";
 import { redirectedHome, searchPageOf } from "./listing.js";
 import { identityKeys, readFromEutils } from "./identity.js";
@@ -702,15 +702,26 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // A deep link answered by the site's home page is a dead link that
       // returned 200: the home page is not the document, and is never cited.
       const home = redirectedHome(it.url, res.finalUrl) ? res.finalUrl : undefined;
+      // A read the host parked on an anti-bot challenge (fda.gov's abuse-detection
+      // apology, Apple's /verify-human/) never reached the page: the address is
+      // the challenge's, and so is any text that came with it — whatever the
+      // status, since Apple's is a 200. The engine has already asked again under
+      // the other User-Agent; a read that still lands there is a wall.
+      const challenge = res.finalUrl && res.finalUrl !== it.url && challengeUrl(res.finalUrl) ? res.finalUrl : undefined;
       if (home)
         hydrateNotes.push(
           `${it.url} redirected to the site's home page (${home}) — the document is gone; its search snippet stands in for it unless the archive has a copy.`,
         );
-      else if (res.finalUrl && res.finalUrl !== it.url) it.url = res.finalUrl; // follow redirects (provenance + exclude re-check)
+      // Follow redirects (provenance + exclude re-check) — but never onto a
+      // challenge, nor onto a 404/410: that last hop is an error page, and the
+      // archive is asked for the address the document had. A 401/403 is still
+      // followed: a record behind a sign-in wall is still that record.
+      else if (res.finalUrl && res.finalUrl !== it.url && !challenge && res.status !== 404 && res.status !== 410) it.url = res.finalUrl;
       if (res.note) hydrateNotes.push(res.note);
+      else if (challenge) hydrateNotes.push(`Could not read ${it.url}: it was redirected to an anti-bot challenge (${challenge}).`);
 
-      let text = res.text?.trim() && !home ? res.text : "";
-      let junk = text ? looksLikeWall(text) : undefined;
+      let text = res.text?.trim() && !home && !challenge ? res.text : "";
+      let junk = text ? looksLikeWall(text) : challenge ? "anti-bot challenge page" : undefined;
       // A wall's <title> is boilerplate too ("Checking your browser - reCAPTCHA")
       // — drop it with the body so a rescued page isn't labelled by the wall.
       let title = junk ? undefined : res.title;
@@ -780,10 +791,12 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       // Dead-link rescue: the origin is gone/blocked (404/410/451/403) and we
       // got nothing — try the Wayback Machine's closest snapshot before dropping
       // to the snippet. Capped per run; the ORIGINAL url stays the source url.
-      if (!text && (DEAD_LINK_STATUS.has(res.status) || home) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
+      if (!text && (DEAD_LINK_STATUS.has(res.status) || home || challenge) && waybackUsed < WAYBACK_CAP && !process.env.ULTRASEARCH_NO_WAYBACK) {
         waybackUsed++; // reserve the slot synchronously (before any await) so the cap holds under concurrency
         const wb = await rescueViaWayback(it.url, extractOpts);
-        if (wb) {
+        // An archived wall is still a wall: the archive keeps whatever the
+        // crawler was served, challenge and apology pages included.
+        if (wb && !looksLikeWall(wb.text)) {
           text = wb.text;
           junk = undefined;
           title = title || wb.title;
@@ -870,7 +883,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
         // is only snippet-only: it may be a real (short) document. Nor is an
         // item whose backend already gave its abstract: the wall was the page,
         // and the snippet it falls back to is that abstract, not the wall.
-        if (text && isWordedWall(junk) && !thinBackend) it.wall = true;
+        if ((text || challenge) && isWordedWall(junk) && !thinBackend) it.wall = true;
       }
     });
 

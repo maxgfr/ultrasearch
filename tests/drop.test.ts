@@ -126,6 +126,22 @@ describe("dropSources", () => {
     ]);
   });
 
+  // wiki.openfoodfacts.org's Anubis page, as a research run banked it: `drop
+  // --where wall --dry-run` said "nothing matched" and `check` passed a report
+  // citing it, because its template's prose outvoted its one strong phrase.
+  it("finds an Anubis proof-of-work page by its wording, and check refuses a claim on it", () => {
+    const dir = dossier();
+    writeFileSync(join(dir, "sources/S1.md"), `# S1\n${readFileSync(join(import.meta.dirname, "fixtures/anubis-challenge.txt"), "utf8")}`);
+    expect(dropSources(dir, { where: "wall", dryRun: true }).dropped).toContainEqual(
+      expect.objectContaining({ id: "S1", reason: "a anti-bot proof-of-work challenge" }),
+    );
+    writeFileSync(join(dir, "REPORT.md"), "# R\nRate limiting caps how many requests a client may make in a window [S1].\n");
+    const res = runCheck(dir);
+    expect(res.ok).toBe(false);
+    expect(res.errors.join("\n")).toMatch(/S1 \(anti-bot proof-of-work challenge\)/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("changes nothing on a dry run, or when nothing matches", () => {
     const dir = dossier();
     const before = readFileSync(join(dir, "sources.json"), "utf8");
