@@ -18660,6 +18660,7 @@ function runPlan(question, mode2, override, cap = DEEP_CAPS.maxSubQuestions, run
   const result = { question: q, mode: mode2, ...depth ? { depth } : {}, subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
+    for (const s of uniq) if (s.out) ensureDir(s.out);
     writeArtifact(join23(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;

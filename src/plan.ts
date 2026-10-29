@@ -340,7 +340,7 @@ function templateFacets(question: string, template: string): SubQuestion[] {
 // capped (DEEP_CAPS.maxSubQuestions, overridable). The agent can bypass the whole
 // generator with its own `override` list (the CLI's --subquestions). When
 // `runRoot` is given, each sub-question also carries a deterministic `out` dir
-// (<runRoot>/q1…/qN) AND the plan is written to <runRoot>/PLAN.json so the
+// (<runRoot>/q1…/qN, created on disk) AND the plan is written to <runRoot>/PLAN.json so the
 // orchestrator can dispatch one fan-out gather per sub-question without parsing
 // stdout. `depth` (when given) is persisted with the plan, so an orchestrated
 // fan-out gathers at the depth the run was planned at (standard runs stay
@@ -397,6 +397,10 @@ export function runPlan(
   const result: PlanResult = { question: q, mode, ...(depth ? { depth } : {}), subQuestions: uniq };
   if (runRoot) {
     ensureDir(runRoot);
+    // The q# dirs exist as soon as the plan does, so a caller can drop a
+    // sub-question's inputs (e.g. `--web-results <RUN>/q1/websearch.json`) in
+    // before its gather runs. ensureDir is a no-op under --stdout.
+    for (const s of uniq) if (s.out) ensureDir(s.out);
     writeArtifact(join(runRoot, "PLAN.json"), JSON.stringify(result, null, 2));
   }
   return result;

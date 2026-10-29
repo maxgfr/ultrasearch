@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runPlan, subjectOf, facetQuestion } from "../src/plan.js";
@@ -135,6 +135,21 @@ describe("runPlan", () => {
     // stable across runs
     const again = runPlan("rate limiting", "topic", undefined, undefined, root);
     expect(again.subQuestions.map((s) => s.out)).toEqual(r.subQuestions.map((s) => s.out));
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // A research run wrote <RUN>/q1/websearch.json before `gather` and failed:
+  // SKILL.md promised the q# dirs, but only PLAN.json was written.
+  it("creates each sub-question's out dir under --run-root, so files can be dropped in before gather", () => {
+    const root = mkdtempSync(join(tmpdir(), "us-plan-"));
+    const r = runPlan("rate limiting", "topic", undefined, undefined, root);
+    for (const s of r.subQuestions) {
+      expect(existsSync(s.out!)).toBe(true);
+      writeFileSync(join(s.out!, "websearch.json"), "[]");
+    }
+    // a second plan over the same root keeps what was dropped in
+    runPlan("rate limiting", "topic", undefined, undefined, root);
+    expect(existsSync(join(r.subQuestions[0]!.out!, "websearch.json"))).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
 
