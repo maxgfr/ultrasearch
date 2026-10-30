@@ -23,7 +23,7 @@ import { parseWebResults } from "./backends/websearch.js";
 import { runGather, ignoredByExplicitBackends, type GatherResult } from "./gather.js";
 import { runBackends } from "./backends/registry.js";
 import { getMode, listModes } from "./modes/registry.js";
-import { buildSource, upgradeLegacyManifest } from "./dossier.js";
+import { buildSource, readDossier, upgradeLegacyManifest } from "./dossier.js";
 import { extraFiles, extraSummaries } from "./extras.js";
 import { addSource, addSources, addFiles, type IngestResult } from "./enrich.js";
 import { loadRenderContext, writeHtml, writeReportMarkdown } from "./render.js";
@@ -48,7 +48,17 @@ import {
   UsageError,
 } from "./engine.js";
 import { closeBrowserOnSignal, resolveBrowserRung, withBrowserClosed } from "./browser.js";
-import { humanCandidates, humanHint, runHuman, selectForHuman, type HumanResult } from "./human.js";
+import {
+  HUMAN_TIMEOUT_DEFAULT_MS,
+  handOffDuringRun,
+  humanCandidates,
+  humanHint,
+  humanTimeoutMs,
+  refusedForChallenge,
+  runHuman,
+  selectForHuman,
+  type HumanResult,
+} from "./human.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
 import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
@@ -847,6 +857,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 }
 
+/** One line for the person at the terminal. */
+const say = (line: string): void => void process.stderr.write(`${line}\n`);
+
 async function dispatch(p: Parsed): Promise<void> {
   switch (p.command) {
     case "gather": {
@@ -867,7 +880,13 @@ async function dispatch(p: Parsed): Promise<void> {
           );
         }
       }
-      const r = await runGather(options);
+      let r = await runGather(options);
+      // A page a challenge stopped is handed to the person now, while they are
+      // here, instead of in a window that closed seconds after it came up.
+      if (!options.stdout) {
+        const handed = await handOffDuringRun(r.dir, { browser: options.browser ?? "off", firecrawl: options.firecrawl, tell: say });
+        if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
+      }
       const report = gatherReport(r, options);
       const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
@@ -1045,7 +1064,8 @@ async function dispatch(p: Parsed): Promise<void> {
       const line = (r: HumanResult) => `${r.id}\t${r.url}\t${r.outcome}${r.note ? `\t${r.note}` : ""}`;
       if (!json) for (const r of skipped) process.stdout.write(line(r) + "\n");
       const results = await runHuman(rdir, chosen, {
-        ...(secs !== undefined ? { timeoutMs: secs * 1000 } : {}),
+        // --timeout, else ULTRASEARCH_HUMAN_TIMEOUT_MS; asked for by name, `human` waits even when that is 0.
+        timeoutMs: secs !== undefined ? secs * 1000 : (humanTimeoutMs() ?? HUMAN_TIMEOUT_DEFAULT_MS),
         ...(p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {}),
         ...(noWindow ? { noWindow } : {}),
         onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) — handing ${c.url} to you in the browser window\n`),
@@ -1183,14 +1203,26 @@ async function dispatch(p: Parsed): Promise<void> {
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve(dir), url, {
+      const browser = browserMode(p);
+      let r = await addSource(resolve(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"), // same default-on policy as gather
-        browser: browserMode(p),
+        browser,
       });
+      // A page a challenge stopped goes to the person now (see src/human.ts).
+      const refused = r.added ? undefined : refusedForChallenge(url, r.note);
+      const handed = await handOffDuringRun(resolve(dir), {
+        browser,
+        firecrawl: p.values.firecrawl,
+        tell: say,
+        ...(refused ? { refused: [refused] } : {}),
+      });
+      const mine = handed.find((h) => h.url === url && (h.outcome === "added" || h.outcome === "repaired"));
+      if (mine)
+        r = { id: mine.id, added: true, ...(mine.outcome === "repaired" ? { repaired: true as const } : {}), ...(mine.note ? { note: mine.note } : {}) };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else if (r.added) {
@@ -1245,11 +1277,27 @@ async function dispatch(p: Parsed): Promise<void> {
       // both allocate [S#] ids by read-then-write.
       const web = hits.length ? await addSources(resolve(dir), hits, enrichOpts) : undefined;
       const local = files.length ? await addFiles(resolve(dir), files, enrichOpts) : undefined;
-      const repaired = web?.repaired ?? 0;
+      // The pages a challenge stopped go to the person now (see src/human.ts);
+      // what they get past counts as this ingest's own.
+      const refused = (web?.results ?? []).flatMap((o) => (o.added || o.repaired ? [] : (refusedForChallenge(o.url, o.note) ?? [])));
+      const handed = await handOffDuringRun(resolve(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const results = [...(web?.results ?? []), ...(local?.results ?? [])].map((o) => {
+        const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
+        if (!h || o.added || o.repaired) return o;
+        return {
+          url: o.url,
+          id: h.id,
+          added: h.outcome === "added",
+          ...(h.outcome === "repaired" ? { repaired: true as const } : {}),
+          ...(h.note ? { note: h.note } : {}),
+        };
+      });
+      const repaired = results.filter((o) => o.repaired).length;
+      const added = results.filter((o) => o.added).length;
       const r: IngestResult = {
-        results: [...(web?.results ?? []), ...(local?.results ?? [])],
-        added: (web?.added ?? 0) + (local?.added ?? 0),
-        skipped: (web?.skipped ?? 0) + (local?.skipped ?? 0),
+        results,
+        added,
+        skipped: results.length - added - repaired,
         ...(repaired ? { repaired } : {}),
       };
       if (p.bools.has("json")) {

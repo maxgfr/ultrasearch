@@ -19078,12 +19078,13 @@ Worklist: \`${join25(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has
 
 For EACH of your sub-questions:
 
-1. **Sweep with your OWN web search first \u2014 this is the primary engine, not an extra.**
+1. **Sweep with your OWN web search first \u2014 this is the primary engine, not an extra.** Use your host's web search tool: \`WebSearch\` in Claude Code, the built-in web search (\`web_search\`) in Codex. Never search through the engine, a browser or a fetched search results page: with \`--web-results\` the gather below searches nothing itself.
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
    names how many DISTINCT queries to run and which angles to cover. Run your web search once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your web search queries into that language when the run targets a non-English audience):
    \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
+   If a page stops at a CAPTCHA or an anti-bot check, the command hands it to the user before it ends and waits for them (up to \`ULTRASEARCH_HUMAN_TIMEOUT_MS\`, 5 minutes): let it wait, never try to get past the check yourself.
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND web search round at that gap and fold the whole round in with ONE call:
    \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
@@ -19271,9 +19272,14 @@ async function runHuman(dir, chosen, opts = {}) {
   };
   if (!chosen.length) return results;
   const { manifest } = readDossier(dir);
+  let unanswered;
   for (const c of chosen) {
     if (opts.noWindow) {
       done({ ...c, outcome: "skipped", note: opts.noWindow });
+      continue;
+    }
+    if (unanswered) {
+      done({ ...c, outcome: "skipped", note: `nobody got past ${unanswered} in time \u2014 left for \`ultrasearch human --run ${dir}\`` });
       continue;
     }
     opts.onStart?.(c);
@@ -19285,10 +19291,68 @@ async function runHuman(dir, chosen, opts = {}) {
       ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {}
     });
     const r = got.results[0];
-    const outcome2 = r?.repaired ? "repaired" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
-    done({ ...c, outcome: outcome2, ...r?.note ? { note: r.note } : {} });
+    const outcome2 = r?.repaired ? "repaired" : r?.added ? "added" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
+    done({ ...c, ...r?.added && r.id ? { id: r.id } : {}, outcome: outcome2, ...r?.note ? { note: r.note } : {} });
+    if (outcome2 === "timed out" && opts.stopAfterTimeout) unanswered = c.url;
   }
   return results;
+}
+var HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
+var HUMAN_TIMEOUT_DEFAULT_MS = 3e5;
+function humanTimeoutMs(env2 = process.env) {
+  const raw = env2[HUMAN_TIMEOUT_ENV]?.trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return HUMAN_TIMEOUT_DEFAULT_MS;
+  if (n <= 0) return void 0;
+  return Math.min(36e5, Math.max(1e4, Math.trunc(n)));
+}
+var CHALLENGE = /\bchallenge\b|\b(?:re|h)?captcha\b|\banti-bot\b|\bbot check\b|\bverify(?:ing)? (?:that )?you(?:'re| are) (?:a )?human\b/i;
+function challengeIn(text) {
+  return text ? CHALLENGE.exec(text)?.[0] : void 0;
+}
+function challengeCandidates(dir, sources, manifest) {
+  return humanCandidates(sources, manifest).filter((c) => {
+    if (challengeIn(c.why)) return true;
+    if ((manifest.notes ?? []).some((n) => mentions(n, c.url) && challengeIn(n))) return true;
+    const s = sources.find((x) => x.id === c.id);
+    try {
+      return !!s && !!challengeIn(wallPattern(readSourceText(dir, s)));
+    } catch {
+      return false;
+    }
+  });
+}
+async function handOffDuringRun(dir, opts) {
+  if (opts.browser === "off") return [];
+  const timeoutMs = humanTimeoutMs(opts.env);
+  if (timeoutMs === void 0 || !(opts.canShow ?? (() => canShowWindow()))()) return [];
+  let candidates2;
+  try {
+    const { sources, manifest } = readDossier(dir);
+    candidates2 = challengeCandidates(dir, sources, manifest);
+  } catch {
+    return [];
+  }
+  const seen = new Set(candidates2.map((c) => c.url));
+  for (const c of opts.refused ?? []) {
+    if (seen.has(c.url)) continue;
+    seen.add(c.url);
+    candidates2.push(c);
+  }
+  if (!candidates2.length) return [];
+  opts.tell(
+    `ultrasearch: ${candidates2.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). The browser comes forward on each in turn: get past it there and the read goes on by itself \u2014 up to ${Math.round(timeoutMs / 1e3)} s each (${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`
+  );
+  return runHuman(dir, candidates2, {
+    timeoutMs,
+    stopAfterTimeout: true,
+    ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {},
+    onResult: (r) => opts.tell(`ultrasearch: human: ${r.id}	${r.url}	${r.outcome}${r.outcome === "skipped" && r.note ? ` \u2014 ${r.note}` : ""}`)
+  });
+}
+function refusedForChallenge(url, note) {
+  const found = challengeIn(note);
+  return found ? { id: "-", url, why: `refused \u2014 ${found}` } : void 0;
 }
 
 // src/mcp/handlers.ts
@@ -21986,6 +22050,8 @@ async function main(argv = process.argv.slice(2)) {
     uninstall();
   }
 }
+var say = (line) => void process.stderr.write(`${line}
+`);
 async function dispatch2(p) {
   switch (p.command) {
     case "gather": {
@@ -22001,7 +22067,11 @@ async function dispatch2(p) {
           );
         }
       }
-      const r = await runGather(options);
+      let r = await runGather(options);
+      if (!options.stdout) {
+        const handed = await handOffDuringRun(r.dir, { browser: options.browser ?? "off", firecrawl: options.firecrawl, tell: say });
+        if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
+      }
       const report = gatherReport(r, options);
       const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
@@ -22166,7 +22236,8 @@ ${formatServices(rows)}
       const line = (r) => `${r.id}	${r.url}	${r.outcome}${r.note ? `	${r.note}` : ""}`;
       if (!json2) for (const r of skipped) process.stdout.write(line(r) + "\n");
       const results = await runHuman(rdir, chosen, {
-        ...secs !== void 0 ? { timeoutMs: secs * 1e3 } : {},
+        // --timeout, else ULTRASEARCH_HUMAN_TIMEOUT_MS; asked for by name, `human` waits even when that is 0.
+        timeoutMs: secs !== void 0 ? secs * 1e3 : humanTimeoutMs() ?? HUMAN_TIMEOUT_DEFAULT_MS,
         ...p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {},
         ...noWindow ? { noWindow } : {},
         onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) \u2014 handing ${c.url} to you in the browser window
@@ -22283,15 +22354,26 @@ ${formatServices(rows)}
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve5(dir), url, {
+      const browser = browserMode(p);
+      let r = await addSource(resolve5(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"),
         // same default-on policy as gather
-        browser: browserMode(p)
+        browser
       });
+      const refused = r.added ? void 0 : refusedForChallenge(url, r.note);
+      const handed = await handOffDuringRun(resolve5(dir), {
+        browser,
+        firecrawl: p.values.firecrawl,
+        tell: say,
+        ...refused ? { refused: [refused] } : {}
+      });
+      const mine = handed.find((h) => h.url === url && (h.outcome === "added" || h.outcome === "repaired"));
+      if (mine)
+        r = { id: mine.id, added: true, ...mine.outcome === "repaired" ? { repaired: true } : {}, ...mine.note ? { note: mine.note } : {} };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else if (r.added) {
@@ -22346,11 +22428,25 @@ ${formatServices(rows)}
       };
       const web = hits.length ? await addSources(resolve5(dir), hits, enrichOpts) : void 0;
       const local2 = files.length ? await addFiles(resolve5(dir), files, enrichOpts) : void 0;
-      const repaired = web?.repaired ?? 0;
+      const refused = (web?.results ?? []).flatMap((o) => o.added || o.repaired ? [] : refusedForChallenge(o.url, o.note) ?? []);
+      const handed = await handOffDuringRun(resolve5(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const results = [...web?.results ?? [], ...local2?.results ?? []].map((o) => {
+        const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
+        if (!h || o.added || o.repaired) return o;
+        return {
+          url: o.url,
+          id: h.id,
+          added: h.outcome === "added",
+          ...h.outcome === "repaired" ? { repaired: true } : {},
+          ...h.note ? { note: h.note } : {}
+        };
+      });
+      const repaired = results.filter((o) => o.repaired).length;
+      const added = results.filter((o) => o.added).length;
       const r = {
-        results: [...web?.results ?? [], ...local2?.results ?? []],
-        added: (web?.added ?? 0) + (local2?.added ?? 0),
-        skipped: (web?.skipped ?? 0) + (local2?.skipped ?? 0),
+        results,
+        added,
+        skipped: results.length - added - repaired,
         ...repaired ? { repaired } : {}
       };
       if (p.bools.has("json")) {

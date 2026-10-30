@@ -98,12 +98,13 @@ Worklist: \`${join(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has \
 
 For EACH of your sub-questions:
 
-1. **Sweep with your OWN web search first — this is the primary engine, not an extra.**
+1. **Sweep with your OWN web search first — this is the primary engine, not an extra.** Use your host's web search tool: \`WebSearch\` in Claude Code, the built-in web search (\`web_search\`) in Codex. Never search through the engine, a browser or a fetched search results page: with \`--web-results\` the gather below searches nothing itself.
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
    names how many DISTINCT queries to run and which angles to cover. Run your web search once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":…,"title":…,"snippet":…}, …]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your web search queries into that language when the run targets a non-English audience):
    \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
+   If a page stops at a CAPTCHA or an anti-bot check, the command hands it to the user before it ends and waits for them (up to \`ULTRASEARCH_HUMAN_TIMEOUT_MS\`, 5 minutes): let it wait, never try to get past the check yourself.
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND web search round at that gap and fold the whole round in with ONE call:
    \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN — landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a … wall", the host is throttling you: that is a refusal, not a setback to work around — take another source, or pass the provider's text endpoint and let the engine record the page.

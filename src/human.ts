@@ -8,10 +8,22 @@
 // window, the human gets past the wall, and the text that comes back repairs the
 // source in place — through addSources, the very path `fetch --url` takes on a ⛔
 // source — so every [S#] a report cites keeps pointing at the same document.
+//
+// gather, ingest and fetch do the same for the pages a CHALLENGE stopped (a
+// CAPTCHA, an anti-bot check) before they end: the read that met one is over in
+// seconds, so a person who saw it come up had no time to solve it. Those pages
+// are handed over at the end of the run instead, one at a time, the browser
+// coming forward only then, each waiting ULTRASEARCH_HUMAN_TIMEOUT_MS (5 minutes
+// by default; 0 never waits during a run). The first page nobody gets past ends
+// it: nobody is at the window, and the rest are left for `ultrasearch human`. A
+// sign-in or consent wall is never handed over this way: whether to sign in is
+// the person's call, made with `ultrasearch human`.
 
-import { readDossier } from "./dossier.js";
+import { readDossier, readSourceText } from "./dossier.js";
 import { addSources } from "./enrich.js";
-import type { Manifest, Source } from "./types.js";
+import { canShowBrowserWindow } from "./engine.js";
+import type { BrowserMode, Manifest, Source } from "./types.js";
+import { wallPattern } from "./walls.js";
 
 export interface HumanCandidate {
   id: string;
@@ -20,7 +32,7 @@ export interface HumanCandidate {
   why: string;
 }
 
-export type HumanVerdict = "repaired" | "still walled" | "timed out" | "skipped";
+export type HumanVerdict = "repaired" | "added" | "still walled" | "timed out" | "skipped";
 
 export interface HumanResult extends HumanCandidate {
   outcome: HumanVerdict;
@@ -110,6 +122,8 @@ export function selectForHuman(dir: string, ids?: string[]): HumanSelection {
 export interface RunHumanOptions {
   /** How long the human has for each page, in ms (the engine's 5 minutes by default). */
   timeoutMs?: number;
+  /** Stop at the first page nobody got past in time: nobody is at the window, and the rest are skipped. */
+  stopAfterTimeout?: boolean;
   firecrawl?: string;
   /** Why nobody can be shown a window here; every page is then skipped, and nobody is waited for. */
   noWindow?: string;
@@ -132,9 +146,14 @@ export async function runHuman(dir: string, chosen: HumanCandidate[], opts: RunH
   };
   if (!chosen.length) return results;
   const { manifest } = readDossier(dir);
+  let unanswered: string | undefined;
   for (const c of chosen) {
     if (opts.noWindow) {
       done({ ...c, outcome: "skipped", note: opts.noWindow });
+      continue;
+    }
+    if (unanswered) {
+      done({ ...c, outcome: "skipped", note: `nobody got past ${unanswered} in time — left for \`ultrasearch human --run ${dir}\`` });
       continue;
     }
     opts.onStart?.(c);
@@ -148,8 +167,119 @@ export async function runHuman(dir: string, chosen: HumanCandidate[], opts: RunH
       ...(opts.firecrawl ? { firecrawl: opts.firecrawl } : {}),
     });
     const r = got.results[0];
-    const outcome: HumanVerdict = r?.repaired ? "repaired" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
-    done({ ...c, outcome, ...(r?.note ? { note: r.note } : {}) });
+    const outcome: HumanVerdict = r?.repaired
+      ? "repaired"
+      : r?.added
+        ? "added"
+        : r?.handoff === "timeout"
+          ? "timed out"
+          : r?.handoff === "no-window"
+            ? "skipped"
+            : "still walled";
+    done({ ...c, ...(r?.added && r.id ? { id: r.id } : {}), outcome, ...(r?.note ? { note: r.note } : {}) });
+    if (outcome === "timed out" && opts.stopAfterTimeout) unanswered = c.url;
   }
   return results;
+}
+
+// --- the handoff at the end of gather, ingest and fetch ------------------------
+
+/** The env var that bounds every wait for a person, in ms. */
+export const HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
+/** How long a person has per page when nothing says otherwise: as long as `human` gives them. */
+export const HUMAN_TIMEOUT_DEFAULT_MS = 300_000;
+
+/**
+ * How long a run waits for a person per page, in ms: ULTRASEARCH_HUMAN_TIMEOUT_MS
+ * (10 s to an hour), 5 minutes when unset or unreadable — or undefined when it
+ * is 0 (or less): a run then never waits, and the pages are left for `human`.
+ */
+export function humanTimeoutMs(env: Record<string, string | undefined> = process.env): number | undefined {
+  const raw = env[HUMAN_TIMEOUT_ENV]?.trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return HUMAN_TIMEOUT_DEFAULT_MS;
+  if (n <= 0) return undefined;
+  return Math.min(3_600_000, Math.max(10_000, Math.trunc(n)));
+}
+
+// What a person at the window can get past right now: a CAPTCHA, an anti-bot
+// check. Not a sign-in wall, nor a consent wall.
+const CHALLENGE = /\bchallenge\b|\b(?:re|h)?captcha\b|\banti-bot\b|\bbot check\b|\bverify(?:ing)? (?:that )?you(?:'re| are) (?:a )?human\b/i;
+
+/** The CAPTCHA or anti-bot check `text` names, or undefined. */
+export function challengeIn(text: string | undefined): string | undefined {
+  return text ? CHALLENGE.exec(text)?.[0] : undefined;
+}
+
+/**
+ * The candidates a challenge stopped: a snippet-only source whose read met
+ * one, and a ⛔ wall whose notes or extract say it is one. In dossier order.
+ */
+export function challengeCandidates(dir: string, sources: Source[], manifest: Pick<Manifest, "notes">): HumanCandidate[] {
+  return humanCandidates(sources, manifest).filter((c) => {
+    if (challengeIn(c.why)) return true;
+    if ((manifest.notes ?? []).some((n) => mentions(n, c.url) && challengeIn(n))) return true;
+    const s = sources.find((x) => x.id === c.id);
+    try {
+      return !!s && !!challengeIn(wallPattern(readSourceText(dir, s)));
+    } catch {
+      return false;
+    }
+  });
+}
+
+export interface HandOffDuringRunOptions {
+  /** The command's browser rung: `off` hands nothing over — the run was told to open nothing. */
+  browser: BrowserMode;
+  firecrawl?: string;
+  /** Pages the run refused for a challenge, not in the dossier: handed over too, and added once read. */
+  refused?: HumanCandidate[];
+  /** Where the lines for the person go (stderr in the CLI). */
+  tell: (line: string) => void;
+  env?: Record<string, string | undefined>;
+  /** Defaults to the engine's: false with no display, and in any CI run. */
+  canShow?: () => boolean;
+}
+
+/**
+ * Hand the pages a challenge stopped to the person at the machine, before the
+ * run ends (see the head of this file). Nothing happens — and nobody is waited
+ * for — when the rung is off, ULTRASEARCH_HUMAN_TIMEOUT_MS is 0, no window can
+ * be shown, or no page needs it.
+ */
+export async function handOffDuringRun(dir: string, opts: HandOffDuringRunOptions): Promise<HumanResult[]> {
+  if (opts.browser === "off") return [];
+  const timeoutMs = humanTimeoutMs(opts.env);
+  if (timeoutMs === undefined || !(opts.canShow ?? (() => canShowBrowserWindow()))()) return [];
+  let candidates: HumanCandidate[];
+  try {
+    const { sources, manifest } = readDossier(dir);
+    candidates = challengeCandidates(dir, sources, manifest);
+  } catch {
+    return [];
+  }
+  const seen = new Set(candidates.map((c) => c.url));
+  for (const c of opts.refused ?? []) {
+    if (seen.has(c.url)) continue;
+    seen.add(c.url);
+    candidates.push(c);
+  }
+  if (!candidates.length) return [];
+  opts.tell(
+    `ultrasearch: ${candidates.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). ` +
+      `The browser comes forward on each in turn: get past it there and the read goes on by itself — up to ${Math.round(timeoutMs / 1000)} s each ` +
+      `(${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`,
+  );
+  return runHuman(dir, candidates, {
+    timeoutMs,
+    stopAfterTimeout: true,
+    ...(opts.firecrawl ? { firecrawl: opts.firecrawl } : {}),
+    onResult: (r) => opts.tell(`ultrasearch: human: ${r.id}\t${r.url}\t${r.outcome}${r.outcome === "skipped" && r.note ? ` — ${r.note}` : ""}`),
+  });
+}
+
+/** A page `fetch` / `ingest` refused because a challenge stopped its read, as a candidate; undefined for any other refusal. */
+export function refusedForChallenge(url: string, note: string | undefined): HumanCandidate | undefined {
+  const found = challengeIn(note);
+  return found ? { id: "-", url, why: `refused — ${found}` } : undefined;
 }
