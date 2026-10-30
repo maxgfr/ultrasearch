@@ -129,8 +129,9 @@ export function describeBrowserRung(r: BrowserRung): { name: "browser"; ok: bool
     ok: true,
     detail:
       `${r.mode} (${originOf(r)}) — ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). ` +
-      "A window may open during a run. `--browser off` to disable. " +
-      "A page only you can get past (a CAPTCHA, a sign-in) is handed to you in that window by `ultrasearch human --run <dir>`.",
+      "Pages are read in background tabs of a small window that never takes the focus (`--browser off` to disable). " +
+      "When a CAPTCHA or an anti-bot check stops a page, the run asks you before bringing it forward (ULTRASEARCH_HUMAN_ASK=ask|always|never); " +
+      "`ultrasearch human --run <dir>` hands you sign-in walls and whatever is left.",
   };
 }
 
