@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.45.0](https://github.com/maxgfr/ultrasearch/compare/v1.44.0...v1.45.0) (2026-10-30)
+
+
+### Features
+
+* **human:** ask the person once before handing challenged pages over during a run ([#63](https://github.com/maxgfr/ultrasearch/issues/63)) ([49b5ab1](https://github.com/maxgfr/ultrasearch/commit/49b5ab1d8a100775900f2ead6d8ceff11d17f26c)), closes [#62](https://github.com/maxgfr/ultrasearch/issues/62)
+
 # [1.44.0](https://github.com/maxgfr/ultrasearch/compare/v1.43.2...v1.44.0) (2026-10-30)
 
 
