@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.36.1";
+declare const ENGINE_VERSION = "1.36.2";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1062,6 +1062,13 @@ interface LaunchOptions {
      * background. Ours is used, or launched, instead. An explicit `cdp` still wins.
      */
     ownOnly?: boolean;
+    /**
+     * Launch for reads in the background, out of the way of whoever is at the
+     * machine: no window of its own on macOS (the reads open one without
+     * activating the browser), elsewhere one at the reads' window size. Only a
+     * browser this call starts is launched so; a running one is used as it is.
+     */
+    quiet?: boolean;
     deps?: Partial<BrowserDeps>;
 }
 interface Endpoint {
@@ -1167,6 +1174,13 @@ declare class BrowserSession {
     get pid(): number | undefined;
     get profile(): string;
     get headless(): boolean;
+    /**
+     * Bring this session's tab to the front for a person: its window at a size
+     * one can work in (the reads keep it small, in a corner), the tab shown, the
+     * browser activated. Resolves with what puts the window back as it was. Best
+     * effort, all of it: a window that cannot be resized is still brought up.
+     */
+    showToHuman(): Promise<() => Promise<void>>;
     /** What the launch had to say (extensions the browser will not load), once: the next call gets nothing. */
     takeNotes(): string[];
     get targetId(): string;
@@ -1276,7 +1290,7 @@ type BrowserFetchMode = "always" | "fallback" | "off";
  * waits until the wall is gone, then reads the page from that same tab.
  */
 interface HumanHandoff {
-    /** How long the human has to get past the wall; 5 minutes by default. */
+    /** How long the human has to get past the wall; HUMAN_TIMEOUT_MS (ms), else 5 minutes, by default. */
     timeoutMs?: number;
     /** Where the request to the human goes: a line on stderr by default. */
     tell?: (message: string) => void;

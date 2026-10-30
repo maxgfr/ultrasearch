@@ -5112,7 +5112,12 @@ async function resolveEndpoint(opts = {}) {
     }
     clearSession();
   }
-  return launch(deps, opts.binary, profile, headless, opts.kind);
+  return launch(deps, opts.binary, profile, headless, opts.kind, opts.quiet === true);
+}
+function readWindowSize(deps) {
+  const m = /^\s*(\d{3,4})\s*[x,]\s*(\d{3,4})\s*$/i.exec(deps.env("BROWSER_WINDOW") ?? "");
+  const clamp = (n) => Math.min(4e3, Math.max(200, n));
+  return m ? { width: clamp(Number(m[1])), height: clamp(Number(m[2])) } : { width: 800, height: 600 };
 }
 function wantedKind(deps, kind, profile) {
   if (kind) return kind;
@@ -5120,7 +5125,7 @@ function wantedKind(deps, kind, profile) {
   if (asked && !isBrowserKind(asked)) throw new UsageError(`${envName("BROWSER_KIND")} is "${asked}", not one of chrome, brave, chromium, edge`);
   return asked && isBrowserKind(asked) ? asked : readProfileKind(profile);
 }
-async function launch(deps, binary, profile, headless, kind) {
+async function launch(deps, binary, profile, headless, kind, quiet) {
   const wanted = binary ? void 0 : wantedKind(deps, kind, profile);
   const found = binary ? { kind: kindOf(binary), path: binary } : deps.detectBrowser(wanted);
   if (!found && wanted) throw new UsageError(`no ${wanted} found: install it, or name its executable with ${envName("BROWSER_BIN")}`);
@@ -5155,8 +5160,12 @@ async function launch(deps, binary, profile, headless, kind) {
     "--no-default-browser-check",
     ...dropped ? [] : extensionArgs(extensions)
   ];
-  if (headless) args.push("--headless=new");
-  args.push("about:blank");
+  if (headless) args.push("--headless=new", "about:blank");
+  else if (quiet && deps.platform === "darwin") args.push(...KEEP_RENDERING, "--no-startup-window");
+  else if (quiet) {
+    const { width, height } = readWindowSize(deps);
+    args.push(...KEEP_RENDERING, `--window-size=${width},${height}`, "about:blank");
+  } else args.push(...KEEP_RENDERING, "about:blank");
   const child = deps.spawn(bin, args, { detached: true, stdio: "ignore" });
   let failure2;
   child.on("exit", (code, signal) => {
@@ -5229,6 +5238,7 @@ async function isSameBrowser(deps, port, host, wsBrowserUrl) {
 }
 var STARTUP_TIMEOUT_MS;
 var POLL_MS;
+var KEEP_RENDERING;
 var init_launch = __esm({
   "src/browser/launch.ts"() {
     "use strict";
@@ -5242,6 +5252,7 @@ var init_launch = __esm({
     init_state();
     STARTUP_TIMEOUT_MS = 2e4;
     POLL_MS = 100;
+    KEEP_RENDERING = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding", "--disable-background-timer-throttling"];
   }
 });
 function cleanTabs(v) {
@@ -5289,9 +5300,43 @@ function assertOpenableUrl(url) {
   }
   if (!ok) throw new UsageError(`only http(s) URLs (and about:blank) can be opened \u2014 use \`${brand().cli} extract <path>\` for local files`);
 }
-async function createTarget(cdp) {
-  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+async function createTarget(cdp, opts = {}) {
+  const params = { url: "about:blank", ...opts.background ? { background: true } : {}, ...opts.window ? { newWindow: true, ...opts.window } : {} };
+  const { targetId } = await cdp.send("Target.createTarget", params);
   return targetId;
+}
+function screenArea(v) {
+  const a = v;
+  const ok = (n) => typeof n === "number" && Number.isFinite(n);
+  return a && ok(a.left) && ok(a.top) && ok(a.width) && ok(a.height) && a.width > 0 && a.height > 0 ? a : void 0;
+}
+async function windowOf(cdp, targetId) {
+  const got = await cdp.send("Browser.getWindowForTarget", { targetId }).catch(() => void 0);
+  return typeof got?.windowId === "number" && got.bounds ? { windowId: got.windowId, bounds: got.bounds } : void 0;
+}
+async function setBounds(cdp, windowId, bounds) {
+  await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+  await cdp.send("Browser.setWindowBounds", { windowId, bounds });
+}
+async function tuckAway(cdp, targetId, size) {
+  try {
+    const win = await windowOf(cdp, targetId);
+    if (!win) return;
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    let area;
+    try {
+      const got = await cdp.session(sessionId).send("Runtime.evaluate", { expression: SCREEN_AREA, returnByValue: true }, { timeoutMs: STATUS_TIMEOUT_MS });
+      area = screenArea(got.result?.value);
+    } finally {
+      await cdp.send("Target.detachFromTarget", { sessionId }).catch(() => {
+      });
+    }
+    if (!area) return;
+    const width = Math.min(size.width, area.width);
+    const height = Math.min(size.height, area.height);
+    await setBounds(cdp, win.windowId, { left: area.left + area.width - width, top: area.top + area.height - height, width, height });
+  } catch {
+  }
 }
 async function attachPage(cdp, targetId) {
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -5337,7 +5382,7 @@ function forget(targetIds, all) {
 }
 async function openBrowserSession(opts = {}) {
   const deps = browserDeps(opts.deps);
-  const endpoint = await resolveEndpoint({ ...opts, deps });
+  const endpoint = await resolveEndpoint({ ...opts, deps, quiet: opts.quiet ?? opts.scratch === true });
   const saved2 = readSession();
   const same = saved2 !== null && saved2.port === endpoint.port && (saved2.host ?? "127.0.0.1") === endpoint.host ? saved2 : null;
   const { webSocketDebuggerUrl } = await deps.discovery.getVersion(endpoint.port, endpoint.host);
@@ -5346,7 +5391,14 @@ async function openBrowserSession(opts = {}) {
   try {
     const pages = await deps.discovery.listPages(endpoint.port, endpoint.host);
     let targetId;
-    if (opts.newTab || opts.scratch) targetId = created = await createTarget(cdp);
+    if (opts.scratch && !endpoint.headless) {
+      const size = readWindowSize(deps);
+      let holder = pages[0]?.id;
+      const fresh = holder === void 0 && endpoint.launchedByUs;
+      if (fresh) holder = await createTarget(cdp, { background: true, window: size });
+      if (holder !== void 0 && (fresh || endpoint.spawned)) await tuckAway(cdp, holder, size);
+      targetId = created = await createTarget(cdp, { background: true });
+    } else if (opts.newTab || opts.scratch) targetId = created = await createTarget(cdp);
     else if (same && pages.some((p) => p.id === same.targetId)) targetId = same.targetId;
     else targetId = pages[0]?.id ?? await createTarget(cdp);
     const sessionId = await attachPage(cdp, targetId);
@@ -5366,11 +5418,13 @@ var BROWSER_CLOSE_TIMEOUT_MS;
 var STATUS_TIMEOUT_MS;
 var ATTACH_TIMEOUT_MS;
 var TAB_ID;
+var HUMAN_WINDOW;
 var LIFECYCLE;
 var NavigationTimeoutError;
 var committedIn;
 var stillLoading;
 var tabNumber;
+var SCREEN_AREA;
 var BrowserSession;
 var init_session = __esm({
   "src/browser/session.ts"() {
@@ -5388,12 +5442,14 @@ var init_session = __esm({
     STATUS_TIMEOUT_MS = 2e3;
     ATTACH_TIMEOUT_MS = 5e3;
     TAB_ID = /^t([1-9]\d*)$/;
+    HUMAN_WINDOW = { width: 1100, height: 860 };
     LIFECYCLE = { load: "load", domcontentloaded: "DOMContentLoaded" };
     NavigationTimeoutError = class extends Error {
     };
     committedIn = (frameId, isNew) => (e) => e.frameId === frameId && isNew(e.loaderId) && (e.kind === "commit" || e.kind === "lifecycle" && e.name !== "init");
     stillLoading = (timeoutMs) => `still loading after ${timeoutMs} ms \u2014 take a snapshot or \`${brand().cli} browser wait --load\``;
     tabNumber = (id) => Number(TAB_ID.exec(id)?.[1] ?? 0);
+    SCREEN_AREA = "({ left: screen.availLeft, top: screen.availTop, width: screen.availWidth, height: screen.availHeight })";
     BrowserSession = class {
       /** @internal use openBrowserSession */
       constructor(cdp, endpoint, wsBrowserUrl, deps, targetId, sessionId, tabs, scratch = false) {
@@ -5442,6 +5498,50 @@ var init_session = __esm({
       }
       get headless() {
         return this.endpoint.headless;
+      }
+      /**
+       * Bring this session's tab to the front for a person: its window at a size
+       * one can work in (the reads keep it small, in a corner), the tab shown, the
+       * browser activated. Resolves with what puts the window back as it was. Best
+       * effort, all of it: a window that cannot be resized is still brought up.
+       */
+      async showToHuman() {
+        let restore = async () => {
+        };
+        const win = await windowOf(this.cdp, this.targetId);
+        if (win) {
+          try {
+            const got = await this.page.send(
+              "Runtime.evaluate",
+              { expression: SCREEN_AREA, returnByValue: true },
+              { timeoutMs: STATUS_TIMEOUT_MS }
+            );
+            const area = screenArea(got.result?.value);
+            const { width = 0, height = 0 } = win.bounds;
+            if (area && (width < HUMAN_WINDOW.width || height < HUMAN_WINDOW.height)) {
+              const w = Math.min(Math.max(width, HUMAN_WINDOW.width), area.width);
+              const h = Math.min(Math.max(height, HUMAN_WINDOW.height), area.height);
+              await setBounds(this.cdp, win.windowId, {
+                left: area.left + Math.round((area.width - w) / 2),
+                top: area.top + Math.round((area.height - h) / 2),
+                width: w,
+                height: h
+              });
+              const { windowState, ...was } = win.bounds;
+              restore = async () => {
+                await setBounds(this.cdp, win.windowId, was).catch(() => {
+                });
+                if (windowState && windowState !== "normal")
+                  await this.cdp.send("Browser.setWindowBounds", { windowId: win.windowId, bounds: { windowState } }).catch(() => {
+                  });
+              };
+            }
+          } catch {
+          }
+        }
+        await this.deps.discovery.activateTarget(this.port, this.targetId, this.host).catch(() => {
+        });
+        return restore;
       }
       /** What the launch had to say (extensions the browser will not load), once: the next call gets nothing. */
       takeNotes() {
@@ -9647,7 +9747,7 @@ async function render(url, opts, deps, timeoutMs, run) {
         note: [cleared.note, `Read after a human got past ${wall}.`].filter(Boolean).join(" "),
         handoff: "cleared"
       };
-    const secs = Math.round((human.timeoutMs ?? HUMAN_TIMEOUT_MS) / 1e3);
+    const secs = Math.round((human.timeoutMs ?? humanTimeoutMs()) / 1e3);
     return { ...asIs, note: [asIs.note, `Nobody got past it within ${secs} s.`].filter(Boolean).join(" "), handoff: "timeout" };
   } finally {
     page.off("Network.responseReceived", onResponse);
@@ -9659,12 +9759,11 @@ async function render(url, opts, deps, timeoutMs, run) {
 async function handOff(session, url, wall, challenged, human, deps, take, signal) {
   const tell = human.tell ?? ((m) => void process.stderr.write(`${m}
 `));
-  const timeoutMs = human.timeoutMs ?? HUMAN_TIMEOUT_MS;
+  const timeoutMs = human.timeoutMs ?? humanTimeoutMs();
   const start = deps.now();
   const left = () => timeoutMs - (deps.now() - start);
   const { cli, name } = brand();
-  await deps.discovery.activateTarget(session.port, session.targetId, session.host).catch(() => {
-  });
+  const restore = await session.showToHuman();
   tell(
     `${cli}: ${url} is behind ${wall}. It is open in the ${name} browser window (its own profile, not your browser): get past it there and the read goes on by itself \u2014 waiting up to ${Math.round(timeoutMs / 1e3)} s.`
   );
@@ -9687,6 +9786,8 @@ async function handOff(session, url, wall, challenged, human, deps, take, signal
     }
   } catch (e) {
     if (!(e instanceof WaitTimeoutError)) throw e;
+  } finally {
+    await restore();
   }
   tell(`${cli}: ${url} is still behind ${wall} after ${Math.round(timeoutMs / 1e3)} s \u2014 read without it.`);
   return void 0;
@@ -9700,7 +9801,7 @@ async function read(url, opts) {
   if (signal?.aborted) throw cancelled();
   const deps = browserDeps(opts.deps);
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
-  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? HUMAN_TIMEOUT_MS : 0;
+  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? humanTimeoutMs() : 0;
   const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
     release();
@@ -9733,6 +9834,7 @@ async function read(url, opts) {
 var IDLE_CAP_MS;
 var WEB_PAGE;
 var HUMAN_TIMEOUT_MS;
+var humanTimeoutMs;
 var WALL_POLL_MS;
 var AFTER_WALL_LOAD_MS;
 var active;
@@ -9758,6 +9860,7 @@ var init_read = __esm({
     IDLE_CAP_MS = 3e3;
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     HUMAN_TIMEOUT_MS = 3e5;
+    humanTimeoutMs = () => envInt("HUMAN_TIMEOUT_MS", HUMAN_TIMEOUT_MS, 1e4, 36e5);
     WALL_POLL_MS = 1e3;
     AFTER_WALL_LOAD_MS = 1e4;
     active = 0;
@@ -19299,7 +19402,7 @@ async function runHuman(dir, chosen, opts = {}) {
 }
 var HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
 var HUMAN_TIMEOUT_DEFAULT_MS = 3e5;
-function humanTimeoutMs(env2 = process.env) {
+function humanTimeoutMs2(env2 = process.env) {
   const raw = env2[HUMAN_TIMEOUT_ENV]?.trim();
   const n = raw ? Number(raw) : Number.NaN;
   if (!Number.isFinite(n)) return HUMAN_TIMEOUT_DEFAULT_MS;
@@ -19324,7 +19427,7 @@ function challengeCandidates(dir, sources, manifest) {
 }
 async function handOffDuringRun(dir, opts) {
   if (opts.browser === "off") return [];
-  const timeoutMs = humanTimeoutMs(opts.env);
+  const timeoutMs = humanTimeoutMs2(opts.env);
   if (timeoutMs === void 0 || !(opts.canShow ?? (() => canShowWindow()))()) return [];
   let candidates2;
   try {
@@ -22237,7 +22340,7 @@ ${formatServices(rows)}
       if (!json2) for (const r of skipped) process.stdout.write(line(r) + "\n");
       const results = await runHuman(rdir, chosen, {
         // --timeout, else ULTRASEARCH_HUMAN_TIMEOUT_MS; asked for by name, `human` waits even when that is 0.
-        timeoutMs: secs !== void 0 ? secs * 1e3 : humanTimeoutMs() ?? HUMAN_TIMEOUT_DEFAULT_MS,
+        timeoutMs: secs !== void 0 ? secs * 1e3 : humanTimeoutMs2() ?? HUMAN_TIMEOUT_DEFAULT_MS,
         ...p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {},
         ...noWindow ? { noWindow } : {},
         onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) \u2014 handing ${c.url} to you in the browser window

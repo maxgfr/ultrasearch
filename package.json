@@ -56,7 +56,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.3",
-    "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/c80d8694960b3c0903b9e0f00af9c428b305bb5d",
+    "@maxgfr/webindex": "https://codeload.github.com/maxgfr/webindex/tar.gz/c76829acc778370055149602feecaa57199a4f11",
     "@semantic-release/changelog": "^7.0.0",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^11.0.1",
