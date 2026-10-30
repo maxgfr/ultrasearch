@@ -164,7 +164,10 @@ fallback|always|off` overrides both. A window may appear during a run; every
 command that reads pages closes it on the way out. It never accepts a consent
 wall for you and never solves a challenge: a CAPTCHA is handed to the human with
 `ultrasearch browser open <url>`, or — for every such page of a dossier —
-`ultrasearch human --run <dir>`, which waits for them and repairs the sources. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
+`ultrasearch human --run <dir>`, which waits for them and repairs the sources.
+`gather`, `ingest` and `fetch` ask the person first, in one native dialog for
+the whole batch (Later / Solve it; `ULTRASEARCH_HUMAN_ASK=ask|always|never`),
+and bring nothing forward unless they say yes. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
 is off unless asked for, since a browser writes its profile. `ultrasearch doctor`
 shows the binary, the mode and why it is off when it is.
 

@@ -12,16 +12,25 @@
 // gather, ingest and fetch do the same for the pages a CHALLENGE stopped (a
 // CAPTCHA, an anti-bot check) before they end: the read that met one is over in
 // seconds, so a person who saw it come up had no time to solve it. Those pages
-// are handed over at the end of the run instead, one at a time, the browser
-// coming forward only then, each waiting ULTRASEARCH_HUMAN_TIMEOUT_MS (5 minutes
-// by default; 0 never waits during a run). The first page nobody gets past ends
-// it: nobody is at the window, and the rest are left for `ultrasearch human`. A
-// sign-in or consent wall is never handed over this way: whether to sign in is
-// the person's call, made with `ultrasearch human`.
+// are handed over at the end of the run instead. The person is asked first —
+// once for the whole batch, with the engine's native dialog (askHuman), since
+// an agent running the command reads its stderr and the person does not — and
+// nothing comes forward unless they say yes (ULTRASEARCH_HUMAN_ASK: `ask` by
+// default, `always` hands over unasked, `never` hands nothing over during a
+// run). On a yes the pages come forward one at a time, the browser coming
+// forward only then, each waiting ULTRASEARCH_HUMAN_TIMEOUT_MS (5 minutes by
+// default; 0 never waits during a run), and a notification says when it is
+// done. The first page nobody gets past ends it: nobody is at the window, and
+// the rest are left for `ultrasearch human`. On "Later", or no answer, they are
+// all left for it. A sign-in or consent wall is never handed over this way:
+// whether to sign in is the person's call, made with `ultrasearch human`.
+//
+// `ultrasearch human` itself does not ask: running it is the request to hand
+// the pages over, and the skill has the agent ask the person before it does.
 
 import { readDossier, readSourceText } from "./dossier.js";
 import { addSources } from "./enrich.js";
-import { canShowBrowserWindow } from "./engine.js";
+import { askHuman, canShowBrowserWindow, type HumanAnswer, type HumanAskPage, humanAskMode, notifyHumanDone } from "./engine.js";
 import type { BrowserMode, Manifest, Source } from "./types.js";
 import { wallPattern } from "./walls.js";
 
@@ -30,6 +39,8 @@ export interface HumanCandidate {
   url: string;
   /** What stands in front of it, in a few words: "⛔ wall", "snippet only — cloudflare challenge". */
   why: string;
+  /** The read's own words about the check, when the candidate carries them (a page fetch refused): what the question names. */
+  check?: string;
 }
 
 export type HumanVerdict = "repaired" | "added" | "still walled" | "timed out" | "skipped";
@@ -163,7 +174,8 @@ export async function runHuman(dir: string, chosen: HumanCandidate[], opts: RunH
       question: manifest.question,
       cache: false,
       browser: "always",
-      human: opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {},
+      // Asked already, about the whole batch (or asked for by name): the engine's read does not ask again.
+      human: { ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}), ask: false },
       ...(opts.firecrawl ? { firecrawl: opts.firecrawl } : {}),
     });
     const r = got.results[0];
@@ -186,6 +198,8 @@ export async function runHuman(dir: string, chosen: HumanCandidate[], opts: RunH
 
 /** The env var that bounds every wait for a person, in ms. */
 export const HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
+/** The env var that says whether a run asks the person before handing pages over: ask (default), always, never. */
+export const HUMAN_ASK_ENV = "ULTRASEARCH_HUMAN_ASK";
 /** How long a person has per page when nothing says otherwise: as long as `human` gives them. */
 export const HUMAN_TIMEOUT_DEFAULT_MS = 300_000;
 
@@ -239,22 +253,33 @@ export interface HandOffDuringRunOptions {
   env?: Record<string, string | undefined>;
   /** Defaults to the engine's: false with no display, and in any CI run. */
   canShow?: () => boolean;
+  /** The question to the person, once for the batch; the engine's native dialog (askHuman) by default. */
+  ask?: (pages: HumanAskPage[]) => Promise<HumanAnswer>;
+  /** The notification once a batch the person said yes to is done; the engine's (notifyHumanDone) by default. */
+  notify?: (cleared: number, total: number) => Promise<boolean>;
 }
 
 /**
  * Hand the pages a challenge stopped to the person at the machine, before the
- * run ends (see the head of this file). Nothing happens — and nobody is waited
- * for — when the rung is off, ULTRASEARCH_HUMAN_TIMEOUT_MS is 0, no window can
- * be shown, or no page needs it.
+ * run ends (see the head of this file), once they said yes to the question.
+ * Nothing happens — and nobody is waited for — when the rung is off,
+ * ULTRASEARCH_HUMAN_ASK is never, ULTRASEARCH_HUMAN_TIMEOUT_MS is 0, no window
+ * can be shown, or no page needs it. On "Later", or no answer, every page comes
+ * back `skipped`, and nothing came forward.
  */
 export async function handOffDuringRun(dir: string, opts: HandOffDuringRunOptions): Promise<HumanResult[]> {
   if (opts.browser === "off") return [];
+  const env = opts.env ?? process.env;
+  const mode = humanAskMode(env[HUMAN_ASK_ENV] ?? "ask");
+  if (mode === "never") return [];
   const timeoutMs = humanTimeoutMs(opts.env);
   if (timeoutMs === undefined || !(opts.canShow ?? (() => canShowBrowserWindow()))()) return [];
   let candidates: HumanCandidate[];
+  let notes: string[];
   try {
     const { sources, manifest } = readDossier(dir);
     candidates = challengeCandidates(dir, sources, manifest);
+    notes = manifest.notes ?? [];
   } catch {
     return [];
   }
@@ -265,21 +290,43 @@ export async function handOffDuringRun(dir: string, opts: HandOffDuringRunOption
     candidates.push(c);
   }
   if (!candidates.length) return [];
+  let answer: HumanAnswer | undefined;
+  if (mode === "ask") {
+    opts.tell(
+      `ultrasearch: ${candidates.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). ` +
+        `A dialog asks the person at this machine whether to solve them now; nothing comes forward unless they say yes ` +
+        `(${HUMAN_ASK_ENV}=always hands them over unasked, never skips this).`,
+    );
+    answer = await (opts.ask ?? ((pages) => askHuman(pages)))(
+      candidates.map((c) => ({ url: c.url, check: c.check ?? notes.find((n) => mentions(n, c.url) && challengeIn(n)) ?? c.why })),
+    ).catch((): HumanAnswer => "unavailable");
+    if (answer === "later" || answer === "no-answer") {
+      const note = `${answer === "later" ? "left for later by the person" : "nobody answered the question"} — \`ultrasearch human --run ${dir}\``;
+      opts.tell(`ultrasearch: human: ${answer === "later" ? "later" : "no answer"} — nothing was brought forward.`);
+      return candidates.map((c) => ({ ...c, outcome: "skipped" as const, note }));
+    }
+  }
   opts.tell(
-    `ultrasearch: ${candidates.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). ` +
+    `ultrasearch: ${answer ? "" : `${candidates.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). `}` +
       `The browser comes forward on each in turn: get past it there and the read goes on by itself — up to ${Math.round(timeoutMs / 1000)} s each ` +
       `(${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`,
   );
-  return runHuman(dir, candidates, {
+  const results = await runHuman(dir, candidates, {
     timeoutMs,
     stopAfterTimeout: true,
     ...(opts.firecrawl ? { firecrawl: opts.firecrawl } : {}),
     onResult: (r) => opts.tell(`ultrasearch: human: ${r.id}\t${r.url}\t${r.outcome}${r.outcome === "skipped" && r.note ? ` — ${r.note}` : ""}`),
   });
+  // A yes is told how it went, where the question was: the run goes on.
+  if (answer === "solve") {
+    const cleared = results.filter((r) => r.outcome === "repaired" || r.outcome === "added").length;
+    await (opts.notify ?? ((c, t) => notifyHumanDone(c, t)))(cleared, candidates.length).catch(() => false);
+  }
+  return results;
 }
 
 /** A page `fetch` / `ingest` refused because a challenge stopped its read, as a candidate; undefined for any other refusal. */
 export function refusedForChallenge(url: string, note: string | undefined): HumanCandidate | undefined {
   const found = challengeIn(note);
-  return found ? { id: "-", url, why: `refused — ${found}` } : undefined;
+  return found ? { id: "-", url, why: `refused — ${found}`, ...(note ? { check: note } : {}) } : undefined;
 }

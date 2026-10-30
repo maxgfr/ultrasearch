@@ -16,6 +16,7 @@ import {
   runHuman,
   selectForHuman,
 } from "../src/human.js";
+import type { HumanCandidate } from "../src/human.js";
 import type { Source } from "../src/types.js";
 import { makeCtx } from "./ctx.js";
 
@@ -159,7 +160,8 @@ describe("the handoff at the end of a run", () => {
   const OTHER = "https://cf.test/other-page";
   const lines: string[] = [];
   const tell = (l: string) => void lines.push(l);
-  const on = { ULTRASEARCH_HUMAN_TIMEOUT_MS: "20000" };
+  // Handed over unasked, as before there was a question; "asking the person first" below asks.
+  const on = { ULTRASEARCH_HUMAN_TIMEOUT_MS: "20000", ULTRASEARCH_HUMAN_ASK: "always" };
   const shown = () => true;
   beforeEach(() => {
     lines.length = 0;
@@ -180,7 +182,7 @@ describe("the handoff at the end of a run", () => {
     expect(challengeIn("hCaptcha")).toBe("hCaptcha");
     expect(challengeIn("login wall")).toBeUndefined();
     expect(challengeIn(WALL)).toBeUndefined();
-    expect(refusedForChallenge(OTHER, CF_NOTE)).toEqual({ id: "-", url: OTHER, why: "refused — challenge" });
+    expect(refusedForChallenge(OTHER, CF_NOTE)).toEqual({ id: "-", url: OTHER, why: "refused — challenge", check: CF_NOTE });
     expect(refusedForChallenge(OTHER, "Could not fetch it (status 404).")).toBeUndefined();
   });
 
@@ -240,6 +242,84 @@ describe("the handoff at the end of a run", () => {
     });
     expect(got.find((r) => r.url === OTHER)).toMatchObject({ outcome: "added", id: `S${n + 1}` });
     expect(readDossier(dir).sources).toHaveLength(n + 1);
+  });
+
+  describe("asking the person first", () => {
+    const asking = { ULTRASEARCH_HUMAN_TIMEOUT_MS: "20000" };
+    const cleared = async (url: string, opts: Opts = {}) =>
+      opts.human ? { text: ARTICLE, title: "Rate limiting", finalUrl: url, status: 200, extractor: "browser", handoff: "cleared" } : untouched(url);
+
+    it("asks once for the whole batch, naming each page and its check, then hands them over and notifies", async () => {
+      const before = await dossier();
+      fetchPage.mockImplementation(cleared);
+      const asked: { url: string; check?: string }[][] = [];
+      const notified: [number, number][] = [];
+      const got = await handOffDuringRun(dir, {
+        browser: "fallback",
+        tell,
+        env: asking,
+        canShow: shown,
+        refused: [refusedForChallenge(OTHER, CF_NOTE.replace(CHALLENGED, OTHER)) as HumanCandidate],
+        ask: async (pages) => {
+          asked.push(pages);
+          return "solve";
+        },
+        notify: async (c, t) => {
+          notified.push([c, t]);
+          return true;
+        },
+      });
+      expect(asked).toHaveLength(1);
+      expect(asked[0]?.map((p) => p.url)).toEqual([CHALLENGED, OTHER]);
+      // The read's own words, so the dialog can say "Cloudflare check".
+      expect(asked[0]?.every((p) => p.check?.includes("cloudflare challenge"))).toBe(true);
+      expect(got.map((r) => r.outcome)).toEqual(["repaired", "added"]);
+      expect(got[0]?.id).toBe(byUrl(before, CHALLENGED).id);
+      // The engine's read is told not to ask again.
+      for (const c of fetchPage.mock.calls.filter((x) => x[1]?.human)) expect(c[1]?.human).toMatchObject({ ask: false, timeoutMs: 20_000 });
+      expect(notified).toEqual([[2, 2]]);
+      expect(lines[0]).toContain("A dialog asks the person at this machine");
+    });
+
+    it("brings nothing forward on Later, or on no answer: every page is left for `human`", async () => {
+      await dossier();
+      fetchPage.mockImplementation(cleared);
+      for (const answer of ["later", "no-answer"] as const) {
+        lines.length = 0;
+        const notify = vi.fn(async () => true);
+        const got = await handOffDuringRun(dir, { browser: "fallback", tell, env: asking, canShow: shown, ask: async () => answer, notify });
+        expect(got).toEqual([expect.objectContaining({ url: CHALLENGED, outcome: "skipped" })]);
+        expect(got[0]?.note).toContain(`\`ultrasearch human --run ${dir}\``);
+        expect(lines.at(-1)).toContain("nothing was brought forward");
+        expect(notify).not.toHaveBeenCalled();
+      }
+      expect(fetchPage.mock.calls.filter((c) => c[1]?.human)).toHaveLength(0);
+      // Still there to hand over, the challenged page among them: the run ends with the hint.
+      expect(humanHint(dir)).toBe(`2 page(s) need a human: ultrasearch human --run ${dir}`);
+    });
+
+    it("hands over as before when nobody can be asked, and asks nothing under always or never", async () => {
+      await dossier();
+      fetchPage.mockImplementation(cleared);
+      const ask = vi.fn(async (): Promise<"unavailable"> => "unavailable");
+      const got = await handOffDuringRun(dir, { browser: "fallback", tell, env: asking, canShow: shown, ask, notify: async () => true });
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(got.map((r) => r.outcome)).toEqual(["repaired"]);
+      await dossier();
+      const unasked = vi.fn(async (): Promise<"solve"> => "solve");
+      expect(
+        await handOffDuringRun(dir, { browser: "fallback", tell, env: { ...asking, ULTRASEARCH_HUMAN_ASK: "never" }, canShow: shown, ask: unasked }),
+      ).toEqual([]);
+      const always = await handOffDuringRun(dir, {
+        browser: "fallback",
+        tell,
+        env: { ...asking, ULTRASEARCH_HUMAN_ASK: "always" },
+        canShow: shown,
+        ask: unasked,
+      });
+      expect(always.map((r) => r.outcome)).toEqual(["repaired"]);
+      expect(unasked).not.toHaveBeenCalled();
+    });
   });
 
   it("waits for nobody when the rung is off, the env says 0, or no window can be shown", async () => {

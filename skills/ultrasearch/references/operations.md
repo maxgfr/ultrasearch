@@ -93,6 +93,8 @@ more than saving ten seconds.
 | `ULTRASEARCH_BROWSER_TIMEOUT_MS` | 30000 | Ceiling for rendering ONE page in the browser; the tab is closed when it runs out. |
 | `ULTRASEARCH_BROWSER_CONCURRENCY` | 1 | Pages rendered at once (1-4). |
 | `ULTRASEARCH_HUMAN_TIMEOUT_MS` | 300000 | How long a person has to get past a CAPTCHA or anti-bot page, per page (10000 to 3600000): the handoff `gather` / `ingest` / `fetch` do before they end, and `human` without `--timeout`. `0`: a run never waits for anyone (the pages are left for `human`). |
+| `ULTRASEARCH_HUMAN_ASK` | `ask` | Whether `gather` / `ingest` / `fetch` ask the person before that handoff: `ask` shows one native dialog for the whole batch (Later / Solve it) and brings nothing forward unless they say yes; `always` hands the pages over without asking; `never` hands nothing over during a run (the pages are left for `human`). `human` itself never asks. |
+| `ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS` | 120000 | How long that dialog waits for an answer before it gives up (10000 to 3600000); no answer is "Later". |
 | `ULTRASEARCH_PDF_ENGINE` | unset | Force ONE rung of the PDF extractor ladder: `pdf-inspector`, `anydoc`, `firecrawl`, `pdftotext`, `native` or `ocr`. Unset ⇒ the full ladder, strongest first. |
 | `ULTRASEARCH_DOC_ENGINE` | unset | Force ONE rung of the office-document ladder (`anydoc`, `firecrawl`), or `none` to disable it — office documents are then refused rather than read. |
 | `ULTRASEARCH_NO_NPX` | unset | Set to skip both rungs that need an implicit `npx` install (`pdf-inspector`, `anydoc`). Useful offline, or where an unattended install is not acceptable. |
@@ -237,11 +239,15 @@ What to expect:
   source in turn comes up in the window, the command waits (`--timeout`, 300 s
   per page by default) until the human is past the wall, and the page read there
   repairs the source in place. `gather`, `ingest` and `fetch` do the same
-  before they end for the pages a CAPTCHA or an anti-bot check stopped — the
-  browser comes forward only then, each page waits up to
-  `ULTRASEARCH_HUMAN_TIMEOUT_MS`, and the first page nobody gets past ends the
-  wait — and end with `N page(s) need a human: ultrasearch human --run <dir>`
-  for what is left (sign-in and consent walls included).
+  before they end for the pages a CAPTCHA or an anti-bot check stopped, once the
+  person said yes to a native dialog that asks once for the whole batch
+  (`ULTRASEARCH_HUMAN_ASK`; it names the sites and what blocks them, and gives
+  up after `ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS`) — the browser comes forward only
+  then, each page waits up to `ULTRASEARCH_HUMAN_TIMEOUT_MS`, the first page
+  nobody gets past ends the wait, and a notification says when it is done. On
+  Later, or no answer, nothing comes forward. They end with `N page(s) need a
+  human: ultrasearch human --run <dir>` for what is left (sign-in and consent
+  walls included). Nothing is ever put into the challenged page.
 - **Accounting.** `gather` notes `Rendered N page(s) in a real browser` and the
   `Helpers:` line counts `browser ✓ N page(s)`. `fetch` / `ingest` record
   `meta.extractor: "browser"` on a source the browser read.
@@ -302,7 +308,8 @@ around them:
 | `searxng` backend skipped although containers are running | A bare `docker compose up` on some other stack starts nothing here — every service is behind a profile | `ultrasearch searxng up` |
 | Firecrawl is up but nothing says so | The probe failed, or `ULTRASEARCH_FIRECRAWL` is `off` | `curl -s http://localhost:3002/` should answer. A run that used it says `Firecrawl cleaned N page(s)…` in the notes. |
 | A browser window opened during a run | The browser rung (`fallback` by default) rendered a walled or JS-only page | Expected; it closes when the command ends. `--browser off` (or `ULTRASEARCH_BROWSER_FETCH=off`) for a run that must not open one. |
-| The browser came forward on a "verify you are human" page and the run waits | A CAPTCHA or anti-bot check stopped a read; the run hands it to you before it ends | Get past it in that window and the run goes on; or wait `ULTRASEARCH_HUMAN_TIMEOUT_MS` (5 min) and it carries on without it. `ULTRASEARCH_HUMAN_TIMEOUT_MS=0` for a run nobody watches. |
+| A dialog "ultrasearch" asks to solve a human check | A CAPTCHA or anti-bot check stopped a read; the run asks before it ends | **Solve it** brings the browser forward on each page; **Later** (or no answer within `ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS`) brings nothing forward and leaves them for `ultrasearch human --run <dir>`. `ULTRASEARCH_HUMAN_ASK=never` for a run nobody watches. |
+| The browser came forward on a "verify you are human" page and the run waits | You said Solve it (or `ULTRASEARCH_HUMAN_ASK=always`) | Get past it in that window and the run goes on; or wait `ULTRASEARCH_HUMAN_TIMEOUT_MS` (5 min) and it carries on without it. `ULTRASEARCH_HUMAN_TIMEOUT_MS=0` for a run nobody watches. |
 | A note says "challenge — open it with `ultrasearch browser open <url>`" | The page put a CAPTCHA / anti-bot check in front of the browser | Hand it to the human: ask them, then `ultrasearch human --run <dir>` (or `browser open <url>` and a re-read). Never try to solve it yourself. |
 | `human` says `skipped — no window can be shown here` | No display (Linux without `DISPLAY` / `WAYLAND_DISPLAY`), a CI run, or no browser installed | Run it on a machine with a screen; nobody is waited for until then. |
 | `doctor`: `browser ✗ off — no Chrome, Brave, Chromium or Edge found` | No supported browser installed, or `ULTRASEARCH_BROWSER_BIN` points nowhere | Install one, or set `ULTRASEARCH_BROWSER_BIN`. The run is unaffected otherwise — walls fall back to Firecrawl / the snippet. |

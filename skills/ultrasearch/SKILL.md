@@ -386,17 +386,25 @@ not hand control back mid-retrieval.
 ## Human handoff
 
 **During a run.** When `gather`, `ingest` or `fetch` met a CAPTCHA or an
-anti-bot check, it hands those pages to the person at the machine before it
-ends: the browser comes forward on each page in turn (only then), a line on
-stderr says which page needs them, and the command waits until they are past it
-— up to `ULTRASEARCH_HUMAN_TIMEOUT_MS` per page (default 300000, 5 minutes) —
-then repairs the source under its own `[S#]`. The first page nobody gets past
-ends the wait: nobody is there, and the rest are left for `human`. Tell the user
-when you start such a run that a window may come forward asking them to prove
-they are human. It never happens with `--browser off`, under `--stdout`, with no
-window to show (no display, a CI run), or with `ULTRASEARCH_HUMAN_TIMEOUT_MS=0`
-(set it for a run nobody is watching). A sign-in or consent wall is never
-handed over this way.
+anti-bot check, it asks the person at the machine before it ends — once for the
+whole batch, with a native dialog titled "ultrasearch" (macOS `osascript`,
+Linux `zenity` / `kdialog` / `notify-send`, Windows a PowerShell popup, in
+French or English after the locale) that names the blocked sites, what blocks
+them and how many pages wait, with **Later** and **Solve it**. It gives up after
+`ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS` (default 120000, 2 minutes). On **Solve it**
+the browser comes forward on each page in turn (only then), and the command
+waits until they are past it — up to `ULTRASEARCH_HUMAN_TIMEOUT_MS` per page
+(default 300000, 5 minutes) — then repairs the source under its own `[S#]`; a
+notification says when it is done. The first page nobody gets past ends the
+wait: nobody is there, and the rest are left for `human`. On **Later**, or no
+answer, nothing comes forward and the run ends with the `human --run` hint
+below. Tell the user when you start such a run that a dialog may ask them to
+solve a human check. `ULTRASEARCH_HUMAN_ASK=always` hands the pages over without
+asking, `never` (or `ULTRASEARCH_HUMAN_TIMEOUT_MS=0`) hands nothing over during
+a run — set one for a run nobody is watching. Nothing happens with `--browser
+off`, under `--stdout`, or with no window to show (no display, a CI run); with
+no tool to ask with, the pages are handed over unasked. A sign-in or consent
+wall is never handed over this way.
 
 **After a run.** When a run ends with `N page(s) need a human: ultrasearch human --run <dir>`
 (gather, ingest and fetch print it), some sources sit behind a CAPTCHA, an
@@ -407,7 +415,8 @@ the browser window is open on the page that needs them; it waits up to
 `--timeout` seconds per page (else `ULTRASEARCH_HUMAN_TIMEOUT_MS`, else 300), then reads the page and repairs the source under
 its own `[S#]`. If no, carry on without those sources. **Never solve, click
 through or script past a challenge yourself.** With no window to show (no
-display, a CI run) every page is skipped and nobody is waited for.
+display, a CI run) every page is skipped and nobody is waited for. `human`
+asks no dialog of its own: you asked the user already.
 
 ## Deals — discount codes for a merchant
 
