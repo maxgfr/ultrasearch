@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.44.0](https://github.com/maxgfr/ultrasearch/compare/v1.43.2...v1.44.0) (2026-10-30)
+
+
+### Features
+
+* **human:** hand a challenged page to the person before gather, ingest and fetch end ([#61](https://github.com/maxgfr/ultrasearch/issues/61)) ([73dd968](https://github.com/maxgfr/ultrasearch/commit/73dd9680d1310beb1dae0190ee48bd59361d9a4c)), closes [#60](https://github.com/maxgfr/ultrasearch/issues/60)
+
 ## [1.43.2](https://github.com/maxgfr/ultrasearch/compare/v1.43.1...v1.43.2) (2026-10-29)
 
 
