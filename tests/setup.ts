@@ -60,3 +60,9 @@ process.env.ULTRASEARCH_BACKOFF_MS = "0";
 // Same for the per-host pacing of rate-capped APIs (NCBI: 3 requests/s): the
 // pacing test sets its own gap.
 process.env.ULTRASEARCH_NCBI_INTERVAL_MS = "0";
+
+// gather, ingest and fetch hand a page a challenge stopped to the person at the
+// machine before they end, and wait for them (src/human.ts) — wherever a window
+// can be shown, which is every developer laptop. A test must never wait on
+// anyone: 0 turns that off for the suite; tests/human.test.ts turns it back on.
+process.env.ULTRASEARCH_HUMAN_TIMEOUT_MS = "0";

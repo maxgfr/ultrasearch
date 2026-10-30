@@ -5112,7 +5112,12 @@ async function resolveEndpoint(opts = {}) {
     }
     clearSession();
   }
-  return launch(deps, opts.binary, profile, headless, opts.kind);
+  return launch(deps, opts.binary, profile, headless, opts.kind, opts.quiet === true);
+}
+function readWindowSize(deps) {
+  const m = /^\s*(\d{3,4})\s*[x,]\s*(\d{3,4})\s*$/i.exec(deps.env("BROWSER_WINDOW") ?? "");
+  const clamp = (n) => Math.min(4e3, Math.max(200, n));
+  return m ? { width: clamp(Number(m[1])), height: clamp(Number(m[2])) } : { width: 800, height: 600 };
 }
 function wantedKind(deps, kind, profile) {
   if (kind) return kind;
@@ -5120,7 +5125,7 @@ function wantedKind(deps, kind, profile) {
   if (asked && !isBrowserKind(asked)) throw new UsageError(`${envName("BROWSER_KIND")} is "${asked}", not one of chrome, brave, chromium, edge`);
   return asked && isBrowserKind(asked) ? asked : readProfileKind(profile);
 }
-async function launch(deps, binary, profile, headless, kind) {
+async function launch(deps, binary, profile, headless, kind, quiet) {
   const wanted = binary ? void 0 : wantedKind(deps, kind, profile);
   const found = binary ? { kind: kindOf(binary), path: binary } : deps.detectBrowser(wanted);
   if (!found && wanted) throw new UsageError(`no ${wanted} found: install it, or name its executable with ${envName("BROWSER_BIN")}`);
@@ -5155,8 +5160,12 @@ async function launch(deps, binary, profile, headless, kind) {
     "--no-default-browser-check",
     ...dropped ? [] : extensionArgs(extensions)
   ];
-  if (headless) args.push("--headless=new");
-  args.push("about:blank");
+  if (headless) args.push("--headless=new", "about:blank");
+  else if (quiet && deps.platform === "darwin") args.push(...KEEP_RENDERING, "--no-startup-window");
+  else if (quiet) {
+    const { width, height } = readWindowSize(deps);
+    args.push(...KEEP_RENDERING, `--window-size=${width},${height}`, "about:blank");
+  } else args.push(...KEEP_RENDERING, "about:blank");
   const child = deps.spawn(bin, args, { detached: true, stdio: "ignore" });
   let failure2;
   child.on("exit", (code, signal) => {
@@ -5229,6 +5238,7 @@ async function isSameBrowser(deps, port, host, wsBrowserUrl) {
 }
 var STARTUP_TIMEOUT_MS;
 var POLL_MS;
+var KEEP_RENDERING;
 var init_launch = __esm({
   "src/browser/launch.ts"() {
     "use strict";
@@ -5242,6 +5252,7 @@ var init_launch = __esm({
     init_state();
     STARTUP_TIMEOUT_MS = 2e4;
     POLL_MS = 100;
+    KEEP_RENDERING = ["--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding", "--disable-background-timer-throttling"];
   }
 });
 function cleanTabs(v) {
@@ -5289,9 +5300,43 @@ function assertOpenableUrl(url) {
   }
   if (!ok) throw new UsageError(`only http(s) URLs (and about:blank) can be opened \u2014 use \`${brand().cli} extract <path>\` for local files`);
 }
-async function createTarget(cdp) {
-  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+async function createTarget(cdp, opts = {}) {
+  const params = { url: "about:blank", ...opts.background ? { background: true } : {}, ...opts.window ? { newWindow: true, ...opts.window } : {} };
+  const { targetId } = await cdp.send("Target.createTarget", params);
   return targetId;
+}
+function screenArea(v) {
+  const a = v;
+  const ok = (n) => typeof n === "number" && Number.isFinite(n);
+  return a && ok(a.left) && ok(a.top) && ok(a.width) && ok(a.height) && a.width > 0 && a.height > 0 ? a : void 0;
+}
+async function windowOf(cdp, targetId) {
+  const got = await cdp.send("Browser.getWindowForTarget", { targetId }).catch(() => void 0);
+  return typeof got?.windowId === "number" && got.bounds ? { windowId: got.windowId, bounds: got.bounds } : void 0;
+}
+async function setBounds(cdp, windowId, bounds) {
+  await cdp.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
+  await cdp.send("Browser.setWindowBounds", { windowId, bounds });
+}
+async function tuckAway(cdp, targetId, size) {
+  try {
+    const win = await windowOf(cdp, targetId);
+    if (!win) return;
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    let area;
+    try {
+      const got = await cdp.session(sessionId).send("Runtime.evaluate", { expression: SCREEN_AREA, returnByValue: true }, { timeoutMs: STATUS_TIMEOUT_MS });
+      area = screenArea(got.result?.value);
+    } finally {
+      await cdp.send("Target.detachFromTarget", { sessionId }).catch(() => {
+      });
+    }
+    if (!area) return;
+    const width = Math.min(size.width, area.width);
+    const height = Math.min(size.height, area.height);
+    await setBounds(cdp, win.windowId, { left: area.left + area.width - width, top: area.top + area.height - height, width, height });
+  } catch {
+  }
 }
 async function attachPage(cdp, targetId) {
   const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
@@ -5337,7 +5382,7 @@ function forget(targetIds, all) {
 }
 async function openBrowserSession(opts = {}) {
   const deps = browserDeps(opts.deps);
-  const endpoint = await resolveEndpoint({ ...opts, deps });
+  const endpoint = await resolveEndpoint({ ...opts, deps, quiet: opts.quiet ?? opts.scratch === true });
   const saved2 = readSession();
   const same = saved2 !== null && saved2.port === endpoint.port && (saved2.host ?? "127.0.0.1") === endpoint.host ? saved2 : null;
   const { webSocketDebuggerUrl } = await deps.discovery.getVersion(endpoint.port, endpoint.host);
@@ -5346,7 +5391,14 @@ async function openBrowserSession(opts = {}) {
   try {
     const pages = await deps.discovery.listPages(endpoint.port, endpoint.host);
     let targetId;
-    if (opts.newTab || opts.scratch) targetId = created = await createTarget(cdp);
+    if (opts.scratch && !endpoint.headless) {
+      const size = readWindowSize(deps);
+      let holder = pages[0]?.id;
+      const fresh = holder === void 0 && endpoint.launchedByUs;
+      if (fresh) holder = await createTarget(cdp, { background: true, window: size });
+      if (holder !== void 0 && (fresh || endpoint.spawned)) await tuckAway(cdp, holder, size);
+      targetId = created = await createTarget(cdp, { background: true });
+    } else if (opts.newTab || opts.scratch) targetId = created = await createTarget(cdp);
     else if (same && pages.some((p) => p.id === same.targetId)) targetId = same.targetId;
     else targetId = pages[0]?.id ?? await createTarget(cdp);
     const sessionId = await attachPage(cdp, targetId);
@@ -5366,11 +5418,13 @@ var BROWSER_CLOSE_TIMEOUT_MS;
 var STATUS_TIMEOUT_MS;
 var ATTACH_TIMEOUT_MS;
 var TAB_ID;
+var HUMAN_WINDOW;
 var LIFECYCLE;
 var NavigationTimeoutError;
 var committedIn;
 var stillLoading;
 var tabNumber;
+var SCREEN_AREA;
 var BrowserSession;
 var init_session = __esm({
   "src/browser/session.ts"() {
@@ -5388,12 +5442,14 @@ var init_session = __esm({
     STATUS_TIMEOUT_MS = 2e3;
     ATTACH_TIMEOUT_MS = 5e3;
     TAB_ID = /^t([1-9]\d*)$/;
+    HUMAN_WINDOW = { width: 1100, height: 860 };
     LIFECYCLE = { load: "load", domcontentloaded: "DOMContentLoaded" };
     NavigationTimeoutError = class extends Error {
     };
     committedIn = (frameId, isNew) => (e) => e.frameId === frameId && isNew(e.loaderId) && (e.kind === "commit" || e.kind === "lifecycle" && e.name !== "init");
     stillLoading = (timeoutMs) => `still loading after ${timeoutMs} ms \u2014 take a snapshot or \`${brand().cli} browser wait --load\``;
     tabNumber = (id) => Number(TAB_ID.exec(id)?.[1] ?? 0);
+    SCREEN_AREA = "({ left: screen.availLeft, top: screen.availTop, width: screen.availWidth, height: screen.availHeight })";
     BrowserSession = class {
       /** @internal use openBrowserSession */
       constructor(cdp, endpoint, wsBrowserUrl, deps, targetId, sessionId, tabs, scratch = false) {
@@ -5442,6 +5498,50 @@ var init_session = __esm({
       }
       get headless() {
         return this.endpoint.headless;
+      }
+      /**
+       * Bring this session's tab to the front for a person: its window at a size
+       * one can work in (the reads keep it small, in a corner), the tab shown, the
+       * browser activated. Resolves with what puts the window back as it was. Best
+       * effort, all of it: a window that cannot be resized is still brought up.
+       */
+      async showToHuman() {
+        let restore = async () => {
+        };
+        const win = await windowOf(this.cdp, this.targetId);
+        if (win) {
+          try {
+            const got = await this.page.send(
+              "Runtime.evaluate",
+              { expression: SCREEN_AREA, returnByValue: true },
+              { timeoutMs: STATUS_TIMEOUT_MS }
+            );
+            const area = screenArea(got.result?.value);
+            const { width = 0, height = 0 } = win.bounds;
+            if (area && (width < HUMAN_WINDOW.width || height < HUMAN_WINDOW.height)) {
+              const w = Math.min(Math.max(width, HUMAN_WINDOW.width), area.width);
+              const h = Math.min(Math.max(height, HUMAN_WINDOW.height), area.height);
+              await setBounds(this.cdp, win.windowId, {
+                left: area.left + Math.round((area.width - w) / 2),
+                top: area.top + Math.round((area.height - h) / 2),
+                width: w,
+                height: h
+              });
+              const { windowState, ...was } = win.bounds;
+              restore = async () => {
+                await setBounds(this.cdp, win.windowId, was).catch(() => {
+                });
+                if (windowState && windowState !== "normal")
+                  await this.cdp.send("Browser.setWindowBounds", { windowId: win.windowId, bounds: { windowState } }).catch(() => {
+                  });
+              };
+            }
+          } catch {
+          }
+        }
+        await this.deps.discovery.activateTarget(this.port, this.targetId, this.host).catch(() => {
+        });
+        return restore;
       }
       /** What the launch had to say (extensions the browser will not load), once: the next call gets nothing. */
       takeNotes() {
@@ -9647,7 +9747,7 @@ async function render(url, opts, deps, timeoutMs, run) {
         note: [cleared.note, `Read after a human got past ${wall}.`].filter(Boolean).join(" "),
         handoff: "cleared"
       };
-    const secs = Math.round((human.timeoutMs ?? HUMAN_TIMEOUT_MS) / 1e3);
+    const secs = Math.round((human.timeoutMs ?? humanTimeoutMs()) / 1e3);
     return { ...asIs, note: [asIs.note, `Nobody got past it within ${secs} s.`].filter(Boolean).join(" "), handoff: "timeout" };
   } finally {
     page.off("Network.responseReceived", onResponse);
@@ -9659,12 +9759,11 @@ async function render(url, opts, deps, timeoutMs, run) {
 async function handOff(session, url, wall, challenged, human, deps, take, signal) {
   const tell = human.tell ?? ((m) => void process.stderr.write(`${m}
 `));
-  const timeoutMs = human.timeoutMs ?? HUMAN_TIMEOUT_MS;
+  const timeoutMs = human.timeoutMs ?? humanTimeoutMs();
   const start = deps.now();
   const left = () => timeoutMs - (deps.now() - start);
   const { cli, name } = brand();
-  await deps.discovery.activateTarget(session.port, session.targetId, session.host).catch(() => {
-  });
+  const restore = await session.showToHuman();
   tell(
     `${cli}: ${url} is behind ${wall}. It is open in the ${name} browser window (its own profile, not your browser): get past it there and the read goes on by itself \u2014 waiting up to ${Math.round(timeoutMs / 1e3)} s.`
   );
@@ -9687,6 +9786,8 @@ async function handOff(session, url, wall, challenged, human, deps, take, signal
     }
   } catch (e) {
     if (!(e instanceof WaitTimeoutError)) throw e;
+  } finally {
+    await restore();
   }
   tell(`${cli}: ${url} is still behind ${wall} after ${Math.round(timeoutMs / 1e3)} s \u2014 read without it.`);
   return void 0;
@@ -9700,7 +9801,7 @@ async function read(url, opts) {
   if (signal?.aborted) throw cancelled();
   const deps = browserDeps(opts.deps);
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
-  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? HUMAN_TIMEOUT_MS : 0;
+  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? humanTimeoutMs() : 0;
   const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
     release();
@@ -9733,6 +9834,7 @@ async function read(url, opts) {
 var IDLE_CAP_MS;
 var WEB_PAGE;
 var HUMAN_TIMEOUT_MS;
+var humanTimeoutMs;
 var WALL_POLL_MS;
 var AFTER_WALL_LOAD_MS;
 var active;
@@ -9758,6 +9860,7 @@ var init_read = __esm({
     IDLE_CAP_MS = 3e3;
     WEB_PAGE = /^(?:text\/html|application\/xhtml\+xml)$/i;
     HUMAN_TIMEOUT_MS = 3e5;
+    humanTimeoutMs = () => envInt("HUMAN_TIMEOUT_MS", HUMAN_TIMEOUT_MS, 1e4, 36e5);
     WALL_POLL_MS = 1e3;
     AFTER_WALL_LOAD_MS = 1e4;
     active = 0;
@@ -19078,12 +19181,13 @@ Worklist: \`${join25(runAbs, "PLAN.json")}\` (\`subQuestions[]\`; each entry has
 
 For EACH of your sub-questions:
 
-1. **Sweep with your OWN web search first \u2014 this is the primary engine, not an extra.**
+1. **Sweep with your OWN web search first \u2014 this is the primary engine, not an extra.** Use your host's web search tool: \`WebSearch\` in Claude Code, the built-in web search (\`web_search\`) in Codex. Never search through the engine, a browser or a fetched search results page: with \`--web-results\` the gather below searches nothing itself.
    \`node ${engineAbs} queries --q "<its question>" --mode <the plan's mode> --depth <the plan's depth>\`
    names how many DISTINCT queries to run and which angles to cover. Run your web search once per angle, pool EVERY hit into \`<its out dir>/websearch.json\` as \`[{"url":\u2026,"title":\u2026,"snippet":\u2026}, \u2026]\`. A fan-out multiplies whatever discovery it was given, so a sub-question gathered with no lane is where this run quietly gets worse.
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your web search queries into that language when the run targets a non-English audience):
    \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
+   If a page stops at a CAPTCHA or an anti-bot check, the command hands it to the user before it ends and waits for them (up to \`ULTRASEARCH_HUMAN_TIMEOUT_MS\`, 5 minutes): let it wait, never try to get past the check yourself.
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND web search round at that gap and fold the whole round in with ONE call:
    \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
@@ -19271,9 +19375,14 @@ async function runHuman(dir, chosen, opts = {}) {
   };
   if (!chosen.length) return results;
   const { manifest } = readDossier(dir);
+  let unanswered;
   for (const c of chosen) {
     if (opts.noWindow) {
       done({ ...c, outcome: "skipped", note: opts.noWindow });
+      continue;
+    }
+    if (unanswered) {
+      done({ ...c, outcome: "skipped", note: `nobody got past ${unanswered} in time \u2014 left for \`ultrasearch human --run ${dir}\`` });
       continue;
     }
     opts.onStart?.(c);
@@ -19285,10 +19394,68 @@ async function runHuman(dir, chosen, opts = {}) {
       ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {}
     });
     const r = got.results[0];
-    const outcome2 = r?.repaired ? "repaired" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
-    done({ ...c, outcome: outcome2, ...r?.note ? { note: r.note } : {} });
+    const outcome2 = r?.repaired ? "repaired" : r?.added ? "added" : r?.handoff === "timeout" ? "timed out" : r?.handoff === "no-window" ? "skipped" : "still walled";
+    done({ ...c, ...r?.added && r.id ? { id: r.id } : {}, outcome: outcome2, ...r?.note ? { note: r.note } : {} });
+    if (outcome2 === "timed out" && opts.stopAfterTimeout) unanswered = c.url;
   }
   return results;
+}
+var HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
+var HUMAN_TIMEOUT_DEFAULT_MS = 3e5;
+function humanTimeoutMs2(env2 = process.env) {
+  const raw = env2[HUMAN_TIMEOUT_ENV]?.trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  if (!Number.isFinite(n)) return HUMAN_TIMEOUT_DEFAULT_MS;
+  if (n <= 0) return void 0;
+  return Math.min(36e5, Math.max(1e4, Math.trunc(n)));
+}
+var CHALLENGE = /\bchallenge\b|\b(?:re|h)?captcha\b|\banti-bot\b|\bbot check\b|\bverify(?:ing)? (?:that )?you(?:'re| are) (?:a )?human\b/i;
+function challengeIn(text) {
+  return text ? CHALLENGE.exec(text)?.[0] : void 0;
+}
+function challengeCandidates(dir, sources, manifest) {
+  return humanCandidates(sources, manifest).filter((c) => {
+    if (challengeIn(c.why)) return true;
+    if ((manifest.notes ?? []).some((n) => mentions(n, c.url) && challengeIn(n))) return true;
+    const s = sources.find((x) => x.id === c.id);
+    try {
+      return !!s && !!challengeIn(wallPattern(readSourceText(dir, s)));
+    } catch {
+      return false;
+    }
+  });
+}
+async function handOffDuringRun(dir, opts) {
+  if (opts.browser === "off") return [];
+  const timeoutMs = humanTimeoutMs2(opts.env);
+  if (timeoutMs === void 0 || !(opts.canShow ?? (() => canShowWindow()))()) return [];
+  let candidates2;
+  try {
+    const { sources, manifest } = readDossier(dir);
+    candidates2 = challengeCandidates(dir, sources, manifest);
+  } catch {
+    return [];
+  }
+  const seen = new Set(candidates2.map((c) => c.url));
+  for (const c of opts.refused ?? []) {
+    if (seen.has(c.url)) continue;
+    seen.add(c.url);
+    candidates2.push(c);
+  }
+  if (!candidates2.length) return [];
+  opts.tell(
+    `ultrasearch: ${candidates2.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). The browser comes forward on each in turn: get past it there and the read goes on by itself \u2014 up to ${Math.round(timeoutMs / 1e3)} s each (${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`
+  );
+  return runHuman(dir, candidates2, {
+    timeoutMs,
+    stopAfterTimeout: true,
+    ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {},
+    onResult: (r) => opts.tell(`ultrasearch: human: ${r.id}	${r.url}	${r.outcome}${r.outcome === "skipped" && r.note ? ` \u2014 ${r.note}` : ""}`)
+  });
+}
+function refusedForChallenge(url, note) {
+  const found = challengeIn(note);
+  return found ? { id: "-", url, why: `refused \u2014 ${found}` } : void 0;
 }
 
 // src/mcp/handlers.ts
@@ -21986,6 +22153,8 @@ async function main(argv = process.argv.slice(2)) {
     uninstall();
   }
 }
+var say = (line) => void process.stderr.write(`${line}
+`);
 async function dispatch2(p) {
   switch (p.command) {
     case "gather": {
@@ -22001,7 +22170,11 @@ async function dispatch2(p) {
           );
         }
       }
-      const r = await runGather(options);
+      let r = await runGather(options);
+      if (!options.stdout) {
+        const handed = await handOffDuringRun(r.dir, { browser: options.browser ?? "off", firecrawl: options.firecrawl, tell: say });
+        if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
+      }
       const report = gatherReport(r, options);
       const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
@@ -22166,7 +22339,8 @@ ${formatServices(rows)}
       const line = (r) => `${r.id}	${r.url}	${r.outcome}${r.note ? `	${r.note}` : ""}`;
       if (!json2) for (const r of skipped) process.stdout.write(line(r) + "\n");
       const results = await runHuman(rdir, chosen, {
-        ...secs !== void 0 ? { timeoutMs: secs * 1e3 } : {},
+        // --timeout, else ULTRASEARCH_HUMAN_TIMEOUT_MS; asked for by name, `human` waits even when that is 0.
+        timeoutMs: secs !== void 0 ? secs * 1e3 : humanTimeoutMs2() ?? HUMAN_TIMEOUT_DEFAULT_MS,
         ...p.values.firecrawl ? { firecrawl: p.values.firecrawl } : {},
         ...noWindow ? { noWindow } : {},
         onStart: (c) => process.stderr.write(`ultrasearch: ${c.id} (${c.why}) \u2014 handing ${c.url} to you in the browser window
@@ -22283,15 +22457,26 @@ ${formatServices(rows)}
       if (!dir) fail("missing --out <dossier-dir>");
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
-      const r = await addSource(resolve5(dir), url, {
+      const browser = browserMode(p);
+      let r = await addSource(resolve5(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
         firecrawl: p.values.firecrawl,
         cache: !p.bools.has("no-cache"),
         // same default-on policy as gather
-        browser: browserMode(p)
+        browser
       });
+      const refused = r.added ? void 0 : refusedForChallenge(url, r.note);
+      const handed = await handOffDuringRun(resolve5(dir), {
+        browser,
+        firecrawl: p.values.firecrawl,
+        tell: say,
+        ...refused ? { refused: [refused] } : {}
+      });
+      const mine = handed.find((h) => h.url === url && (h.outcome === "added" || h.outcome === "repaired"));
+      if (mine)
+        r = { id: mine.id, added: true, ...mine.outcome === "repaired" ? { repaired: true } : {}, ...mine.note ? { note: mine.note } : {} };
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       } else if (r.added) {
@@ -22346,11 +22531,25 @@ ${formatServices(rows)}
       };
       const web = hits.length ? await addSources(resolve5(dir), hits, enrichOpts) : void 0;
       const local2 = files.length ? await addFiles(resolve5(dir), files, enrichOpts) : void 0;
-      const repaired = web?.repaired ?? 0;
+      const refused = (web?.results ?? []).flatMap((o) => o.added || o.repaired ? [] : refusedForChallenge(o.url, o.note) ?? []);
+      const handed = await handOffDuringRun(resolve5(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const results = [...web?.results ?? [], ...local2?.results ?? []].map((o) => {
+        const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
+        if (!h || o.added || o.repaired) return o;
+        return {
+          url: o.url,
+          id: h.id,
+          added: h.outcome === "added",
+          ...h.outcome === "repaired" ? { repaired: true } : {},
+          ...h.note ? { note: h.note } : {}
+        };
+      });
+      const repaired = results.filter((o) => o.repaired).length;
+      const added = results.filter((o) => o.added).length;
       const r = {
-        results: [...web?.results ?? [], ...local2?.results ?? []],
-        added: (web?.added ?? 0) + (local2?.added ?? 0),
-        skipped: (web?.skipped ?? 0) + (local2?.skipped ?? 0),
+        results,
+        added,
+        skipped: results.length - added - repaired,
         ...repaired ? { repaired } : {}
       };
       if (p.bools.has("json")) {

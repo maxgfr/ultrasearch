@@ -37,9 +37,14 @@ Seven rules hold on every run, at every depth. Later sections cite them by numbe
 instead of restating them.
 
 - **I0 — Native web search drives discovery.** Every route starts with you
-  searching. `queries` tells you how many distinct queries to run and which
-  angles to cover; you pool every hit into one JSON array and pass it as
-  `--web-results`. Never let a run fall back to the keyless engines *by default*
+  searching **with your host's own web search tool** — `WebSearch` in Claude
+  Code, the built-in web search in Codex (`web_search`), whatever your host
+  calls it — never with the engine, a browser or a fetched search page.
+  `queries` tells you how many distinct queries to run and which angles to
+  cover; you pool every hit into one JSON array and pass it as `--web-results`.
+  With hits supplied, the run searches nothing itself (`--search auto` resolves
+  to `light`: no keyless engine, no gap or `site:` round) unless you ask for
+  `--search full`. Never let a run fall back to the keyless engines *by default*
   — that is what the run means when it prints `websearch: none supplied`. If your
   host genuinely has no web-search capability, omit the flag and the engine keeps its
   old behaviour on its own.
@@ -253,7 +258,8 @@ not hand control back mid-retrieval.
    automatically in every profile and needs no flag; it extracts pages, it does
    not find them. So does the **browser rung**, keylessly: a Chrome or Brave
    window may open during the run to read a walled or JS-only page, and closes
-   when the command ends (`--browser off` to prevent it).
+   when the command ends (`--browser off` to prevent it). A page that needs the
+   user comes forward before the run ends ([Human handoff](#human-handoff)).
 
    **Widen only when it pays** (measured on two real runs, same engine):
 
@@ -379,13 +385,26 @@ not hand control back mid-retrieval.
 
 ## Human handoff
 
-When a run ends with `N page(s) need a human: ultrasearch human --run <dir>`
+**During a run.** When `gather`, `ingest` or `fetch` met a CAPTCHA or an
+anti-bot check, it hands those pages to the person at the machine before it
+ends: the browser comes forward on each page in turn (only then), a line on
+stderr says which page needs them, and the command waits until they are past it
+— up to `ULTRASEARCH_HUMAN_TIMEOUT_MS` per page (default 300000, 5 minutes) —
+then repairs the source under its own `[S#]`. The first page nobody gets past
+ends the wait: nobody is there, and the rest are left for `human`. Tell the user
+when you start such a run that a window may come forward asking them to prove
+they are human. It never happens with `--browser off`, under `--stdout`, with no
+window to show (no display, a CI run), or with `ULTRASEARCH_HUMAN_TIMEOUT_MS=0`
+(set it for a run nobody is watching). A sign-in or consent wall is never
+handed over this way.
+
+**After a run.** When a run ends with `N page(s) need a human: ultrasearch human --run <dir>`
 (gather, ingest and fetch print it), some sources sit behind a CAPTCHA, an
 anti-bot check or a sign-in only the user can pass. Ask the user — with your
 host's ask-the-user tool if it has one — whether they can solve them now. If
 yes, run `human --run <dir>` (`--list` first to name the pages) and tell them
 the browser window is open on the page that needs them; it waits up to
-`--timeout` seconds per page, then reads the page and repairs the source under
+`--timeout` seconds per page (else `ULTRASEARCH_HUMAN_TIMEOUT_MS`, else 300), then reads the page and repairs the source under
 its own `[S#]`. If no, carry on without those sources. **Never solve, click
 through or script past a challenge yourself.** With no window to show (no
 display, a CI run) every page is skipped and nobody is waited for.
