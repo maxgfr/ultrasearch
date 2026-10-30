@@ -3,7 +3,7 @@ name: ultrasearch
 description: Research a web topic, brainstorm research angles, and produce an evidence dossier and citation-checked report. Use only when the user explicitly asks for ultrasearch or web research.
 license: MIT
 metadata:
-  version: 1.45.0
+  version: 1.45.1
 ---
 
 # ultrasearch — recap the web, grounded not guessed

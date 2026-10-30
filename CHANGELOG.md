@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.45.1](https://github.com/maxgfr/ultrasearch/compare/v1.45.0...v1.45.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **doctor:** describe the quiet browser window and the ask before a handoff ([#65](https://github.com/maxgfr/ultrasearch/issues/65)) ([92b38af](https://github.com/maxgfr/ultrasearch/commit/92b38af8dd73bbaadcd9ddec4217437048448600)), closes [#64](https://github.com/maxgfr/ultrasearch/issues/64)
+
 # [1.45.0](https://github.com/maxgfr/ultrasearch/compare/v1.44.0...v1.45.0) (2026-10-30)
 
 
