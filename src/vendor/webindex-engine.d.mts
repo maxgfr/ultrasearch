@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.36.2";
+declare const ENGINE_VERSION = "1.37.0";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -898,6 +898,98 @@ declare class CdpClient {
     private onClosed;
 }
 
+/**
+ * What a handoff does about the person (`<PREFIX>_HUMAN_ASK`): `ask` them first
+ * (the default), hand the page over without asking (`always`, as before there
+ * was a question), or hand nothing over at all (`never`).
+ */
+type HumanAskMode = "ask" | "always" | "never";
+/** The caller's choice, else `<PREFIX>_HUMAN_ASK`; anything unknown is `ask`. Read at call time. */
+declare function humanAskMode(explicit?: string): HumanAskMode;
+/** How long the question waits for an answer, by default: 2 minutes. */
+declare const HUMAN_ASK_TIMEOUT_MS = 120000;
+/** How long the question waits: `<PREFIX>_HUMAN_ASK_TIMEOUT_MS`, 10 s to an hour, 2 minutes unset. */
+declare function humanAskTimeoutMs(): number;
+/**
+ * The person's answer: `solve` (bring the pages forward now), `later` (bring
+ * nothing forward), `no-answer` (the question gave up, or was closed), or
+ * `unavailable`: nobody could be asked here — no window, no tool to ask with,
+ * or the tool failed — and the caller does what it did before it asked.
+ */
+type HumanAnswer = "solve" | "later" | "no-answer" | "unavailable";
+type HumanLang = "en" | "fr";
+/** One page waiting for the person. */
+interface HumanAskPage {
+    url: string;
+    /** What stops it, in any words: "cloudflare challenge", "snippet only — captcha", "login wall". */
+    check?: string;
+}
+/** Runs one command and reads what it said; `shAsync` by default. */
+type HumanAskRunner = (cmd: string, args: string[], opts: {
+    timeoutMs: number;
+    env?: NodeJS.ProcessEnv;
+}) => Promise<ShResult>;
+interface HumanAskOptions {
+    /** How long the question waits for an answer; HUMAN_ASK_TIMEOUT_MS by default. */
+    timeoutMs?: number;
+    /** The language of the text; the person's own (humanLang) by default. */
+    lang?: HumanLang;
+    /** The dialog's title; the brand's name by default. */
+    title?: string;
+    platform?: NodeJS.Platform;
+    /** The environment the locale and the display are read from; process.env by default. */
+    env?: Record<string, string | undefined>;
+    /** Test seam: runs each command. */
+    run?: HumanAskRunner;
+    /** Test seam: whether a command is on PATH (the Linux tools). */
+    have?: (cmd: string) => boolean;
+    /** Test seam: the runtime's locale, the last word on the language. */
+    defaultLocale?: string;
+}
+/**
+ * The person's language: LC_ALL, then LC_MESSAGES, then LANG — the first one
+ * set to a real locale (not C or POSIX) decides — else, on macOS, the
+ * AppleLocale of the account, else the runtime's own locale. French or English.
+ */
+declare function humanLang(opts?: Pick<HumanAskOptions, "platform" | "env" | "run" | "defaultLocale">): Promise<HumanLang>;
+/** What stops a page, said the way a person names it: "CAPTCHA", "Cloudflare check", "sign-in". */
+declare function humanCheckLabel(check: string | undefined, lang?: HumanLang): string;
+/** The words of the question, and of the notification once it is done. */
+interface HumanAskText {
+    title: string;
+    message: string;
+    /** The default button. */
+    solve: string;
+    later: string;
+    /** What the notification says once the person is through: `cleared` of `total` pages. */
+    done(cleared: number, total: number): string;
+}
+/**
+ * The question, for `pages`: which sites are stopped and by what, how many
+ * pages wait, and what each answer does. One line per site, at most five.
+ */
+declare function humanAskText(pages: HumanAskPage[], lang?: HumanLang, title?: string): HumanAskText;
+/**
+ * Ask the person whether to bring `pages` forward now — once, for all of them:
+ * a native dialog naming the sites and what stops them, "Later" and "Solve it"
+ * (the default), that gives up on its own after `timeoutMs`. Never throws.
+ * `unavailable` with no window anyone can see (no display, a CI run), with
+ * nothing to ask with, or when the dialog itself failed.
+ */
+declare function askHuman(pages: HumanAskPage[], opts?: HumanAskOptions): Promise<HumanAnswer>;
+/**
+ * Say one short thing to the person in a notification that goes away by
+ * itself: macOS Notification Center, `notify-send` on Linux. True when it was
+ * shown; false where there is nothing to show it with (Windows included) — it
+ * is a courtesy, never a question, and never throws.
+ */
+declare function notifyHuman(message: string, opts?: Omit<HumanAskOptions, "timeoutMs" | "lang" | "defaultLocale">): Promise<boolean>;
+/**
+ * The notification that ends a handoff the person said yes to: they got past
+ * `cleared` of `total` pages and the run goes on — in their language.
+ */
+declare function notifyHumanDone(cleared: number, total: number, opts?: Omit<HumanAskOptions, "timeoutMs">): Promise<boolean>;
+
 type BrowserKind = "chrome" | "brave" | "chromium" | "edge";
 interface BrowserBinary {
     kind: BrowserKind;
@@ -1044,6 +1136,10 @@ interface BrowserDeps {
     /** Reads `WEBINDEX_<name>` (brand-aware), like the rest of the library. */
     env(name: string): string | undefined;
     platform: NodeJS.Platform;
+    /** Ask the person before a handoff brings the browser forward (askHuman). */
+    askHuman(pages: HumanAskPage[]): Promise<HumanAnswer>;
+    /** Tell the person, in a notification, that they got past `cleared` of `total` pages (notifyHumanDone). */
+    notifyHuman(cleared: number, total: number): Promise<boolean>;
 }
 
 interface LaunchOptions {
@@ -1294,14 +1390,25 @@ interface HumanHandoff {
     timeoutMs?: number;
     /** Where the request to the human goes: a line on stderr by default. */
     tell?: (message: string) => void;
+    /**
+     * Whether the person is asked first, with a native dialog (askHuman), before
+     * the browser comes forward. Unset, `<PREFIX>_HUMAN_ASK` decides: `ask` (the
+     * default) asks once for every read of this process for the next 10 minutes,
+     * `always` hands the page over without asking, `never` hands nothing over.
+     * `false` hands it over without asking, whatever the env says: for a caller
+     * that asked the person already, about its whole batch.
+     */
+    ask?: boolean;
 }
 /**
  * How a handoff went, on a read that met a wall a human could get past:
  * `cleared` the human got past it and the page was read, `timeout` the wall was
  * still up when the time ran out, `no-window` nobody could be shown the page
- * (no display, a headless browser, a CI run) so nobody was waited for.
+ * (no display, a headless browser, a CI run) so nobody was waited for,
+ * `declined` the person was asked and said later, or did not answer — or
+ * `<PREFIX>_HUMAN_ASK=never` — so nothing came forward.
  */
-type HumanOutcome = "cleared" | "timeout" | "no-window";
+type HumanOutcome = "cleared" | "timeout" | "no-window" | "declined";
 /**
  * Whether a window this process opens has someone to look at it: macOS and
  * Windows always, Linux only under X11 or Wayland — and never in a CI run,
@@ -1718,8 +1825,9 @@ interface ReadPageOptions extends LaunchOptions {
      * Hand a page that needs a human to the human (HumanHandoff): on a blocking
      * challenge, or a consent or sign-in wall, the read brings its tab up in the
      * visible browser, says on stderr which page needs them, and waits for the
-     * wall to go — on top of `timeoutMs` — before reading it. The result says how
-     * that went in `handoff`. Off by default: a read never waits on anyone unasked.
+     * wall to go — on top of `timeoutMs` — before reading it. The person is asked
+     * first (`ask`, `<PREFIX>_HUMAN_ASK`). The result says how that went in
+     * `handoff`. Off by default: a read never waits on anyone unasked.
      */
     human?: boolean | HumanHandoff;
 }
@@ -5081,4 +5189,4 @@ declare function readResource(uri: string, moduleDir?: string): ResourceContents
 declare class ResourceError extends Error {
 }
 
-export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, BATCHES_REMOVED_IN, BATCH_SIZE, type Bm25Doc, type Bm25Index, type Brand, type AXNode as BrowserAXNode, type ActionResult as BrowserActionResult, type BrowserBinary, type Challenge as BrowserChallenge, type ChallengeSignature as BrowserChallengeSignature, type CloseReadsOptions as BrowserCloseReadsOptions, type DetectOptions as BrowserDetectOptions, type HumanHandoff as BrowserHumanHandoff, type HumanOutcome as BrowserHumanOutcome, type BrowserKind, type NetworkEntry as BrowserNetworkEntry, type OpenOptions as BrowserOpenOptions, type ReadPageOptions as BrowserReadOptions, type RenderOptions as BrowserRenderOptions, type RenderResult as BrowserRenderResult, BrowserSession, type SnapshotOptions as BrowserSnapshotOptions, type SnapshotResult as BrowserSnapshotResult, COMPOSE_YAML, CP1252_C1, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, type ChangeVerdict, type ClaimUnit, type ClaimUnitOptions, type CliSpec, type CommandArgs, type CorpusResult, type CorpusVideo, type CrawlOptions, type CrawlResult, type CrawledPage, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, EVIDENCE_TOKEN, EXIT_FAILURE, EXIT_HUMAN, EXIT_OK, EXIT_USAGE, type EmbedResult, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FILE_LINE_TOKEN, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, FRAME_EFFORT, type Feed, type FeedItem, type Fingerprint, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type FirecrawlSearchOptions, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type FrameEffort, type FrameKind, type FramesResult, type Fusable, type HandleOptions, type HttpOptions, type HttpResult, type HybridDoc, type HybridHit, InvalidParamsError, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type ListedVideo, MIN_USEFUL_CHARS, type MarkdownOptions, type McpAdapter, type McpServer, type OrchestrateOptions, type OrchestrateResult, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROGRESS_MESSAGE_SINCE, PROTOCOL_VERSIONS, type PackageFacts, type PackageLookup, type PackageResolution, type PageMetadata, type ParsedArgs, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PhaseDefinition, type PhaseEmission, type PhaseInfo, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoFactsResult, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RungOutcome, type RungReport, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, SMALL_WORKLIST, SOURCE_TOKEN, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type SearchRung, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, TOKEN_RE, type Table, type ToolAnnotations, type ToolCallContext, type ToolDecl, ToolError, type ToolOutcome, UNDER_COVERED_MIN, UsageError, VIDEO_TRANSCRIBERS, type VectorHit, type VectorPoint, type VideoChapter, type VideoCorpus, type VideoDeps, type VideoFrame, type VideoHit, type VideoLadderOptions, type VideoMeta, type VideoProbe, type VideoRunMeta, type VideoRunResult, type VideoRunner, type VideoSegment, type VideoSource, type VideoTranscriberId, type VideoTranscript, WORKFLOW_FORBIDDEN, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, appendixMask, applyRelevanceFloor, argBool, argInt, argList, argOneOf, argValue, arxivIdFromUrl, assessExtractedText, assessPdfText, assessTranscript, awaitHostSlot, backOffHost, baseLang, batchRefusal, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, bracketedTokensIn, brand, browserHome, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canShowWindow as canShowBrowserWindow, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, challengePage, challengeUrl, charsetFromContentType, charsetFromHtml, citationTokensIn, classifyChallenge as classifyBrowserChallenge, classifyYtdlpError, cleanInline, closeBrowserReads, codeMask, collectCitations, configure, contactUa, contentCoverage, contentHash, corpusLabels, corpusMarkdown, cosine, coverageWindow, crawlConcurrency, crawlSite, createServer, danglingTokens, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, decodeLocal, dedupeByUrl, dedupeNearDuplicates, defaultUa, deleteCollection, deriveCitableUrl, detectBrowserBinary, detectRateLimited, discoverFeeds, diversify, docFlagRegex, docFormatForContentType, docFormatForUrl, documentedFlags, doiFromUrl, domainOf, downloadSubtitle, embed, embedModel, embedOne, embedPrefixes, embeddingsDisabled, emitWorkflowScript, enabledDocExtractors, enabledExtractors, enabledTranscribers, ensureClone, ensureCollection, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractClaimUnits, extractDocument, extractFrames, extractFromHtml, extractJsonLd, extractMainHtml, extractMetaTags, extractNumerals, extractPdf, extractTables, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, fetchVideoCorpus, fetchVideoRun, fingerprint, firecrawlBase, firecrawlIsExplicit, fnv1a64, fnv1a64Words, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, forgeRef, formatStamp, fuse, hammingDistance, hasChanged, have, headCommit, helpCoversFlag, hostDelayMs, htmlCanonicalUrl, htmlTitle, htmlToMarkdown, htmlToText, httpGet, httpJson, hybridSearch, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isInvokedDirectly, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, isWordedWall, jsonLine, keylessEngines, keywords, knownVideo, linksFrom, listPhases, listReleases, listResources, listTags, listVideoRuns, listVideos, looksLikeChallenge, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, looksLikeWall, lookupPackage, lookupPackageResult, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, markedQuoteMask, matcherFromTokens, maxCrawlDelayMs, mergeSegments, metaDescriptionOf, missingFromHelp, nearestHeading, negotiateProtocol, normalize, normalizeDoi, normalizeNumeralText, normalizeRepoUrl, ocrBudgetLeft, ocrPdf, ocrTools, officeToText, ollamaBase, oneWriterFooter, openBrowserSession, orMasks, orchestrateRun, originUrl, pageDelayMs, pageMetadata, parseArgs, parseDdgHtml, parseDdgLite, parseFeed, parseFileLine, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, parseVtt, pdfToText, pipedEnum, politeDelayMs, positionalText, probeFirecrawl, probeOllama, probeQdrant, probeSearxng, probeVideo, proseOutweighsWall, pubmedAbstractUrl, qdrantBase, rankedKeywords, readCapped, readCappedBytes, readJsonSafe, readManifest, readRenderedPage, readResource, readVideoRun, recencyScore, renderAsset, renderSnapshot as renderBrowserSnapshot, repoCacheRoot, repoFacts, repoFactsResult, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetHostSchedule, resetNoWrite, resetOcrBudget, resetOcrTools, resetOllamaProbe, resetPdfLadderCache, resetQdrantProbe, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resetVideoLadderCache, resolvePackage, resolvePackageResult, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runId, runStdioServer, runWithInput, runbookMd, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchVectors, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searchVideoRuns, searxngBase, searxngIsExplicit, searxngLanguage, setCacheMode, setNoWrite, setVideoDeps, sh, shAsync, shq, simhash, siteOf, skillName, sleep, slugify, sniffDocument, splitRegistryPrefix, stackControl, startHttpServer, stripConsentBoilerplate, stripHtmlComments, stripInlineCode, stripTags, structuredContentFor, subtokens, tableToMarkdown, takeArtifacts, termCoverage, throttleReason, toBatches, transcribeVideo, transcriptMarkdown, uncitedIds, underCovered, unitTexts, unknownEngines, upsert, urlDeclaresIdentity, usefulChars, validateArgs, videoMetaFromInfo, videoRoot, videoRunKey, videoSource, videoUrlAt, wallPattern, whisperBudgetLeft, whisperModel, withRunLock, writeArtifact, writeFileAtomic, writeManifest, youtubeListKind, youtubeVideoId, ytdlpVersionAge };
+export { ANNOTATIONS_SINCE, ANYDOC_SPEC, ASSUMED_HTTP_PROTOCOL, type Artifact, BATCHES_REMOVED_IN, BATCH_SIZE, type Bm25Doc, type Bm25Index, type Brand, type AXNode as BrowserAXNode, type ActionResult as BrowserActionResult, type BrowserBinary, type Challenge as BrowserChallenge, type ChallengeSignature as BrowserChallengeSignature, type CloseReadsOptions as BrowserCloseReadsOptions, type DetectOptions as BrowserDetectOptions, type HumanHandoff as BrowserHumanHandoff, type HumanOutcome as BrowserHumanOutcome, type BrowserKind, type NetworkEntry as BrowserNetworkEntry, type OpenOptions as BrowserOpenOptions, type ReadPageOptions as BrowserReadOptions, type RenderOptions as BrowserRenderOptions, type RenderResult as BrowserRenderResult, BrowserSession, type SnapshotOptions as BrowserSnapshotOptions, type SnapshotResult as BrowserSnapshotResult, COMPOSE_YAML, CP1252_C1, type CacheEntry, type CacheMode, type CacheStats, type CapAdvice, type ChangeVerdict, type ClaimUnit, type ClaimUnitOptions, type CliSpec, type CommandArgs, type CorpusResult, type CorpusVideo, type CrawlOptions, type CrawlResult, type CrawledPage, DEAD_LINK_STATUS, DEFAULT_MAX_RESPONSE_BYTES, DOC_EXTENSIONS, DOC_EXTRACTORS, type DocExtraction, type DocExtractorId, type DocFormat, type DocLadderOptions, ENGINE_VERSION, ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, EVIDENCE_TOKEN, EXIT_FAILURE, EXIT_HUMAN, EXIT_OK, EXIT_USAGE, type EmbedResult, type EngineHit, type EngineResult, type ExcerptWindow, type ExpandedKeyword, type ExtractResult, type ExtractorId, FILE_LINE_TOKEN, FIRECRAWL_DEFAULT_BASE, FIRECRAWL_ENV, FRAME_EFFORT, type Feed, type FeedItem, type Fingerprint, type FirecrawlHit, type FirecrawlOptions, type FirecrawlScrape, type FirecrawlSearchOptions, type ForgeItem, type ForgeKind, type ForgeOptions, type ForgeResult, type FrameEffort, type FrameKind, type FramesResult, type Fusable, HUMAN_ASK_TIMEOUT_MS, type HandleOptions, type HttpOptions, type HttpResult, type HumanAnswer, type HumanAskMode, type HumanAskOptions, type HumanAskPage, type HumanAskRunner, type HumanAskText, type HumanLang, type HybridDoc, type HybridHit, InvalidParamsError, type JsonRpcMessage, type JsonSchema, type JsonSchemaProp, KEYLESS_ENGINES, type KeylessEngine, type KeywordMatcher, type KeywordVariant, LATEST_PROTOCOL, LOCAL_FILE_DOMAIN, type ListedVideo, MIN_USEFUL_CHARS, type MarkdownOptions, type McpAdapter, type McpServer, type OrchestrateOptions, type OrchestrateResult, PDF_EXTRACTORS, PDF_INSPECTOR_SPEC, PDF_URL_RE, PROGRESS_MESSAGE_SINCE, PROTOCOL_VERSIONS, type PackageFacts, type PackageLookup, type PackageResolution, type PageMetadata, type ParsedArgs, type PdfExtraction, type PdfExtractorId, type PdfLadderOptions, type PdfVerdict, type PhaseDefinition, type PhaseEmission, type PhaseInfo, type PromptDecl, PromptError, type PromptResult, type ProtocolVersion, RICH_TOOLS_SINCE, type Ranked, type RegistryKind, type RepoFacts, type RepoFactsResult, type RepoRef, type ResolvedProvider, type ResourceContents, type ResourceDecl, ResourceError, type Robots, type RobotsRule, type RungOutcome, type RungReport, type RunningHttpServer, SEARXNG_DEFAULT_BASE, SEARXNG_SETTINGS_YAML, SERVICE_PROFILES, SMALL_WORKLIST, SOURCE_TOKEN, STACK_SERVICES, type ScrapeAttempt, type SearchHit, type SearchOptions, type SearchResult, type SearchRung, type ServerOptions, type ShResult, type Sitemap, type StackAction, type StackDeps, type StackResult, type StackRun, type StdioOptions, TOKEN_RE, type Table, type ToolAnnotations, type ToolCallContext, type ToolDecl, ToolError, type ToolOutcome, UNDER_COVERED_MIN, UsageError, VIDEO_TRANSCRIBERS, type VectorHit, type VectorPoint, type VideoChapter, type VideoCorpus, type VideoDeps, type VideoFrame, type VideoHit, type VideoLadderOptions, type VideoMeta, type VideoProbe, type VideoRunMeta, type VideoRunResult, type VideoRunner, type VideoSegment, type VideoSource, type VideoTranscriberId, type VideoTranscript, WORKFLOW_FORBIDDEN, accentPattern, acceptLanguageHeader, addressedIdCount, apiBase, apiPrefix, appendixMask, applyRelevanceFloor, argBool, argInt, argList, argOneOf, argValue, arxivIdFromUrl, askHuman, assessExtractedText, assessPdfText, assessTranscript, awaitHostSlot, backOffHost, baseLang, batchRefusal, bestExcerpt, bm25MatchedTerms, bm25Score, bm25Tokenize, bracketedTokensIn, brand, browserHome, browserUa, buildBm25Index, buildMatcher, cacheClean, cacheDir, cacheMode, cachePath, cacheStats, cachedFetchAndExtract, canShowWindow as canShowBrowserWindow, canonicalRepo, canonicalRepoRef, canonicalizeUrl, capExtract, capResponse, challengePage, challengeUrl, charsetFromContentType, charsetFromHtml, citationTokensIn, classifyChallenge as classifyBrowserChallenge, classifyYtdlpError, cleanInline, closeBrowserReads, codeMask, collectCitations, configure, contactUa, contentCoverage, contentHash, corpusLabels, corpusMarkdown, cosine, coverageWindow, crawlConcurrency, crawlSite, createServer, danglingTokens, ddgRedirectTarget, ddgRegion, deaccent, decodeBody, decodeEntities, decodeLocal, dedupeByUrl, dedupeNearDuplicates, defaultUa, deleteCollection, deriveCitableUrl, detectBrowserBinary, detectRateLimited, discoverFeeds, diversify, docFlagRegex, docFormatForContentType, docFormatForUrl, documentedFlags, doiFromUrl, domainOf, downloadSubtitle, embed, embedModel, embedOne, embedPrefixes, embeddingsDisabled, emitWorkflowScript, enabledDocExtractors, enabledExtractors, enabledTranscribers, ensureClone, ensureCollection, ensureComposeMaterialized, ensureDir, ensureHistoryDepth, env, envFlag, envInt, envName, escapeRegExp, excerptWindows, expandTokens, externalHosts, extractClaimUnits, extractDocument, extractFrames, extractFromHtml, extractJsonLd, extractMainHtml, extractMetaTags, extractNumerals, extractPdf, extractTables, fetchAndExtract, fetchFeed, fetchRobots, fetchSitemap, fetchVideoCorpus, fetchVideoRun, fingerprint, firecrawlBase, firecrawlIsExplicit, fnv1a64, fnv1a64Words, focusedSnippet, foldTerm, forgeAuthHeaders, forgeKind, forgeRef, formatStamp, fuse, hammingDistance, hasChanged, have, headCommit, helpCoversFlag, hostDelayMs, htmlCanonicalUrl, htmlTitle, htmlToMarkdown, htmlToText, httpGet, httpJson, humanAskMode, humanAskText, humanAskTimeoutMs, humanCheckLabel, humanLang, hybridSearch, isAllowed, isApiEndpoint, isCacheFresh, isCitableUrl, isInvokedDirectly, isKeylessEngine, isNoWrite, isOriginAllowed, isProtocolVersion, isStopword, isWordedWall, jsonLine, keylessEngines, keywords, knownVideo, linksFrom, listPhases, listReleases, listResources, listTags, listVideoRuns, listVideos, looksLikeChallenge, looksLikeFirecrawl, looksLikeJunkExtraction, looksLikePdfUrl, looksLikeWall, lookupPackage, lookupPackageResult, mapGithubIssues, mapLimit, mapScrapeResponse, mapSearchResponse, markFirecrawlDown, markedQuoteMask, matcherFromTokens, maxCrawlDelayMs, mergeSegments, metaDescriptionOf, missingFromHelp, nearestHeading, negotiateProtocol, normalize, normalizeDoi, normalizeNumeralText, normalizeRepoUrl, notifyHuman, notifyHumanDone, ocrBudgetLeft, ocrPdf, ocrTools, officeToText, ollamaBase, oneWriterFooter, openBrowserSession, orMasks, orchestrateRun, originUrl, pageDelayMs, pageMetadata, parseArgs, parseDdgHtml, parseDdgLite, parseFeed, parseFileLine, parseMojeek, parseRetryAfter, parseRobots, parseSitemap, parseVtt, pdfToText, pipedEnum, politeDelayMs, positionalText, probeFirecrawl, probeOllama, probeQdrant, probeSearxng, probeVideo, proseOutweighsWall, pubmedAbstractUrl, qdrantBase, rankedKeywords, readCapped, readCappedBytes, readJsonSafe, readManifest, readRenderedPage, readResource, readVideoRun, recencyScore, renderAsset, renderSnapshot as renderBrowserSnapshot, repoCacheRoot, repoFacts, repoFactsResult, rescueViaWayback, resetBrand, resetCacheMode, resetCanonicalRepoCache, resetDocLadderCache, resetFirecrawlProbeCache, resetHaveCache, resetHistoryDepthCache, resetHostSchedule, resetNoWrite, resetOcrBudget, resetOcrTools, resetOllamaProbe, resetPdfLadderCache, resetQdrantProbe, resetRobotsCache, resetRunLocks, resetSearxngProbeCache, resetVideoLadderCache, resolvePackage, resolvePackageResult, resolveProvider, resolveRegion, resolveRepo, resolveSkillRoot, revalidationHeaders, rrf, runId, runStdioServer, runWithInput, runbookMd, sameCommit, scrapeViaFirecrawl, search, searchIssues, searchVectors, searchViaFirecrawl, searchViaKeyless, searchViaSearxng, searchVideoRuns, searxngBase, searxngIsExplicit, searxngLanguage, setCacheMode, setNoWrite, setVideoDeps, sh, shAsync, shq, simhash, siteOf, skillName, sleep, slugify, sniffDocument, splitRegistryPrefix, stackControl, startHttpServer, stripConsentBoilerplate, stripHtmlComments, stripInlineCode, stripTags, structuredContentFor, subtokens, tableToMarkdown, takeArtifacts, termCoverage, throttleReason, toBatches, transcribeVideo, transcriptMarkdown, uncitedIds, underCovered, unitTexts, unknownEngines, upsert, urlDeclaresIdentity, usefulChars, validateArgs, videoMetaFromInfo, videoRoot, videoRunKey, videoSource, videoUrlAt, wallPattern, whisperBudgetLeft, whisperModel, withRunLock, writeArtifact, writeFileAtomic, writeManifest, youtubeListKind, youtubeVideoId, ytdlpVersionAge };

@@ -4571,6 +4571,344 @@ ${method}`;
     };
   }
 });
+function challengePage(text) {
+  const t = text.trim();
+  if (!t || t.length >= CHALLENGE_MAX_CHARS) return void 0;
+  const head = t.slice(0, 800);
+  return CHALLENGE_PAGES.find(([re]) => re.test(head))?.[1];
+}
+function looksLikeJunkExtraction(text) {
+  const t = text.trim();
+  const challenge = challengePage(t);
+  if (challenge) return challenge;
+  if (t.length >= 2e3) return void 0;
+  const head = t.slice(0, 800);
+  const hits = JUNK_PATTERNS.filter(([re]) => re.test(head));
+  const strong = hits.find(([, , kind]) => kind === "strong");
+  if (!strong) return void 0;
+  if (hits.length >= 2) return strong[1];
+  const prose = t.split("\n").filter((l) => l.trim().length >= 60 && !JUNK_PATTERNS.some(([re]) => re.test(l))).length;
+  return prose < 3 ? strong[1] : void 0;
+}
+var JUNK_PATTERNS;
+var CHALLENGE_PAGES;
+var CHALLENGE_MAX_CHARS;
+var init_junk = __esm({
+  "src/junk.ts"() {
+    "use strict";
+    JUNK_PATTERNS = [
+      [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall", "strong"],
+      [/\bwe use cookies\b/i, "cookie/consent wall", "strong"],
+      [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall", "weak"],
+      [/\b(accept|reject|allow|decline) all\b/i, "cookie/consent wall", "weak"],
+      [/\b(please )?enable javascript\b/i, "JavaScript-required shell", "strong"],
+      [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell", "strong"],
+      [
+        /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bmaking sure (you are|you're) not a (ro)?bot\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
+        "anti-bot interstitial",
+        "strong"
+      ],
+      [/\battention required\b.*cloudflare|\bunusual traffic from your (computer )?network\b|\bchecking your browser\b/i, "anti-bot interstitial", "strong"],
+      // Akamai's and Cloudflare's denials carry an incident reference; without one
+      // the phrase is as likely a permission-error article.
+      [/\baccess denied\b[\s\S]{0,300}?(\breference #|\bray id\b|\bpermission to access\b)/i, "anti-bot interstitial", "strong"],
+      // Cloudflare's WAF block page. Its "Attention Required!" is the <title>,
+      // which extraction drops, so the body's own wording has to carry it.
+      [/\bsorry, you have been blocked\b|\byou are unable to access\b[\s\S]{0,300}?\bray id\b/i, "anti-bot interstitial", "strong"],
+      [/\baccess denied\b|\benable cookies\b/i, "anti-bot interstitial", "weak"],
+      // FR / DE (the locale layer targets non-EN markets)
+      [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)", "strong"],
+      [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)", "strong"]
+    ];
+    CHALLENGE_PAGES = [
+      // Anubis (TecharoHQ): its <h1>, and its explanation of itself.
+      [/^\W*(?:#+\s*)?making sure you(?:'|’| a)re not a bot\b/i, "anti-bot proof-of-work challenge"],
+      [/\bset up anubis to protect (?:the|this) server\b|\bprotected by anubis\b/i, "anti-bot proof-of-work challenge"],
+      // Apple's forums interstitial and its kin.
+      [/^\W*(?:#+\s*)?security verification in progress\b|\bplease wait while we verify your browser\b/i, "anti-bot interstitial"]
+    ];
+    CHALLENGE_MAX_CHARS = 4e3;
+  }
+});
+function browserFetchMode(explicit) {
+  const m = (explicit ?? env("BROWSER_FETCH"))?.toLowerCase();
+  return m === "always" || m === "fallback" ? m : "off";
+}
+function browserFetchModeFor(opts) {
+  const m = browserFetchMode(opts.browser);
+  return m === "off" && opts.human && opts.browser !== "off" ? "fallback" : m;
+}
+function worthRendering(res) {
+  if (RENDER_STATUS.has(res.status)) return res.status ? `got HTTP ${res.status}` : "got no answer";
+  if (res.status < 200 || res.status >= 300) return void 0;
+  const junk = looksLikeJunkExtraction(res.text);
+  if (junk) return `read a ${junk}`;
+  return res.text.trim().length < 200 ? "found almost no text" : void 0;
+}
+function canShowWindow(platform = process.platform, env2 = process.env) {
+  const ci = env2.CI?.trim().toLowerCase();
+  if (ci && ci !== "false" && ci !== "0") return false;
+  if (platform === "darwin" || platform === "win32") return true;
+  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
+}
+function humanWall(text) {
+  const junk = looksLikeJunkExtraction(text);
+  if (junk && !junk.startsWith("JavaScript")) return junk;
+  const t = text.trim();
+  return t && t.length < LOGIN_WALL_MAX && LOGIN_WALL.test(t.slice(0, 800)) ? "login wall" : void 0;
+}
+var RENDER_STATUS;
+var LOGIN_WALL;
+var LOGIN_WALL_MAX;
+var init_mode = __esm({
+  "src/browser/mode.ts"() {
+    "use strict";
+    init_brand();
+    init_junk();
+    RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
+    LOGIN_WALL = /\b(?:sign|log) ?in (?:to (?:continue|read|view|see|access|keep reading)|or (?:sign up|register|create an account))\b|\byou (?:must|need to|have to) (?:be )?(?:signed|logged) ?in\b|\bplease (?:sign|log) ?in\b/i;
+    LOGIN_WALL_MAX = 1500;
+  }
+});
+function humanAskMode(explicit) {
+  const m = (explicit ?? env("HUMAN_ASK"))?.trim().toLowerCase();
+  return m === "always" || m === "never" ? m : "ask";
+}
+function humanAskTimeoutMs() {
+  return envInt("HUMAN_ASK_TIMEOUT_MS", HUMAN_ASK_TIMEOUT_MS, 1e4, 36e5);
+}
+async function humanLang(opts = {}) {
+  const e = opts.env ?? process.env;
+  for (const key of ["LC_ALL", "LC_MESSAGES", "LANG"]) {
+    const v = e[key]?.trim();
+    if (!v || /^(?:C|POSIX)(?:$|[.@])/i.test(v)) continue;
+    return isFrench(v) ? "fr" : "en";
+  }
+  if ((opts.platform ?? process.platform) === "darwin") {
+    const r = await (opts.run ?? shAsync)("defaults", ["read", "-g", "AppleLocale"], { timeoutMs: 5e3 });
+    if (r.ok && r.stdout.trim()) return isFrench(r.stdout) ? "fr" : "en";
+  }
+  return isFrench(opts.defaultLocale ?? Intl.DateTimeFormat().resolvedOptions().locale) ? "fr" : "en";
+}
+function humanCheckLabel(check, lang = "en") {
+  const t = (check ?? "").toLowerCase();
+  const fr = lang === "fr";
+  if (/captcha/.test(t)) return "CAPTCHA";
+  const vendor = /\b(cloudflare|turnstile|datadome|perimeterx|akamai|imperva|arkose)\b/.exec(t)?.[1];
+  if (vendor) return fr ? `v\xE9rification ${VENDORS[vendor]}` : `${VENDORS[vendor]} check`;
+  if (/\b(?:log|sign) ?-?in\b|\bsignin\b/.test(t)) return fr ? "connexion requise" : "sign-in";
+  if (/consent|cookie/.test(t)) return fr ? "bandeau de consentement" : "consent wall";
+  return fr ? "v\xE9rification anti-robot" : "human check";
+}
+function hostOf(url) {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+function humanAskText(pages, lang = "en", title = brand().name) {
+  const fr = lang === "fr";
+  const sites = /* @__PURE__ */ new Map();
+  for (const p of pages) {
+    const host = hostOf(p.url);
+    const site = sites.get(host) ?? { labels: /* @__PURE__ */ new Set(), pages: 0 };
+    site.labels.add(humanCheckLabel(p.check, lang));
+    site.pages++;
+    sites.set(host, site);
+  }
+  const lines = [...sites].slice(0, SITES_SHOWN).map(([host, s]) => {
+    const n2 = s.pages > 1 ? ` (${s.pages} pages)` : "";
+    return `\u2022 ${host} \u2014 ${[...s.labels].join(", ")}${n2}`;
+  });
+  const more = sites.size - SITES_SHOWN;
+  if (more > 0) lines.push(fr ? `\u2022 et ${more} autre(s) site(s)` : `\u2022 and ${more} more site(s)`);
+  const n = pages.length;
+  const head = fr ? n === 1 ? "Une page est bloqu\xE9e par une v\xE9rification humaine :" : `${n} pages sont bloqu\xE9es par une v\xE9rification humaine :` : n === 1 ? "A page is stopped by a human check:" : `${n} pages are stopped by a human check:`;
+  const solve = fr ? "R\xE9soudre" : "Solve it";
+  const later = fr ? "Plus tard" : "Later";
+  const what = fr ? `${solve} : le navigateur passe au premier plan sur chaque page, l'une apr\xE8s l'autre ; passez la v\xE9rification et la suite se fait toute seule.
+${later} : rien ne s'affiche, les pages restent de c\xF4t\xE9 pour plus tard.` : `${solve}: the browser comes forward on each page in turn; get past the check there and the rest goes on by itself.
+${later}: nothing comes forward; the pages are left for later.`;
+  return {
+    title,
+    message: `${head}
+${lines.join("\n")}
+
+${what}`,
+    solve,
+    later,
+    done: (cleared, total) => fr ? `${cleared} page(s) sur ${total} d\xE9bloqu\xE9e(s) \u2014 la suite continue.` : `Got past ${cleared} of ${total} page(s) \u2014 the run goes on.`
+  };
+}
+async function askMac(a) {
+  const { text } = a;
+  const args = [...MAC_DIALOG.flatMap((l) => ["-e", l]), text.message, text.title, text.later, text.solve, String(a.secs)];
+  const r = await a.run("osascript", args, { timeoutMs: a.timeoutMs + GRACE_MS });
+  if (r.status === 124) return "no-answer";
+  if (r.missing || /-1713\b/.test(r.stderr)) return "unavailable";
+  if (!r.ok) return "no-answer";
+  const out = r.stdout.trim();
+  if (out === text.solve) return "solve";
+  if (out === text.later) return "later";
+  return "no-answer";
+}
+async function askLinux(a) {
+  const { text } = a;
+  if (a.has("zenity")) {
+    const r = await a.run(
+      "zenity",
+      [
+        "--question",
+        "--no-markup",
+        `--title=${text.title}`,
+        `--text=${text.message}`,
+        `--ok-label=${text.solve}`,
+        `--cancel-label=${text.later}`,
+        `--timeout=${a.secs}`
+      ],
+      { timeoutMs: a.timeoutMs + GRACE_MS }
+    );
+    if (!r.missing) {
+      if (r.status === 0) return "solve";
+      if (r.status === 1) return "later";
+      if (r.status === 5 || r.status === 124) return "no-answer";
+    }
+  }
+  if (a.has("kdialog")) {
+    const r = await a.run("kdialog", ["--title", text.title, "--yes-label", text.solve, "--no-label", text.later, "--warningyesno", text.message], {
+      timeoutMs: a.timeoutMs
+    });
+    if (!r.missing) {
+      if (r.status === 0) return "solve";
+      if (r.status === 1) return "later";
+      if (r.status === 124) return "no-answer";
+    }
+  }
+  if (a.has("notify-send")) {
+    const r = await a.run(
+      "notify-send",
+      [
+        `--app-name=${text.title}`,
+        "--urgency=critical",
+        `--expire-time=${a.timeoutMs}`,
+        `--action=solve=${text.solve}`,
+        `--action=later=${text.later}`,
+        "--wait",
+        text.title,
+        text.message
+      ],
+      { timeoutMs: a.timeoutMs + GRACE_MS }
+    );
+    if (r.status === 124) return "no-answer";
+    if (r.ok) {
+      const out = r.stdout.trim();
+      return out === "solve" ? "solve" : out === "later" ? "later" : "no-answer";
+    }
+  }
+  return "unavailable";
+}
+async function askWindows(a, lang) {
+  const { text } = a;
+  const legend = lang === "fr" ? `Oui : ${text.solve.toLowerCase()} \xB7 Non : ${text.later.toLowerCase()}` : `Yes: ${text.solve.toLowerCase()} \xB7 No: ${text.later.toLowerCase()}`;
+  const r = await a.run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_POPUP], {
+    timeoutMs: a.timeoutMs + GRACE_MS,
+    env: { ...process.env, HUMAN_ASK_TEXT: `${text.message}
+
+${legend}`, HUMAN_ASK_SECS: String(a.secs), HUMAN_ASK_TITLE: text.title }
+  });
+  if (r.status === 124) return "no-answer";
+  if (!r.ok) return "unavailable";
+  const out = r.stdout.trim();
+  return out === "6" ? "solve" : out === "7" ? "later" : out === "-1" ? "no-answer" : "unavailable";
+}
+async function askHuman(pages, opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const e = opts.env ?? process.env;
+  if (!pages.length || !canShowWindow(platform, e)) return "unavailable";
+  const run = opts.run ?? ((cmd, args, o) => shAsync(cmd, args, o));
+  try {
+    const lang = opts.lang ?? await humanLang({ platform, env: e, run, ...opts.defaultLocale ? { defaultLocale: opts.defaultLocale } : {} });
+    const timeoutMs = opts.timeoutMs ?? humanAskTimeoutMs();
+    const asking2 = {
+      text: humanAskText(pages, lang, opts.title),
+      secs: Math.max(1, Math.round(timeoutMs / 1e3)),
+      timeoutMs,
+      run,
+      has: opts.have ?? have
+    };
+    if (platform === "darwin") return await askMac(asking2);
+    if (platform === "win32") return await askWindows(asking2, lang);
+    return await askLinux(asking2);
+  } catch {
+    return "unavailable";
+  }
+}
+async function notifyHuman(message, opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  if (!canShowWindow(platform, opts.env ?? process.env)) return false;
+  const run = opts.run ?? ((cmd, args, o) => shAsync(cmd, args, o));
+  const title = opts.title ?? brand().name;
+  try {
+    if (platform === "darwin") {
+      const script = ["on run argv", 'display notification (item 1 of argv) with title (item 2 of argv) sound name "Glass"', "end run"];
+      return (await run("osascript", [...script.flatMap((l) => ["-e", l]), message, title], { timeoutMs: 1e4 })).ok;
+    }
+    if (platform !== "win32" && (opts.have ?? have)("notify-send")) {
+      return (await run("notify-send", [`--app-name=${title}`, "--expire-time=6000", title, message], { timeoutMs: 1e4 })).ok;
+    }
+  } catch {
+  }
+  return false;
+}
+async function notifyHumanDone(cleared, total, opts = {}) {
+  const platform = opts.platform ?? process.platform;
+  const e = opts.env ?? process.env;
+  if (!canShowWindow(platform, e)) return false;
+  const run = opts.run ?? ((cmd, args, o) => shAsync(cmd, args, o));
+  const lang = opts.lang ?? await humanLang({ platform, env: e, run, ...opts.defaultLocale ? { defaultLocale: opts.defaultLocale } : {} }).catch(() => "en");
+  const { lang: _l, defaultLocale: _d, ...rest } = opts;
+  return notifyHuman(humanAskText([], lang, opts.title).done(cleared, total), { ...rest, platform, env: e, run });
+}
+var HUMAN_ASK_TIMEOUT_MS;
+var GRACE_MS;
+var isFrench;
+var VENDORS;
+var SITES_SHOWN;
+var MAC_DIALOG;
+var WIN_POPUP;
+var init_ask = __esm({
+  "src/ask.ts"() {
+    "use strict";
+    init_brand();
+    init_mode();
+    init_exec2();
+    HUMAN_ASK_TIMEOUT_MS = 12e4;
+    GRACE_MS = 15e3;
+    isFrench = (locale) => /^fr(?:$|[_.@-])/i.test(locale.trim());
+    VENDORS = {
+      cloudflare: "Cloudflare",
+      turnstile: "Cloudflare",
+      datadome: "DataDome",
+      perimeterx: "PerimeterX",
+      akamai: "Akamai",
+      imperva: "Imperva",
+      arkose: "Arkose"
+    };
+    SITES_SHOWN = 5;
+    MAC_DIALOG = [
+      "on run argv",
+      // osascript is no app of its own: brought to the front, or the dialog may open behind the window in use.
+      "activate",
+      "beep",
+      "set r to display dialog (item 1 of argv) with title (item 2 of argv) buttons {item 3 of argv, item 4 of argv} default button 2 with icon caution giving up after ((item 5 of argv) as integer)",
+      'if gave up of r then return "gave-up"',
+      "return button returned of r",
+      "end run"
+    ];
+    WIN_POPUP = "$s = New-Object -ComObject WScript.Shell; [Console]::Out.Write($s.Popup($env:HUMAN_ASK_TEXT, [int]$env:HUMAN_ASK_SECS, $env:HUMAN_ASK_TITLE, 4132))";
+  }
+});
 function isLaunchable(path) {
   try {
     if (!statSync2(path).isFile()) return false;
@@ -5032,7 +5370,9 @@ function defaultBrowserDeps() {
     kill: (pid, signal) => void process.kill(pid, signal),
     alive: pidAlive,
     env: (name) => env(name),
-    platform: process.platform
+    platform: process.platform,
+    askHuman: (pages) => askHuman(pages),
+    notifyHuman: (cleared, total) => notifyHumanDone(cleared, total)
   };
 }
 function browserDeps(own) {
@@ -5041,6 +5381,7 @@ function browserDeps(own) {
 var init_deps = __esm({
   "src/browser/deps.ts"() {
     "use strict";
+    init_ask();
     init_brand();
     init_cdp();
     init_detect();
@@ -7580,105 +7921,6 @@ var init_forge_host = __esm({
     WWW_ALIASED = /* @__PURE__ */ new Set(["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"]);
   }
 });
-function challengePage(text) {
-  const t = text.trim();
-  if (!t || t.length >= CHALLENGE_MAX_CHARS) return void 0;
-  const head = t.slice(0, 800);
-  return CHALLENGE_PAGES.find(([re]) => re.test(head))?.[1];
-}
-function looksLikeJunkExtraction(text) {
-  const t = text.trim();
-  const challenge = challengePage(t);
-  if (challenge) return challenge;
-  if (t.length >= 2e3) return void 0;
-  const head = t.slice(0, 800);
-  const hits = JUNK_PATTERNS.filter(([re]) => re.test(head));
-  const strong = hits.find(([, , kind]) => kind === "strong");
-  if (!strong) return void 0;
-  if (hits.length >= 2) return strong[1];
-  const prose = t.split("\n").filter((l) => l.trim().length >= 60 && !JUNK_PATTERNS.some(([re]) => re.test(l))).length;
-  return prose < 3 ? strong[1] : void 0;
-}
-var JUNK_PATTERNS;
-var CHALLENGE_PAGES;
-var CHALLENGE_MAX_CHARS;
-var init_junk = __esm({
-  "src/junk.ts"() {
-    "use strict";
-    JUNK_PATTERNS = [
-      [/\b(accept|manage)\s+(all\s+)?cookies\b/i, "cookie/consent wall", "strong"],
-      [/\bwe use cookies\b/i, "cookie/consent wall", "strong"],
-      [/\bcookie (policy|settings|consent|preferences)\b/i, "cookie/consent wall", "weak"],
-      [/\b(accept|reject|allow|decline) all\b/i, "cookie/consent wall", "weak"],
-      [/\b(please )?enable javascript\b/i, "JavaScript-required shell", "strong"],
-      [/\bjavascript is (disabled|required|not enabled)\b/i, "JavaScript-required shell", "strong"],
-      [
-        /\bverify(ing)? (that )?(you are|you're) (a )?(human|not a (ro)?bot)\b|\bmaking sure (you are|you're) not a (ro)?bot\b|\bare you a (human|robot)\b|\bhuman verification\b/i,
-        "anti-bot interstitial",
-        "strong"
-      ],
-      [/\battention required\b.*cloudflare|\bunusual traffic from your (computer )?network\b|\bchecking your browser\b/i, "anti-bot interstitial", "strong"],
-      // Akamai's and Cloudflare's denials carry an incident reference; without one
-      // the phrase is as likely a permission-error article.
-      [/\baccess denied\b[\s\S]{0,300}?(\breference #|\bray id\b|\bpermission to access\b)/i, "anti-bot interstitial", "strong"],
-      // Cloudflare's WAF block page. Its "Attention Required!" is the <title>,
-      // which extraction drops, so the body's own wording has to carry it.
-      [/\bsorry, you have been blocked\b|\byou are unable to access\b[\s\S]{0,300}?\bray id\b/i, "anti-bot interstitial", "strong"],
-      [/\baccess denied\b|\benable cookies\b/i, "anti-bot interstitial", "weak"],
-      // FR / DE (the locale layer targets non-EN markets)
-      [/\bnous utilisons des cookies\b|\baccepter (tous )?les cookies\b|\bactiver javascript\b/i, "cookie/consent wall (fr)", "strong"],
-      [/\bwir verwenden cookies\b|\bcookies akzeptieren\b|\bjavascript aktivieren\b/i, "cookie/consent wall (de)", "strong"]
-    ];
-    CHALLENGE_PAGES = [
-      // Anubis (TecharoHQ): its <h1>, and its explanation of itself.
-      [/^\W*(?:#+\s*)?making sure you(?:'|’| a)re not a bot\b/i, "anti-bot proof-of-work challenge"],
-      [/\bset up anubis to protect (?:the|this) server\b|\bprotected by anubis\b/i, "anti-bot proof-of-work challenge"],
-      // Apple's forums interstitial and its kin.
-      [/^\W*(?:#+\s*)?security verification in progress\b|\bplease wait while we verify your browser\b/i, "anti-bot interstitial"]
-    ];
-    CHALLENGE_MAX_CHARS = 4e3;
-  }
-});
-function browserFetchMode(explicit) {
-  const m = (explicit ?? env("BROWSER_FETCH"))?.toLowerCase();
-  return m === "always" || m === "fallback" ? m : "off";
-}
-function browserFetchModeFor(opts) {
-  const m = browserFetchMode(opts.browser);
-  return m === "off" && opts.human && opts.browser !== "off" ? "fallback" : m;
-}
-function worthRendering(res) {
-  if (RENDER_STATUS.has(res.status)) return res.status ? `got HTTP ${res.status}` : "got no answer";
-  if (res.status < 200 || res.status >= 300) return void 0;
-  const junk = looksLikeJunkExtraction(res.text);
-  if (junk) return `read a ${junk}`;
-  return res.text.trim().length < 200 ? "found almost no text" : void 0;
-}
-function canShowWindow(platform = process.platform, env2 = process.env) {
-  const ci = env2.CI?.trim().toLowerCase();
-  if (ci && ci !== "false" && ci !== "0") return false;
-  if (platform === "darwin" || platform === "win32") return true;
-  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
-}
-function humanWall(text) {
-  const junk = looksLikeJunkExtraction(text);
-  if (junk && !junk.startsWith("JavaScript")) return junk;
-  const t = text.trim();
-  return t && t.length < LOGIN_WALL_MAX && LOGIN_WALL.test(t.slice(0, 800)) ? "login wall" : void 0;
-}
-var RENDER_STATUS;
-var LOGIN_WALL;
-var LOGIN_WALL_MAX;
-var init_mode = __esm({
-  "src/browser/mode.ts"() {
-    "use strict";
-    init_brand();
-    init_junk();
-    RENDER_STATUS = /* @__PURE__ */ new Set([0, 401, 403, 429, 503]);
-    LOGIN_WALL = /\b(?:sign|log) ?in (?:to (?:continue|read|view|see|access|keep reading)|or (?:sign up|register|create an account))\b|\byou (?:must|need to|have to) (?:be )?(?:signed|logged) ?in\b|\bplease (?:sign|log) ?in\b/i;
-    LOGIN_WALL_MAX = 1500;
-  }
-});
 function usefulChars(text) {
   return text.split("\n").filter((l) => !/^\s*#{1,6}\s/.test(l)).join(" ").replace(/\s+/g, " ").trim().length;
 }
@@ -8928,7 +9170,7 @@ function classifyChallenge(sig) {
     blocking: statusBlocked || ev2.some((e) => e.interstitial || littleText && !e.weak && !e.widget),
     signals: ev2.map((e) => e.signal)
   });
-  for (const [kind, rule] of VENDORS) {
+  for (const [kind, rule] of VENDORS2) {
     const ev2 = rule(h);
     if (ev2.some((e) => !e.weak) || ev2.length > 0 && statusBlocked) return finish(kind, ev2);
   }
@@ -8993,7 +9235,7 @@ var imperva;
 var arkose;
 var hcaptcha;
 var recaptcha;
-var VENDORS;
+var VENDORS2;
 var GENERIC_PHRASES;
 var PROBE_TIMEOUT_MS3;
 var PROBE;
@@ -9113,7 +9355,7 @@ var init_challenge = __esm({
       add(out, selHas(h, ".g-recaptcha"), { signal: ".g-recaptcha", widget: true });
       return out;
     };
-    VENDORS = [
+    VENDORS2 = [
       ["datadome", datadome],
       ["cloudflare", cloudflare],
       ["perimeterx", perimeterx],
@@ -9597,6 +9839,7 @@ var init_wait = __esm({
 var read_exports = {};
 __export(read_exports, {
   closeBrowserReads: () => closeBrowserReads,
+  forgetHumanAnswer: () => forgetHumanAnswer,
   readRenderedPage: () => readRenderedPage
 });
 function pump() {
@@ -9739,7 +9982,15 @@ async function render(url, opts, deps, timeoutMs, run) {
     const nobody = session.headless ? "the browser runs headless" : canShowWindow(deps.platform) ? void 0 : "no window can be shown here";
     if (nobody) return { ...asIs, note: [asIs.note, `It needs a human, and ${nobody}.`].filter(Boolean).join(" "), handoff: "no-window" };
     const human = opts.human === true ? {} : opts.human;
+    const asks = askFirst(human, deps);
+    const answer = asks === "never" ? "never" : asks === "ask" ? await answerFor(url, found, deps) : "unavailable";
+    if (answer === "never" || answer === "later" || answer === "no-answer") {
+      const why = answer === "never" ? `It needs a human, and handoffs are off (${envName("HUMAN_ASK")}=never).` : answer === "later" ? "It needs a human, who chose to get past it later." : "It needs a human, and nobody answered the question whether to bring it forward.";
+      return { ...asIs, note: [asIs.note, why].filter(Boolean).join(" "), handoff: "declined" };
+    }
     const cleared = await handOff(session, url, wall, !!challenge?.blocking, human, deps, take, opts.signal);
+    if (answer === "solve" && !cleared) answered = { answer: "no-answer", at: deps.now() };
+    if (answer === "solve" && cleared) await deps.notifyHuman(1, 1).catch(() => false);
     if (cleared)
       return {
         ...cleared,
@@ -9755,6 +10006,25 @@ async function render(url, opts, deps, timeoutMs, run) {
     });
     await session.detach();
   }
+}
+function askFirst(human, deps) {
+  if (human.ask === false) return "hand";
+  if (human.ask === true) return "ask";
+  const mode2 = humanAskMode(deps.env("HUMAN_ASK") ?? "ask");
+  return mode2 === "always" ? "hand" : mode2;
+}
+function answerFor(url, check, deps) {
+  if (answered && deps.now() - answered.at < ANSWER_HOLDS_MS) return Promise.resolve(answered.answer);
+  asking ??= deps.askHuman([{ url, check }]).catch(() => "unavailable").then((answer) => {
+    answered = { answer, at: deps.now() };
+    asking = void 0;
+    return answer;
+  });
+  return asking;
+}
+function forgetHumanAnswer() {
+  answered = void 0;
+  asking = void 0;
 }
 async function handOff(session, url, wall, challenged, human, deps, take, signal) {
   const tell = human.tell ?? ((m) => void process.stderr.write(`${m}
@@ -9801,7 +10071,8 @@ async function read(url, opts) {
   if (signal?.aborted) throw cancelled();
   const deps = browserDeps(opts.deps);
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
-  const humanMs = opts.human ? (opts.human === true ? void 0 : opts.human.timeoutMs) ?? humanTimeoutMs() : 0;
+  const human = opts.human === true ? {} : opts.human || void 0;
+  const humanMs = human ? (human.timeoutMs ?? humanTimeoutMs()) + (askFirst(human, deps) === "ask" ? humanAskTimeoutMs() + ASK_GRACE_MS : 0) : 0;
   const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
     release();
@@ -9843,9 +10114,14 @@ var DRAIN_MS;
 var launched;
 var inflight;
 var WHOLE_DOCUMENT;
+var ANSWER_HOLDS_MS;
+var ASK_GRACE_MS;
+var answered;
+var asking;
 var init_read = __esm({
   "src/browser/read.ts"() {
     "use strict";
+    init_ask();
     init_brand();
     init_fetch();
     init_challenge();
@@ -9868,6 +10144,8 @@ var init_read = __esm({
     DRAIN_MS = 5e3;
     inflight = /* @__PURE__ */ new Set();
     WHOLE_DOCUMENT = "({ html: document.documentElement ? document.documentElement.outerHTML : '', url: location.href })";
+    ANSWER_HOLDS_MS = 6e5;
+    ASK_GRACE_MS = 15e3;
   }
 });
 init_brand();
@@ -9884,6 +10162,7 @@ init_challenge();
 init_mode();
 init_detect();
 init_profile();
+init_ask();
 init_exec();
 init_fetch();
 init_markdown2();
@@ -11242,7 +11521,7 @@ async function sleepFor(ms, signal) {
 function hostDelayMs() {
   return envInt("POLITE_DELAY_MS", 400, 0, 5e3);
 }
-function hostOf(url) {
+function hostOf2(url) {
   try {
     return new URL(url).host.toLowerCase();
   } catch {
@@ -11250,7 +11529,7 @@ function hostOf(url) {
   }
 }
 async function awaitHostSlot(url, delayMs = hostDelayMs(), now = Date.now(), signal) {
-  const host = hostOf(url);
+  const host = hostOf2(url);
   if (!host) return 0;
   const spaced = delayMs > 0;
   let waited = 0;
@@ -19187,7 +19466,7 @@ For EACH of your sub-questions:
 2. Run (add \`--lang <code> --region <cc>\` and translate BOTH the \`--queries\` and your web search queries into that language when the run targets a non-English audience):
    \`node ${engineAbs} gather --q "<its question>" --queries "<its queries, |-joined>" --mode <the plan's mode> --depth <the plan's depth; deep when the plan predates the field> --web-results "<its out dir>/websearch.json" --out "<its out dir>"${browserFlag}\`
    (The on-disk fetch cache is ON by default and shared across processes, so a URL two sub-questions both surface is fetched once. Do NOT pass \`--no-cache\` here.)
-   If a page stops at a CAPTCHA or an anti-bot check, the command hands it to the user before it ends and waits for them (up to \`ULTRASEARCH_HUMAN_TIMEOUT_MS\`, 5 minutes): let it wait, never try to get past the check yourself.
+   If a page stops at a CAPTCHA or an anti-bot check, the command asks the user in a native dialog before it ends and, if they say yes, hands it to them and waits (up to \`ULTRASEARCH_HUMAN_TIMEOUT_MS\`, 5 minutes): let it wait, never try to get past the check yourself.
 3. Open \`<its out dir>/DOSSIER.md\`. If it is flagged **thin**, or it lists **under-covered** terms, or an angle is missing, run a SECOND web search round at that gap and fold the whole round in with ONE call:
    \`node ${engineAbs} ingest --run "<its out dir>" --web-results "<round2.json>"${browserFlag}\`
    Pin URLs a reader can OPEN \u2014 landing pages, never raw API endpoints or batch/search URLs (the engine rewrites the endpoints it knows and refuses the rest). If it answers that a page "extracted to a \u2026 wall", the host is throttling you: that is a refusal, not a setback to work around \u2014 take another source, or pass the provider's text endpoint and let the engine record the page.
@@ -19390,7 +19669,8 @@ async function runHuman(dir, chosen, opts = {}) {
       question: manifest.question,
       cache: false,
       browser: "always",
-      human: opts.timeoutMs !== void 0 ? { timeoutMs: opts.timeoutMs } : {},
+      // Asked already, about the whole batch (or asked for by name): the engine's read does not ask again.
+      human: { ...opts.timeoutMs !== void 0 ? { timeoutMs: opts.timeoutMs } : {}, ask: false },
       ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {}
     });
     const r = got.results[0];
@@ -19401,6 +19681,7 @@ async function runHuman(dir, chosen, opts = {}) {
   return results;
 }
 var HUMAN_TIMEOUT_ENV = "ULTRASEARCH_HUMAN_TIMEOUT_MS";
+var HUMAN_ASK_ENV = "ULTRASEARCH_HUMAN_ASK";
 var HUMAN_TIMEOUT_DEFAULT_MS = 3e5;
 function humanTimeoutMs2(env2 = process.env) {
   const raw = env2[HUMAN_TIMEOUT_ENV]?.trim();
@@ -19427,12 +19708,17 @@ function challengeCandidates(dir, sources, manifest) {
 }
 async function handOffDuringRun(dir, opts) {
   if (opts.browser === "off") return [];
+  const env2 = opts.env ?? process.env;
+  const mode2 = humanAskMode(env2[HUMAN_ASK_ENV] ?? "ask");
+  if (mode2 === "never") return [];
   const timeoutMs = humanTimeoutMs2(opts.env);
   if (timeoutMs === void 0 || !(opts.canShow ?? (() => canShowWindow()))()) return [];
   let candidates2;
+  let notes;
   try {
     const { sources, manifest } = readDossier(dir);
     candidates2 = challengeCandidates(dir, sources, manifest);
+    notes = manifest.notes ?? [];
   } catch {
     return [];
   }
@@ -19443,19 +19729,38 @@ async function handOffDuringRun(dir, opts) {
     candidates2.push(c);
   }
   if (!candidates2.length) return [];
+  let answer;
+  if (mode2 === "ask") {
+    opts.tell(
+      `ultrasearch: ${candidates2.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). A dialog asks the person at this machine whether to solve them now; nothing comes forward unless they say yes (${HUMAN_ASK_ENV}=always hands them over unasked, never skips this).`
+    );
+    answer = await (opts.ask ?? ((pages) => askHuman(pages)))(
+      candidates2.map((c) => ({ url: c.url, check: c.check ?? notes.find((n) => mentions(n, c.url) && challengeIn(n)) ?? c.why }))
+    ).catch(() => "unavailable");
+    if (answer === "later" || answer === "no-answer") {
+      const note = `${answer === "later" ? "left for later by the person" : "nobody answered the question"} \u2014 \`ultrasearch human --run ${dir}\``;
+      opts.tell(`ultrasearch: human: ${answer === "later" ? "later" : "no answer"} \u2014 nothing was brought forward.`);
+      return candidates2.map((c) => ({ ...c, outcome: "skipped", note }));
+    }
+  }
   opts.tell(
-    `ultrasearch: ${candidates2.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). The browser comes forward on each in turn: get past it there and the read goes on by itself \u2014 up to ${Math.round(timeoutMs / 1e3)} s each (${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`
+    `ultrasearch: ${answer ? "" : `${candidates2.length} page(s) stopped at a human check (a CAPTCHA, an anti-bot page). `}The browser comes forward on each in turn: get past it there and the read goes on by itself \u2014 up to ${Math.round(timeoutMs / 1e3)} s each (${HUMAN_TIMEOUT_ENV}=0 never waits during a run).`
   );
-  return runHuman(dir, candidates2, {
+  const results = await runHuman(dir, candidates2, {
     timeoutMs,
     stopAfterTimeout: true,
     ...opts.firecrawl ? { firecrawl: opts.firecrawl } : {},
     onResult: (r) => opts.tell(`ultrasearch: human: ${r.id}	${r.url}	${r.outcome}${r.outcome === "skipped" && r.note ? ` \u2014 ${r.note}` : ""}`)
   });
+  if (answer === "solve") {
+    const cleared = results.filter((r) => r.outcome === "repaired" || r.outcome === "added").length;
+    await (opts.notify ?? ((c, t) => notifyHumanDone(c, t)))(cleared, candidates2.length).catch(() => false);
+  }
+  return results;
 }
 function refusedForChallenge(url, note) {
   const found = challengeIn(note);
-  return found ? { id: "-", url, why: `refused \u2014 ${found}` } : void 0;
+  return found ? { id: "-", url, why: `refused \u2014 ${found}`, ...note ? { check: note } : {} } : void 0;
 }
 
 // src/mcp/handlers.ts

@@ -66,3 +66,5 @@ process.env.ULTRASEARCH_NCBI_INTERVAL_MS = "0";
 // can be shown, which is every developer laptop. A test must never wait on
 // anyone: 0 turns that off for the suite; tests/human.test.ts turns it back on.
 process.env.ULTRASEARCH_HUMAN_TIMEOUT_MS = "0";
+// Nor ask anyone anything: a handoff hands over unasked; tests/human.test.ts fakes the question.
+process.env.ULTRASEARCH_HUMAN_ASK = "always";
