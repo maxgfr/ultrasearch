@@ -34,6 +34,28 @@ function rfcSource(o: any, score: number): RawSource {
   };
 }
 
+/**
+ * The phrase to look for in RFC titles. `title__icontains` is a SUBSTRING
+ * filter, so the words must be ones a title could hold side by side: two
+ * keywords that are neighbours in the question, the most distinctive such
+ * pair. Numbers never take part — a status code is not in a title, and "429"
+ * only ever matched RFC numbers. With no pair, the most distinctive word.
+ */
+export function titlePhrase(question: string): string {
+  const words = keywords(question);
+  const rank = new Map(rankedKeywords(question).map((w, i) => [w, i] as const));
+  const rankOf = (w: string): number => rank.get(w) ?? words.length;
+  const worded = (w: string): boolean => !/^\d+$/.test(w);
+  let best: [string, string] | undefined;
+  for (let i = 0; i + 1 < words.length; i++) {
+    const pair: [string, string] = [words[i]!, words[i + 1]!];
+    if (!pair.every(worded)) continue;
+    if (!best || rankOf(pair[0]) + rankOf(pair[1]) < rankOf(best[0]) + rankOf(best[1])) best = pair;
+  }
+  if (best) return best.join(" ");
+  return rankedKeywords(question).find(worded) ?? "";
+}
+
 export const standardsBackend: Backend = async (ctx): Promise<BackendResult> => {
   const items: RawSource[] = [];
   const notes: string[] = [];
@@ -51,7 +73,7 @@ export const standardsBackend: Backend = async (ctx): Promise<BackendResult> => 
   // httpJson never throws (it returns {ok:false} on any failure), so these
   // calls need no catch guard — a down API just yields empty results + a note.
   const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
-  const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
+  const bigram = titlePhrase(ctx.question);
   const [rfcHits, mdnResult, titleResult] = await Promise.all([
     Promise.all(rfcNums.map((n) => rfcByNumber(n))),
     // 2. MDN search (discovery — url + summary, gather hydrates).

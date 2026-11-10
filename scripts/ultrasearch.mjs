@@ -14354,6 +14354,20 @@ ${abstract}` } : {},
     meta: { rfcNumber: n }
   };
 }
+function titlePhrase(question) {
+  const words = keywords(question);
+  const rank = new Map(rankedKeywords(question).map((w, i) => [w, i]));
+  const rankOf = (w) => rank.get(w) ?? words.length;
+  const worded = (w) => !/^\d+$/.test(w);
+  let best;
+  for (let i = 0; i + 1 < words.length; i++) {
+    const pair = [words[i], words[i + 1]];
+    if (!pair.every(worded)) continue;
+    if (!best || rankOf(pair[0]) + rankOf(pair[1]) < rankOf(best[0]) + rankOf(best[1])) best = pair;
+  }
+  if (best) return best.join(" ");
+  return rankedKeywords(question).find(worded) ?? "";
+}
 var standardsBackend = async (ctx) => {
   const items = [];
   const notes = [];
@@ -14367,7 +14381,7 @@ var standardsBackend = async (ctx) => {
   const perSource = Math.max(3, Math.min(8, ctx.options.perSource));
   const qTerms = new Set(keywords(ctx.question));
   const rfcNums = [...new Set([...ctx.question.matchAll(/\bRFC[-\s]?(\d{3,5})\b/gi)].map((m) => Number(m[1])))].slice(0, 3);
-  const bigram = rankedKeywords(ctx.question).slice(0, 2).join(" ");
+  const bigram = titlePhrase(ctx.question);
   const [rfcHits, mdnResult, titleResult] = await Promise.all([
     Promise.all(rfcNums.map((n) => rfcByNumber(n))),
     // 2. MDN search (discovery — url + summary, gather hydrates).

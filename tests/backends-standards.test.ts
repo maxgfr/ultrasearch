@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { standardsBackend } from "../src/backends/standards.js";
+import { standardsBackend, titlePhrase } from "../src/backends/standards.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -66,6 +66,24 @@ describe("standardsBackend", () => {
     expect(rfcNums).toContain(6585); // real match on "rate limiting"
     expect(rfcNums).not.toContain(2429); // shares no query term, only digits — dropped
     expect(r.items.some((i) => i.title?.includes("slides"))).toBe(false); // no rfc_number → dropped
+  });
+
+  it("searches RFC titles for a phrase a title can actually contain", async () => {
+    // `title__icontains` is a SUBSTRING filter. The two most distinctive words
+    // of the question, in rank order, gave "429 limiting" — a string no title
+    // holds — so the keyword search returned nothing on most questions.
+    expect(titlePhrase("HTTP 429 rate limiting")).toBe("rate limiting");
+    expect(titlePhrase("how does TLS session resumption work")).toBe("session resumption");
+    expect(titlePhrase("websocket")).toBe("websocket");
+    expect(titlePhrase("429 503")).toBe("");
+
+    const spy = installFetchMock((url) => {
+      if (url.includes("title__icontains")) return { body: TITLE_SEARCH, contentType: "application/json" };
+      return { body: JSON.stringify({ documents: [], objects: [] }), contentType: "application/json" };
+    });
+    await standardsBackend(makeCtx("HTTP 429 rate limiting"));
+    const titleQuery = spy.mock.calls.map((c) => String(c[0])).find((u) => u.includes("title__icontains"))!;
+    expect(new URL(titleQuery).searchParams.get("title__icontains")).toBe("rate limiting");
   });
 
   it("degrades to a note when both APIs are down", async () => {
