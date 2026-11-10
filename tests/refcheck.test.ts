@@ -372,6 +372,12 @@ describe("refcheck — the whole run", () => {
       expect(readFileSync(join(out, "sources", "S2.md"), "utf8")).toContain("Of 2.8 million procedures");
       expect(readFileSync(join(out, "DOSSIER.md"), "utf8")).toContain("## Report template (verification)");
       expect(existsSync(join(out, "refs.bib"))).toBe(true);
+      // Records name their authors "Family INITIALS". Written as-is, BibTeX
+      // reads the initials as the family name ("MHM"), and the key follows.
+      const bib = readFileSync(join(out, "refs.bib"), "utf8");
+      expect(bib).toContain("author = {Segers, M. H. M. and Behndig, A. and van den Biggelaar, F. J. H. M.");
+      expect(bib).toMatch(/@article\{segers\d{4}/);
+      expect(bib).not.toMatch(/@article\{mhm/);
       const md = readFileSync(join(out, "REFCHECK.md"), "utf8");
       for (const h of [
         "## Verdict",

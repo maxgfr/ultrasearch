@@ -115,6 +115,17 @@ export async function readDocumentText(path: string): Promise<string> {
   return text;
 }
 
+/**
+ * A record's author ("Gurney NT", "van den Biggelaar FJHM") as a dossier stores
+ * one: "Gurney, N. T.". The dossier's authors end up in refs.bib, and BibTeX
+ * takes the LAST word of an unpunctuated name for the family name — the
+ * initials, here. The comma form is unambiguous, and reads back the same.
+ */
+export function familyFirst(vancouver: string): string {
+  const m = /^(.+?)\s+(\p{Lu}{1,6})$/u.exec(vancouver.trim());
+  return m ? `${m[1]}, ${[...m[2]!].map((initial) => `${initial}.`).join(" ")}` : vancouver;
+}
+
 function recordText(ref: CitedReference, rec: ResolvedRecord): string {
   const where = [rec.journal, [rec.year, rec.volume ? `;${rec.volume}` : "", rec.issue ? `(${rec.issue})` : "", rec.pages ? `:${rec.pages}` : ""].join("")]
     .filter(Boolean)
@@ -283,7 +294,7 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
           ...(rec.doi ? { doi: rec.doi } : {}),
           ...(rec.pmid ? { pmid: rec.pmid } : {}),
           ...(rec.pmcid ? { pmcid: rec.pmcid } : {}),
-          authors: rec.authors,
+          authors: rec.authors.map(familyFirst),
           ...(rec.year ? { year: Number(rec.year) } : {}),
           ...(rec.journal ? { venue: rec.journal } : {}),
           reference: e.n,

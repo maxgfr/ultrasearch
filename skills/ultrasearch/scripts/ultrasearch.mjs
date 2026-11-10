@@ -15516,7 +15516,7 @@ function clean2(s) {
   return s.replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
 }
 function bibKey(s, used) {
-  const last = s.meta?.authors?.[0]?.split(/\s+/).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const last = s.meta?.authors?.[0]?.split(",")[0]?.trim().split(/\s+/).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
   const year = s.meta?.year ? String(s.meta.year) : "";
   const word = s.title.split(/\s+/).find((w) => w.replace(/[^a-z0-9]/gi, "").length > 3)?.toLowerCase().replace(/[^a-z0-9]/g, "");
   const base2 = `${last || s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
@@ -20608,6 +20608,10 @@ async function readDocumentText(path) {
   if (!text) throw new Error(`could not read ${basename3(abs)} as an office document (.docx, .odt, .pptx, .xlsx)`);
   return text;
 }
+function familyFirst(vancouver) {
+  const m = new RegExp("^(.+?)\\s+(\\p{Lu}{1,6})$", "u").exec(vancouver.trim());
+  return m ? `${m[1]}, ${[...m[2]].map((initial) => `${initial}.`).join(" ")}` : vancouver;
+}
 function recordText(ref, rec) {
   const where = [rec.journal, [rec.year, rec.volume ? `;${rec.volume}` : "", rec.issue ? `(${rec.issue})` : "", rec.pages ? `:${rec.pages}` : ""].join("")].filter(Boolean).join(". ");
   return [
@@ -20757,7 +20761,7 @@ async function runRefcheck(opts) {
           ...rec.doi ? { doi: rec.doi } : {},
           ...rec.pmid ? { pmid: rec.pmid } : {},
           ...rec.pmcid ? { pmcid: rec.pmcid } : {},
-          authors: rec.authors,
+          authors: rec.authors.map(familyFirst),
           ...rec.year ? { year: Number(rec.year) } : {},
           ...rec.journal ? { venue: rec.journal } : {},
           reference: e.n

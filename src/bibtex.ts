@@ -6,8 +6,11 @@ function clean(s: string): string {
 
 // Stable-ish citation key: firstauthorlastname + year + first title word.
 function bibKey(s: Source, used: Set<string>): string {
+  // "Family, Given" names its family before the comma; otherwise the last word.
   const last = s.meta?.authors?.[0]
-    ?.split(/\s+/)
+    ?.split(",")[0]
+    ?.trim()
+    .split(/\s+/)
     .pop()
     ?.toLowerCase()
     .replace(/[^a-z0-9]/g, "");
