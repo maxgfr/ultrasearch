@@ -192,7 +192,7 @@ for (const n of Object.keys(MONTHS)) if (n.length >= 4) STOP_TOKENS.add(deaccent
 
 // What precedes a minimum spend, and what precedes an expiry date.
 const MIN_MARKER =
-  "(?:dès|des|à partir de|a partir de|minimum(?:\\s+(?:d'achat|d’achat|de commande|order|spend|purchase))?(?:\\s+(?:de|of))?|min\\.?|" +
+  "(?:dès|à partir de|a partir de|minimum(?:\\s+(?:d'achat|d’achat|de commande|order|spend|purchase))?(?:\\s+(?:de|of))?|min\\.?|" +
   "on orders? (?:over|of|above)|orders? (?:over|above)|when you spend|spend(?:\\s+(?:over|at least))?|over|" +
   "ab(?:\\s+einem\\s+(?:Einkauf|Bestellwert)\\s+von)?|Mindestbestellwert(?:\\s+von)?|desde|compra mínima de|" +
   "da|con una spesa minima di|vanaf|bij besteding van|od|przy zakupach (?:za|od)|powyżej)";
@@ -379,7 +379,11 @@ const CURRENCY: Record<string, { sym: string; prefix: boolean }> = {
 const NUM = "(\\d{1,5}(?:[.,]\\d{1,2})?)";
 const AMOUNT = `(?:([€£$])\\s?${NUM}|${NUM}\\s?(€|£|\\$|zł|zl|chf|eur|euros?|gbp|usd|pln)(?![\\p{L}]))`;
 const AMOUNT_RE = new RegExp(AMOUNT, "giu");
-const MIN_RE = new RegExp(`${BOUNDARY_BEFORE}${MIN_MARKER}\\s*${AMOUNT}`, "giu");
+// "des" is "dès" typed without its accent — and also plain French for "some":
+// "profitez des 10€ de remise" names a discount. So the unaccented word marks a
+// minimum only when what follows the amount says it is one.
+const MIN_UNACCENTED = `des\\s*${AMOUNT}(?=\\s*(?:d['’]achats?|de commande|minimum))`;
+const MIN_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${MIN_MARKER}\\s*${AMOUNT}|${MIN_UNACCENTED})`, "giu");
 const PERCENT_RE = /(?<![\d.,])(\d{1,2}(?:[.,]\d)?)\s?%/g;
 const FREE_SHIPPING_RE =
   /livraison (?:offerte|gratuite)|frais de port (?:offerts|gratuits)|free (?:shipping|delivery|postage)|versandkostenfrei|kostenlose[rn]? versand|gratis versand|env[ií]o gratis|envio gratuito|spedizione gratuita|gratis verzending|darmowa dostawa/i;
