@@ -19,6 +19,25 @@ describe("wikipediaBackend — edge cases", () => {
     expect(searchUrl).toContain("https://fr.wikipedia.org/");
   });
 
+  it.each(["evil.example/x?", "en.evil.example", "../..", "e n", "x"])("never builds a host out of a --lang that is not a language code (%j)", async (lang) => {
+    // The language goes straight into the hostname. An MCP client (or a typo)
+    // could aim the backend at any server, whose JSON then became source text
+    // under a wikipedia label.
+    const spy = installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      return undefined;
+    });
+    await wikipediaBackend(makeCtx("x", { lang }));
+    const hosts = spy.mock.calls.map((c) => new URL(String(c[0])).host);
+    expect(hosts).toEqual(["en.wikipedia.org"]);
+  });
+
+  it("lowercases a language code before it becomes a host", async () => {
+    const spy = installFetchMock(() => ({ body: JSON.stringify({ pages: [] }), contentType: "application/json" }));
+    await wikipediaBackend(makeCtx("x", { lang: "FR-ca" }));
+    expect(new URL(String(spy.mock.calls[0]![0])).host).toBe("fr.wikipedia.org");
+  });
+
   it("falls back to the en host when --lang is empty", async () => {
     const spy = installFetchMock((url) => {
       if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };

@@ -5,7 +5,11 @@ import { httpJson, decodeEntities } from "./fetch.js";
 // Wikipedia via the keyless REST API: search for pages, then pull each top
 // page's summary extract as the source text. Language-aware via --lang.
 export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => {
-  const lang = (ctx.options.lang || "en").split("-")[0]!;
+  // The language becomes a HOSTNAME, so it has to be a language code and
+  // nothing else: `--lang` (and an MCP client's `lang`) is free text, and
+  // "evil.example/x?" sent the search — and the citation — to another server.
+  const asked = (ctx.options.lang || "en").split("-")[0]!.toLowerCase();
+  const lang = /^[a-z]{2,12}$/.test(asked) ? asked : "en";
   const host = `https://${lang}.wikipedia.org`;
   const limit = Math.max(3, Math.min(10, ctx.options.perSource));
   const searchUrl = `${host}/w/rest.php/v1/search/page?q=${encodeURIComponent(ctx.question)}&limit=${limit}`;

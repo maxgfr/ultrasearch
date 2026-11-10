@@ -13512,7 +13512,8 @@ var marginaliaBackend = async (ctx) => {
 
 // src/backends/wikipedia.ts
 var wikipediaBackend = async (ctx) => {
-  const lang = (ctx.options.lang || "en").split("-")[0];
+  const asked = (ctx.options.lang || "en").split("-")[0].toLowerCase();
+  const lang = /^[a-z]{2,12}$/.test(asked) ? asked : "en";
   const host = `https://${lang}.wikipedia.org`;
   const limit = Math.max(3, Math.min(10, ctx.options.perSource));
   const searchUrl = `${host}/w/rest.php/v1/search/page?q=${encodeURIComponent(ctx.question)}&limit=${limit}`;
