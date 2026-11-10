@@ -188,9 +188,12 @@ describe("refcheck — parsing a bibliography", () => {
 
   it("follows a list whose numbering has a gap, and one that does not start at 1", () => {
     const gap = splitEntries(
-      ["1. Smith J. First title here. J A. 2020;1:1.", "2. Doe J. Second title here. J B. 2021;2:2.", "5. Roe B. Fifth title here. J C. 2022;3:3.", "6. Poe C. Sixth title here. J D. 2023;4:4."].join(
-        "\n",
-      ),
+      [
+        "1. Smith J. First title here. J A. 2020;1:1.",
+        "2. Doe J. Second title here. J B. 2021;2:2.",
+        "5. Roe B. Fifth title here. J C. 2022;3:3.",
+        "6. Poe C. Sixth title here. J D. 2023;4:4.",
+      ].join("\n"),
     );
     expect(gap.map((e) => e.n)).toEqual([1, 2, 5, 6]);
     const excerpt = splitEntries(["[12] Smith J. First title here. J A. 2020;1:1.", "[13] Doe J. Second title here. J B. 2021;2:2."].join("\n"));
