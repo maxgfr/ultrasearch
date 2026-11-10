@@ -74,6 +74,12 @@ describe("parsePepperThreads (saved Dealabs capture)", () => {
     const viaState = parsePepperThreads(`<script>window.__INITIAL_STATE__ = ${JSON.stringify({ t: thread })};</script>`, "x.test");
     expect(viaState[0]!.code).toBe("SCRIPT10");
   });
+
+  it("keeps a price of 0 — a free deal — and leaves an absent price absent", () => {
+    const page = (thread: object) => `<script type="application/json">${JSON.stringify({ a: [{ thread }] })}</script>`;
+    expect(parsePepperThreads(page({ threadId: 7, title: "Free ebook", price: 0 }), "x.test")[0]!.price).toBe(0);
+    expect(parsePepperThreads(page({ threadId: 8, title: "No price given" }), "x.test")[0]).not.toHaveProperty("price");
+  });
 });
 
 describe("parsePepperVouchers (saved Dealabs voucher page)", () => {
@@ -107,6 +113,17 @@ describe("pepper backend", () => {
     expect(app5.text).toContain("Code: APP5");
     expect(r.items.every((i) => !i.url.includes("/visit/"))).toBe(true);
     expect(r.notes[0]).toMatch(/www\.dealabs\.com: 3 thread\(s\) about "decathlon", 1 carrying a voucher code/);
+  });
+
+  it("counts expired threads among the ones it returns, not the ones the cap left out", async () => {
+    const thread = (id: number, isExpired: boolean) =>
+      `<script type="application/json">${JSON.stringify({ a: [{ thread: { threadId: id, title: `Decathlon deal ${id}`, isExpired, merchant: { merchantName: "Decathlon" } } }] })}</script>`;
+    // Five live threads fill the cap; the three expired ones behind them are not returned.
+    const body = [1, 2, 3, 4, 5].map((id) => thread(id, false)).join("") + [6, 7, 8].map((id) => thread(id, true)).join("");
+    installFetchMock(() => ({ body }));
+    const r = await pepperBackend(makeCtx("code promo decathlon", { lang: "fr", region: "fr", perSource: 1 }));
+    expect(r.items).toHaveLength(5);
+    expect(r.notes[0]).not.toContain("expired");
   });
 
   it("drops threads about another merchant", async () => {

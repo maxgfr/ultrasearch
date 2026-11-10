@@ -200,7 +200,8 @@ export function parsePepperThreads(html: string, host: string): PepperThread[] {
       ...(typeof merchant.merchantName === "string" ? { merchant: merchant.merchantName } : {}),
       ...(typeof merchant.merchantUrlName === "string" ? { merchantSlug: merchant.merchantUrlName } : {}),
       ...(code ? { code } : {}),
-      ...(num(t.price) ? { price: num(t.price) } : {}),
+      // A price of 0 is a price: a free deal.
+      ...(num(t.price) !== undefined ? { price: num(t.price) } : {}),
       ...(pct ? { discount: `${pct}%` } : {}),
       ...(shipping.isFree === 1 || shipping.isFree === true ? { freeShipping: true } : {}),
       expired: t.isExpired === true || String(t.status ?? "").toLowerCase() === "expired",
@@ -389,9 +390,11 @@ export const pepperBackend: Backend = async (ctx): Promise<BackendResult> => {
   }
 
   const relevant = threads.filter((t) => aboutMerchant(t, merchant));
-  const items = relevant.slice(0, Math.max(5, ctx.options.perSource * 2)).map((t, i, all) => threadSource(t, i, all.length, merchant));
+  const kept = relevant.slice(0, Math.max(5, ctx.options.perSource * 2));
+  const items = kept.map((t, i, all) => threadSource(t, i, all.length, merchant));
   const withCodes = items.filter((it) => it.meta?.codes?.length).length;
-  const expired = relevant.filter((t) => t.expired).length;
+  // Counted over the threads returned: the note describes them, not the ones the cap left out.
+  const expired = kept.filter((t) => t.expired).length;
   const notes = [
     `${site.host}: ${items.length} thread(s) about "${q}"` +
       (threads.length > relevant.length ? ` (${threads.length - relevant.length} about other merchants dropped)` : "") +
