@@ -3,7 +3,7 @@ import { writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { Manifest, Source, VerdictKind, VerifyResult } from "./types.js";
 import { readDossier } from "./dossier.js";
-import { citedSourceIds } from "./claims.js";
+import { citedSourceIds, codeMask } from "./claims.js";
 import { slugify, RUN_SLUG } from "./util.js";
 
 // Verdict severity (worst wins) for the per-source citation badge.
@@ -53,6 +53,9 @@ function renderInline(escaped: string, verdicts?: Map<string, VerdictKind>): str
   return s;
 }
 
+// A code fence line: the run of backticks or tildes, then its info string.
+const FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
+
 export interface Heading {
   level: number;
   text: string;
@@ -66,6 +69,7 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
   // A report saved with CRLF endings is the same report: a stray "\r" would
   // defeat every `$`-anchored rule below (and end up in the markup).
   const lines = md.replace(/\r\n?/g, "\n").split("\n");
+  const code = codeMask(lines);
   const out: string[] = [];
   const headings: Heading[] = [];
   const usedIds = new Set<string>();
@@ -84,19 +88,21 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
   while (i < lines.length) {
     const line = lines[i]!;
 
-    // Fenced code block.
-    const fence = /^\s*(```|~~~)(.*)$/.exec(line);
+    // Fenced code block. `code` is the mask `check` and `verify` read, so a line
+    // is code here exactly when the grounding gate treated it as code — a
+    // looser closing rule would render as prose a claim the gate never scored.
+    const fence = code[i] ? FENCE.exec(line) : null;
     if (fence) {
       const marker = fence[1]!;
-      // Built once per fence, not once per scanned line (no /g, so no state).
-      const close = new RegExp(`^\\s*${marker}`);
       const body: string[] = [];
       i++;
-      while (i < lines.length && !close.test(lines[i]!)) {
-        body.push(lines[i]!);
+      while (i < lines.length && code[i]) {
+        const m = FENCE.exec(lines[i]!);
         i++;
+        // Closed by the same character, at least as long, with no info string.
+        if (m && m[1]![0] === marker[0] && m[1]!.length >= marker.length && m[2]!.trim() === "") break;
+        body.push(lines[i - 1]!);
       }
-      i++; // closing fence
       out.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
       continue;
     }
@@ -191,7 +197,7 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
       !/^(#{1,6})\s/.test(lines[i]!) &&
       !/^\s*>/.test(lines[i]!) &&
       !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]!) &&
-      !/^\s*(```|~~~)/.test(lines[i]!) &&
+      !code[i] &&
       !/^([-*_])\1{2,}\s*$/.test(lines[i]!)
     ) {
       para.push(lines[i]!);

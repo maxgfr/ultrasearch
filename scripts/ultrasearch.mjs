@@ -17562,8 +17562,10 @@ function renderInline(escaped, verdicts) {
   s = s.replace(/\uE000(\d+)\uE000/g, (_m, n) => stash[Number(n)] ?? "");
   return s;
 }
+var FENCE = /^\s*(`{3,}|~{3,})(.*)$/;
 function mdToHtml(md, idPrefix, opts = {}) {
   const lines = md.replace(/\r\n?/g, "\n").split("\n");
+  const code = codeMask(lines);
   const out = [];
   const headings = [];
   const usedIds = /* @__PURE__ */ new Set();
@@ -17579,17 +17581,17 @@ function mdToHtml(md, idPrefix, opts = {}) {
   };
   while (i < lines.length) {
     const line = lines[i];
-    const fence = /^\s*(```|~~~)(.*)$/.exec(line);
+    const fence = code[i] ? FENCE.exec(line) : null;
     if (fence) {
       const marker = fence[1];
-      const close = new RegExp(`^\\s*${marker}`);
       const body = [];
       i++;
-      while (i < lines.length && !close.test(lines[i])) {
-        body.push(lines[i]);
+      while (i < lines.length && code[i]) {
+        const m = FENCE.exec(lines[i]);
         i++;
+        if (m && m[1][0] === marker[0] && m[1].length >= marker.length && m[2].trim() === "") break;
+        body.push(lines[i - 1]);
       }
-      i++;
       out.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
       continue;
     }
@@ -17659,7 +17661,7 @@ function mdToHtml(md, idPrefix, opts = {}) {
       continue;
     }
     const para = [];
-    while (i < lines.length && lines[i].trim() !== "" && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) && !/^\s*(```|~~~)/.test(lines[i]) && !/^([-*_])\1{2,}\s*$/.test(lines[i])) {
+    while (i < lines.length && lines[i].trim() !== "" && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*>/.test(lines[i]) && !/^\s*([-*+]|\d+\.)\s+/.test(lines[i]) && !code[i] && !/^([-*_])\1{2,}\s*$/.test(lines[i])) {
       para.push(lines[i]);
       i++;
     }

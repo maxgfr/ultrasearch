@@ -6,6 +6,7 @@ import { renderHtml, mdToHtml, buildReportMarkdown, writeReportMarkdown, writeHt
 import { writeDossier } from "../src/dossier.js";
 import { runVerify, applyVerdicts } from "../src/verify.js";
 import { writeFixtureDossier } from "./dossierfix.js";
+import { codeMask } from "../src/claims.js";
 import type { Manifest, RawSource } from "../src/types.js";
 
 function scratch(): string {
@@ -387,5 +388,21 @@ describe("mdToHtml — audit regressions", () => {
     expect(crlf.html).toContain("<pre><code>code [S1]</code></pre>");
     expect(crlf.headings).toEqual([{ level: 2, text: "Title", id: "t-title" }]);
     expect(crlf.html).not.toContain("\r");
+  });
+
+  it("closes a fence where check closes it, never earlier", () => {
+    // check masks all five lines as code (a 4-backtick fence is closed only by
+    // 4+ backticks). Rendering the inner line as prose would show a reader a
+    // claim the grounding gate never scored.
+    const md = ["````", "```", "Drug X cures 99% of patients.", "```", "````", "", "Real prose."].join("\n");
+    const { html } = mdToHtml(md, "t");
+    expect(codeMask(md.split("\n")).slice(0, 5)).toEqual([true, true, true, true, true]);
+    expect(html).toContain("<pre><code>```\nDrug X cures 99% of patients.\n```</code></pre>");
+    expect(html).not.toContain("<p>Drug X");
+    expect(html).toContain("<p>Real prose.</p>");
+    // A fence line with an info string does not close an open block either.
+    const info = mdToHtml(["```", "```python", "still code", "```", "after"].join("\n"), "t").html;
+    expect(info).toContain("<pre><code>```python\nstill code</code></pre>");
+    expect(info).toContain("<p>after</p>");
   });
 });
