@@ -14732,7 +14732,7 @@ MONTH_NAMES.forEach((names, i) => {
   for (const n of names) MONTHS[n] = i + 1;
 });
 for (const n of Object.keys(MONTHS)) if (n.length >= 4) STOP_TOKENS.add(deaccent(n).toUpperCase());
-var MIN_MARKER = "(?:d\xE8s|des|\xE0 partir de|a partir de|minimum(?:\\s+(?:d'achat|d\u2019achat|de commande|order|spend|purchase))?(?:\\s+(?:de|of))?|min\\.?|on orders? (?:over|of|above)|orders? (?:over|above)|when you spend|spend(?:\\s+(?:over|at least))?|over|ab(?:\\s+einem\\s+(?:Einkauf|Bestellwert)\\s+von)?|Mindestbestellwert(?:\\s+von)?|desde|compra m\xEDnima de|da|con una spesa minima di|vanaf|bij besteding van|od|przy zakupach (?:za|od)|powy\u017Cej)";
+var MIN_MARKER = "(?:d\xE8s|\xE0 partir de|a partir de|minimum(?:\\s+(?:d'achat|d\u2019achat|de commande|order|spend|purchase))?(?:\\s+(?:de|of))?|min\\.?|on orders? (?:over|of|above)|orders? (?:over|above)|when you spend|spend(?:\\s+(?:over|at least))?|over|ab(?:\\s+einem\\s+(?:Einkauf|Bestellwert)\\s+von)?|Mindestbestellwert(?:\\s+von)?|desde|compra m\xEDnima de|da|con una spesa minima di|vanaf|bij besteding van|od|przy zakupach (?:za|od)|powy\u017Cej)";
 var EXP_MARKER = "(?:expires?|expiring|expiry|exp\\.|valid (?:until|till|through|thru|to)|ends?|until|till|jusqu['\u2019]?(?:au|\xE0)|valable jusqu['\u2019]?(?:au|\xE0)|expire le|fin le|se termine le|g\xFCltig bis(?: zum)?|bis zum|bis|endet am|v\xE1lido hasta(?: el)?|valido hasta(?: el)?|hasta el|hasta|valido fino al|fino al|scade il|geldig (?:t\\/m|tot(?: en met)?)|tot en met|t\\/m|wa\u017Cny do|wazny do|do)";
 var foldText = (s) => deaccent(s.toLowerCase()).replace(/[^a-z0-9]/g, "");
 var BOUNDARY_BEFORE = "(?<![\\p{L}\\p{N}_])";
@@ -14870,7 +14870,8 @@ var CURRENCY = {
 var NUM = "(\\d{1,5}(?:[.,]\\d{1,2})?)";
 var AMOUNT = `(?:([\u20AC\xA3$])\\s?${NUM}|${NUM}\\s?(\u20AC|\xA3|\\$|z\u0142|zl|chf|eur|euros?|gbp|usd|pln)(?![\\p{L}]))`;
 var AMOUNT_RE = new RegExp(AMOUNT, "giu");
-var MIN_RE = new RegExp(`${BOUNDARY_BEFORE}${MIN_MARKER}\\s*${AMOUNT}`, "giu");
+var MIN_UNACCENTED = `des\\s*${AMOUNT}(?=\\s*(?:d['\u2019]achats?|de commande|minimum))`;
+var MIN_RE = new RegExp(`${BOUNDARY_BEFORE}(?:${MIN_MARKER}\\s*${AMOUNT}|${MIN_UNACCENTED})`, "giu");
 var PERCENT_RE = /(?<![\d.,])(\d{1,2}(?:[.,]\d)?)\s?%/g;
 var FREE_SHIPPING_RE = /livraison (?:offerte|gratuite)|frais de port (?:offerts|gratuits)|free (?:shipping|delivery|postage)|versandkostenfrei|kostenlose[rn]? versand|gratis versand|env[ií]o gratis|envio gratuito|spedizione gratuita|gratis verzending|darmowa dostawa/i;
 function formatAmount(m) {
@@ -15279,7 +15280,8 @@ function parsePepperThreads(html, host) {
       ...typeof merchant.merchantName === "string" ? { merchant: merchant.merchantName } : {},
       ...typeof merchant.merchantUrlName === "string" ? { merchantSlug: merchant.merchantUrlName } : {},
       ...code ? { code } : {},
-      ...num2(t.price) ? { price: num2(t.price) } : {},
+      // A price of 0 is a price: a free deal.
+      ...num2(t.price) !== void 0 ? { price: num2(t.price) } : {},
       ...pct ? { discount: `${pct}%` } : {},
       ...shipping.isFree === 1 || shipping.isFree === true ? { freeShipping: true } : {},
       expired: t.isExpired === true || String(t.status ?? "").toLowerCase() === "expired",
@@ -15428,9 +15430,10 @@ var pepperBackend = async (ctx) => {
     return { backend: "pepper", items: [], notes: [`${site.host} ${why} ${websearchHint(site.host, q)}`] };
   }
   const relevant = threads.filter((t) => aboutMerchant(t, merchant));
-  const items = relevant.slice(0, Math.max(5, ctx.options.perSource * 2)).map((t, i, all) => threadSource(t, i, all.length, merchant));
+  const kept = relevant.slice(0, Math.max(5, ctx.options.perSource * 2));
+  const items = kept.map((t, i, all) => threadSource(t, i, all.length, merchant));
   const withCodes = items.filter((it) => it.meta?.codes?.length).length;
-  const expired = relevant.filter((t) => t.expired).length;
+  const expired = kept.filter((t) => t.expired).length;
   const notes = [
     `${site.host}: ${items.length} thread(s) about "${q}"` + (threads.length > relevant.length ? ` (${threads.length - relevant.length} about other merchants dropped)` : "") + `, ${withCodes} carrying a voucher code` + (expired ? `, ${expired} marked expired by the community` : "") + "."
   ];
@@ -15444,8 +15447,8 @@ var pepperBackend = async (ctx) => {
       const src = voucherSource(vurl, decodeEntities(title), vouchers, merchant);
       if (src) {
         items.unshift(src);
-        const kept = src.meta.codes;
-        notes.push(`${site.host} voucher page: ${kept.length} code(s) (${kept.filter((c) => c.expired).length} expired).`);
+        const kept2 = src.meta.codes;
+        notes.push(`${site.host} voucher page: ${kept2.length} code(s) (${kept2.filter((c) => c.expired).length} expired).`);
       } else {
         notes.push(`${site.host} voucher page ${vurl}: ${vr.ok ? "no voucher code on it" : throttleReason(vr.status, vr.error).why}.`);
       }
@@ -16553,6 +16556,7 @@ function ignoredByMaxProfile(options) {
   if (resolveSearchProfile(options) !== "max") return [];
   const out = [];
   if (options.webEngine !== "auto") out.push("--web-engine");
+  if (options.perSourceAsked !== void 0 && options.perSourceAsked < MAX_PROFILE_KNOBS.perSource) out.push("--per-source");
   return out;
 }
 function fuseSources(lists) {
@@ -16992,7 +16996,7 @@ async function runGather(options) {
     // exhaustive. So say exactly which part was missing.
     ...profile === "max" ? [
       `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), ${options.perSource} per backend, Firecrawl /search in discovery).`,
-      ...ignoredByMaxProfile(options).length ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`] : [],
+      ...ignoredByMaxProfile(options).length ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine and every recall knob at its ceiling.`] : [],
       // Do NOT guess why. A running SearXNG whose upstreams are throttling
       // (brave 429, duckduckgo CAPTCHA) contributes nothing and reports
       // exactly that in its own note — telling the reader "the container is
@@ -19374,10 +19378,8 @@ function buildUserQuestions(angles, signals) {
   if (!signals.identifiers.some((id) => /^\d{4}$/.test(id))) {
     qs.push("Any timeframe or recency constraint \u2014 the current state, or the historical picture too?");
   }
-  if (qs.length < 4) {
-    qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
-  }
-  return qs.slice(0, 4);
+  qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
+  return qs;
 }
 function buildCandidateQuestions(question, mode2, angles) {
   const headings = getMode(mode2).template.split("\n").map((l) => /^##\s+(.+?)\s*$/.exec(l.trim())?.[1]?.trim()).filter((h) => !!h && !/^(tl;?dr|abstract|executive summary|sources|references)/i.test(h)).slice(0, 2);
@@ -21047,6 +21049,7 @@ function gatherOptions(args) {
     queries: strArray(args.queries),
     maxSources: positive(args.max_sources, "max_sources"),
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
+    ...positive(args.per_source, "per_source") ? { perSourceAsked: positive(args.per_source, "per_source") } : {},
     lang: str2(args.lang) ?? "en",
     region: str2(args.region),
     // Pilotable from MCP, at last: these were hardcoded, so a client could not
@@ -22582,6 +22585,7 @@ function buildGatherOptions(p, opts = {}) {
     // Unset unless asked for: no default FETCH budget (see GatherOptions).
     maxSources: p.values["max-sources"] ? num4("max-sources", p.values["max-sources"], 0) : void 0,
     perSource: num4("per-source", p.values["per-source"], caps.perSource),
+    ...p.values["per-source"] ? { perSourceAsked: num4("per-source", p.values["per-source"], caps.perSource) } : {},
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,

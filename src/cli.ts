@@ -793,6 +793,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     // Unset unless asked for: no default FETCH budget (see GatherOptions).
     maxSources: p.values["max-sources"] ? num("max-sources", p.values["max-sources"], 0) : undefined,
     perSource: num("per-source", p.values["per-source"], caps.perSource),
+    ...(p.values["per-source"] ? { perSourceAsked: num("per-source", p.values["per-source"], caps.perSource) } : {}),
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,

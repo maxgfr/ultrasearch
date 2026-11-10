@@ -401,6 +401,8 @@ export function ignoredByMaxProfile(options: GatherOptions): string[] {
   if (resolveSearchProfile(options) !== "max") return [];
   const out: string[] = [];
   if (options.webEngine !== "auto") out.push("--web-engine");
+  // A lower cap somebody typed is raised like the default is: say so.
+  if (options.perSourceAsked !== undefined && options.perSourceAsked < MAX_PROFILE_KNOBS.perSource) out.push("--per-source");
   return out;
 }
 
@@ -1179,7 +1181,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       ? [
           `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), ${options.perSource} per backend, Firecrawl /search in discovery).`,
           ...(ignoredByMaxProfile(options).length
-            ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`]
+            ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine and every recall knob at its ceiling.`]
             : []),
           // Do NOT guess why. A running SearXNG whose upstreams are throttling
           // (brave 429, duckduckgo CAPTCHA) contributes nothing and reports

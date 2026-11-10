@@ -57,8 +57,8 @@ What the lane gets, and what it deliberately does not:
   back already read by a real browser instead of being re-fetched by the regex
   stripper.
 - **Every recall knob at its limit**: `--pages 5`, `--web-breadth 5`,
-  `--rounds 2`, `--per-source 50`. It supersedes a pinned `--web-engine` and
-  says so. Measured on one question: 60 sources before `--per-source` was part
+  `--rounds 2`, `--per-source 50`. It supersedes a pinned `--web-engine` and a
+  lower `--per-source`, and says so. Measured on one question: 60 sources before `--per-source` was part
   of the ceiling, 188 after.
 - **`--depth deep`**, unless you pinned a depth yourself.
 

@@ -181,6 +181,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     queries: strArray(args.queries),
     maxSources: positive(args.max_sources, "max_sources"),
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
+    ...(positive(args.per_source, "per_source") ? { perSourceAsked: positive(args.per_source, "per_source") } : {}),
     lang: str(args.lang) ?? "en",
     region: str(args.region),
     // Pilotable from MCP, at last: these were hardcoded, so a client could not

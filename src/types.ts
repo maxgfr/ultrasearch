@@ -421,6 +421,12 @@ export interface GatherOptions {
    */
   maxSources?: number;
   perSource: number;
+  /**
+   * `perSource` as the caller gave it, when they did (it is the depth's default
+   * otherwise). Kept apart so a profile that raises the cap can say it overrode
+   * a number somebody chose.
+   */
+  perSourceAsked?: number;
   lang: string;
   region?: string; // region/country for locale-aware web search (else derived from lang)
   searxng?: string; // SearXNG base URL (else env / default)
