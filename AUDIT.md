@@ -3,7 +3,8 @@
 Scope: everything under `src/` except the vendored engine (`src/vendor/`, a pinned
 artifact with its own repository), plus `scripts/`, `evals/` and the test suite.
 Baseline: `9375ad4` (v1.45.1). The bug fixes shipped as **v1.45.2**; the
-optimizations, the cleanup and the dblp fix as **v1.45.3**.
+optimizations, the cleanup and a first dblp fix as **v1.45.3**; a second dblp fix,
+found by running against the live web, as **v1.45.4**.
 
 ## Summary
 
@@ -13,11 +14,12 @@ optimizations, the cleanup and the dblp fix as **v1.45.3**.
 2. The defects that mattered sat in the report gate: `render` could loop forever on
    ordinary markdown, and four report shapes let a claim past `check` or `verify`
    unexamined. All are fixed.
-3. 29 bug-fix commits, each with a regression test; 4 optimizations, each measured;
+3. 30 bug-fix commits, each with a regression test; 4 optimizations, each measured;
    lint warnings 4 → 0; 2 dead functions removed. CI and the release workflow were
-   green after both pushes.
-4. Tests 1359 → 1411. Coverage up on every axis: statements 94.72 → 95.13 %,
-   branches 85.41 → 85.93 %, functions 97.26 → 97.50 %, lines 96.52 → 96.85 %.
+   green after every push. The shipped bundle was then run against the live web
+   next to the v1.45.1 bundle — see "Verified on the live web".
+4. Tests 1359 → 1412. Coverage up on every axis: statements 94.72 → 95.13 %,
+   branches 85.41 → 85.94 %, functions 97.26 → 97.50 %, lines 96.52 → 96.85 %.
 5. What remains is design work, not defects in a line: two commands overwrite an
    existing dossier without a guard, and nothing locks a dossier across processes.
    See "Not fixed" and "Open questions".
@@ -93,6 +95,7 @@ topic's existing file.
 | `69222eb` | `src/refcheck/citing.ts` | "two and three eyes" was read as 5. | "and"/"et" joins only after a scale, or a French ten before un/onze. | `refcheck.test.ts` — "does not add up two numbers that an 'and' merely lists" |
 | `f4d92e1` | `src/mcp/handlers.ts` | `ultrasearch_verify` took `shards` without `shard` for stripe 0. | The CLI's validation. | `mcp-handlers.test.ts` — "refuses half of a shard pair" |
 | `86b7834` | `src/backends/dblp.ts` | "dblp search failed or empty (status 200)". | `apiFailure`, like the other scholarly backends. | `backends-research.test.ts` — "tells an empty answer, a throttle and a failure apart" ³ |
+| `0e1af1f` | `src/backends/dblp.ts` | dblp.org answers its API with an anti-bot challenge (HTTP 202, HTML); read as "returned nothing for …". Found on the live API. | A 2xx that is not dblp's JSON is named as what it is. | `backends-research.test.ts` — "names an anti-bot challenge instead of calling it an empty answer" |
 
 ¹ Not run against the old code as a test — it would hang the runner. The hang was
 reproduced beforehand on the committed v1.45.1 bundle (`render` still running after
@@ -102,6 +105,39 @@ file. The old behavior was read in the source, and the assertion on the request 
 is the one the old code would fail.
 ³ Written together with the fix and only run after it; the old wording is the one
 quoted in the Issue column.
+
+## Verified on the live web
+
+The test suite is offline by design, so the shipped bundle was also run against the
+real services (10 November 2026), each time next to the v1.45.1 bundle on the same
+input. What that showed:
+
+| Area | v1.45.1 | After the audit |
+|---|---|---|
+| The 11 CLI reproductions (render hang, nested fence, HTML injection, CRLF, numerals, escaping `extract`, `drop` template, fractional flag, quoting, excluded domains) | all 11 reproduce | all 11 fixed |
+| MCP server over stdio, `ultrasearch_render` on a report holding `# ` | never answers (the server spins) | answers in 2 ms |
+| MCP `ultrasearch_verify {shards: 4}` | returns one stripe as the worklist | refused |
+| Europe PMC, 23 real abstracts for one query | 50 425 characters, 1 p-value kept | 53 103 characters, 13 p-values kept |
+| RFC title search, "how does TLS session resumption work" | 0 RFC | RFC 4507 and RFC 5077 |
+| Wikipedia, `--lang "evil.example/x?"` | request sent to `evil.example` | 4 sources from `en.wikipedia.org` |
+| Wikipedia, standard depth | 6 pages | the same 6 pages |
+| refcheck on 3 real references | `author = {Jinek M and …}`, key `m2012programmable` | `author = {Jinek, M. and …}`, key `jinek2012programmable` |
+| Deal codes re-extracted from the same 12 real pages | 2 codes | the same 2 codes |
+| PMC full text, 6 real articles | — | identical text (none has the nested-list shape `42e5523` fixes: that fix is proven by its unit test only) |
+| Research run end to end (18 sources, `refs.bib`, a report quoted from the extracts) | — | `check`, `check --strict-numerals`, the same report in CRLF, `verify` (8 pairs) and `render` all pass |
+
+**One defect was found this way, and fixed** (`0e1af1f`, v1.45.4): dblp.org
+now serves its API behind an anti-bot challenge (HTTP 202, an HTML page). The backend
+read that as an empty answer — and the audit's own rewording of its note had made
+that worse, "dblp search returned nothing for …". It now says "dblp answered with an
+anti-bot proof-of-work challenge (HTTP 202)" and points at `site:dblp.org`.
+
+Not conclusive, and not caused by the audit: six backends returned nothing during
+the run — OpenAlex, Semantic Scholar and Reddit (HTTP 429), Marginalia (unreachable),
+DuckDuckGo Lite and Mojeek (no results from this address). The v1.45.1 bundle gave
+the same answers at the same moment, and none of those six files was changed.
+SearXNG was not running locally, so the `--since` mapping (`e77f180`) was exercised
+by its unit test only.
 
 ## Optimizations
 
