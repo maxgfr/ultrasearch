@@ -16,6 +16,28 @@ export function sourceTextWithoutPassageLabels(text: string): string {
     .join("\n");
 }
 
+/**
+ * Where the window opening at `start` ends: 800 characters on, pulled back to
+ * the last line break or sentence end in its second half when there is one.
+ *
+ * Only a boundary past `start + 400` is ever used, so only that stretch is
+ * searched. `lastIndexOf(x, end)` over the whole text walks back to the start
+ * of the EXTRACT when no boundary exists — on a page with no line break
+ * (minified text, one long table) every window then cost the size of
+ * everything before it: seconds on a 3 MB extract.
+ */
+export function windowEnd(text: string, start: number): number {
+  const end = Math.min(text.length, start + 800);
+  if (end >= text.length) return end;
+  const from = start + 401;
+  const paragraph = text.slice(from, end + 1).lastIndexOf("\n");
+  const sentence = text.slice(from, end + 2).lastIndexOf(". ");
+  const boundary = Math.max(paragraph, sentence);
+  if (boundary >= 0) return from + boundary + 1;
+  // Avoid splitting a UTF-16 surrogate pair at a window boundary.
+  return /[\uD800-\uDBFF]/.test(text[end - 1]!) ? end - 1 : end;
+}
+
 // Rank bounded, contiguous windows of the complete fetched text. The source
 // slices stay verbatim; offsets refer to the original extract, not this digest.
 export function selectSourcePassages(text: string, question: string, depth: Manifest["depth"]): string {
@@ -24,15 +46,7 @@ export function selectSourcePassages(text: string, question: string, depth: Mani
   const matcher = buildMatcher(question);
   const candidates: { start: number; end: number; score: number }[] = [];
   for (let start = 0; start < text.length; ) {
-    let end = Math.min(text.length, start + 800);
-    if (end < text.length) {
-      const paragraph = text.lastIndexOf("\n", end);
-      const sentence = text.lastIndexOf(". ", end);
-      const boundary = Math.max(paragraph, sentence);
-      if (boundary > start + 400) end = boundary + 1;
-      // Avoid splitting a UTF-16 surrogate pair at a window boundary.
-      else if (/[\uD800-\uDBFF]/.test(text[end - 1]!)) end--;
-    }
+    const end = windowEnd(text, start);
     const score = matcher.matchLine(text.slice(start, end)).size;
     if (score) {
       let contextStart = Math.max(0, start - 160);

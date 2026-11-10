@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSource, renderSourceExtract } from "../src/dossier.js";
+import { windowEnd } from "../src/passages.js";
 
 const question = "What does HTTP 429 mean and how does Retry-After work?";
 const answer = "HTTP 429 means Too Many Requests. A Retry-After header indicates how long to wait before retrying.";
@@ -53,5 +54,50 @@ describe("question-focused source extracts", () => {
     expect(result).not.toContain("[Source passage:");
     expect(result).toContain("[truncated]");
     expect(renderSourceExtract(source, text, "summary", "quantum entanglement")).toBe(result);
+  });
+});
+
+describe("windowEnd", () => {
+  // The rule as it was first written: search the WHOLE text backwards. Correct,
+  // and quadratic on a text with no boundary. The bounded search must cut every
+  // window at exactly the same place.
+  const reference = (text: string, start: number): number => {
+    let end = Math.min(text.length, start + 800);
+    if (end < text.length) {
+      const boundary = Math.max(text.lastIndexOf("\n", end), text.lastIndexOf(". ", end));
+      if (boundary > start + 400) end = boundary + 1;
+      else if (/[\uD800-\uDBFF]/.test(text[end - 1]!)) end--;
+    }
+    return end;
+  };
+  // A small deterministic generator: the texts must be the same on every run.
+  const rng = (seed: number) => () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 2 ** 32;
+  };
+
+  it("ends every window where the unbounded search ended it", () => {
+    const next = rng(42);
+    const pieces = ["word ", "longerword ", "x", ". ", ".", "\n", "\n\n", "😀", "é ", "a. b ", " "];
+    for (let round = 0; round < 40; round++) {
+      // Sparse boundaries on some rounds, none at all on others.
+      const boundaryRate = round % 4 === 0 ? 0 : 0.002 * round;
+      let text = "";
+      while (text.length < 6000) {
+        const r = next();
+        text += r < boundaryRate ? pieces[3 + Math.floor(next() * 4)]! : pieces[Math.floor(next() * 3)]!;
+        if (next() < 0.01) text += pieces[7 + Math.floor(next() * 4)]!;
+      }
+      for (let start = 0; start < text.length; start = windowEnd(text, start)) {
+        expect(windowEnd(text, start), `round ${round}, start ${start}`).toBe(reference(text, start));
+      }
+    }
+  });
+
+  it("puts a boundary sitting exactly on either edge of the search on the right side", () => {
+    const at = (i: number, piece: string) => "a".repeat(i) + piece + "a".repeat(2000 - i - piece.length);
+    for (const i of [399, 400, 401, 402, 798, 799, 800, 801]) {
+      for (const piece of ["\n", ". "]) expect(windowEnd(at(i, piece), 0), `${JSON.stringify(piece)} at ${i}`).toBe(reference(at(i, piece), 0));
+    }
   });
 });

@@ -15611,20 +15611,23 @@ function sourceTextWithoutPassageLabels(text) {
     return !/^\[Source passage: characters \d+-\d+ of \d+\]$/.test(trimmed) && trimmed !== OMISSION_NOTICE;
   }).join("\n");
 }
+function windowEnd(text, start) {
+  const end = Math.min(text.length, start + 800);
+  if (end >= text.length) return end;
+  const from = start + 401;
+  const paragraph2 = text.slice(from, end + 1).lastIndexOf("\n");
+  const sentence = text.slice(from, end + 2).lastIndexOf(". ");
+  const boundary = Math.max(paragraph2, sentence);
+  if (boundary >= 0) return from + boundary + 1;
+  return /[\uD800-\uDBFF]/.test(text[end - 1]) ? end - 1 : end;
+}
 function selectSourcePassages(text, question, depth) {
   const cap = depth === "deep" ? Infinity : depth === "standard" ? 8e3 : 4e3;
   if (text.length <= cap || !question.trim()) return capExtract(text, depth);
   const matcher = buildMatcher(question);
   const candidates2 = [];
   for (let start = 0; start < text.length; ) {
-    let end = Math.min(text.length, start + 800);
-    if (end < text.length) {
-      const paragraph2 = text.lastIndexOf("\n", end);
-      const sentence = text.lastIndexOf(". ", end);
-      const boundary = Math.max(paragraph2, sentence);
-      if (boundary > start + 400) end = boundary + 1;
-      else if (/[\uD800-\uDBFF]/.test(text[end - 1])) end--;
-    }
+    const end = windowEnd(text, start);
     const score = matcher.matchLine(text.slice(start, end)).size;
     if (score) {
       let contextStart = Math.max(0, start - 160);
