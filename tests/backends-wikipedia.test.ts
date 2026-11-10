@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { wikipediaBackend } from "../src/backends/wikipedia.js";
+import { runBackends } from "../src/backends/registry.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -131,5 +132,42 @@ describe("wikipediaBackend", () => {
     // rank order + score preserved (top.length - i, in search order)
     expect(r.items.map((i) => i.title)).toEqual(["Page 0", "Page 1", "Page 2", "Page 3", "Page 4", "Page 5"]);
     expect(r.items.map((i) => i.score)).toEqual([6, 5, 4, 3, 2, 1]);
+  });
+
+  it("reads each page's summary once per run, however many query variants surface it", async () => {
+    const spy = installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: SEARCH, contentType: "application/json" };
+      if (url.includes("/summary/Rate_limiting")) return { body: SUMMARY_RL, contentType: "application/json", delayMs: 5 };
+      if (url.includes("/summary/Token_bucket")) return { body: SUMMARY_TB, contentType: "application/json", delayMs: 5 };
+      return undefined;
+    });
+    const ctx = { ...makeCtx("rate limiting"), variants: ["rate limiting", "rate limiting algorithms", "what is rate limiting"] };
+    const [res] = await runBackends(["wikipedia"], ctx);
+    const calls = spy.mock.calls.map((c) => String(c[0]));
+    // Three searches (one per variant), and each of the two pages read ONCE —
+    // not three times — though all three variants were in flight together.
+    expect(calls.filter((u) => u.includes("/search/page"))).toHaveLength(3);
+    expect(calls.filter((u) => u.includes("/summary/"))).toHaveLength(2);
+    expect(res!.items.map((i) => i.url)).toEqual(["https://en.wikipedia.org/wiki/Rate_limiting", "https://en.wikipedia.org/wiki/Token_bucket"]);
+    expect(res!.items.every((i) => i.text)).toBe(true);
+
+    // Another run starts from nothing: the memo belongs to the run that made it.
+    await runBackends(["wikipedia"], { ...makeCtx("rate limiting"), variants: ["rate limiting"] });
+    expect(spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("/summary/"))).toHaveLength(4);
+  });
+
+  it("does not remember a summary read that failed", async () => {
+    let attempts = 0;
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: SEARCH, contentType: "application/json" };
+      if (url.includes("/summary/Rate_limiting")) return ++attempts === 1 ? { status: 500, body: "" } : { body: SUMMARY_RL, contentType: "application/json" };
+      if (url.includes("/summary/Token_bucket")) return { body: SUMMARY_TB, contentType: "application/json" };
+      return undefined;
+    });
+    const ctx = makeCtx("rate limiting");
+    const first = await wikipediaBackend(ctx);
+    expect(first.items.find((i) => i.title === "Rate limiting")!.text).toBe("controls request rate"); // the search excerpt stood in
+    const second = await wikipediaBackend(ctx);
+    expect(second.items.find((i) => i.title === "Rate limiting")!.text).toMatch(/strategy for limiting network traffic/);
   });
 });

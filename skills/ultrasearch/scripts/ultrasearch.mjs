@@ -13511,6 +13511,20 @@ var marginaliaBackend = async (ctx) => {
 };
 
 // src/backends/wikipedia.ts
+var summaries = /* @__PURE__ */ new WeakMap();
+function readSummary(run, url) {
+  let memo = summaries.get(run);
+  if (!memo) summaries.set(run, memo = /* @__PURE__ */ new Map());
+  const known = memo.get(url);
+  if (known) return known;
+  const read2 = httpJson("GET", url, void 0, { timeoutMs: 1e4 });
+  memo.set(url, read2);
+  const forget2 = memo;
+  void read2.then((r) => {
+    if (!r.ok) forget2.delete(url);
+  });
+  return read2;
+}
 var wikipediaBackend = async (ctx) => {
   const asked = (ctx.options.lang || "en").split("-")[0].toLowerCase();
   const lang = /^[a-z]{2,12}$/.test(asked) ? asked : "en";
@@ -13527,7 +13541,7 @@ var wikipediaBackend = async (ctx) => {
   const built = await mapLimit(top, 4, async (p, i) => {
     if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
-    const dr = await httpJson("GET", summaryUrl, void 0, { timeoutMs: 1e4 });
+    const dr = await readSummary(ctx.options, summaryUrl);
     if (dr.data?.type === "disambiguation") {
       disambigSkipped++;
       return null;
@@ -20573,12 +20587,12 @@ async function resolveReferences(refs) {
     }
   }
   const pmids = [...new Set([...pmidOf.values()].map((v) => v.pmid))];
-  const summaries = pmids.length ? await esummary(pmids) : /* @__PURE__ */ new Map();
+  const summaries2 = pmids.length ? await esummary(pmids) : /* @__PURE__ */ new Map();
   const articles = pmids.length ? await efetchArticles(pmids) : /* @__PURE__ */ new Map();
   const records = /* @__PURE__ */ new Map();
   for (const r of refs) {
     const hit = pmidOf.get(r.n);
-    const rec = hit ? summaries.get(hit.pmid) : void 0;
+    const rec = hit ? summaries2.get(hit.pmid) : void 0;
     if (rec && (hit.how !== "title" || !r.title || titleSimilarity(r.title, rec.title) >= 0.8)) {
       const art = articles.get(rec.pmid);
       const abs = art?.abstract;
@@ -20589,7 +20603,7 @@ async function resolveReferences(refs) {
     const viaCrossref = (r.doi ? await crossrefByDoi(r.doi) : void 0) ?? (r.title ? await crossrefBibliographic(r) : void 0);
     if (viaCrossref) records.set(r.n, viaCrossref);
   }
-  if (summaries.size < pmids.length) notes.push(`PubMed returned no summary for ${pmids.length - summaries.size} PMID(s).`);
+  if (summaries2.size < pmids.length) notes.push(`PubMed returned no summary for ${pmids.length - summaries2.size} PMID(s).`);
   const doiChecks = /* @__PURE__ */ new Map();
   for (const r of refs) {
     if (!r.doi || doiChecks.has(r.doi.toLowerCase())) continue;
@@ -22594,15 +22608,15 @@ async function dispatch2(p) {
         if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
       }
       const report = gatherReport(r, options);
-      const summaries = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
+      const summaries2 = Object.fromEntries(extraSummaries(r.sources, r.manifest).map((s) => [s.key, s.data]));
       if (options.stdout) {
-        emitArtifacts(r.dir, options.json, { manifest: r.manifest, ...summaries });
+        emitArtifacts(r.dir, options.json, { manifest: r.manifest, ...summaries2 });
         process.stderr.write(report.lines.join("\n") + "\n");
         process.exitCode = report.exitCode;
         return;
       }
       if (options.json) {
-        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest, ...summaries }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ dir: r.dir, manifest: r.manifest, ...summaries2 }, null, 2) + "\n");
         process.exitCode = report.exitCode;
         return;
       }

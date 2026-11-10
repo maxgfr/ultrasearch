@@ -2,6 +2,30 @@ import type { Backend, BackendResult, RawSource } from "../types.js";
 import { mapLimit } from "../util.js";
 import { httpJson, decodeEntities } from "./fetch.js";
 
+// One summary read per page per RUN. A question's query variants ("rate
+// limiting", "rate limiting algorithms", …) surface mostly the same pages, and
+// each variant used to read every summary again: 3 variants over 6 shared pages
+// cost 18 requests where 6 answer them all. Keyed by the run's options object,
+// which every variant of a run shares and nothing else does, so the memo lives
+// exactly as long as the run. The PROMISE is kept: variants run concurrently,
+// and the second to ask must wait for the first read, not start its own.
+type SummaryRead = ReturnType<typeof httpJson>;
+const summaries = new WeakMap<object, Map<string, SummaryRead>>();
+function readSummary(run: object, url: string): SummaryRead {
+  let memo = summaries.get(run);
+  if (!memo) summaries.set(run, (memo = new Map()));
+  const known = memo.get(url);
+  if (known) return known;
+  const read = httpJson("GET", url, undefined, { timeoutMs: 10000 });
+  memo.set(url, read);
+  // A failed read is not remembered: a later variant asks again, as before.
+  const forget = memo;
+  void read.then((r) => {
+    if (!r.ok) forget.delete(url);
+  });
+  return read;
+}
+
 // Wikipedia via the keyless REST API: search for pages, then pull each top
 // page's summary extract as the source text. Language-aware via --lang.
 export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => {
@@ -27,7 +51,7 @@ export const wikipediaBackend: Backend = async (ctx): Promise<BackendResult> => 
   const built = await mapLimit(top, 4, async (p: any, i): Promise<RawSource | null> => {
     if (!p?.key) return null;
     const summaryUrl = `${host}/api/rest_v1/page/summary/${encodeURIComponent(p.key)}`;
-    const dr = await httpJson("GET", summaryUrl, undefined, { timeoutMs: 10000 });
+    const dr = await readSummary(ctx.options, summaryUrl);
     // A disambiguation page ("Mercury may refer to …") is a router, not a
     // source — the REST summary marks it `type: "disambiguation"`. Skip it at
     // the source so it never eats a slot or seeds off-topic fan-out.
