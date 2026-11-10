@@ -60,7 +60,7 @@ const INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
 // The longest cell a named index column may hold and still be a label.
 const INDEX_LABEL_WORDS = 3;
 // A source citation anywhere in a cell — the mark of a claim, never of a label.
-const TOKEN_RE_ONCE = /\[S\d+\]/;
+const CELL_CITATION = /\[S\d+\]/;
 
 /**
  * Data rows of a table whose FIRST column is an index — the row numbers of a
@@ -88,7 +88,7 @@ export function indexColumnRows(lines: string[], code: boolean[]): boolean[] {
     // A header can only name an index over cells that ARE labels ("15",
     // "REQ-12", "Fig. 3"). A sentence filed under "Item" is a claim: dropping
     // it would take its [S#] with it, and the row would never be verified.
-    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !TOKEN_RE_ONCE.test(c));
+    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !CELL_CITATION.test(c));
     const index = (INDEX_HEADER.test(header) && labels) || (rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs);
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1]! : i + 1;
@@ -256,6 +256,13 @@ export interface MaskedFile {
   noNumerals: boolean[];
 }
 
+// A report saved with CRLF endings is the same report. Every line rule below
+// (headings, fences, the appendix) is `$`-anchored, so a trailing "\r" would
+// switch the masks off — and an unmasked `## Sources` listing reads as citations.
+function lfOnly(text: string): string {
+  return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
+}
+
 // The single masking of a report file: HTML comments blanked, code fences,
 // model-hint regions and the Sources/References appendix located. `check`'s
 // token accounting, `check`'s claim units and `unitsOfFile` (verify/render) all
@@ -264,7 +271,8 @@ export interface MaskedFile {
 // One deliberate exception stays outside: `citedSourceIds` below runs its own
 // pass because it must NOT apply `hintMask` — a [S#] inside a model-hint region
 // is still a citation for "which sources did the report cite?".
-export function maskedFile(text: string): MaskedFile {
+export function maskedFile(raw: string): MaskedFile {
+  const text = lfOnly(raw);
   // The annotation is read BEFORE comments are blanked — it is one. Blanking
   // keeps every line break, so the two line arrays index the same lines.
   const noNumerals = noNumeralsMask(text.split("\n"));
@@ -308,7 +316,7 @@ export function unitSourceTokens(text: string): string[] {
 // appendix are excluded (a [S#] in the appendix listing is not a citation).
 // Shared so `render` and `check` can never disagree on what counts as cited.
 export function citedSourceIds(text: string): Set<string> {
-  const lines = stripHtmlComments(text).split("\n");
+  const lines = stripHtmlComments(lfOnly(text)).split("\n");
   const code = codeMask(lines);
   const appendix = reportAppendixMask(lines);
   const out = new Set<string>();

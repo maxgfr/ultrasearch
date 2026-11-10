@@ -247,6 +247,22 @@ describe("runCheck — Sources/References appendix mask", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("masks the appendix and code fences of a CRLF report exactly as it does an LF one", () => {
+    // A trailing "\r" kept the heading and fence rules from matching, so the
+    // `## Sources` listing of a Windows-saved report counted as citations.
+    const lf = "# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n```\nnot a citation [S2]\n```\n\n## Sources\n- [S1] Rate limiting algorithms\n- [S2] Token bucket overview";
+    const results = [lf, lf.replace(/\n/g, "\r\n")].map((body) => {
+      const dir = scratch();
+      writeFixtureDossier(dir, 2);
+      report(dir, body);
+      const r = runCheck(dir);
+      rmSync(dir, { recursive: true, force: true });
+      return { citations: r.sourceCitations, uncited: r.uncitedSources, ok: r.ok };
+    });
+    expect(results[0]).toEqual({ citations: 1, uncited: ["S2"], ok: true });
+    expect(results[1]).toEqual(results[0]);
+  });
+
   it("does not count appendix [S#] as citations or cited ids", () => {
     const dir = scratch();
     writeFixtureDossier(dir, 2);

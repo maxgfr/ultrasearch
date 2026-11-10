@@ -17380,7 +17380,7 @@ function tableCells(line, dropFirst = false) {
 var INDEX_HEADER = /^(#|n[°ºo]\.?|no\.|num(ber|éro|ero)?\.?|r[ée]f(s|\.|érence|erence)?\.?|id|item)$/i;
 var INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
 var INDEX_LABEL_WORDS = 3;
-var TOKEN_RE_ONCE = /\[S\d+\]/;
+var CELL_CITATION = /\[S\d+\]/;
 function indexColumnRows(lines, code) {
   const out = lines.map(() => false);
   for (let i = 0; i + 1 < lines.length; i++) {
@@ -17392,7 +17392,7 @@ function indexColumnRows(lines, code) {
     const firsts = rows.map((j) => cellsOf(lines[j])[0].replace(/[*_`]/g, "").trim());
     const values = firsts.map((c) => Number(c.replace(/[^\d]/g, "")));
     const runs = values.every((v, k) => k === 0 || v > values[k - 1]);
-    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !TOKEN_RE_ONCE.test(c));
+    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !CELL_CITATION.test(c));
     const index = INDEX_HEADER.test(header2) && labels || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs;
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1] : i + 1;
@@ -17496,7 +17496,11 @@ var APPENDIX_HEADING = /^(?:sources?|references?|r[ée]f[ée]rences(?:\s+bibliog
 function reportAppendixMask(lines) {
   return appendixMask(lines, { headings: APPENDIX_HEADING });
 }
-function maskedFile(text) {
+function lfOnly(text) {
+  return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
+}
+function maskedFile(raw) {
+  const text = lfOnly(raw);
   const noNumerals = noNumeralsMask(text.split("\n"));
   const lines = stripHtmlComments(text).split("\n");
   const code = codeMask(lines);
@@ -17522,7 +17526,7 @@ function unitSourceTokens(text) {
   return out;
 }
 function citedSourceIds(text) {
-  const lines = stripHtmlComments(text).split("\n");
+  const lines = stripHtmlComments(lfOnly(text)).split("\n");
   const code = codeMask(lines);
   const appendix = reportAppendixMask(lines);
   const out = /* @__PURE__ */ new Set();
