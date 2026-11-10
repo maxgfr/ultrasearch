@@ -17389,10 +17389,8 @@ async function readSource(state, url, citeUrlIn, supplied, provider, ncbi, quest
     const why = home ? `${readUrl} redirected to the site's home page (${home}) \u2014 the document is gone, and the archive has no copy; not added` : fetched.note ?? `no readable content at ${readUrl}`;
     return { ok: false, result: { id: "", added: false, note: ncbiMiss ? `${why} (${ncbiMiss}.)` : why, ...handoff } };
   }
-  if (supplied && supplied !== url) {
-    meta.textVia = url;
-    via = url;
-  } else if (!isCitableUrl(citeUrl)) {
+  const citesGivenPage = !!supplied && supplied !== url;
+  if (!citesGivenPage && !isCitableUrl(citeUrl)) {
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {

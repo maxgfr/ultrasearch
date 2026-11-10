@@ -684,10 +684,14 @@ async function readSource(
   // DOI, arXiv id, PMID) rather than pinning a URL no reader can open. When the
   // payload names no document, refuse — guessing a landing page would be worse
   // than saying so.
-  if (supplied && supplied !== url) {
-    meta.textVia = url;
-    via = url;
-  } else if (!isCitableUrl(citeUrl)) {
+  //
+  // A caller who named the page to cite has settled it already — and where the
+  // text came from is on record above (`via`): the endpoint when it answered,
+  // nothing when it was empty and the cited page itself was read instead.
+  // Re-pinning `textVia` to the endpoint here credited an address that had
+  // returned nothing.
+  const citesGivenPage = !!supplied && supplied !== url;
+  if (!citesGivenPage && !isCitableUrl(citeUrl)) {
     const derived = deriveCitableUrl(text, fetched.canonical);
     if (!derived) {
       return {

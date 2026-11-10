@@ -228,6 +228,28 @@ describe("addSource — walls and API endpoints", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("does not credit an endpoint that returned nothing when the cited page supplied the text", async () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    // The endpoint is empty; the page given as citeUrl is read instead. The
+    // text is the page's own — `textVia` naming the endpoint would claim the
+    // opposite, and an E-utilities textVia makes later passes mine this text
+    // for DOI/PMID lines it never had.
+    installFetchMock(
+      routes([
+        ["records.test", { contentType: "text/plain", body: "" }],
+        ["journal.test", { body: `<html><body><article><p>${"The article itself, read on its own page. ".repeat(30)}</p></article></body></html>` }],
+      ]),
+    );
+    const r = await addSource(dir, "https://records.test/v1/item/77?format=json", { citeUrl: "https://journal.test/articles/scleral-fixation" });
+    expect(r.added).toBe(true);
+    const added = (JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[])[1]!;
+    expect(added.url).toBe("https://journal.test/articles/scleral-fixation");
+    expect(readFileSync(join(dir, added.extract), "utf8")).toContain("read on its own page");
+    expect(added.meta?.textVia).toBeUndefined();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("refuses a reconstructed url that is itself not citable", async () => {
     const dir = scratch();
     writeFixtureDossier(dir, 1);
