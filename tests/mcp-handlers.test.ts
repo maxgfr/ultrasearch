@@ -232,4 +232,12 @@ describe("guardrails", () => {
   it("rejects a shard outside its shard count", async () => {
     expect(await errorText("ultrasearch_verify", { run: RUN, shards: 2, shard: 5 })).toMatch(/`shard` must be between 0 and 1/);
   });
+
+  it("refuses half of a shard pair, as the CLI does", async () => {
+    // `shards: 4` alone used to mean stripe 0: a quarter of the worklist,
+    // returned as if it were all of it. `shard` alone was ignored outright.
+    expect(await errorText("ultrasearch_verify", { run: RUN, shards: 4 })).toMatch(/`shards` requires `shard`/);
+    expect(await errorText("ultrasearch_verify", { run: RUN, shard: 1 })).toMatch(/`shard` requires `shards`/);
+    expect(await errorText("ultrasearch_verify", { run: RUN, shards: 2, shard: 0.5 })).toMatch(/`shard` must be a whole number/);
+  });
 });

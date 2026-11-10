@@ -21290,6 +21290,14 @@ function handleDrop(args, run) {
 function handleVerify(args, run) {
   const shards = positive(args.shards, "shards");
   const shard = num3(args.shard);
+  for (const [key, value] of [
+    ["shards", shards],
+    ["shard", shard]
+  ]) {
+    if (value !== void 0 && !Number.isInteger(value)) throw new ToolError(`\`${key}\` must be a whole number.`);
+  }
+  if (shards !== void 0 && shard === void 0) throw new ToolError("`shards` requires `shard` (0-based) \u2014 or drop both for the whole worklist.");
+  if (shards === void 0 && shard !== void 0) throw new ToolError("`shard` requires `shards` \u2014 the number of stripes the worklist is split into.");
   if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
     throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
   }

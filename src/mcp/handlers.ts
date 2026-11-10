@@ -563,6 +563,17 @@ function handleDrop(args: Record<string, unknown>, run: string): unknown {
 function handleVerify(args: Record<string, unknown>, run: string): unknown {
   const shards = positive(args.shards, "shards");
   const shard = num(args.shard);
+  // The same rules as `verify --shards/--shard`. Half a pair is not a request
+  // for everything: `shards` alone silently meant stripe 0 — one slice of the
+  // worklist returned as if it were the whole — and `shard` alone was ignored.
+  for (const [key, value] of [
+    ["shards", shards],
+    ["shard", shard],
+  ] as const) {
+    if (value !== undefined && !Number.isInteger(value)) throw new ToolError(`\`${key}\` must be a whole number.`);
+  }
+  if (shards !== undefined && shard === undefined) throw new ToolError("`shards` requires `shard` (0-based) — or drop both for the whole worklist.");
+  if (shards === undefined && shard !== undefined) throw new ToolError("`shard` requires `shards` — the number of stripes the worklist is split into.");
   if (shards !== undefined && shard !== undefined && (shard < 0 || shard >= shards)) {
     throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
   }
