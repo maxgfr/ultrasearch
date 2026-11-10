@@ -135,7 +135,10 @@ describe("container lifecycle", () => {
     const calls: string[][] = [];
     const r = stackControl("searxng", "up", {
       has: () => true,
-      run: (cmd, args) => (calls.push([cmd, ...args]), { ok: true, stdout: "", stderr: "" }),
+      run: (cmd, args) => {
+        calls.push([cmd, ...args]);
+        return { ok: true, stdout: "", stderr: "" };
+      },
     });
     expect(r.code).toBe(0);
     // The engine asks the daemon (`docker info`) before any compose call.
@@ -149,7 +152,13 @@ describe("container lifecycle", () => {
   // bring that profile too.
   it("brings SearXNG up alongside Firecrawl", () => {
     const calls: string[][] = [];
-    stackControl("firecrawl", "up", { has: () => true, run: (c, a) => (calls.push([c, ...a]), { ok: true, stdout: "", stderr: "" }) });
+    stackControl("firecrawl", "up", {
+      has: () => true,
+      run: (c, a) => {
+        calls.push([c, ...a]);
+        return { ok: true, stdout: "", stderr: "" };
+      },
+    });
     expect(calls.find((c) => c[1] === "compose")).toEqual(expect.arrayContaining(["--profile", "search", "--profile", "extract"]));
   });
 
@@ -165,7 +174,10 @@ describe("container lifecycle", () => {
     const calls: string[][] = [];
     const r = stackControl("searxng", "up", {
       has: () => true,
-      run: (c, a) => (calls.push([c, ...a]), { ok: false, stdout: "", stderr: "Cannot connect to the Docker daemon" }),
+      run: (c, a) => {
+        calls.push([c, ...a]);
+        return { ok: false, stdout: "", stderr: "Cannot connect to the Docker daemon" };
+      },
     });
     expect(r.code).not.toBe(0);
     expect(r.message.startsWith("ultrasearch searxng:")).toBe(true);

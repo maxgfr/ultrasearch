@@ -104,7 +104,7 @@ const VERIFY: PhaseDefinition<{ pairs?: ClaimEvidencePair[] }> = {
  * bound behind a local wrapper: a wrapper would be a declaration shadowing an
  * engine export, which is the exact thing the usage gate refuses.
  */
-// biome-ignore lint/suspicious/noExplicitAny: two differently-typed worklists in one table, which is the real shape
+// `any` on purpose: two differently-typed worklists in one table, which is the real shape.
 export const PHASE_DEFS = [GATHER, VERIFY] as any as PhaseDefinition<unknown>[];
 
 // The runner, the resolver and their types are the engine's. Re-exported so
