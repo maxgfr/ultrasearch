@@ -16833,10 +16833,10 @@ async function runGather(options) {
     }
   }
   const merged = r.merged;
-  const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
+  const backendsUsed = [...new Set(results.filter((res) => res.items.length > 0).map((res) => res.backend))];
   const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "host" || b === "firecrawl"))];
   const timings = {};
-  for (const res of results) if (res.ms !== void 0) timings[res.backend] = res.ms;
+  for (const res of results) if (res.ms !== void 0) timings[res.backend] = (timings[res.backend] ?? 0) + res.ms;
   timings.total = Date.now() - t0;
   const floor = Math.min(RECALL_FLOORS[options.depth], options.maxSources ?? Number.POSITIVE_INFINITY);
   const thin = merged.length < floor;
@@ -16847,9 +16847,9 @@ async function runGather(options) {
   const laneKept = merged.filter((it) => it.backend === "host").length;
   const webSearch = { supplied, rejected: options.webResultsRejected ?? 0, kept: laneKept };
   const bridge = options.stdout ? "and read those pages directly before answering" : "and fold the round in with `ingest --web-results` before writing";
-  const searxngResult = results.find((res) => res.backend === "searxng");
+  const searxngHits = results.filter((res) => res.backend === "searxng").reduce((n, res) => n + res.items.length, 0);
   const services = {
-    searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
+    searxng: { requested: backends.includes("searxng"), sources: searxngHits },
     firecrawl: { pages: extractorUse.get("firecrawl") ?? 0 },
     // `anydoc` is counted under whichever ladder actually ran it: the PDF bucket
     // gets what it read as a PDF, the doc bucket what it read as an office file.

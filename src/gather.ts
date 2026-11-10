@@ -1071,14 +1071,18 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   }
 
   const merged = r.merged;
-  const backendsUsed = results.filter((res) => res.items.length > 0).map((res) => res.backend);
+  // `results` holds one entry per RUN of a backend: the seed-domain searches and
+  // the gap round run the same engines again. Everything below is per backend,
+  // so each is named once, its runs' times add up, and its hits are counted
+  // across all of them.
+  const backendsUsed = [...new Set(results.filter((res) => res.items.length > 0).map((res) => res.backend))];
   // Both lanes that find pages without being in the DISCOVERY cascade belong in
   // the "engines" line: the web-search lane, and Firecrawl's /search once
   // `--search max` puts it to work. Reporting 10 Firecrawl hits under a line
   // that names only marginalia is how a lane goes unnoticed.
   const enginesFused = [...new Set(backendsUsed.filter((b) => DISCOVERY.includes(b) || b === "host" || b === "firecrawl"))];
   const timings: Record<string, number> = {};
-  for (const res of results) if (res.ms !== undefined) timings[res.backend] = res.ms;
+  for (const res of results) if (res.ms !== undefined) timings[res.backend] = (timings[res.backend] ?? 0) + res.ms;
   timings.total = Date.now() - t0;
 
   // Thin-dossier signal: the recall floor is the depth's target, clamped to what
@@ -1107,9 +1111,9 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   // What the optional helpers actually contributed this run — the answer to
   // "the container is up, is anything using it?".
-  const searxngResult = results.find((res) => res.backend === "searxng");
+  const searxngHits = results.filter((res) => res.backend === "searxng").reduce((n, res) => n + res.items.length, 0);
   const services: ManifestServices = {
-    searxng: { requested: backends.includes("searxng"), sources: searxngResult?.items.length ?? 0 },
+    searxng: { requested: backends.includes("searxng"), sources: searxngHits },
     firecrawl: { pages: extractorUse.get("firecrawl") ?? 0 },
     // `anydoc` is counted under whichever ladder actually ran it: the PDF bucket
     // gets what it read as a PDF, the doc bucket what it read as an office file.

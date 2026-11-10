@@ -73,6 +73,8 @@ describe("gather --rounds 2: a Wayback rescue is folded into the hydrate cache",
 
     // The gap round really ran (otherwise this test proves nothing about round 2).
     expect(r.manifest.notes.join(" ")).toMatch(/Gap round/);
+    // An engine that ran in both rounds is still ONE backend used.
+    expect(r.manifest.backendsUsed).toEqual(["duckduckgo"]);
 
     // ONE rescue for the whole run: round 2 reuses round 1's, instead of paying
     // archive.org a second time for the same dead page.
@@ -100,7 +102,6 @@ describe("gather --rounds 2: a Wayback rescue is folded into the hydrate cache",
             "standards",
           ],
           "backendsUsed": [
-            "duckduckgo",
             "duckduckgo",
           ],
           "cache": {
