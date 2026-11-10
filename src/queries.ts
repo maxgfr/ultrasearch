@@ -1,6 +1,6 @@
 import type { Depth, ModeName } from "./types.js";
 import { getMode } from "./modes/registry.js";
-import { planVariants } from "./util.js";
+import { planVariants, shq } from "./util.js";
 
 // The web search worklist.
 //
@@ -49,7 +49,7 @@ export function planQueries(opts: { question: string; mode: ModeName; depth: Dep
     target,
     planned: planVariants(opts.question, opts.depth),
     angles: mode.searchAngles.slice(0, target),
-    next: `Run your own web search once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q "${opts.question}" --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`,
+    next: `Run your own web search once per angle, pool EVERY hit into one JSON array, then: ultrasearch gather --q ${shq(opts.question)} --mode ${opts.mode} --depth ${opts.depth} --web-results <hits.json>`,
   };
 }
 
@@ -69,7 +69,8 @@ export function formatQueryPlan(plan: QueryPlan): string {
     ...plan.planned.map((q) => `  · ${q}`),
     ``,
     `Then pool every hit into one JSON array — [{"url":…,"title":…,"snippet":…}, …] — and:`,
-    `  ultrasearch gather --q "${plan.question}" --mode ${plan.mode} --depth ${plan.depth} --web-results <hits.json>`,
+    // Single-quoted: the line is run as printed, and a question is free text.
+    `  ultrasearch gather --q ${shq(plan.question)} --mode ${plan.mode} --depth ${plan.depth} --web-results <hits.json>`,
   ];
   return lines.join("\n") + "\n";
 }

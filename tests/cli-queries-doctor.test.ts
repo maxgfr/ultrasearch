@@ -46,7 +46,7 @@ describe("main() — queries (the web search worklist)", () => {
     const r = await run(["queries", "--q", "what is rate limiting", "--mode", "topic", "--depth", "standard"]);
     expect(r.exit).toBeUndefined();
     expect(r.out).toMatch(/Run 4 DISTINCT web search queries/);
-    expect(r.out).toMatch(/gather --q "what is rate limiting"/);
+    expect(r.out).toMatch(/gather --q 'what is rate limiting'/);
     expect(r.out).toMatch(/--web-results/);
   });
 

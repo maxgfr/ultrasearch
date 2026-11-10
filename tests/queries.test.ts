@@ -60,6 +60,17 @@ describe("planQueries — the web search worklist", () => {
     expect(p.next).toMatch(/--web-results/);
     const text = formatQueryPlan(p);
     expect(text).toMatch(/phrased in fr/);
-    expect(text).toMatch(/gather --q "limitation de débit"/);
+    expect(text).toMatch(/gather --q 'limitation de débit'/);
+  });
+
+  it("quotes the question so the follow-up command is safe to paste into a shell", () => {
+    // The command is printed for an agent to run. Inside double quotes, a
+    // question holding `"`, `$(…)` or a backtick ended the argument or ran a
+    // substitution; single-quoted, it is one literal argument whatever it holds.
+    const question = `why does "$(id)" fail with \`x\` and it's fine`;
+    const quoted = `--q 'why does "$(id)" fail with \`x\` and it'"'"'s fine' --mode`;
+    const p = planQueries({ question, mode: "bug", depth: "summary" });
+    expect(p.next).toContain(quoted);
+    expect(formatQueryPlan(p)).toContain(quoted);
   });
 });

@@ -207,6 +207,18 @@ describe("orchestrate — emitted workflow", () => {
     expect(read()).toBe(first);
   });
 
+  it("quotes the engine path in the commands a gatherer is told to run", () => {
+    // `~/Library/Application Support/…` is where a skill often lives: unquoted,
+    // every command in the gatherer's contract split at the space.
+    const run = makeRun({ plan: 5 });
+    const spaced = "/Users/me/Library/Application Support/skills/ultrasearch.mjs";
+    emitOrchestration(run, spaced);
+    const contract = readFileSync(join(run, "orchestration", "agents", "gatherer.md"), "utf8");
+    const commands = contract.split("\n").filter((l) => l.includes(spaced) && /`node /.test(l));
+    expect(commands.length).toBeGreaterThanOrEqual(3);
+    for (const line of commands) expect(line).toContain(`node '${spaced}' `);
+  });
+
   it("batches the verify worklist (one skeptic per batch of BATCH_SIZE pairs)", () => {
     const run = makeRun({ verify: 20 });
     emitOrchestration(run, ENGINE);
