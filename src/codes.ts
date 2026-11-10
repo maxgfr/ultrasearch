@@ -457,19 +457,25 @@ function readExpiry(window: string, opts: ExtractOptions): string | undefined {
 // The sentence a code sits in; when it states no discount, the next sentence
 // too — unless that one introduces a code of its own.
 const SENTENCE_END = /[.!?;](?=\s+[\p{Lu}\d"“«(*]|\s*$)|\n/gu;
-function sentenceAround(text: string, at: number): { here: string; next: string } {
-  let start = 0;
-  let end = text.length;
-  let nextEnd = text.length;
-  for (const m of text.matchAll(SENTENCE_END)) {
-    const stop = m.index! + 1;
-    if (stop <= at) start = stop;
-    else if (end === text.length) end = stop;
-    else {
-      nextEnd = stop;
-      break;
-    }
+//
+// `stops` is where every sentence of the text ends, found once per text: a page
+// that repeats its codes dozens of times asked for the sentence around each
+// mention, and each ask used to walk the text again from its first character.
+function sentenceStops(text: string): number[] {
+  return [...text.matchAll(SENTENCE_END)].map((m) => m.index! + 1);
+}
+function sentenceAround(text: string, at: number, stops: number[]): { here: string; next: string } {
+  // The first stop past `at`, by bisection.
+  let lo = 0;
+  let hi = stops.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (stops[mid]! <= at) lo = mid + 1;
+    else hi = mid;
   }
+  const start = lo > 0 ? stops[lo - 1]! : 0;
+  const end = stops[lo] ?? text.length;
+  const nextEnd = stops[lo + 1] ?? text.length;
   return { here: text.slice(Math.max(start, at - 200), Math.min(end, at + 240)), next: text.slice(end, Math.min(nextEnd, end + 240)) };
 }
 
@@ -538,13 +544,21 @@ export function extractCodes(text: string, opts: ExtractOptions): CodeMention[] 
 
   const inWindow = (at: number) => anchors.some((a) => at >= a.end && at - a.end <= REPEAT_WINDOW);
   const byCode = new Map<string, CodeMention>();
+  // Both depend on the text alone (and, for the count, on the code): computed
+  // once, not once per mention. An aggregator page names the same dozen codes
+  // forty times each, and every mention used to cost two more passes over it.
+  const outsideOf = new Map<string, number>();
+  let stops: number[] | undefined;
   for (const f of found) {
     // A product name: repeated across the page with no keyword in front of it.
-    const outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter(
-      (m) => !inWindow(m.index!),
-    ).length;
+    let outside = outsideOf.get(f.code);
+    if (outside === undefined) {
+      outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter((m) => !inWindow(m.index!)).length;
+      outsideOf.set(f.code, outside);
+    }
     if (outside >= 3) continue;
-    const { here, next } = sentenceAround(text, f.at);
+    stops ??= sentenceStops(text);
+    const { here, next } = sentenceAround(text, f.at, stops);
     // The following sentence only speaks for this code if it names no code of its own.
     const tail = next && !HAS_KEYWORD.test(next) ? next : "";
     const terms = readDiscount(here);

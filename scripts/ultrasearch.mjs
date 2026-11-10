@@ -14899,19 +14899,20 @@ function readExpiry(window, opts) {
   return void 0;
 }
 var SENTENCE_END2 = /[.!?;](?=\s+[\p{Lu}\d"“«(*]|\s*$)|\n/gu;
-function sentenceAround(text, at) {
-  let start = 0;
-  let end = text.length;
-  let nextEnd = text.length;
-  for (const m of text.matchAll(SENTENCE_END2)) {
-    const stop = m.index + 1;
-    if (stop <= at) start = stop;
-    else if (end === text.length) end = stop;
-    else {
-      nextEnd = stop;
-      break;
-    }
+function sentenceStops(text) {
+  return [...text.matchAll(SENTENCE_END2)].map((m) => m.index + 1);
+}
+function sentenceAround(text, at, stops) {
+  let lo = 0;
+  let hi = stops.length;
+  while (lo < hi) {
+    const mid = lo + hi >> 1;
+    if (stops[mid] <= at) lo = mid + 1;
+    else hi = mid;
   }
+  const start = lo > 0 ? stops[lo - 1] : 0;
+  const end = stops[lo] ?? text.length;
+  const nextEnd = stops[lo + 1] ?? text.length;
   return { here: text.slice(Math.max(start, at - 200), Math.min(end, at + 240)), next: text.slice(end, Math.min(nextEnd, end + 240)) };
 }
 function mergeMention(a, b) {
@@ -14952,12 +14953,17 @@ function extractCodes(text, opts) {
   }
   const inWindow = (at) => anchors.some((a) => at >= a.end && at - a.end <= REPEAT_WINDOW);
   const byCode = /* @__PURE__ */ new Map();
+  const outsideOf = /* @__PURE__ */ new Map();
+  let stops;
   for (const f of found) {
-    const outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter(
-      (m) => !inWindow(m.index)
-    ).length;
+    let outside = outsideOf.get(f.code);
+    if (outside === void 0) {
+      outside = [...text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(f.code)}(?![A-Za-z0-9_-])`, "gi"))].filter((m) => !inWindow(m.index)).length;
+      outsideOf.set(f.code, outside);
+    }
     if (outside >= 3) continue;
-    const { here, next } = sentenceAround(text, f.at);
+    stops ??= sentenceStops(text);
+    const { here, next } = sentenceAround(text, f.at, stops);
     const tail = next && !HAS_KEYWORD.test(next) ? next : "";
     const terms = readDiscount(here);
     const discount = terms.discount ?? (tail ? readDiscount(tail).discount : void 0);

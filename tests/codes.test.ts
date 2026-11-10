@@ -101,6 +101,27 @@ describe("extractCodes — real codes", () => {
     expect(ms).toHaveLength(1);
     expect(ms[0]).toMatchObject({ code: "BACK10", strength: "strong", discount: "10%" });
   });
+
+  it("reads every repeat of a code in its OWN sentence, wherever it sits in the page", () => {
+    // The sentence around a mention is found from a table of sentence ends built
+    // once per text. A wrong lookup would hand a late mention an early sentence:
+    // each of these three facts lives only in the sentence of one repeat.
+    const filler = "Les magasins sont ouverts du lundi au samedi toute la saison. ".repeat(30);
+    const text =
+      `Le code promo TRIPLE7 est annoncé ici. ${filler}` +
+      `Avec le code promo TRIPLE7 vous obtenez 15% de remise. ${filler}` +
+      `Le code promo TRIPLE7 est valable jusqu'au 31/10/2026. ${filler}` +
+      `Enfin le code promo SOLO9 offre 5€ de réduction dès 40€ d'achat.`;
+    const ms = extractCodes(text, fr);
+    expect(codesOf(ms)).toEqual(["TRIPLE7", "SOLO9"]);
+    expect(ms[0]).toMatchObject({ code: "TRIPLE7", discount: "15%", expires: "2026-10-31", context: "Le code promo TRIPLE7 est annoncé ici." });
+    expect(ms[1]).toMatchObject({
+      code: "SOLO9",
+      discount: "5 €",
+      minSpend: "40 €",
+      context: "Enfin le code promo SOLO9 offre 5€ de réduction dès 40€ d'achat.",
+    });
+  });
 });
 
 describe("extractCodes — decoys", () => {
