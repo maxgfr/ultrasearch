@@ -485,7 +485,9 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
       const id = escapeHtml(s.id);
       // Only a web address becomes a link: sources.json is a file anyone can
       // edit or share, and a `javascript:` url is one click from running.
-      const title = /^https?:\/\//i.test(s.url) ? `<a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a>` : escapeHtml(s.title);
+      const title = /^https?:\/\//i.test(s.url)
+        ? `<a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a>`
+        : escapeHtml(s.title);
       return `<li id="src-${id}"${cls}><strong>[${id}]</strong> ${title}<br><span class="s-meta">${meta}</span></li>`;
     })
     .join("\n");

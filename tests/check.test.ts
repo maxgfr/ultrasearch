@@ -250,7 +250,8 @@ describe("runCheck — Sources/References appendix mask", () => {
   it("masks the appendix and code fences of a CRLF report exactly as it does an LF one", () => {
     // A trailing "\r" kept the heading and fence rules from matching, so the
     // `## Sources` listing of a Windows-saved report counted as citations.
-    const lf = "# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n```\nnot a citation [S2]\n```\n\n## Sources\n- [S1] Rate limiting algorithms\n- [S2] Token bucket overview";
+    const lf =
+      "# X\nA grounded claim about buckets and windows and tokens here [S1].\n\n```\nnot a citation [S2]\n```\n\n## Sources\n- [S1] Rate limiting algorithms\n- [S2] Token bucket overview";
     const results = [lf, lf.replace(/\n/g, "\r\n")].map((body) => {
       const dir = scratch();
       writeFixtureDossier(dir, 2);
