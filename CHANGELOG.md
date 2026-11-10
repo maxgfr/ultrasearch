@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.45.4](https://github.com/maxgfr/ultrasearch/compare/v1.45.3...v1.45.4) (2026-11-10)
+
+
+### Bug Fixes
+
+* **dblp:** name an anti-bot challenge instead of calling it an empty answer ([0e1af1f](https://github.com/maxgfr/ultrasearch/commit/0e1af1fbbb2bb69ac678bdb2f76b5c6065a47aba))
+
 ## [1.45.3](https://github.com/maxgfr/ultrasearch/compare/v1.45.2...v1.45.3) (2026-11-10)
 
 
