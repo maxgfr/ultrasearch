@@ -15454,7 +15454,7 @@ async function runBackends(kinds, ctx) {
 
 // src/dossier.ts
 import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
-import { join as join12 } from "path";
+import { isAbsolute as isAbsolute3, join as join12 } from "path";
 
 // src/authority.ts
 function sourceSignals(opts) {
@@ -15661,8 +15661,14 @@ function sourceIdentityError(sources) {
     }
     if (seen.has(source2.id)) return `contains duplicate source id: ${source2.id}`;
     seen.add(source2.id);
+    if (typeof source2.extract === "string" && escapesDossier(source2.extract)) {
+      return `has an extract path that points outside the dossier (${source2.id}: ${source2.extract})`;
+    }
   }
   return void 0;
+}
+function escapesDossier(rel) {
+  return isAbsolute3(rel) || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes("..");
 }
 function idNum2(id) {
   const m = /^S(\d+)$/.exec(id);
@@ -19797,7 +19803,7 @@ function refusedForChallenge(url, note) {
 
 // src/mcp/handlers.ts
 import { existsSync as existsSync18, readFileSync as readFileSync19, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
-import { isAbsolute as isAbsolute3, join as join28, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+import { isAbsolute as isAbsolute4, join as join28, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
 
 // src/refcheck/index.ts
 import { existsSync as existsSync17, readFileSync as readFileSync18 } from "fs";
@@ -20882,7 +20888,7 @@ function browserArg(args) {
 function requiredRun(args, defaults) {
   const run = str2(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
-  if (!isAbsolute3(run)) throw new ToolError("`run` must be an absolute path.");
+  if (!isAbsolute4(run)) throw new ToolError("`run` must be an absolute path.");
   const abs = resolve4(run);
   if (!existsSync18(join28(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
@@ -20901,7 +20907,7 @@ function gatherOptions(args) {
     }
   }
   const out = str2(args.out);
-  if (out !== void 0 && !isAbsolute3(out)) throw new ToolError("`out` must be an absolute path.");
+  if (out !== void 0 && !isAbsolute4(out)) throw new ToolError("`out` must be an absolute path.");
   const depth = oneOf(str2(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
   const caps = DEPTH_CAPS[depth];
   const web = webResultsArg(args.web_results);
@@ -21083,7 +21089,7 @@ function handlePlan(args) {
   const question = requiredStr(args, "question", "the umbrella question to decompose.");
   const mode2 = oneOf(str2(args.mode), ALL_MODES, "mode", "topic");
   const runRoot = str2(args.run_root);
-  if (runRoot !== void 0 && !isAbsolute3(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
+  if (runRoot !== void 0 && !isAbsolute4(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
   const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
   if (isNoWrite()) takeArtifacts();
   return {
@@ -21095,11 +21101,11 @@ function handleMerge(args) {
   const runs = strArray(args.runs);
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
-    if (!isAbsolute3(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
+    if (!isAbsolute4(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
     if (!existsSync18(join28(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
-  if (master !== void 0 && !isAbsolute3(master)) throw new ToolError("`master` must be an absolute path.");
+  if (master !== void 0 && !isAbsolute4(master)) throw new ToolError("`master` must be an absolute path.");
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
   return {
     run: res.dir,
@@ -21124,7 +21130,7 @@ async function handleRefcheck(args) {
     ["citing", citing],
     ["out", out]
   ]) {
-    if (v !== void 0 && !isAbsolute3(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
+    if (v !== void 0 && !isAbsolute4(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
   }
   if (!existsSync18(refs)) throw new ToolError(`no file at ${refs}`);
   if (citing && !existsSync18(citing)) throw new ToolError(`no file at ${citing}`);
@@ -21254,7 +21260,7 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute3(raw) ? raw : join28(run, raw);
+  const target = isAbsolute4(raw) ? raw : join28(run, raw);
   let real;
   try {
     real = realpathSync3(target);
@@ -21275,7 +21281,7 @@ function handleRead(args, run) {
   const requestedEnd = Math.floor(num3(args.end_line) ?? total);
   const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
   return {
-    path: isAbsolute3(raw) ? real : raw,
+    path: isAbsolute4(raw) ? real : raw,
     start_line: start,
     end_line: end,
     total_lines: total,

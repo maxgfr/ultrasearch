@@ -353,6 +353,25 @@ describe("idfShare", () => {
   });
 });
 
+describe("a dossier cannot point outside itself", () => {
+  it.each(["../victim.md", "sources/../../victim.md", "ABSOLUTE"])("refuses a source whose extract path escapes the dossier (%s)", (shape) => {
+    // sources.json is a file people share and hand-edit. `drop` deletes
+    // `join(dir, extract)` and `relink` rewrites it: an extract of "../x" made
+    // both reach files that were never the dossier's.
+    const root = scratch();
+    const dir = join(root, "dossier");
+    const victim = join(root, "victim.md");
+    writeFileSync(victim, "not yours");
+    const sources = writeFixtureDossier(dir, 2);
+    sources[1]!.extract = shape === "ABSOLUTE" ? victim : shape;
+    writeFileSync(join(dir, "sources.json"), JSON.stringify(sources));
+    expect(() => dropSources(dir, { ids: ["S2"] })).toThrow(/extract path that points outside the dossier/);
+    expect(runCheck(dir).errors.join(" ")).toMatch(/outside the dossier/);
+    expect(readFileSync(victim, "utf8")).toBe("not yours");
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("drop keeps the dossier's own report template", () => {
   it("rewrites DOSSIER.md with the template the dossier asked for, not its mode's", () => {
     const dir = scratch();

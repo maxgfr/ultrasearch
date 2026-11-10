@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { BackendKind, Manifest, RawSource, Source } from "./types.js";
 import { UNDER_COVERED_MIN, canonicalBackend } from "./types.js";
 import { canonicalizeUrl, domainOf, trustScore } from "./util.js";
@@ -67,8 +67,19 @@ export function sourceIdentityError(sources: unknown): string | undefined {
     }
     if (seen.has(source.id)) return `contains duplicate source id: ${source.id}`;
     seen.add(source.id);
+    // `extract` is joined onto the dossier directory by everything that reads,
+    // rewrites or deletes a source's text. sources.json is a file people share
+    // and hand-edit: a path that climbs out of the dossier must be refused
+    // here, before `drop` deletes it or `relink` writes over it.
+    if (typeof source.extract === "string" && escapesDossier(source.extract)) {
+      return `has an extract path that points outside the dossier (${source.id}: ${source.extract})`;
+    }
   }
   return undefined;
+}
+
+function escapesDossier(rel: string): boolean {
+  return isAbsolute(rel) || /^[a-z]:/i.test(rel) || rel.split(/[\\/]/).includes("..");
 }
 
 // Parse the numeric suffix of an "S<n>" id.
