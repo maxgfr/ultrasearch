@@ -16,7 +16,7 @@
 // anti-bot check is reported and left to the human).
 import { browserHome, closeBrowserReads, detectBrowserBinary, type BrowserBinary } from "./engine.js";
 import { isNoWrite } from "./no-write.js";
-import { ALL_BROWSER_MODES, type BrowserMode } from "./types.js";
+import type { BrowserMode } from "./types.js";
 
 export interface BrowserRung {
   mode: BrowserMode;
@@ -47,10 +47,6 @@ const NO_BINARY = "no Chrome, Brave, Chromium or Edge found (install one, or poi
 export function canShowWindow(platform: NodeJS.Platform, env: Record<string, string | undefined>): boolean {
   if (platform === "darwin" || platform === "win32") return true;
   return !!(env.DISPLAY || env.WAYLAND_DISPLAY);
-}
-
-export function isBrowserMode(v: string): v is BrowserMode {
-  return (ALL_BROWSER_MODES as readonly string[]).includes(v);
 }
 
 /**

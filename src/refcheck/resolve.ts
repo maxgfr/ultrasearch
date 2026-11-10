@@ -157,14 +157,7 @@ export function initialsOf(foreName: string): string {
     .join("");
 }
 
-/** efetch XML for many PMIDs → their abstracts (structured abstracts keep their section labels). */
-export async function efetchAbstracts(pmids: string[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
-  for (const [pmid, a] of await efetchArticles(pmids)) if (a.abstract) out.set(pmid, a.abstract);
-  return out;
-}
-
-/** efetch XML for many PMIDs → each article's abstract and ForeName-based author list. */
+/** efetch XML for many PMIDs → each article's abstract (structured abstracts keep their section labels) and ForeName-based author list. */
 export async function efetchArticles(pmids: string[]): Promise<Map<string, EfetchArticle>> {
   const out = new Map<string, EfetchArticle>();
   for (let i = 0; i < pmids.length; i += BATCH) {
