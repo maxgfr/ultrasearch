@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.45.2](https://github.com/maxgfr/ultrasearch/compare/v1.45.1...v1.45.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **bibtex:** keep a url with braces inside its field ([2abe0e6](https://github.com/maxgfr/ultrasearch/commit/2abe0e6ab0a20c498e1a8ac2a91169fdf503517a))
+* **check:** mask a CRLF report the way an LF one is masked ([f2771d2](https://github.com/maxgfr/ultrasearch/commit/f2771d206b2258ea713c3f0eea6e198958f8d83e))
+* **check:** match a claim's numeral as a number, not as a substring ([5f04b99](https://github.com/maxgfr/ultrasearch/commit/5f04b99d51c69b045491b618049e769610db7707))
+* **check:** score a cited sentence filed under an index-like table header ([c06b9d1](https://github.com/maxgfr/ultrasearch/commit/c06b9d15ec00cf0dadc4fb51d667523431ba58c7))
+* **cli:** reject a numeric flag that floors to zero ([6bd0b0e](https://github.com/maxgfr/ultrasearch/commit/6bd0b0e52178d1599d2bf3ccf5d8fa547fb0343b))
+* **dossier:** refuse a source whose extract path leaves the dossier ([7275cf9](https://github.com/maxgfr/ultrasearch/commit/7275cf906e6867ce013616150a033e9d735e1d79))
+* **drop:** rewrite DOSSIER.md with the dossier's own report template ([ad17460](https://github.com/maxgfr/ultrasearch/commit/ad1746074c9a0a848d527d34634cfe40beedeb7f))
+* **europepmc:** keep the text after a literal less-than in an abstract ([df6468f](https://github.com/maxgfr/ultrasearch/commit/df6468f5349208342d7d2fb0b20cade4cf5d9123))
+* **fetch:** do not credit an endpoint that returned nothing ([f195ca2](https://github.com/maxgfr/ultrasearch/commit/f195ca2566840d27fc91d7272575bed2ca4dc0aa))
+* **gather:** compare --exclude-domains and --seed-domains as hosts ([90d4734](https://github.com/maxgfr/ultrasearch/commit/90d4734b7db6caa7936875c6cf5b682c9e9cac03))
+* **gather:** do not hand a merged record the loser's text provenance ([a9c5a26](https://github.com/maxgfr/ultrasearch/commit/a9c5a266e4f333d790b0592c99d37ae06b62af55))
+* **gather:** keep a Wayback rescue of a redirected page across rounds ([e1f0c84](https://github.com/maxgfr/ultrasearch/commit/e1f0c84301b57a5f116471ed7c2d63a82cd93b82))
+* **gather:** report each backend once in the manifest ([a1d8931](https://github.com/maxgfr/ultrasearch/commit/a1d8931e3de6533357fec88c87865053c7756c9b))
+* **mcp:** refuse half of a shards/shard pair in ultrasearch_verify ([f4d92e1](https://github.com/maxgfr/ultrasearch/commit/f4d92e1be0904314ec2a1fc716e519cec98d1b47))
+* **ncbi:** keep the text after a list nested in a JATS paragraph ([42e5523](https://github.com/maxgfr/ultrasearch/commit/42e55238d386e2473b491a9c40f30abab5796305))
+* **queries:** shell-quote the question and the engine path in printed commands ([14aa1c7](https://github.com/maxgfr/ultrasearch/commit/14aa1c7b4c1438e14aaeeab08b9f03c737c9dbe1))
+* **refcheck:** do not sum two spelled-out numbers joined by 'and' ([69222eb](https://github.com/maxgfr/ultrasearch/commit/69222eb78bf6eb78d781bad4e5ae9f45a828fc66))
+* **refcheck:** write authors family-first so refs.bib names them right ([3937d4a](https://github.com/maxgfr/ultrasearch/commit/3937d4a9bbeae08d45eaad8beea5cdac981ed428))
+* **relink:** take a source id in either case ([3b629ca](https://github.com/maxgfr/ultrasearch/commit/3b629ca5bd3b99beeb903702336a343713d395fc))
+* **render:** close a code fence where check closes it ([f68258d](https://github.com/maxgfr/ultrasearch/commit/f68258d3e12a406b9de2dbc194afa0690921ad4b))
+* **render:** escape every dossier value written into index.html ([e3a5622](https://github.com/maxgfr/ultrasearch/commit/e3a5622389c03301b0dda1fa1c57e2ee1e240971))
+* **render:** keep a trailing hash that is part of a heading ([41b1024](https://github.com/maxgfr/ultrasearch/commit/41b10240ef8052e0e06d314a9b3a304a3d5058b6))
+* **render:** never stall on an empty heading or a CRLF report ([45d63de](https://github.com/maxgfr/ultrasearch/commit/45d63de64edb6644ec46db668459a9189f85f845))
+* **searxng:** map --since onto a time range that covers it ([e77f180](https://github.com/maxgfr/ultrasearch/commit/e77f1802fca01d3682aad17b5aee428d6b2674fe))
+* **stackexchange:** say a refusal is a refusal, not 'no results' ([d1b5bca](https://github.com/maxgfr/ultrasearch/commit/d1b5bcaf707b1144da3cf6cce2625eee7eaf6c02))
+* **standards:** search RFC titles for a phrase a title can contain ([d706e24](https://github.com/maxgfr/ultrasearch/commit/d706e240512e8b6246069553725a51f05c2a5b41))
+* **templates:** never resolve a mode or template through Object.prototype ([7bd0c77](https://github.com/maxgfr/ultrasearch/commit/7bd0c77db0296430abd8511f4ea441c6aa266e4e))
+* **wikipedia:** only a language code can become the wiki host ([06301e3](https://github.com/maxgfr/ultrasearch/commit/06301e307c0effcca956cb39ce31f560b6a6cef8))
+
 ## [1.45.1](https://github.com/maxgfr/ultrasearch/compare/v1.45.0...v1.45.1) (2026-10-30)
 
 
