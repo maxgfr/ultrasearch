@@ -62,17 +62,42 @@ export function splitDocument(text: string): { body: string; list: string; hadHe
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
 
+/**
+ * Whether a line numbered `n` opens the next reference of a list whose last
+ * one is `prev`. The next number always does. A jump ahead does only when the
+ * list goes on from it (n + 1 shows up before prev + 1): a list with a gap
+ * keeps its numbering, while a stray number — a year, a volume, a repeat —
+ * stays inside the reference it was wrapped out of.
+ */
+function continuesList(n: number, prev: number | undefined, opens: ({ n: number } | undefined)[], at: number): boolean {
+  if (prev === undefined || n === prev + 1) return true;
+  if (n <= prev) return false;
+  for (let i = at + 1; i < opens.length; i++) {
+    const next = opens[i]?.n;
+    if (next === prev + 1) return false;
+    if (next === n + 1) return true;
+  }
+  return false;
+}
+
 /** Split a reference list into its entries, numbered as written (or 1..n when the numbering was lost). */
 export function splitEntries(list: string): { n: number; raw: string }[] {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out: { n: number; raw: string }[] = [];
   if (numbered >= 2) {
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t || HEADING.test(line)) continue;
+    // Every line that could open a reference, in order. Whether it does is
+    // decided against its neighbours below: a wrapped line can start with a
+    // number too ("2020 Mar;382(5):100-110."), and read as reference 2020 it
+    // takes the year and pages of the reference it belongs to with it.
+    const kept = lines.map((line) => line.trim()).filter((t, i) => t && !HEADING.test(lines[i]!));
+    const opens = kept.map((t) => {
       const m = NUMBERED.exec(t);
-      if (m && (m[4] ?? "").length > 8) out.push({ n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4]!.trim() });
+      return m && (m[4] ?? "").length > 8 ? { n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4]!.trim() } : undefined;
+    });
+    for (const [i, t] of kept.entries()) {
+      const open = opens[i];
+      if (open && continuesList(open.n, out.at(-1)?.n, opens, i)) out.push(open);
       else if (out.length) out[out.length - 1]!.raw += ` ${t}`;
     }
     return out;

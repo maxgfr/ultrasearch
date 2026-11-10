@@ -19938,16 +19938,29 @@ function splitDocument(text) {
   }
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
+function continuesList(n, prev, opens, at) {
+  if (prev === void 0 || n === prev + 1) return true;
+  if (n <= prev) return false;
+  for (let i = at + 1; i < opens.length; i++) {
+    const next = opens[i]?.n;
+    if (next === prev + 1) return false;
+    if (next === n + 1) return true;
+  }
+  return false;
+}
 function splitEntries(list) {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out = [];
   if (numbered >= 2) {
-    for (const line of lines) {
-      const t = line.trim();
-      if (!t || HEADING.test(line)) continue;
+    const kept = lines.map((line) => line.trim()).filter((t, i) => t && !HEADING.test(lines[i]));
+    const opens = kept.map((t) => {
       const m = NUMBERED.exec(t);
-      if (m && (m[4] ?? "").length > 8) out.push({ n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4].trim() });
+      return m && (m[4] ?? "").length > 8 ? { n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4].trim() } : void 0;
+    });
+    for (const [i, t] of kept.entries()) {
+      const open2 = opens[i];
+      if (open2 && continuesList(open2.n, out.at(-1)?.n, opens, i)) out.push(open2);
       else if (out.length) out[out.length - 1].raw += ` ${t}`;
     }
     return out;
@@ -20193,7 +20206,8 @@ function analyseCiting(text, refNumbers) {
   const outOfOrder = [];
   let highest = 0;
   for (const n of firstCitationOrder) {
-    if (n < highest && known.has(n)) outOfOrder.push({ n, after: highest });
+    if (!known.has(n)) continue;
+    if (n < highest) outOfOrder.push({ n, after: highest });
     highest = Math.max(highest, n);
   }
   return {

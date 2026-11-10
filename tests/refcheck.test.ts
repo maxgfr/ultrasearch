@@ -170,6 +170,33 @@ describe("refcheck — parsing a bibliography", () => {
     expect(parseReferences(doc)).toHaveLength(4);
   });
 
+  it("keeps a wrapped line that starts with a number inside its reference", () => {
+    // The date line reads like "reference 2020"; the repeat like a second 2.
+    const list = [
+      "1. Smith J, Doe A. A trial of something. N Engl J Med.",
+      "2020 Mar;382(5):100-110.",
+      "2. Roe B. Another trial entirely. Lancet. 2019;393:10-20.",
+      "2. Suppl data for the same trial, printed on its own line.",
+      "3. Poe C. A third trial altogether. BMJ. 2018;360:k1.",
+    ].join("\n");
+    const entries = splitEntries(list);
+    expect(entries.map((e) => e.n)).toEqual([1, 2, 3]);
+    const [first] = parseReferences(list);
+    expect(first).toMatchObject({ n: 1, year: "2020", volume: "382", issue: "5", pages: "100-110" });
+    expect(entries[1]!.raw).toContain("Suppl data");
+  });
+
+  it("follows a list whose numbering has a gap, and one that does not start at 1", () => {
+    const gap = splitEntries(
+      ["1. Smith J. First title here. J A. 2020;1:1.", "2. Doe J. Second title here. J B. 2021;2:2.", "5. Roe B. Fifth title here. J C. 2022;3:3.", "6. Poe C. Sixth title here. J D. 2023;4:4."].join(
+        "\n",
+      ),
+    );
+    expect(gap.map((e) => e.n)).toEqual([1, 2, 5, 6]);
+    const excerpt = splitEntries(["[12] Smith J. First title here. J A. 2020;1:1.", "[13] Doe J. Second title here. J B. 2021;2:2."].join("\n"));
+    expect(excerpt.map((e) => e.n)).toEqual([12, 13]);
+  });
+
   it("parses BibTeX, braces, 'and others' and page ranges", () => {
     const bib = `@comment{x}
 @article{gurney2022,
@@ -212,10 +239,11 @@ describe("refcheck — reading the citing text", () => {
     expect(a.uncited).toEqual([4]);
     expect(a.unknown).toEqual([5]);
     expect(a.firstCitationOrder).toEqual([2, 1, 5, 3]);
-    expect(a.outOfOrder).toEqual([
-      { n: 1, after: 2 },
-      { n: 3, after: 5 },
-    ]);
+    // 5 is not in the list: it is reported as unknown, and sets no bar for 3.
+    expect(a.outOfOrder).toEqual([{ n: 1, after: 2 }]);
+    const cascade = analyseCiting("First [1]. A stray call [99]. Then [2] and [3].", [1, 2, 3]);
+    expect(cascade.unknown).toEqual([99]);
+    expect(cascade.outOfOrder).toEqual([]);
     const first = a.calls[0]!;
     expect(first.numerals).toEqual(["2.8"]);
     // "séries de 78 [21], 72 [22]": each figure goes to its own call.
@@ -354,7 +382,7 @@ describe("refcheck — the whole run", () => {
         doisBroken: 1,
         uncited: 1,
         unknownCalls: 1,
-        outOfOrder: 2,
+        outOfOrder: 1,
       });
       expect(r.citingFile).toBe(doc);
       const byN = Object.fromEntries(r.references.map((e) => [e.n, e]));
