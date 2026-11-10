@@ -176,11 +176,13 @@ function newState(sources: Source[]): RelinkState {
  */
 function applyRelink(
   state: RelinkState,
-  id: string,
+  rawId: string,
   url: string,
   textOf: (s: Source) => string,
   opts: { title?: string } = {},
 ): { result: RelinkResult; relinked?: Source; text?: string } {
+  // Ids are "S<n>"; `drop --id` and `human --id` take them in either case, so does this.
+  const id = rawId.trim().toUpperCase();
   const idx = state.sources.findIndex((s) => s.id === id);
   if (idx < 0) return { result: { id, relinked: false, note: `${id} is not in this dossier` } };
   const target = state.sources[idx]!;

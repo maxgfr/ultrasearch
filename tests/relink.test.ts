@@ -255,4 +255,12 @@ describe("main() — relink", () => {
     expect((await runCli(["relink"])).exit).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it("takes a source id in either case, as drop and human do", () => {
+    const dir = scratch();
+    withEndpointSource(dir);
+    const r = relink(dir, " s2 ", "https://pubmed.ncbi.nlm.nih.gov/34397876/");
+    expect(r).toMatchObject({ id: "S2", relinked: true });
+    rmSync(dir, { recursive: true, force: true });
+  });
 });

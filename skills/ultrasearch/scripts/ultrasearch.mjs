@@ -18698,7 +18698,8 @@ function newState(sources) {
   for (const s of sources) if (!byCanon.has(s.canonicalUrl)) byCanon.set(s.canonicalUrl, s);
   return { sources: [...sources], byCanon };
 }
-function applyRelink(state, id, url, textOf, opts = {}) {
+function applyRelink(state, rawId, url, textOf, opts = {}) {
+  const id = rawId.trim().toUpperCase();
   const idx = state.sources.findIndex((s) => s.id === id);
   if (idx < 0) return { result: { id, relinked: false, note: `${id} is not in this dossier` } };
   const target = state.sources[idx];
