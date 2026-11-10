@@ -13736,7 +13736,10 @@ var SITES = ["stackoverflow", "serverfault", "superuser", "askubuntu", "unix.sta
 async function searchSite(site, q, perSite, fromdate) {
   const url = `https://api.stackexchange.com/2.3/search/advanced?order=desc&sort=relevance&q=${encodeURIComponent(q)}&site=${encodeURIComponent(site)}&filter=withbody&pagesize=${perSite}` + (fromdate ? `&fromdate=${fromdate}` : "");
   const r = await httpJson("GET", url, void 0, { timeoutMs: 1e4 });
-  if (!r.ok || !Array.isArray(r.data?.items)) return { items: [] };
+  if (!r.ok || !Array.isArray(r.data?.items)) {
+    const throttled = r.status === 429 || r.status === 503 || r.data?.error_name === "throttle_violation";
+    return { items: [], failed: { status: r.status, throttled }, ...typeof r.data?.backoff === "number" ? { backoff: r.data.backoff } : {} };
+  }
   const label = site === "stackoverflow" ? "" : `${site.replace(/\.stackexchange$/, "")}: `;
   const items = r.data.items.map((it, i) => {
     const title = decodeEntities(String(it.title ?? "question"));
@@ -13767,7 +13770,20 @@ var stackexchangeBackend = async (ctx) => {
   if (backoff) notes.push(`StackExchange asked to back off ${backoff}s on one site.`);
   const remaining = perSiteResults.map((r) => r.remaining).filter((x) => typeof x === "number");
   if (remaining.length && Math.min(...remaining) < 20) notes.push(`StackExchange anon quota low (${Math.min(...remaining)} left).`);
-  notes.push(items.length ? `StackExchange returned ${items.length} question(s) across ${SITES.length} sites.` : "StackExchange returned no results.");
+  const failures = perSiteResults.map((r) => r.failed).filter((f) => f !== void 0);
+  const worst = failures.find((f) => f.throttled) ?? failures[0];
+  const status = worst ? `${worst.status || "no response"}` : "";
+  if (items.length) {
+    notes.push(`StackExchange returned ${items.length} question(s) across ${SITES.length} sites.`);
+    if (worst) notes.push(`${failures.length} of ${SITES.length} sites failed (status ${status}).`);
+  } else if (worst?.throttled) {
+    notes.push(`StackExchange rate-limited (HTTP ${status}) \u2014 no results this run; it will answer again shortly.`);
+  } else if (failures.length === SITES.length) {
+    notes.push(`StackExchange search failed on all ${SITES.length} sites (status ${status}).`);
+  } else {
+    notes.push("StackExchange returned no results.");
+    if (worst) notes.push(`${failures.length} of ${SITES.length} sites failed (status ${status}).`);
+  }
   return { backend: "stackexchange", items, notes };
 };
 
