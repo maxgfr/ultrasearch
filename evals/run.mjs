@@ -59,7 +59,7 @@ function offline() {
         continue;
       }
       const sources = JSON.parse(readFileSync(join(out, "sources.json"), "utf8"));
-      if (sources.length < (c.minSources ?? 1)) fail(`[${c.id}] expected ≥${c.minSources} sources, got ${sources.length}`);
+      if (sources.length < (c.minSources ?? 1)) fail(`[${c.id}] expected ≥${c.minSources ?? 1} sources, got ${sources.length}`);
       else if (c.mustInclude && !sources.some((s) => s.title.includes(c.mustInclude))) fail(`[${c.id}] no source title includes "${c.mustInclude}"`);
       else if (c.expectFile && !existsSync(join(out, c.expectFile))) fail(`[${c.id}] expected file ${c.expectFile} not written`);
       else pass(`[${c.id}] ${sources.length} sources`);
