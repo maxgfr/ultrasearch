@@ -411,3 +411,39 @@ describe("mdToHtml — audit regressions", () => {
     expect(mdToHtml("## Closed ##", "t").headings[0]!.text).toBe("Closed");
   });
 });
+
+describe("renderHtml — untrusted values never reach the markup raw", () => {
+  it("escapes a verdict's source id and verdict, and a source's id, backend and domain", () => {
+    const dir = scratch();
+    try {
+      const sources = writeFixtureDossier(dir, 1);
+      const tampered = [{ ...sources[0]!, id: `S1"><i>`, backend: "<b>be</b>", domain: "<u>dom</u>", url: "javascript:alert(1)" }];
+      writeFileSync(join(dir, "sources.json"), JSON.stringify(tampered));
+      writeFileSync(join(dir, "REPORT.md"), "A claim. [S1]\n");
+      writeFileSync(
+        join(dir, "VERIFY.json"),
+        JSON.stringify({
+          ok: true,
+          pairs: 1,
+          adjudicated: 1,
+          supported: 1,
+          partial: 0,
+          refuted: 0,
+          unsupported: 0,
+          failures: [],
+          unadjudicated: [],
+          verdicts: [{ claimId: "C1", sourceId: `x"><img src=x onerror=alert(1)>`, verdict: `supported" onmouseover="x`, claim: "A claim.", note: "" }],
+        }),
+      );
+      const html = renderHtml(dir);
+      expect(html).not.toContain("<img src=x");
+      expect(html).not.toContain(`onmouseover="x"`);
+      expect(html).not.toContain(`S1"><i>`);
+      expect(html).not.toContain("<b>be</b>");
+      expect(html).not.toContain("<u>dom</u>");
+      expect(html).not.toContain(`href="javascript:`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

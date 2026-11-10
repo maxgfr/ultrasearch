@@ -329,7 +329,9 @@ function readVerify(dir: string): VerifyResult | undefined {
 function worstBySource(verify?: VerifyResult): Map<string, VerdictKind> {
   const m = new Map<string, VerdictKind>();
   for (const v of verify?.verdicts ?? []) {
-    if (!v.verdict) continue;
+    // An unknown verdict (a hand-edited VERIFY.json) tints nothing: the value
+    // becomes a class name and a title on every citation of that source.
+    if (!v.verdict || !Object.hasOwn(VERDICT_SEVERITY, v.verdict)) continue;
     const cur = m.get(v.sourceId);
     if (!cur || VERDICT_SEVERITY[v.verdict] > VERDICT_SEVERITY[cur]) m.set(v.sourceId, v.verdict);
   }
@@ -421,8 +423,8 @@ function verificationSection(r: VerifyResult): string {
     .map(
       (v) =>
         `<tr><td>${escapeHtml(v.claimId)}</td>` +
-        `<td><a href="#src-${v.sourceId}">[${escapeHtml(v.sourceId)}]</a></td>` +
-        `<td><span class="vbadge v-${v.verdict}">${escapeHtml(v.verdict ?? "—")}</span></td>` +
+        `<td><a href="#src-${escapeHtml(String(v.sourceId))}">[${escapeHtml(String(v.sourceId))}]</a></td>` +
+        `<td><span class="vbadge v-${escapeHtml(String(v.verdict))}">${escapeHtml(v.verdict ?? "—")}</span></td>` +
         `<td>${escapeHtml(v.claim)}</td><td>${escapeHtml(v.note || "")}</td></tr>`,
     )
     .join("");
@@ -453,7 +455,7 @@ function subQuestionsSection(manifest: Manifest, sources: Source[]): string {
     .map((sq) => {
       const ids = sources
         .filter((s) => (s.meta?.provenance ?? []).some((p) => p.subQuestion === sq.question))
-        .map((s) => `<a href="#src-${s.id}">[${s.id}]</a>`);
+        .map((s) => `<a href="#src-${escapeHtml(s.id)}">[${escapeHtml(s.id)}]</a>`);
       const links = ids.length ? ids.join(" ") : `<span class="s-meta">(no sources)</span>`;
       return `<li><strong>${escapeHtml(sq.id)}</strong> ${escapeHtml(sq.question)}<br><span class="s-meta">${links}</span></li>`;
     })
@@ -469,9 +471,9 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
     .map((s) => {
       const uncited = mark && !cited.has(s.id);
       const meta = [
-        s.backend,
-        s.domain,
-        `<span class="trust" title="trust score">trust ${s.trust}</span>`,
+        escapeHtml(String(s.backend)),
+        escapeHtml(String(s.domain)),
+        `<span class="trust" title="trust score">trust ${escapeHtml(String(s.trust))}</span>`,
         ...(s.wall
           ? [`<span class="snippet-only" title="the page was a consent/anti-bot wall — snippet only">⛔ wall</span>`]
           : s.fullText === false
@@ -480,7 +482,11 @@ function sourcesSection(sources: Source[], cited: Set<string>): string {
         ...(uncited ? [`<span class="chip-uncited" title="never cited by any report tier">uncited</span>`] : []),
       ].join(" · ");
       const cls = uncited ? ` class="s-uncited"` : "";
-      return `<li id="src-${s.id}"${cls}><strong>[${s.id}]</strong> <a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a><br><span class="s-meta">${meta}</span></li>`;
+      const id = escapeHtml(s.id);
+      // Only a web address becomes a link: sources.json is a file anyone can
+      // edit or share, and a `javascript:` url is one click from running.
+      const title = /^https?:\/\//i.test(s.url) ? `<a href="${escapeHtml(s.url)}" rel="noopener" target="_blank">${escapeHtml(s.title)}</a>` : escapeHtml(s.title);
+      return `<li id="src-${id}"${cls}><strong>[${id}]</strong> ${title}<br><span class="s-meta">${meta}</span></li>`;
     })
     .join("\n");
   return `<section id="sources"><h1>Sources</h1><ol class="sources">${items}</ol></section>`;
