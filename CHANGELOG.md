@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.45.3](https://github.com/maxgfr/ultrasearch/compare/v1.45.2...v1.45.3) (2026-11-10)
+
+
+### Bug Fixes
+
+* **dblp:** tell an empty answer, a throttle and a failure apart ([86b7834](https://github.com/maxgfr/ultrasearch/commit/86b7834d43ad03f2dff8aa4296da9d2898655805))
+
+
+### Performance Improvements
+
+* **codes:** find sentence ends and repeat counts once per page ([fff38ee](https://github.com/maxgfr/ultrasearch/commit/fff38eeb970213cb8d7cff8c921dbbce91c779eb))
+* **passages:** bound the boundary search to the window it serves ([758d433](https://github.com/maxgfr/ultrasearch/commit/758d433fc032aef31b5ece4d37eff772aecbefad))
+* **relink:** scan each extract once across auto-relink rounds ([30f95b5](https://github.com/maxgfr/ultrasearch/commit/30f95b5dd73bbe2504f7c2cb639fbdf45b5a9462))
+* **wikipedia:** read each page summary once per run ([8320a27](https://github.com/maxgfr/ultrasearch/commit/8320a27f14767667413765b3153b3ef09e4a2db2))
+
 ## [1.45.2](https://github.com/maxgfr/ultrasearch/compare/v1.45.1...v1.45.2) (2026-11-10)
 
 
