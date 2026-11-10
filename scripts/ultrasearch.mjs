@@ -16103,15 +16103,30 @@ function clean3(s) {
 }
 function blocks(xml) {
   let x = xml;
-  for (const tag2 of DROP) x = x.replace(new RegExp(`<${tag2}\\b[^>]*>[\\s\\S]*?</${tag2}>`, "gi"), " ");
+  for (const tag3 of DROP) x = x.replace(new RegExp(`<${tag3}\\b[^>]*>[\\s\\S]*?</${tag3}>`, "gi"), " ");
   const out = [];
-  const re = /<(title|p)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  const emit = (kind2, raw) => {
+    const body = clean3(raw);
+    if (body) out.push(kind2 === "title" ? `## ${body}` : body);
+  };
+  const tag2 = /<(\/?)(title|p)\b[^>]*>/gi;
+  let kind = "";
+  let depth = 0;
+  let start = 0;
   let m;
-  while (m = re.exec(x)) {
-    const body = clean3(m[2]);
-    if (!body) continue;
-    out.push(m[1].toLowerCase() === "title" ? `## ${body}` : body);
+  while (m = tag2.exec(x)) {
+    const name = m[2].toLowerCase();
+    if (m[1] === "/") {
+      if (depth && name === kind && --depth === 0) emit(kind, x.slice(start, m.index));
+    } else if (!m[0].endsWith("/>")) {
+      if (!depth) {
+        kind = name;
+        start = tag2.lastIndex;
+        depth = 1;
+      } else if (name === kind) depth++;
+    }
   }
+  if (depth) emit(kind, x.slice(start));
   return out;
 }
 function jatsToText(xml) {

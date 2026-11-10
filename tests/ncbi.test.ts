@@ -108,6 +108,25 @@ describe("jatsToText", () => {
     expect(text).not.toMatch(/99999|mixed-citation|A cited paper|<|mml/);
   });
 
+  it("keeps the text that follows a list nested in a paragraph", () => {
+    // JATS allows <p> → <list> → <list-item> → <p>. Matching a paragraph up to
+    // the FIRST </p> closed it at the inner one: the rest of the sentence —
+    // here the consent criterion — never reached the source text.
+    const xml =
+      "<article><body><sec><title>Methods</title>" +
+      "<p>Inclusion criteria:<list><list-item><p>age of 18 or more</p></list-item><list-item><p>a dislocated lens</p></list-item></list>and written consent.</p>" +
+      "<p>Follow-up lasted 24 months.</p></sec></body></article>";
+    expect(jatsToText(xml).text).toBe(
+      "## Methods\n\nInclusion criteria: age of 18 or more a dislocated lens and written consent.\n\nFollow-up lasted 24 months.",
+    );
+    // A list that is not inside a paragraph still yields one block per item.
+    expect(jatsToText("<article><body><list><list-item><p>one</p></list-item><list-item><p>two</p></list-item></list></body></article>").text).toBe(
+      "one\n\ntwo",
+    );
+    // An unclosed paragraph loses nothing.
+    expect(jatsToText("<article><body><p>first<p>second</p></body></article>").text).toBe("first second");
+  });
+
   it("copes with a payload that has no front matter", () => {
     expect(jatsToText("<article><body><p>Only a paragraph.</p></body></article>")).toEqual({ text: "Only a paragraph." });
   });

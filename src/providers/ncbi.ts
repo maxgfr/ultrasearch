@@ -174,13 +174,32 @@ function blocks(xml: string): string[] {
   let x = xml;
   for (const tag of DROP) x = x.replace(new RegExp(`<${tag}\\b[^>]*>[\\s\\S]*?</${tag}>`, "gi"), " ");
   const out: string[] = [];
-  const re = /<(title|p)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  const emit = (kind: string, raw: string): void => {
+    const body = clean(raw);
+    if (body) out.push(kind === "title" ? `## ${body}` : body);
+  };
+  // Counted, not matched lazily: JATS nests a <p> inside a <p> (through
+  // <list><list-item>), and "up to the first </p>" closed the outer paragraph
+  // at the inner one — everything after the list was lost. A block runs from
+  // its opening tag to the close that balances it; what it holds is flattened.
+  const tag = /<(\/?)(title|p)\b[^>]*>/gi;
+  let kind = "";
+  let depth = 0;
+  let start = 0;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(x))) {
-    const body = clean(m[2]!);
-    if (!body) continue;
-    out.push(m[1]!.toLowerCase() === "title" ? `## ${body}` : body);
+  while ((m = tag.exec(x))) {
+    const name = m[2]!.toLowerCase();
+    if (m[1] === "/") {
+      if (depth && name === kind && --depth === 0) emit(kind, x.slice(start, m.index));
+    } else if (!m[0].endsWith("/>")) {
+      if (!depth) {
+        kind = name;
+        start = tag.lastIndex;
+        depth = 1;
+      } else if (name === kind) depth++;
+    }
   }
+  if (depth) emit(kind, x.slice(start)); // never closed: keep what it held
   return out;
 }
 
