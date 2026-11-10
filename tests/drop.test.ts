@@ -9,6 +9,7 @@ import { idfShare, runGather } from "../src/gather.js";
 import { gatherReport, main } from "../src/cli.js";
 import { callTool } from "../src/mcp/handlers.js";
 import { setNoWrite } from "../src/no-write.js";
+import { setDossierTemplate } from "../src/templates.js";
 import { writeFixtureDossier } from "./dossierfix.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import type { GatherOptions, Manifest, Source } from "../src/types.js";
@@ -349,5 +350,19 @@ describe("idfShare", () => {
     expect(idfShare(["common"], ["rare", "common"], idf)).toBeCloseTo(0.1 / 3.1);
     expect(idfShare(["rare"], ["rare", "common"], idf)).toBeCloseTo(3 / 3.1);
     expect(idfShare(["a"], ["a", "b"], new Map())).toBe(0.5);
+  });
+});
+
+describe("drop keeps the dossier's own report template", () => {
+  it("rewrites DOSSIER.md with the template the dossier asked for, not its mode's", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 2);
+    setDossierTemplate(dir, "verification");
+    expect(readFileSync(join(dir, "DOSSIER.md"), "utf8")).toContain("## Reference-by-reference table");
+    dropSources(dir, { ids: ["S2"] });
+    const brief = readFileSync(join(dir, "DOSSIER.md"), "utf8");
+    expect(brief).toContain("## Report template (verification)");
+    expect(brief).toContain("## Reference-by-reference table");
+    rmSync(dir, { recursive: true, force: true });
   });
 });

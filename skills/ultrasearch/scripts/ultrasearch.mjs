@@ -18780,7 +18780,7 @@ function selects(dir, s, where) {
 function dropSources(dir, sel) {
   if (!sel.ids?.length && !sel.where) throw new Error("drop needs --id <S#,\u2026> or --where wall|snippet|offtopic");
   const { sources, manifest } = readDossier(dir);
-  const template = getMode(manifest.mode).template;
+  const template = templateFor(manifest);
   const byId = new Map(sources.map((s) => [s.id, s]));
   const reasons = /* @__PURE__ */ new Map();
   const missing = [];

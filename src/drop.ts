@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Source } from "./types.js";
 import { readDossier, readSourceText, writeDossierIndex } from "./dossier.js";
-import { getMode } from "./modes/registry.js";
+import { templateFor } from "./templates.js";
 import { citedSourceIds } from "./claims.js";
 import { isNoWrite } from "./no-write.js";
 import { MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./walls.js";
@@ -92,7 +92,9 @@ export function dropSources(dir: string, sel: { ids?: string[]; where?: DropWher
   const { sources, manifest } = readDossier(dir);
   // Resolved before anything is removed: an unknown mode must throw while the
   // dossier is still whole.
-  const template = getMode(manifest.mode).template;
+  // The dossier's OWN template when it names one (`ingest --template`,
+  // refcheck's "verification") — the mode's is only the default.
+  const template = templateFor(manifest);
 
   const byId = new Map(sources.map((s) => [s.id, s] as const));
   const reasons = new Map<string, string>();
