@@ -20233,6 +20233,7 @@ function spelledToDigits(text) {
       let used = 0;
       let j = i;
       let lastWasNumber = false;
+      let lastKind;
       let seen = 0;
       while (j < words.length) {
         const w = words[j];
@@ -20242,7 +20243,9 @@ function spelledToDigits(text) {
         }
         const v = wordValue(w);
         if (!v) {
-          if (lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length && wordValue(words[j + 2])) {
+          const next = lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length ? wordValue(words[j + 2]) : void 0;
+          const joins = next && (lastKind === "scale" || lastKind === "tens" && next.kind === "unit" && (next.value === 1 || next.value === 11));
+          if (joins) {
             j++;
             continue;
           }
@@ -20261,6 +20264,7 @@ function spelledToDigits(text) {
           current2 += v.value;
         }
         lastWasNumber = true;
+        lastKind = v.kind;
         seen++;
         used = j + 1;
         j++;

@@ -627,6 +627,18 @@ describe("refcheck — audit regressions", () => {
     expect(numeralIn("23", "Two hundred thirty-four eyes were included.")).toBe(false);
   });
 
+  it("does not add up two numbers that an 'and' merely lists", () => {
+    // "and"/"et" belongs INSIDE a number only after a scale ("hundred and
+    // twelve") or, in French, between a ten and un/onze ("quarante et un").
+    // Anywhere else it joins two numbers: "two and three eyes" is not 5 eyes,
+    // and a citing claim of "5" must not be found in it.
+    expect(spelledToDigits("between two and three eyes")).toBe("between 2 and 3 eyes");
+    expect(spelledToDigits("twenty and thirty percent")).toBe("20 and 30 percent");
+    expect(spelledToDigits("deux et trois yeux, soixante et onze, vingt et un")).toBe("2 et 3 yeux, 71, 21");
+    expect(spelledToDigits("one thousand and one nights")).toBe("1001 nights");
+    expect(numeralIn("5", "It affected between two and three eyes.")).toBe(false);
+  });
+
   it("counts a figure found in a co-cited abstract as found, saying where", async () => {
     const refs = REFS.slice(0, 2);
     const dir = mkdtempSync(join(tmpdir(), "us-refcheck-cocited-"));

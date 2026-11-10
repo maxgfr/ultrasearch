@@ -266,6 +266,7 @@ export function spelledToDigits(text: string): string {
       let used = 0;
       let j = i;
       let lastWasNumber = false;
+      let lastKind: "unit" | "tens" | "scale" | undefined;
       let seen = 0;
       while (j < words.length) {
         const w = words[j]!;
@@ -275,7 +276,13 @@ export function spelledToDigits(text: string): string {
         }
         const v = wordValue(w);
         if (!v) {
-          if (lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length && wordValue(words[j + 2]!)) {
+          // "and"/"et" is part of a number only after a scale ("hundred and
+          // twelve") or, in French, between a ten and un/onze ("quarante et
+          // un", "soixante et onze"). Anywhere else it LISTS two numbers:
+          // "two and three eyes" is not five eyes.
+          const next = lastWasNumber && JOINERS.has(w.toLowerCase()) && j + 2 < words.length ? wordValue(words[j + 2]!) : undefined;
+          const joins = next && (lastKind === "scale" || (lastKind === "tens" && next.kind === "unit" && (next.value === 1 || next.value === 11)));
+          if (joins) {
             j++;
             continue;
           }
@@ -294,6 +301,7 @@ export function spelledToDigits(text: string): string {
           current += v.value;
         }
         lastWasNumber = true;
+        lastKind = v.kind;
         seen++;
         used = j + 1;
         j++;
