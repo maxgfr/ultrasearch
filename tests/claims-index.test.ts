@@ -45,6 +45,23 @@ describe("index columns", () => {
     expect(texts).toEqual(["Raft elects one leader per term [S1]", "Paxos agrees on a single value [S1]"]);
   });
 
+  it("keeps a first column of sentences even when its header reads like an index", () => {
+    // "Item" names an index column — but only labels live in one. A cited
+    // sentence there is a claim: dropping the cell hid it from the coverage
+    // check AND from the verify worklist (no [S#] left on the row).
+    const md = ["| Item | Verdict |", "|---|---|", "| Drug X cures 95% of adult cancers worldwide [S1] | yes |"].join("\n");
+    const texts = unitsOfFile(md).map((u) => (u.kind === "text" ? u.text : ""));
+    expect(texts).toEqual(["Drug X cures 95% of adult cancers worldwide [S1] yes"]);
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    writeFileSync(join(dir, "REPORT.md"), md);
+    expect(buildWorklist(dir).worklist.pairs.map((p) => p.sourceId)).toEqual(["S1"]);
+    rmSync(dir, { recursive: true, force: true });
+    // Short labels under the same header are still an index.
+    const labels = ["| ID | Finding |", "|---|---|", "| REQ-12 | Raft elects one leader per term [S1] |"].join("\n");
+    expect(unitsOfFile(labels).map((u) => (u.kind === "text" ? u.text : ""))).toEqual(["Raft elects one leader per term [S1]"]);
+  });
+
   it("keeps a first column of years, of words, or a lone numbered row", () => {
     const years = ["| Year | Event |", "|---|---|", "| 2019 | First release [S1] |", "| 2021 | Second release [S1] |"].join("\n");
     expect(unitsOfFile(years).map((u) => (u.kind === "text" ? u.text : ""))[0]).toBe("2019 First release [S1]");

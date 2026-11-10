@@ -57,6 +57,10 @@ function tableCells(line: string, dropFirst = false): string {
 const INDEX_HEADER = /^(#|n[°ºo]\.?|no\.|num(ber|éro|ero)?\.?|r[ée]f(s|\.|érence|erence)?\.?|id|item)$/i;
 // A cell that is only a short running number: "15", "[18]", "19.".
 const INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
+// The longest cell a named index column may hold and still be a label.
+const INDEX_LABEL_WORDS = 3;
+// A source citation anywhere in a cell — the mark of a claim, never of a label.
+const TOKEN_RE_ONCE = /\[S\d+\]/;
 
 /**
  * Data rows of a table whose FIRST column is an index — the row numbers of a
@@ -81,7 +85,11 @@ export function indexColumnRows(lines: string[], code: boolean[]): boolean[] {
     // RUN — strictly increasing, row after row. "| Eyes | 41 | 39 |" is data.
     const values = firsts.map((c) => Number(c.replace(/[^\d]/g, "")));
     const runs = values.every((v, k) => k === 0 || v > values[k - 1]!);
-    const index = INDEX_HEADER.test(header) || (rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs);
+    // A header can only name an index over cells that ARE labels ("15",
+    // "REQ-12", "Fig. 3"). A sentence filed under "Item" is a claim: dropping
+    // it would take its [S#] with it, and the row would never be verified.
+    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !TOKEN_RE_ONCE.test(c));
+    const index = (INDEX_HEADER.test(header) && labels) || (rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs);
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1]! : i + 1;
   }

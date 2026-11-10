@@ -17379,6 +17379,8 @@ function tableCells(line, dropFirst = false) {
 }
 var INDEX_HEADER = /^(#|n[°ºo]\.?|no\.|num(ber|éro|ero)?\.?|r[ée]f(s|\.|érence|erence)?\.?|id|item)$/i;
 var INDEX_CELL = /^\[?\d{1,3}\]?\.?$/;
+var INDEX_LABEL_WORDS = 3;
+var TOKEN_RE_ONCE = /\[S\d+\]/;
 function indexColumnRows(lines, code) {
   const out = lines.map(() => false);
   for (let i = 0; i + 1 < lines.length; i++) {
@@ -17390,7 +17392,8 @@ function indexColumnRows(lines, code) {
     const firsts = rows.map((j) => cellsOf(lines[j])[0].replace(/[*_`]/g, "").trim());
     const values = firsts.map((c) => Number(c.replace(/[^\d]/g, "")));
     const runs = values.every((v, k) => k === 0 || v > values[k - 1]);
-    const index = INDEX_HEADER.test(header2) || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs;
+    const labels = firsts.every((c) => c.split(/\s+/).length <= INDEX_LABEL_WORDS && !TOKEN_RE_ONCE.test(c));
+    const index = INDEX_HEADER.test(header2) && labels || rows.length >= 2 && firsts.every((c) => INDEX_CELL.test(c)) && runs;
     if (index) for (const j of rows) out[j] = true;
     i = rows.length ? rows[rows.length - 1] : i + 1;
   }
