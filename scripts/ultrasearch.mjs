@@ -18718,13 +18718,23 @@ function listIssues(dir) {
   const { sources } = readDossier(dir);
   return listIssuesFrom(sources, (s) => safeText(dir, s));
 }
-function listIssuesFrom(sources, textOf) {
+function scanOf(scans, id, text) {
+  const known = scans.get(id);
+  if (known && known.text === text) return known;
+  const fresh = { text };
+  scans.set(id, fresh);
+  return fresh;
+}
+function listIssuesFrom(sources, textOf, scans = /* @__PURE__ */ new Map()) {
   const issues = [];
   for (const s of sources) {
     const text = textOf(s);
+    const scan = scanOf(scans, s.id, text);
     if (!isCitableUrl(s.url)) {
-      const derived = text ? deriveCitableUrl(text) : void 0;
-      const twin = derived ? sources.find((o) => o.id !== s.id && o.canonicalUrl === canonicalizeUrl(derived)) : void 0;
+      if (scan.derived === void 0) scan.derived = text && deriveCitableUrl(text) || null;
+      const derived = scan.derived ?? void 0;
+      const derivedCanon = derived ? canonicalizeUrl(derived) : void 0;
+      const twin = derivedCanon ? sources.find((o) => o.id !== s.id && o.canonicalUrl === derivedCanon) : void 0;
       issues.push({
         id: s.id,
         url: s.url,
@@ -18740,7 +18750,8 @@ function listIssuesFrom(sources, textOf) {
       });
       continue;
     }
-    const wall = s.wall ? "consent/anti-bot wall" : text ? wallPattern(text) : void 0;
+    if (!s.wall && scan.wall === void 0) scan.wall = text && wallPattern(text) || null;
+    const wall = s.wall ? "consent/anti-bot wall" : scan.wall ?? void 0;
     if (wall) {
       issues.push({
         id: s.id,
@@ -18767,8 +18778,9 @@ function autoRelink(dir) {
   };
   const repaired = [];
   const tried = /* @__PURE__ */ new Set();
+  const scans = /* @__PURE__ */ new Map();
   for (; ; ) {
-    const next = listIssuesFrom(state.sources, textOf).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
+    const next = listIssuesFrom(state.sources, textOf, scans).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
     if (!next) break;
     tried.add(next.id);
     const { result, relinked, text } = applyRelink(state, next.id, next.derived, textOf);
@@ -18778,7 +18790,7 @@ function autoRelink(dir) {
     repaired.push(result);
   }
   if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), template);
-  return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
+  return { repaired, remaining: listIssuesFrom(state.sources, textOf, scans) };
 }
 function newState(sources) {
   const byCanon = /* @__PURE__ */ new Map();

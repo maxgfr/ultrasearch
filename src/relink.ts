@@ -52,17 +52,36 @@ export function listIssues(dir: string): RelinkIssue[] {
  * off disk each round was the entire cost of that. With the state passed in, a
  * round costs one scan and no I/O — and the repair loop can keep its text cache.
  */
-function listIssuesFrom(sources: Source[], textOf: (s: Source) => string): RelinkIssue[] {
+/**
+ * What scanning one source's text concluded — `null` for "scanned, found
+ * nothing", `undefined` for "not scanned yet". Both scans read the whole
+ * extract and depend on nothing else, so `autoRelink`, which re-lists the
+ * dossier after every repair, keeps them across rounds: a round then scans only
+ * the one extract the last repair rewrote, instead of every extract again.
+ */
+type TextScans = Map<string, { text: string; derived?: string | null; wall?: string | null }>;
+function scanOf(scans: TextScans, id: string, text: string): { text: string; derived?: string | null; wall?: string | null } {
+  const known = scans.get(id);
+  if (known && known.text === text) return known;
+  const fresh = { text };
+  scans.set(id, fresh);
+  return fresh;
+}
+
+function listIssuesFrom(sources: Source[], textOf: (s: Source) => string, scans: TextScans = new Map()): RelinkIssue[] {
   const issues: RelinkIssue[] = [];
   for (const s of sources) {
     const text = textOf(s);
+    const scan = scanOf(scans, s.id, text);
     if (!isCitableUrl(s.url)) {
-      const derived = text ? deriveCitableUrl(text) : undefined;
+      if (scan.derived === undefined) scan.derived = (text && deriveCitableUrl(text)) || null;
+      const derived = scan.derived ?? undefined;
       // The derived page can already be in the dossier — the same document
       // gathered once by a backend and pinned once through an endpoint. That is
       // a DUPLICATE, and merging two ids would silently orphan the claims citing
       // this one, so it goes to the agent with the twin named.
-      const twin = derived ? sources.find((o) => o.id !== s.id && o.canonicalUrl === canonicalizeUrl(derived)) : undefined;
+      const derivedCanon = derived ? canonicalizeUrl(derived) : undefined;
+      const twin = derivedCanon ? sources.find((o) => o.id !== s.id && o.canonicalUrl === derivedCanon) : undefined;
       issues.push({
         id: s.id,
         url: s.url,
@@ -86,7 +105,8 @@ function listIssuesFrom(sources: Source[], textOf: (s: Source) => string): Relin
     }
     // The recorded flag first (gather saw the page itself), then the wording of
     // the extract — which is all a dossier built before the flag existed has.
-    const wall = s.wall ? "consent/anti-bot wall" : text ? wallPattern(text) : undefined;
+    if (!s.wall && scan.wall === undefined) scan.wall = (text && wallPattern(text)) || null;
+    const wall = s.wall ? "consent/anti-bot wall" : (scan.wall ?? undefined);
     if (wall) {
       issues.push({
         id: s.id,
@@ -130,8 +150,12 @@ export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: 
   // on the repaired dossier exactly as re-reading it from disk used to. `tried`
   // makes the loop terminate: a candidate the writer refuses is never re-offered.
   const tried = new Set<string>();
+  // What each extract's text was found to hold, kept across rounds: a round
+  // re-decides on the repaired dossier, but re-SCANS only the extract the last
+  // repair rewrote (its text changed, so its entry no longer matches).
+  const scans: TextScans = new Map();
   for (;;) {
-    const next = listIssuesFrom(state.sources, textOf).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
+    const next = listIssuesFrom(state.sources, textOf, scans).find((i) => i.reason === "not-citable" && i.derived && !tried.has(i.id));
     if (!next) break;
     tried.add(next.id);
     const { result, relinked, text } = applyRelink(state, next.id, next.derived!, textOf);
@@ -148,7 +172,7 @@ export function autoRelink(dir: string): { repaired: RelinkResult[]; remaining: 
   // and not at all when nothing was repaired, which leaves an unrepairable
   // dossier bit-for-bit untouched.
   if (repaired.length) writeDossierIndex(dir, state.sources, refreshed(manifest, state.sources), template);
-  return { repaired, remaining: listIssuesFrom(state.sources, textOf) };
+  return { repaired, remaining: listIssuesFrom(state.sources, textOf, scans) };
 }
 
 /**
