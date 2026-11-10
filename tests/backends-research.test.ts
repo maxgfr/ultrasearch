@@ -235,6 +235,16 @@ describe("research backends", () => {
     expect(r.items[1]!.meta?.absUrl).toBeUndefined();
   });
 
+  it("dblp tells an empty answer, a throttle and a failure apart", async () => {
+    const note = async (res: { status?: number; body: string }) => {
+      installFetchMock(routes([["dblp.org/search/publ", { ...res, contentType: "application/json" }]]));
+      return (await dblpBackend(makeCtx("attention"))).notes.join(" ");
+    };
+    expect(await note({ body: JSON.stringify({ result: { hits: { "@total": "0" } } }) })).toBe('dblp search returned nothing for "attention".');
+    expect(await note({ status: 500, body: "" })).toBe("dblp search failed (status 500).");
+    expect(await note({ status: 429, body: "" })).toMatch(/^dblp search rate-limited \(HTTP 429\)/);
+  });
+
   it("dblp parses hits, normalizes a single-author object, and picks the ee URL", async () => {
     const DBLP = JSON.stringify({
       result: {

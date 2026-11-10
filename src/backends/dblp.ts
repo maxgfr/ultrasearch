@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpJson, cleanInline } from "./fetch.js";
+import { apiFailure } from "./backoff.js";
 
 // Normalize dblp's `authors.author`, which is a single object for a one-author
 // paper and an array otherwise, into a list of author names.
@@ -33,7 +34,9 @@ export const dblpBackend: Backend = async (ctx): Promise<BackendResult> => {
   const hitRaw = r.data?.result?.hits?.hit;
   const hits: any[] = r.ok ? (Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : []) : [];
   if (!r.ok || !hits.length) {
-    return { backend: "dblp", items: [], notes: [`dblp search failed or empty (status ${r.status}).`] };
+    // Worded like the other scholarly backends: throttled, empty and failed are
+    // three different things to act on, and "failed or empty (status 200)" was none.
+    return { backend: "dblp", items: [], notes: [apiFailure("dblp search", { status: r.status, rateLimited: false, attempts: 1 }, ctx.question)] };
   }
   const items: RawSource[] = hits.slice(0, n).map((h: any, i: number): RawSource => {
     const info = h.info ?? {};

@@ -14325,7 +14325,7 @@ var dblpBackend = async (ctx) => {
   const hitRaw = r.data?.result?.hits?.hit;
   const hits = r.ok ? Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : [] : [];
   if (!r.ok || !hits.length) {
-    return { backend: "dblp", items: [], notes: [`dblp search failed or empty (status ${r.status}).`] };
+    return { backend: "dblp", items: [], notes: [apiFailure("dblp search", { status: r.status, rateLimited: false, attempts: 1 }, ctx.question)] };
   }
   const items = hits.slice(0, n).map((h, i) => {
     const info = h.info ?? {};
