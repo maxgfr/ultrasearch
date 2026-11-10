@@ -23,6 +23,22 @@ function s(over: Partial<Source>): Source {
 // arxiv/venue), a source with no url, and a title with no long word (key falls
 // back to the source id).
 describe("toBibtex — edge cases", () => {
+  it("keeps a url with braces inside its own field", () => {
+    // A query string may hold `{` and `}`. Written raw, `?q=},title={Pwned}`
+    // closed the url field and opened a second title; an odd brace left the
+    // whole entry unbalanced.
+    const bib = toBibtex([s({ url: "https://e.test/p?q=},title={Pwned}&x={", meta: { year: 2020 } })]);
+    expect(bib).toContain("url = {https://e.test/p?q=%7D,title=%7BPwned%7D&x=%7B}");
+    expect(bib.match(/title = /g)).toHaveLength(1);
+    expect(bib.split("{").length).toBe(bib.split("}").length);
+  });
+
+  it("falls back to the source id when the first author has no usable surname", () => {
+    // "李" strips to an empty string — `??` kept it, and the key lost its head.
+    const bib = toBibtex([s({ id: "S7", title: "A", meta: { year: 2020, authors: ["李"] } })]);
+    expect(bib).toContain("@article{s72020,");
+  });
+
   it("emits a minimal @article for a year-only source (no author/doi/eprint/journal)", () => {
     const bib = toBibtex([s({ id: "S1", title: "Some Networking Study", meta: { year: 2019 } })]);
     expect(bib).toContain("year = {2019}");

@@ -15519,7 +15519,7 @@ function bibKey(s, used) {
   const last = s.meta?.authors?.[0]?.split(/\s+/).pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
   const year = s.meta?.year ? String(s.meta.year) : "";
   const word = s.title.split(/\s+/).find((w) => w.replace(/[^a-z0-9]/gi, "").length > 3)?.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const base2 = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
+  const base2 = `${last || s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
   let key = base2;
   let n = 2;
   while (used.has(key)) key = `${base2}${n++}`;
@@ -15544,7 +15544,7 @@ function toBibtex(sources) {
       fields.push(`  eprint = {${clean2(String(s.meta.arxivId))}}`);
       fields.push(`  archivePrefix = {arXiv}`);
     }
-    if (s.url) fields.push(`  url = {${s.url}}`);
+    if (s.url) fields.push(`  url = {${s.url.replace(/[{}]/g, (c) => c === "{" ? "%7B" : "%7D").replace(/\s+/g, "")}}`);
     fields.push(`  note = {ultrasearch source ${s.id}}`);
     out.push(`@article{${key},`);
     out.push(fields.join(",\n"));

@@ -17,7 +17,8 @@ function bibKey(s: Source, used: Set<string>): string {
     .find((w) => w.replace(/[^a-z0-9]/gi, "").length > 3)
     ?.toLowerCase()
     .replace(/[^a-z0-9]/g, "");
-  const base = `${last ?? s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
+  // `||`, not `??`: a surname with no ASCII letter strips to "", which is no head for a key.
+  const base = `${last || s.id.toLowerCase()}${year}${word ?? ""}` || s.id.toLowerCase();
   let key = base;
   let n = 2;
   while (used.has(key)) key = `${base}${n++}`;
@@ -45,7 +46,9 @@ export function toBibtex(sources: Source[]): string {
       fields.push(`  eprint = {${clean(String(s.meta.arxivId))}}`);
       fields.push(`  archivePrefix = {arXiv}`);
     }
-    if (s.url) fields.push(`  url = {${s.url}}`);
+    // Braces are legal in a url and delimit a BibTeX field: percent-encoded,
+    // the address still opens and can no longer close the field it sits in.
+    if (s.url) fields.push(`  url = {${s.url.replace(/[{}]/g, (c) => (c === "{" ? "%7B" : "%7D")).replace(/\s+/g, "")}}`);
     fields.push(`  note = {ultrasearch source ${s.id}}`);
     out.push(`@article{${key},`);
     out.push(fields.join(",\n"));
