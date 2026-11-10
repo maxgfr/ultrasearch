@@ -63,7 +63,9 @@ export interface Heading {
 // Deterministic and dependency-free; supports headings, paragraphs, lists,
 // blockquotes (with model-hint callout styling), fenced code, tables and rules.
 export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<string, VerdictKind> } = {}): { html: string; headings: Heading[] } {
-  const lines = md.split("\n");
+  // A report saved with CRLF endings is the same report: a stray "\r" would
+  // defeat every `$`-anchored rule below (and end up in the markup).
+  const lines = md.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   const headings: Heading[] = [];
   const usedIds = new Set<string>();
@@ -195,6 +197,10 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
       para.push(lines[i]!);
       i++;
     }
+    // A line every block rule above declined AND the paragraph rule stops at
+    // (an empty heading: "# ") is still text. Take it, so the cursor always
+    // moves — a line nobody consumed used to spin this loop forever.
+    if (!para.length) para.push(lines[i++]!);
     out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
   }
 

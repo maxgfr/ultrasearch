@@ -17563,7 +17563,7 @@ function renderInline(escaped, verdicts) {
   return s;
 }
 function mdToHtml(md, idPrefix, opts = {}) {
-  const lines = md.split("\n");
+  const lines = md.replace(/\r\n?/g, "\n").split("\n");
   const out = [];
   const headings = [];
   const usedIds = /* @__PURE__ */ new Set();
@@ -17663,6 +17663,7 @@ function mdToHtml(md, idPrefix, opts = {}) {
       para.push(lines[i]);
       i++;
     }
+    if (!para.length) para.push(lines[i++]);
     out.push(`<p>${inline(escapeHtml(para.join(" ")))}</p>`);
   }
   return { html: out.join("\n"), headings };

@@ -376,3 +376,16 @@ describe("loadRenderContext", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe("mdToHtml — audit regressions", () => {
+  it("terminates on an empty heading, a bare hash and CRLF input", () => {
+    // Each of these used to stall the block loop: the paragraph rule refused the
+    // line the heading/fence rule had also refused, so the cursor never moved.
+    expect(mdToHtml("Intro.\n\n# \n\nAfter.", "t").html).toContain("<p>After.</p>");
+    expect(mdToHtml("#\r\n\r\nAfter.\r\n", "t").html).toContain("<p>After.</p>");
+    const crlf = mdToHtml("Text.\r\n\r\n```\r\ncode [S1]\r\n```\r\n\r\n## Title\r\n", "t");
+    expect(crlf.html).toContain("<pre><code>code [S1]</code></pre>");
+    expect(crlf.headings).toEqual([{ level: 2, text: "Title", id: "t-title" }]);
+    expect(crlf.html).not.toContain("\r");
+  });
+});
