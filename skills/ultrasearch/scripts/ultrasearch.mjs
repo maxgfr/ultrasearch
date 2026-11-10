@@ -17595,7 +17595,7 @@ function mdToHtml(md, idPrefix, opts = {}) {
       out.push(`<pre><code>${escapeHtml(body.join("\n"))}</code></pre>`);
       continue;
     }
-    const h = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    const h = /^(#{1,6})\s+(.*?\S)(?:\s+#+)?\s*$/.exec(line);
     if (h) {
       const level = h[1].length;
       const text = h[2];

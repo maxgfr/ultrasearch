@@ -108,7 +108,8 @@ export function mdToHtml(md: string, idPrefix: string, opts: { verdicts?: Map<st
     }
 
     // Heading.
-    const h = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    // A closing run of hashes is only a closer after a space: "## Why C#" keeps its "#".
+    const h = /^(#{1,6})\s+(.*?\S)(?:\s+#+)?\s*$/.exec(line);
     if (h) {
       const level = h[1]!.length;
       const text = h[2]!;

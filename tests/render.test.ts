@@ -405,4 +405,9 @@ describe("mdToHtml — audit regressions", () => {
     expect(info).toContain("<pre><code>```python\nstill code</code></pre>");
     expect(info).toContain("<p>after</p>");
   });
+
+  it("keeps a trailing hash that belongs to the heading text", () => {
+    expect(mdToHtml("## Why C#", "t").headings[0]!.text).toBe("Why C#");
+    expect(mdToHtml("## Closed ##", "t").headings[0]!.text).toBe("Closed");
+  });
 });
