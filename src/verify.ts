@@ -4,7 +4,7 @@ import { writeArtifact } from "./no-write.js";
 import { join } from "node:path";
 import type { ClaimEvidencePair, Source, Verdict, VerdictKind, VerifyResult } from "./types.js";
 import { DEEP_CAPS } from "./types.js";
-import { extractNumerals, normalizeNumeralText, unitSourceTokens, unitsOfFile } from "./claims.js";
+import { extractNumerals, hasNumeral, normalizeNumeralText, unitSourceTokens, unitsOfFile } from "./claims.js";
 import { readJson, readSourceText, sourceIdentityError, upgradeLegacySources } from "./dossier.js";
 import { focusedSnippet } from "./backends/fetch.js";
 import { sourceTextWithoutPassageLabels } from "./passages.js";
@@ -198,7 +198,7 @@ export function buildWorklist(dir: string, opts: { maxVerify?: number; shards?: 
     // so the adjudicating skeptic cannot miss a specific figure that its cited
     // source never states (verdict caps at `partial`).
     const norm = p.nums.length ? normOf(p.source) : "";
-    const numeralsAbsent = p.nums.filter((n) => !norm.includes(n));
+    const numeralsAbsent = p.nums.filter((n) => !hasNumeral(norm, n));
     return {
       claimId: p.claimId,
       file: p.file,

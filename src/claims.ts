@@ -256,6 +256,23 @@ export interface MaskedFile {
   noNumerals: boolean[];
 }
 
+/**
+ * Whether a claim's numeral appears in a source's (normalized) text AS A NUMBER.
+ * A substring test finds "500" in "2500" and "12" in "2012", so a figure the
+ * source never states passed as stated. Digits may not continue on either
+ * side, nor a decimal point precede it ("25" is not in "1.25") — but a longer
+ * decimal still counts ("12" is in "12.4"): a report may round.
+ */
+export function hasNumeral(normalized: string, numeral: string): boolean {
+  for (let at = normalized.indexOf(numeral); at !== -1; at = normalized.indexOf(numeral, at + 1)) {
+    const before = at > 0 ? normalized.charCodeAt(at - 1) : 0;
+    const after = normalized.charCodeAt(at + numeral.length); // NaN past the end
+    const digit = (c: number): boolean => c >= 48 && c <= 57;
+    if (!digit(before) && before !== 46 && !digit(after)) return true;
+  }
+  return false;
+}
+
 // A report saved with CRLF endings is the same report. Every line rule below
 // (headings, fences, the appendix) is `$`-anchored, so a trailing "\r" would
 // switch the masks off — and an unmasked `## Sources` listing reads as citations.

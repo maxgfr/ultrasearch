@@ -17496,6 +17496,15 @@ var APPENDIX_HEADING = /^(?:sources?|references?|r[ée]f[ée]rences(?:\s+bibliog
 function reportAppendixMask(lines) {
   return appendixMask(lines, { headings: APPENDIX_HEADING });
 }
+function hasNumeral(normalized, numeral) {
+  for (let at = normalized.indexOf(numeral); at !== -1; at = normalized.indexOf(numeral, at + 1)) {
+    const before = at > 0 ? normalized.charCodeAt(at - 1) : 0;
+    const after = normalized.charCodeAt(at + numeral.length);
+    const digit = (c) => c >= 48 && c <= 57;
+    if (!digit(before) && before !== 46 && !digit(after)) return true;
+  }
+  return false;
+}
 function lfOnly(text) {
   return text.includes("\r") ? text.replace(/\r\n?/g, "\n") : text;
 }
@@ -18025,7 +18034,7 @@ function buildWorklist(dir, opts = {}) {
       return { claimId: p.claimId, file: p.file, sourceId: p.sourceId, claim: p.claim, extractPath: p.extractPath, extractDigest: "" };
     }
     const norm3 = p.nums.length ? normOf(p.source) : "";
-    const numeralsAbsent = p.nums.filter((n) => !norm3.includes(n));
+    const numeralsAbsent = p.nums.filter((n) => !hasNumeral(norm3, n));
     return {
       claimId: p.claimId,
       file: p.file,
@@ -18532,7 +18541,7 @@ function runCheck(dir, opts = {}) {
         const texts = cited.map(normOf).filter((t) => t !== null);
         if (!texts.length) continue;
         for (const n of nums) {
-          if (!texts.some((t) => t.includes(n))) {
+          if (!texts.some((t) => hasNumeral(t, n))) {
             numeralIssues.push({ file: a.file, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
           }
         }

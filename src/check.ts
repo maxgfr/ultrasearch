@@ -8,6 +8,7 @@ import {
   stripInlineCode,
   unitSourceTokens,
   extractNumerals,
+  hasNumeral,
   normalizeNumeralText,
   stripHtmlComments,
   type Unit,
@@ -463,7 +464,7 @@ export function runCheck(
         const texts = cited.map(normOf).filter((t): t is string => t !== null);
         if (!texts.length) continue;
         for (const n of nums) {
-          if (!texts.some((t) => t.includes(n))) {
+          if (!texts.some((t) => hasNumeral(t, n))) {
             numeralIssues.push({ file: a.file, claim: claim.trim().slice(0, 120), numeral: n, sourceIds: cited });
           }
         }

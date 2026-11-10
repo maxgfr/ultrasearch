@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { extractNumerals, normalizeNumeralText } from "../src/claims.js";
+import { extractNumerals, hasNumeral, normalizeNumeralText } from "../src/claims.js";
 import { runCheck } from "../src/check.js";
 import { runVerify } from "../src/verify.js";
 import { writeFixtureDossier } from "./dossierfix.js";
@@ -130,6 +130,30 @@ describe("check — numerals-absent-from-source heuristic", () => {
     report(dir, "# X\nA grounded claim about buckets and steady windows here [S1].\n\n## Sources\n- [S1] Source one from 2017 with 10,000 mentions");
     const r = runCheck(dir);
     expect(r.numeralIssues ?? []).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("numerals are matched as whole numbers, not as substrings", () => {
+  it.each([
+    ["500", "The trial enrolled 2,500 patients.", false],
+    ["12", "The 2012 survey covered 120 clinics.", false],
+    ["25", "A ratio of 1.25 was observed.", false],
+    ["500", "It enrolled 500 patients (range 400-500).", true],
+    // A figure the report rounded down is still the source's figure.
+    ["12", "Loss reached 12.4% at one year.", true],
+    ["12.5", "Loss reached 12.5%.", true],
+  ])("%s in %j → %s", (numeral, text, found) => {
+    expect(hasNumeral(normalizeNumeralText(text), numeral)).toBe(found);
+  });
+
+  it("reports a figure that only appears inside a longer number, in check and in verify", () => {
+    const dir = scratch();
+    writeFixtureDossier(dir, 1);
+    extract(dir, "S1", "# S1\nThe registry followed 2,500 patients from 2012 onwards.\n");
+    report(dir, "# X\nThe registry followed 500 patients, of whom 12% relapsed [S1].");
+    expect(runCheck(dir).numeralIssues?.map((n) => n.numeral)).toEqual(["500", "12"]);
+    expect(runVerify(dir).pairs[0]?.numeralsAbsent).toEqual(["500", "12"]);
     rmSync(dir, { recursive: true, force: true });
   });
 });
