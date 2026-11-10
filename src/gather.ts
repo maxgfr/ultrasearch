@@ -821,7 +821,13 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
           // second archive.org round-trip — and a second cap slot — on it. The
           // status stays as fetched: the origin is still dead, and the non-empty
           // `text` is what keeps a cache hit out of this block.
-          hydrateCache.set(key, Promise.resolve({ ...res, text, title, waybackSnapshot: wb.timestamp }));
+          //
+          // The address is NOT kept as fetched when it was the home page or a
+          // challenge: a cache hit re-reads `finalUrl`, would judge "redirected
+          // home" again and throw this very text away. The rescued text belongs
+          // to the address that was asked for.
+          const rescuedAt = home || challenge ? { finalUrl: it.url } : {};
+          hydrateCache.set(key, Promise.resolve({ ...res, ...rescuedAt, text, title, waybackSnapshot: wb.timestamp }));
         }
       }
 

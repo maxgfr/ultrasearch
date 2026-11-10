@@ -16690,7 +16690,8 @@ async function runGather(options) {
           title = title || wb.title;
           it.meta = { ...it.meta, waybackSnapshot: wb.timestamp };
           hydrateNotes.push(`Recovered ${it.url} from the Wayback Machine (snapshot ${wb.timestamp}).`);
-          hydrateCache.set(key, Promise.resolve({ ...res, text, title, waybackSnapshot: wb.timestamp }));
+          const rescuedAt = home || challenge ? { finalUrl: it.url } : {};
+          hydrateCache.set(key, Promise.resolve({ ...res, ...rescuedAt, text, title, waybackSnapshot: wb.timestamp }));
         }
       }
       if (text && junk && res.extractor !== "firecrawl") {

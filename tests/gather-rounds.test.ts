@@ -242,6 +242,36 @@ const DDG_PUBMED = `
 <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fpubmed.ncbi.nlm.nih.gov%2F28495875%2F">Cas9 endonuclease</a>
 <a class="result__snippet">dual-RNA guided endonuclease</a>`;
 
+describe("gather --rounds 2: a rescue of a page that redirected home survives the gap round", () => {
+  it("keeps the archived text in round 2 instead of re-judging the cached redirect", async () => {
+    // The origin answers the deep link with its home page (a dead link that
+    // returns 200). Round 1 rescues it from the archive and caches the rescue —
+    // with the ORIGINAL read's finalUrl. Round 2 saw that url, judged "redirected
+    // home" again, threw the cached text away and paid archive.org a second time.
+    let availCalls = 0;
+    installFetchMock((url) => {
+      if (url.includes("/search/page")) return { body: JSON.stringify({ pages: [] }), contentType: "application/json" };
+      if (url.includes("html.duckduckgo.com")) return { body: DDG_DEAD };
+      if (url.includes("archive.org/wayback/available")) {
+        availCalls++;
+        return { body: WAYBACK_AVAIL, contentType: "application/json" };
+      }
+      if (url.includes("web.archive.org")) return { body: ARCHIVE_HTML };
+      if (url.includes("dead.test")) return { url: "https://dead.test/", body: `<html><body><p>${"Welcome to our home page. ".repeat(20)}</p></body></html>` };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-rounds-home-"));
+    const r = await runGather(opts({ webEngine: "ddg", rounds: 2, out: dir }));
+    expect(r.manifest.notes.join(" ")).toMatch(/Gap round/);
+    expect(availCalls).toBe(1);
+    const dead = (JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[]).find((s) => s.url.includes("dead.test"))!;
+    expect(dead.fullText).not.toBe(false);
+    expect(dead.meta?.waybackSnapshot).toBe("20220101000000");
+    expect(readFileSync(join(dir, dead.extract), "utf8")).toContain("Recovered archived content");
+    rmSync(dir, { recursive: true, force: true });
+  });
+});
+
 describe("gather hydration: two workers reaching for one URL fetch it once", () => {
   it("dedupes an in-flight fetch shared by a source and another source's fallback", async () => {
     process.env.ULTRASEARCH_NO_WAYBACK = "1";
