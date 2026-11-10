@@ -1,6 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpGet, sleep, pageDelayMs } from "./fetch.js";
-import { canonicalizeUrl } from "../util.js";
+import { canonicalizeUrl, sinceEpochSeconds } from "../util.js";
 import { acceptLanguageHeader } from "../locale.js";
 import { searxngBase, searxngIsExplicit } from "../engine.js";
 
@@ -15,6 +15,22 @@ import { searxngBase, searxngIsExplicit } from "../engine.js";
 // none of them.
 export { SEARXNG_DEFAULT_BASE, probeSearxng, resetSearxngProbeCache } from "../engine.js";
 import { probeSearxng } from "../engine.js";
+
+/**
+ * Map --since onto SearXNG's `time_range` (day | month | year): the smallest
+ * window that still covers the date, and none at all for a date further back —
+ * a window narrower than what was asked for drops results silently. (The API
+ * has no "week", so a date within the week takes "month".)
+ */
+export function searxngTimeRange(since?: string, nowMs: number = Date.now()): "day" | "month" | "year" | undefined {
+  const secs = sinceEpochSeconds(since);
+  if (secs === null) return undefined;
+  const days = (nowMs / 1000 - secs) / 86400;
+  if (days <= 1) return "day";
+  if (days <= 31) return "month";
+  if (days <= 366) return "year";
+  return undefined;
+}
 
 // Discovery via a SearXNG instance's JSON API (keyless, self-hosted). Returns
 // candidate URLs (title + snippet, no full text — the gatherer fetches the
@@ -48,9 +64,10 @@ export const searxngBackend: Backend = async (ctx): Promise<BackendResult> => {
   const pages = Math.max(1, ctx.options.pages ?? 1);
   const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
   const perPage = ctx.options.perSource * 2;
+  const timeRange = searxngTimeRange(ctx.options.since);
   const base0 = `${base}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${
     ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""
-  }${ctx.options.since ? `&time_range=year` : ""}`;
+  }${timeRange ? `&time_range=${timeRange}` : ""}`;
   const seen = new Set<string>();
   const found: { url: string; title: string; snippet: string }[] = [];
   // SearXNG answers 200 with an EMPTY result list when its own upstreams have

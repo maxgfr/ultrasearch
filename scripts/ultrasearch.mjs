@@ -13189,6 +13189,15 @@ function sinceDate(since) {
 var RUN_SLUG = { max: 80, fallback: "run" };
 
 // src/backends/searxng.ts
+function searxngTimeRange(since, nowMs = Date.now()) {
+  const secs = sinceEpochSeconds(since);
+  if (secs === null) return void 0;
+  const days = (nowMs / 1e3 - secs) / 86400;
+  if (days <= 1) return "day";
+  if (days <= 31) return "month";
+  if (days <= 366) return "year";
+  return void 0;
+}
 var searxngBackend = async (ctx) => {
   const base2 = searxngBase({ searxng: ctx.options.searxng });
   if (!base2) {
@@ -13211,7 +13220,8 @@ var searxngBackend = async (ctx) => {
   const pages = Math.max(1, ctx.options.pages ?? 1);
   const acceptLanguage = acceptLanguageHeader(ctx.options.lang, ctx.options.region);
   const perPage = ctx.options.perSource * 2;
-  const base0 = `${base2}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""}${ctx.options.since ? `&time_range=year` : ""}`;
+  const timeRange = searxngTimeRange(ctx.options.since);
+  const base0 = `${base2}/search?q=${encodeURIComponent(ctx.question)}&format=json&safesearch=1${ctx.options.lang ? `&language=${encodeURIComponent(ctx.options.lang)}` : ""}${timeRange ? `&time_range=${timeRange}` : ""}`;
   const seen = /* @__PURE__ */ new Set();
   const found = [];
   const suspended = /* @__PURE__ */ new Map();

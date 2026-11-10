@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { searxngBackend, resetSearxngProbeCache, SEARXNG_DEFAULT_BASE } from "../src/backends/searxng.js";
+import { searxngBackend, searxngTimeRange, resetSearxngProbeCache, SEARXNG_DEFAULT_BASE } from "../src/backends/searxng.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -18,6 +18,25 @@ const SEARX_JSON = JSON.stringify({
 });
 
 describe("searxngBackend", () => {
+  it("maps --since onto the smallest time_range that still covers it, or none", async () => {
+    // Every --since used to become time_range=year: `--since 2015` asked for the
+    // last twelve months and silently lost a decade of what was asked for.
+    const now = Date.parse("2026-06-15T00:00:00Z");
+    const day = (n: number) => new Date(now - n * 86_400_000).toISOString().slice(0, 10);
+    expect(searxngTimeRange(undefined, now)).toBeUndefined();
+    expect(searxngTimeRange("2015-01-01", now)).toBeUndefined();
+    expect(searxngTimeRange(day(200), now)).toBe("year");
+    expect(searxngTimeRange(day(20), now)).toBe("month");
+    expect(searxngTimeRange(day(5), now)).toBe("month"); // SearXNG's API has no "week": widen, never narrow
+    expect(searxngTimeRange(day(1), now)).toBe("day");
+
+    const spy = installFetchMock(routes([["format=json", { body: SEARX_JSON, contentType: "application/json" }]]));
+    await searxngBackend(makeCtx("rate limiting", { searxng: "http://localhost:8888", since: "2015-01-01" }));
+    const searches = spy.mock.calls.map((c) => String(c[0])).filter((u) => u.includes("format=json"));
+    expect(searches.length).toBeGreaterThan(0);
+    expect(searches.join(" ")).not.toContain("time_range");
+  });
+
   it("parses the JSON results into ranked sources", async () => {
     installFetchMock(routes([["format=json", { body: SEARX_JSON, contentType: "application/json" }]]));
     const r = await searxngBackend(makeCtx("rate limiting", { searxng: "http://localhost:8888" }));
