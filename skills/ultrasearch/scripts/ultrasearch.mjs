@@ -16309,7 +16309,8 @@ function mergeSameRecord(items) {
     const also = [.../* @__PURE__ */ new Set([...win.meta?.alsoAt ?? [], lose.url, ...lose.meta?.alsoAt ?? []])].filter(
       (u) => urlIdentity(u) !== urlIdentity(win.url)
     );
-    win.meta = { ...lose.meta, ...win.meta, ...also.length ? { alsoAt: also } : {} };
+    const { textVia: _via, waybackSnapshot: _snapshot, extractor: _extractor, ...known } = lose.meta ?? {};
+    win.meta = { ...known, ...win.meta, ...also.length ? { alsoAt: also } : {} };
     if (!also.length) delete win.meta.alsoAt;
     if (win !== prior) out[out.indexOf(prior)] = win;
     const all = [.../* @__PURE__ */ new Set([...keysOf.get(prior) ?? [], ...keys])];

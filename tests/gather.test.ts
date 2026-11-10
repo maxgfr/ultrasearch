@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { hostList, runGather } from "../src/gather.js";
-import type { GatherOptions, Manifest, Source } from "../src/types.js";
+import { hostList, mergeSameRecord, runGather } from "../src/gather.js";
+import type { GatherOptions, Manifest, RawSource, Source } from "../src/types.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -317,5 +317,39 @@ describe("runGather (research mode: a lone homonym cannot carry a scholarly resu
     }
     expect(r.manifest.notes.join("\n")).toMatch(/Dropped 4 arXiv\/Crossref record\(s\) that matched only one distinctive word of the question/);
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("mergeSameRecord", () => {
+  const item = (over: Partial<RawSource>): RawSource => ({ url: "https://a.test/x", title: "T", backend: "duckduckgo", score: 1, snippet: "s", ...over });
+
+  it("hands the winner what the loser knows about the record, never how the loser's text was read", () => {
+    const page = item({ url: "https://journal.test/article", text: "full article text ".repeat(40), meta: { doi: "10.1000/xyz" } });
+    const rescued = item({
+      url: "https://doi.org/10.1000/xyz",
+      text: "short archived abstract",
+      meta: {
+        year: 2021,
+        authors: ["A. Author"],
+        textVia: "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?id=1",
+        waybackSnapshot: "20220101000000",
+        extractor: "firecrawl",
+      },
+    });
+    const { kept, merged } = mergeSameRecord([page, rescued]);
+    expect(merged).toBe(1);
+    expect(kept).toHaveLength(1);
+    // The record's facts travel…
+    expect(kept[0]!.meta).toMatchObject({ doi: "10.1000/xyz", year: 2021, authors: ["A. Author"], alsoAt: ["https://doi.org/10.1000/xyz"] });
+    // …the loser's read does not: this text was read on the page itself.
+    expect(kept[0]!.meta).not.toHaveProperty("textVia");
+    expect(kept[0]!.meta).not.toHaveProperty("waybackSnapshot");
+    expect(kept[0]!.meta).not.toHaveProperty("extractor");
+  });
+
+  it("keeps the winner's own provenance", () => {
+    const rescued = item({ url: "https://doi.org/10.1000/xyz", text: "archived full text ".repeat(40), meta: { waybackSnapshot: "20220101000000" } });
+    const snippet = item({ url: "https://journal.test/article", fullText: false, meta: { doi: "10.1000/xyz" } });
+    expect(mergeSameRecord([snippet, rescued]).kept[0]!.meta).toMatchObject({ waybackSnapshot: "20220101000000", doi: "10.1000/xyz" });
   });
 });

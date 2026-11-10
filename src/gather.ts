@@ -42,7 +42,7 @@ function atNcbiPage(it: RawSource): RawSource {
 // `alsoAt`. Fusion already merged equal addresses, but only the ones the hits
 // were given under: four hits redirected onto one Web of Science record were
 // four sources.
-function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: number } {
+export function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: number } {
   const owner = new Map<string, RawSource>();
   const keysOf = new Map<RawSource, string[]>();
   const out: RawSource[] = [];
@@ -63,7 +63,12 @@ function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged: numbe
     const also = [...new Set([...((win.meta?.alsoAt as string[] | undefined) ?? []), lose.url, ...((lose.meta?.alsoAt as string[] | undefined) ?? [])])].filter(
       (u) => urlIdentity(u) !== urlIdentity(win.url),
     );
-    win.meta = { ...lose.meta, ...win.meta, ...(also.length ? { alsoAt: also } : {}) };
+    // The loser hands over what it KNOWS about the record (DOI, authors, year)
+    // — never how ITS text was read. Inheriting those made a page read directly
+    // look as if it came through E-utilities or the Wayback Machine, and
+    // `readFromEutils(textVia)` then mined the wrong text for identifiers.
+    const { textVia: _via, waybackSnapshot: _snapshot, extractor: _extractor, ...known } = lose.meta ?? {};
+    win.meta = { ...known, ...win.meta, ...(also.length ? { alsoAt: also } : {}) };
     if (!also.length) delete win.meta.alsoAt;
     if (win !== prior) out[out.indexOf(prior)] = win;
     const all = [...new Set([...(keysOf.get(prior) ?? []), ...keys])];
