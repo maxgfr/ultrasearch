@@ -143,3 +143,14 @@ describe("the References (see refs.bib) appendix", () => {
     expect([...citedSourceIds(REPORT)]).toEqual(["S1"]);
   });
 });
+
+describe("templateFor", () => {
+  it("never resolves a template name through Object.prototype", () => {
+    // `"toString" in EXTRA_TEMPLATES` is true: the lookup returned a function,
+    // `.template` of it undefined, and DOSSIER.md printed the word "undefined".
+    for (const name of ["toString", "constructor", "hasOwnProperty"]) {
+      expect(() => templateFor({ mode: "topic", template: name as Manifest["template"] })).toThrow(/unknown mode/i);
+    }
+    expect(templateFor({ mode: "topic", template: "verification" })).toBe(EXTRA_TEMPLATES.verification.template);
+  });
+});

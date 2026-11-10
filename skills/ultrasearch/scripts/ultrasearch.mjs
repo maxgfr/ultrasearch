@@ -13060,6 +13060,7 @@ var MODES = {
   deals: dealsMode
 };
 function getMode(name) {
+  if (!Object.hasOwn(MODES, name)) throw new Error(`unknown mode "${name}"`);
   return MODES[name];
 }
 function listModes() {
@@ -15897,7 +15898,7 @@ var EXTRA_TEMPLATES = {
 };
 function templateFor(manifest) {
   const t = manifest.template;
-  if (t && t in EXTRA_TEMPLATES) return EXTRA_TEMPLATES[t].template;
+  if (t && Object.hasOwn(EXTRA_TEMPLATES, t)) return EXTRA_TEMPLATES[t].template;
   return getMode(t && t !== manifest.mode ? t : manifest.mode).template;
 }
 function setDossierTemplate(dir, name) {

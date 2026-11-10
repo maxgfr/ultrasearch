@@ -26,7 +26,7 @@ export const EXTRA_TEMPLATES: Record<Exclude<TemplateName, Manifest["mode"]>, { 
 /** The template text a dossier asks for: its own `template`, else its mode's. */
 export function templateFor(manifest: Pick<Manifest, "mode" | "template">): string {
   const t = manifest.template;
-  if (t && t in EXTRA_TEMPLATES) return EXTRA_TEMPLATES[t as keyof typeof EXTRA_TEMPLATES].template;
+  if (t && Object.hasOwn(EXTRA_TEMPLATES, t)) return EXTRA_TEMPLATES[t as keyof typeof EXTRA_TEMPLATES].template;
   return getMode(t && t !== manifest.mode ? (t as Manifest["mode"]) : manifest.mode).template;
 }
 

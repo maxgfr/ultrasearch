@@ -20,6 +20,10 @@ export const MODES: Record<ModeName, ModeProfile> = {
 };
 
 export function getMode(name: ModeName): ModeProfile {
+  // An OWN key only. The name can come from a manifest on disk, and
+  // `MODES["toString"]` is a function: its `.template` is undefined, which a
+  // caller then prints. An unknown mode is an error, said as one.
+  if (!Object.hasOwn(MODES, name)) throw new Error(`unknown mode "${name}"`);
   return MODES[name];
 }
 
