@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { runGather } from "../src/gather.js";
+import { hostList, runGather } from "../src/gather.js";
 import type { GatherOptions, Manifest, Source } from "../src/types.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 
@@ -216,6 +216,26 @@ describe("runGather (exclude-domains)", () => {
         out: dir,
       }),
     );
+    expect(r.sources.map((s) => s.domain)).toEqual(["keep.test"]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("reduces typed domains to comparable hosts, once each", () => {
+    expect(hostList([" www.Vendor.com ", "vendor.com", "https://docs.vendor.com/guide", ""])).toEqual(["vendor.com", "docs.vendor.com"]);
+  });
+
+  it.each(["www.Drop.test", "DROP.TEST", "https://www.drop.test/some/page"])("matches a host however it was typed (%s)", async (typed) => {
+    // Source hosts are compared lowercased and without "www."; the user's
+    // value was compared as typed, so `www.reddit.com` excluded nothing.
+    rmSync(dir, { recursive: true, force: true });
+    const page = { body: "<p>rate limiting content that reads perfectly well here</p>" };
+    installFetchMock(
+      routes([
+        ["keep.test", page],
+        ["drop.test", page],
+      ]),
+    );
+    const r = await runGather(opts({ backends: ["generic"], urls: ["https://keep.test/a", "https://sub.drop.test/b"], excludeDomains: [typed], out: dir }));
     expect(r.sources.map((s) => s.domain)).toEqual(["keep.test"]);
     rmSync(dir, { recursive: true, force: true });
   });

@@ -16474,6 +16474,13 @@ function resolveVariants(options) {
   }
   return planVariants(options.question, options.depth);
 }
+function hostList(typed) {
+  const hosts = typed.map((d) => {
+    const t = d.trim();
+    return domainOf(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`) || t.toLowerCase();
+  });
+  return [...new Set(hosts.filter(Boolean))];
+}
 async function runGather(options) {
   const t0 = Date.now();
   const mode2 = getMode(options.mode);
@@ -16503,7 +16510,8 @@ async function runGather(options) {
     const [restResults, webResults] = await Promise.all([runBackends(rest, ctx), runWebCascade(cascade, ctx, breadth)]);
     results = [...restResults, ...webResults];
   }
-  const seedDomains = (options.seedDomains ?? []).slice(0, 3);
+  const seedDomains = hostList(options.seedDomains ?? []).slice(0, 3);
+  const excludeDomains = hostList(options.excludeDomains);
   if (seedDomains.length && webBackends.length > 0 && !explicit) {
     const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
     const kw = rankedKeywords(options.question).slice(0, 4).join(" ");
@@ -16517,7 +16525,7 @@ async function runGather(options) {
   }
   const excluded = (it) => {
     const d = domainOf(it.url);
-    return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
+    return !excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   const hydrateCache = /* @__PURE__ */ new Map();
   let cacheHits = 0;

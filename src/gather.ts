@@ -436,6 +436,19 @@ export function resolveVariants(options: GatherOptions): string[] {
   return planVariants(options.question, options.depth);
 }
 
+/**
+ * `--exclude-domains` / `--seed-domains` as the hosts sources are compared by:
+ * lowercase, no "www.", and a pasted url reduced to its host. A value compared
+ * as typed matched nothing (`www.Reddit.com` against "reddit.com").
+ */
+export function hostList(typed: string[]): string[] {
+  const hosts = typed.map((d) => {
+    const t = d.trim();
+    return domainOf(/^[a-z][a-z0-9+.-]*:\/\//i.test(t) ? t : `https://${t}`) || t.toLowerCase();
+  });
+  return [...new Set(hosts.filter(Boolean))];
+}
+
 // Full `gather`: fan out backends, fuse + dedupe + filter + cap, fetch full
 // text for any source that lacks it, then write the dossier. The model writes
 // the tiered reports afterward.
@@ -491,7 +504,8 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // web search per domain (cap 3) so the primary source is actually retrieved —
   // keyless discovery otherwise surfaced 0/5 must-hit vendor docs in the eval.
   // Deterministic: results still come from real searches, no synthetic URLs.
-  const seedDomains = (options.seedDomains ?? []).slice(0, 3);
+  const seedDomains = hostList(options.seedDomains ?? []).slice(0, 3);
+  const excludeDomains = hostList(options.excludeDomains);
   if (seedDomains.length && webBackends.length > 0 && !explicit) {
     const cascade = options.webEngine === "auto" ? [...DISCOVERY] : DISCOVERY.filter((d) => webBackends.includes(d));
     const kw = rankedKeywords(options.question).slice(0, 4).join(" ");
@@ -506,7 +520,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
 
   const excluded = (it: RawSource): boolean => {
     const d = domainOf(it.url);
-    return !options.excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
+    return !excludeDomains.some((ex) => d === ex || d.endsWith("." + ex));
   };
   // Fetches are cached across rounds by canonical URL so the gap round never
   // re-fetches a page round 1 already hydrated. The cache holds the PROMISE, not
