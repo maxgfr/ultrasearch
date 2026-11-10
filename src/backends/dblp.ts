@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { httpJson, cleanInline } from "./fetch.js";
+import { httpJson, cleanInline, htmlTitle, htmlToText } from "./fetch.js";
+import { wallPattern } from "../walls.js";
 import { apiFailure } from "./backoff.js";
 
 // Normalize dblp's `authors.author`, which is a single object for a one-author
@@ -31,6 +32,22 @@ export const dblpBackend: Backend = async (ctx): Promise<BackendResult> => {
   // single object when exactly one publication matches — same object-or-array
   // quirk `authorNames` handles for `authors.author`. Normalizing here stops a
   // legitimate single result being discarded and mislabeled as an API failure.
+  // A 2xx that is not dblp's JSON is a REFUSAL, not an empty answer. dblp.org
+  // serves its API behind an anti-bot challenge (HTTP 202, an HTML page): read
+  // as "no hits", a query with thousands of them was reported as having none.
+  if (r.ok && (typeof r.data !== "object" || r.data === null || !("result" in r.data))) {
+    const raw = typeof r.data === "string" ? r.data : "";
+    const wall = wallPattern(htmlToText(raw)) ?? wallPattern(htmlTitle(raw) ?? "");
+    const what = wall ? `${/^[aeiou]/i.test(wall) ? "an" : "a"} ${wall}` : "a page that is not its JSON";
+    return {
+      backend: "dblp",
+      items: [],
+      notes: [
+        `dblp answered with ${what} (HTTP ${r.status})${wall ? " — it is refusing automated clients" : ""}. ` +
+          `Search it with your own web search instead — \`site:dblp.org ${ctx.question}\`.`,
+      ],
+    };
+  }
   const hitRaw = r.data?.result?.hits?.hit;
   const hits: any[] = r.ok ? (Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : []) : [];
   if (!r.ok || !hits.length) {

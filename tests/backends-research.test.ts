@@ -245,6 +245,23 @@ describe("research backends", () => {
     expect(await note({ status: 429, body: "" })).toMatch(/^dblp search rate-limited \(HTTP 429\)/);
   });
 
+  it("dblp names an anti-bot challenge instead of calling it an empty answer (live, November 2026)", async () => {
+    // dblp.org put its API behind Anubis: HTTP 202, text/html, "Making sure
+    // you're not a bot!". A 2xx with no hits read as "returned nothing for …" —
+    // the query has thousands of hits; the client was refused.
+    const challenge = `<!doctype html><html lang="en"><head><title>Making sure you&#39;re not a bot!</title></head><body><h1>Making sure you're not a bot!</h1><p>Loading...</p></body></html>`;
+    installFetchMock(routes([["dblp.org/search/publ", { status: 202, body: challenge, contentType: "text/html; charset=utf-8" }]]));
+    const r = await dblpBackend(makeCtx("attention is all you need"));
+    expect(r.items).toEqual([]);
+    const note = r.notes.join(" ");
+    expect(note).toMatch(/dblp answered with an? .*challenge.* \(HTTP 202\)/i);
+    expect(note).toMatch(/site:dblp\.org attention is all you need/);
+    expect(note).not.toMatch(/returned nothing/);
+    // Any other non-JSON answer is named as what it is, too.
+    installFetchMock(routes([["dblp.org/search/publ", { body: "<html><body>Service notice</body></html>", contentType: "text/html" }]]));
+    expect((await dblpBackend(makeCtx("x"))).notes.join(" ")).toMatch(/dblp answered with a page that is not its JSON \(HTTP 200\)/);
+  });
+
   it("dblp parses hits, normalizes a single-author object, and picks the ee URL", async () => {
     const DBLP = JSON.stringify({
       result: {

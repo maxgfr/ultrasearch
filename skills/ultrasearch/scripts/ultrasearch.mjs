@@ -8422,6 +8422,9 @@ ${slot}
     return t.includes(NUL2) ? restoreInlinePre(t, pre) : t;
   }).filter((l) => l.length > 0).join("\n");
 }
+function htmlTitle(html) {
+  return firstElementText(dropElements(html, METADATA_HIDDEN), "title");
+}
 function pageTitleIn(clean32) {
   return firstElementText(clean32, "title") ?? metaContent(clean32, ["og:title", "twitter:title"]) ?? firstElementText(clean32, "h1");
 }
@@ -14308,6 +14311,26 @@ var clinicaltrialsBackend = async (ctx) => {
   return { backend: "clinicaltrials", items, notes: [`ClinicalTrials.gov returned ${items.length} study record(s).`] };
 };
 
+// src/walls.ts
+var bypassing = 0;
+var saved;
+async function readPastCachedWall(url, opts, enabled) {
+  const res = await cachedFetchAndExtract(url, opts, enabled);
+  if (!res.cached || !res.text?.trim() || !looksLikeWall(res.text)) return res;
+  if (bypassing++ === 0) {
+    saved = cacheMode();
+    setCacheMode({ refresh: true });
+  }
+  try {
+    return await cachedFetchAndExtract(url, opts, enabled);
+  } finally {
+    if (--bypassing === 0 && saved) {
+      setCacheMode(saved);
+      saved = void 0;
+    }
+  }
+}
+
 // src/backends/dblp.ts
 function authorNames(authors) {
   const a = authors?.author;
@@ -14322,6 +14345,18 @@ var dblpBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const url = `https://dblp.org/search/publ/api?q=${encodeURIComponent(ctx.question)}&format=json&h=${n}`;
   const r = await httpJson("GET", url, void 0, { timeoutMs: 12e3 });
+  if (r.ok && (typeof r.data !== "object" || r.data === null || !("result" in r.data))) {
+    const raw = typeof r.data === "string" ? r.data : "";
+    const wall = wallPattern(htmlToText(raw)) ?? wallPattern(htmlTitle(raw) ?? "");
+    const what = wall ? `${/^[aeiou]/i.test(wall) ? "an" : "a"} ${wall}` : "a page that is not its JSON";
+    return {
+      backend: "dblp",
+      items: [],
+      notes: [
+        `dblp answered with ${what} (HTTP ${r.status})${wall ? " \u2014 it is refusing automated clients" : ""}. Search it with your own web search instead \u2014 \`site:dblp.org ${ctx.question}\`.`
+      ]
+    };
+  }
   const hitRaw = r.data?.result?.hits?.hit;
   const hits = r.ok ? Array.isArray(hitRaw) ? hitRaw : hitRaw ? [hitRaw] : [] : [];
   if (!r.ok || !hits.length) {
@@ -15979,26 +16014,6 @@ function setDossierTemplate(dir, name) {
 }
 function hasOpenQuestions(markdown) {
   return /^\s{0,3}#{1,6}\s+.*\b(open questions?|questions? ouvertes?|contradictions?)\b/im.test(markdown);
-}
-
-// src/walls.ts
-var bypassing = 0;
-var saved;
-async function readPastCachedWall(url, opts, enabled) {
-  const res = await cachedFetchAndExtract(url, opts, enabled);
-  if (!res.cached || !res.text?.trim() || !looksLikeWall(res.text)) return res;
-  if (bypassing++ === 0) {
-    saved = cacheMode();
-    setCacheMode({ refresh: true });
-  }
-  try {
-    return await cachedFetchAndExtract(url, opts, enabled);
-  } finally {
-    if (--bypassing === 0 && saved) {
-      setCacheMode(saved);
-      saved = void 0;
-    }
-  }
 }
 
 // src/listing.ts
