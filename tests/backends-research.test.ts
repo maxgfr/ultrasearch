@@ -179,6 +179,29 @@ describe("research backends", () => {
     expect(`${r.items[0]!.title} ${r.items[0]!.text}`).not.toMatch(/&(amp|lt|gt);/);
   });
 
+  it("europepmc keeps a literal less-than in an abstract (a p-value is not a tag)", async () => {
+    // Entities are decoded before the markup is stripped, so "p &lt; 0.05" became
+    // "p < 0.05" — and a strip rule that took any "<…>" for a tag then deleted
+    // everything up to the next ">", figures included.
+    const EPMC = JSON.stringify({
+      resultList: {
+        result: [
+          {
+            title: "Cohort mortality",
+            abstractText: "<h4>Results</h4>Mortality fell (p &lt; 0.05) in <i>E. coli</i> cohorts; n&lt;40 in 3 arms and HR &gt; 1.2 overall.",
+            pubYear: "2022",
+            source: "MED",
+            id: "2",
+          },
+        ],
+      },
+    });
+    installFetchMock(routes([["ebi.ac.uk/europepmc", { body: EPMC, contentType: "application/json" }]]));
+    const r = await europepmcBackend(makeCtx("mortality"));
+    expect(r.items[0]!.text).toContain("Mortality fell (p < 0.05) in E. coli cohorts; n<40 in 3 arms and HR > 1.2 overall.");
+    expect(r.items[0]!.text).not.toMatch(/<\/?(h4|i)>/);
+  });
+
   it("pubmed does esearch→esummary and returns metadata (no text → hydrate later)", async () => {
     const ESEARCH = JSON.stringify({ esearchresult: { idlist: ["111", "222"] } });
     const ESUMMARY = JSON.stringify({

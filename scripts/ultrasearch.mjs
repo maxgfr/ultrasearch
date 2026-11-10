@@ -14130,7 +14130,7 @@ var europepmcBackend = async (ctx) => {
   }
   const items = results.slice(0, n).map((w, i) => {
     const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
-    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<[^>]+>/g, "");
+    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<\/?[a-zA-Z][^<>]*>/g, "");
     const authors = w.authorString ? String(w.authorString).split(/,\s*/).filter(Boolean) : [];
     const year = w.pubYear ? Number(w.pubYear) : void 0;
     const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || void 0;

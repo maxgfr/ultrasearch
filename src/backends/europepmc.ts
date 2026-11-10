@@ -17,7 +17,12 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
   const items: RawSource[] = results.slice(0, n).map((w: any, i: number): RawSource => {
     // Europe PMC titles/abstracts carry escaped JATS markup (&lt;i&gt;…&lt;/i&gt;).
     const title = cleanInline(String(w.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
-    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<[^>]+>/g, "");
+    // The markup arrives escaped as often as not, so it has to be decoded before
+    // it can be stripped — and by then a literal "<" ("p &lt; 0.05") looks like
+    // one too. Only what is SHAPED like a tag (a name right after the bracket)
+    // is removed: stripping any "<…>" deleted the text between a p-value and
+    // the next ">".
+    const abstract = decodeEntities(String(w.abstractText ?? "")).replace(/<\/?[a-zA-Z][^<>]*>/g, "");
     const authors = w.authorString ? String(w.authorString).split(/,\s*/).filter(Boolean) : [];
     const year = w.pubYear ? Number(w.pubYear) : undefined;
     const venue = cleanInline(String(w.journalInfo?.journal?.title ?? w.journalTitle ?? "")) || undefined;
