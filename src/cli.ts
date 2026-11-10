@@ -629,9 +629,10 @@ function emitArtifacts(dir: string, asJson: boolean, extra: Record<string, unkno
 
 function num(name: string, raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) fail(`invalid --${name} "${raw}"`);
-  return Math.floor(n);
+  // Floored BEFORE the test: 0.5 is positive, and 0 is what it would become.
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) fail(`invalid --${name} "${raw}"`);
+  return n;
 }
 
 // Pure report for the gather command: 0 retrieved sources is a FAILED

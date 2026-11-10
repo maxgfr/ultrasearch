@@ -128,6 +128,14 @@ describe("buildGatherOptions", () => {
     expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--web-engine", "nope"]))).toThrow(/exit:1/);
   });
 
+  it("rejects a fraction below 1 instead of flooring it to 0", () => {
+    // 0.5 passed the "> 0" test and then became 0: --per-source 0 asked every
+    // engine for nothing, --max-sources 0 capped the dossier at nothing.
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--per-source", "0.5"]))).toThrow(/exit:1/);
+    expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--max-sources", "0.9"]))).toThrow(/exit:1/);
+    expect(buildGatherOptions(parseArgs(["gather", "--q", "x", "--per-source", "2.7"])).perSource).toBe(2);
+  });
+
   it("rejects non-positive / non-numeric numeric flags", () => {
     expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--max-sources", "-1"]))).toThrow(/exit:1/);
     expect(() => buildGatherOptions(parseArgs(["gather", "--q", "x", "--per-source", "0"]))).toThrow(/exit:1/);

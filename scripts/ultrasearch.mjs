@@ -22327,9 +22327,9 @@ ${a.content.endsWith("\n") ? a.content : a.content + "\n"}`);
 }
 function num4(name, raw, fallback2) {
   if (raw === void 0) return fallback2;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) fail(`invalid --${name} "${raw}"`);
-  return Math.floor(n);
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1) fail(`invalid --${name} "${raw}"`);
+  return n;
 }
 function gatherReport(r, options) {
   const used = r.manifest.backendsUsed.join(", ") || "none";
