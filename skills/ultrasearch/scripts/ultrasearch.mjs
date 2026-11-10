@@ -13130,13 +13130,21 @@ var NEUTRAL_TRUST = 0.5;
 function trustScore(_url, backend) {
   return Number(Math.max(NEUTRAL_TRUST, BACKEND_TRUST[backend] ?? 0).toFixed(2));
 }
+function doiKey(doi) {
+  let d = doi.trim();
+  try {
+    d = decodeURIComponent(d);
+  } catch {
+  }
+  return `doi:${normalizeDoi(d).replace(/[.,;)\]]+$/, "")}`;
+}
 function identityKey(item) {
   const doi = item.meta?.doi;
-  if (doi) return "doi:" + normalizeDoi(String(doi));
+  if (doi) return doiKey(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
   const urlDoi = doiFromUrl(item.url);
-  if (urlDoi) return "doi:" + urlDoi;
+  if (urlDoi) return doiKey(urlDoi);
   const urlArxiv = arxivIdFromUrl(item.url);
   if (urlArxiv) return "arxiv:" + urlArxiv;
   return urlIdentity(item.url);
@@ -16187,19 +16195,10 @@ function jatsToText(xml) {
 }
 
 // src/identity.ts
-var DOI_IN_URL = /(?:doi\.org|\/doi(?:\/(?:abs|full|pdf|epdf|reader))?)\/(10\.\d{4,9}\/[^?#\s]+)/i;
-function doiKey(doi) {
-  let d = doi.trim();
-  try {
-    d = decodeURIComponent(d);
-  } catch {
-  }
-  return `doi:${d.replace(/[.,;)\]]+$/, "").toLowerCase()}`;
-}
 function identityKeys(url, meta, ncbiText) {
   const keys = /* @__PURE__ */ new Set();
-  const inUrl = url.match(DOI_IN_URL);
-  if (inUrl) keys.add(doiKey(inUrl[1]));
+  const inUrl = doiFromUrl(url);
+  if (inUrl) keys.add(doiKey(inUrl));
   const doc = ncbiDocument(url);
   if (doc) keys.add(doc.kind === "pubmed" ? `pmid:${doc.id}` : `pmcid:${doc.id}`);
   const arxiv = arxivIdFromUrl(url) ?? (typeof meta?.arxivId === "string" && meta.arxivId.trim() ? meta.arxivId : void 0);

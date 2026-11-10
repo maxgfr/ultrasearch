@@ -1,6 +1,7 @@
 import type { SourceMeta } from "./types.js";
 import { ncbiDocument } from "./providers/ncbi.js";
-import { arxivIdFromUrl } from "./engine.js";
+import { arxivIdFromUrl, doiFromUrl } from "./engine.js";
+import { doiKey } from "./util.js";
 
 // The identifiers that make two addresses one paper: its DOI, its PMID, its
 // PMCID, its arXiv id. A run on the thesis banked the same article three times —
@@ -8,19 +9,9 @@ import { arxivIdFromUrl } from "./engine.js";
 // page — because URLs were the only thing compared; another ingested a paper's
 // arXiv /abs/ page beside its /html/ page. Keys are `doi:10.x/y` (lower-case),
 // `pmid:123`, `pmcid:PMC123`, `arxiv:2609.32209` (no version: v1 and v2 are one
-// paper).
-
-const DOI_IN_URL = /(?:doi\.org|\/doi(?:\/(?:abs|full|pdf|epdf|reader))?)\/(10\.\d{4,9}\/[^?#\s]+)/i;
-
-function doiKey(doi: string): string {
-  let d = doi.trim();
-  try {
-    d = decodeURIComponent(d);
-  } catch {
-    /* keep as given */
-  }
-  return `doi:${d.replace(/[.,;)\]]+$/, "").toLowerCase()}`;
-}
+// paper). A DOI is spelled by `doiKey` (src/util.ts) and read out of a URL by
+// the engine's `doiFromUrl` — the same two functions `gather`'s fusion uses, so
+// the commands cannot disagree about whether two sources are one paper.
 
 /**
  * The identifier keys of a source: from its URL (a DOI resolver or a /doi/
@@ -32,8 +23,8 @@ function doiKey(doi: string): string {
  */
 export function identityKeys(url: string, meta?: SourceMeta, ncbiText?: string): string[] {
   const keys = new Set<string>();
-  const inUrl = url.match(DOI_IN_URL);
-  if (inUrl) keys.add(doiKey(inUrl[1]!));
+  const inUrl = doiFromUrl(url);
+  if (inUrl) keys.add(doiKey(inUrl));
   const doc = ncbiDocument(url);
   if (doc) keys.add(doc.kind === "pubmed" ? `pmid:${doc.id}` : `pmcid:${doc.id}`);
   const arxiv = arxivIdFromUrl(url) ?? (typeof meta?.arxivId === "string" && meta.arxivId.trim() ? meta.arxivId : undefined);

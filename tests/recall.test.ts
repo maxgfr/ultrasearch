@@ -15,6 +15,7 @@ import {
   applyRelevanceFloor,
 } from "../src/util.js";
 import { fuseSources, runGather } from "../src/gather.js";
+import { identityKeys } from "../src/identity.js";
 import type { GatherOptions, RawSource, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
 
@@ -65,6 +66,22 @@ describe("identityKey", () => {
     expect(identityKey(raw({ meta: { doi: "https://doi.org/10.1/ABC" } }))).toBe("doi:10.1/abc");
     expect(identityKey(raw({ meta: { arxivId: "1706.03762v5" } }))).toBe("arxiv:1706.03762");
     expect(identityKey(raw({ url: "https://x.test/a/" }))).toBe("https://x.test/a");
+  });
+
+  it("spells a DOI the way identityKeys does, however it was written", () => {
+    // gather/enrich fuse on identityKey, merge on identityKeys: one paper must
+    // get one key from both, or it stays two sources in one of them.
+    const shapes: [string, Partial<RawSource>][] = [
+      ["a resolver URL, encoded, ending the sentence", { url: "https://doi.org/10.1000/ABC%2Fdef." }],
+      ["a recorded DOI with trailing punctuation", { meta: { doi: "10.1000/ABC/def." } }],
+      ["a recorded DOI, percent-encoded", { meta: { doi: "10.1000%2FABC%2Fdef" } }],
+      ["a publisher /doi/ path", { url: "https://journals.test/doi/full/10.1000/abc/def" }],
+    ];
+    for (const [what, shape] of shapes) {
+      const item = raw(shape);
+      expect(identityKey(item), what).toBe("doi:10.1000/abc/def");
+      expect(identityKeys(item.url, item.meta), what).toContain("doi:10.1000/abc/def");
+    }
   });
 
   it("collapses arXiv abs/pdf/html URL variants (no backend meta) to one key", () => {
