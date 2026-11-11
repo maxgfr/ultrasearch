@@ -179,6 +179,15 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
   // into a neighbour or banked as a second S<n> that `check` would refuse.
   const seen = new Set<number>();
   const refs = parsed.filter((r) => !seen.has(r.n) && seen.add(r.n));
+  // A line that looked like a reference but was read as the end of the one
+  // above (a wrapped date, a publisher line) is named, so a wrong call shows.
+  for (const r of refs) {
+    for (const line of r.folded ?? []) {
+      notes.push(
+        `Reference ${r.n}: the line "${line.slice(0, 80)}${line.length > 80 ? "…" : ""}" was read as part of it (a wrapped line), not as a reference of its own — if it is one, number it "n." in the list.`,
+      );
+    }
+  }
   for (const r of parsed.filter((x) => !refs.includes(x))) {
     notes.push(
       `Reference number ${r.n} appears twice in the list: only the first is checked. Unchecked repeat: "${r.raw.slice(0, 120)}${r.raw.length > 120 ? "…" : ""}"`,

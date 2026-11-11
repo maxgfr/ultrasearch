@@ -20129,7 +20129,7 @@ import { tmpdir as tmpdir5 } from "os";
 // src/refcheck/parse.ts
 var REF_HEADING = /^\s{0,3}(?:#{1,6}\s*)?(?:\d+[.)]?\s+)?(r[ée]f[ée]rences(?:\s+bibliographiques)?|bibliograph(?:y|ie)|references|works cited|literature cited|literatur(?:verzeichnis)?|referencias|bibliografia)\s*:?\s*$/i;
 var HEADING = /^\s{0,3}#{1,6}\s+\S/;
-var NUMBERED = new RegExp("^\\s*(?:\\[(\\d{1,4})\\]|(\\d{1,4})[.)]|(\\d{1,4})(?=\\s+\\p{Lu}))\\s*(.*)$", "u");
+var NUMBERED = new RegExp("^\\s*(?:\\[(\\d{1,4})\\]|(\\d{1,4})[.)]|(\\d{1,4})(?=\\s+(?:(?:van|von|der|den|de|del|della|di|da|du|la|le|ten|ter|dos|das|el|al|bin|ibn)\\s+){0,3}\\p{Lu}))\\s*(.*)$", "u");
 function referenceHeadingLine(lines) {
   let at = -1;
   for (let i = 0; i < lines.length; i++) if (REF_HEADING.test(lines[i].trim())) at = i;
@@ -20148,12 +20148,14 @@ function splitDocument(text) {
   }
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
-function opensReference(n, bare, prev, text) {
+function opensReference(n, bare, prev, text, next, markerList) {
   if (prev === void 0) return true;
-  if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
+  const continues = next === n + 1;
+  if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return continues && startsWithAuthors(text);
   if (!bare) return true;
-  if (n > prev) return true;
-  return n === 1 && startsWithAuthors(text);
+  if (markerList) return false;
+  if (n > prev) return n === prev + 1 || continues || startsWithAuthors(text);
+  return n === 1 && (prev > 1 && continues || startsWithAuthors(text));
 }
 function startsWithAuthors(text) {
   const stop = text.search(/\.\s/);
@@ -20164,13 +20166,24 @@ function splitEntries(list) {
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out = [];
   if (numbered >= 2) {
-    for (const line of lines) {
+    const rows = lines.filter((line) => line.trim() && !HEADING.test(line)).map((line) => {
       const t = line.trim();
-      if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
-      const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
-      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== void 0, out.at(-1)?.n, m[4])) out.push({ n, raw: m[4].trim() });
-      else if (out.length) out[out.length - 1].raw += ` ${t}`;
+      const candidate = m && (m[4] ?? "").length > 8 ? { n: Number(m[1] ?? m[2] ?? m[3]), bare: m[3] !== void 0, text: m[4].trim() } : void 0;
+      return { t, candidate };
+    });
+    const kinds = rows.flatMap((r) => r.candidate ? [r.candidate.bare] : []);
+    const markerList = kinds.filter((bare) => !bare).length > kinds.filter((bare) => bare).length;
+    for (const [i, { t, candidate }] of rows.entries()) {
+      const next = rows.slice(i + 1).find((r) => r.candidate)?.candidate?.n;
+      if (candidate && opensReference(candidate.n, candidate.bare, out.at(-1)?.n, candidate.text, next, markerList)) {
+        out.push({ n: candidate.n, raw: candidate.text });
+        continue;
+      }
+      const last = out.at(-1);
+      if (!last) continue;
+      last.raw += ` ${t}`;
+      if (candidate) (last.folded ??= []).push(t);
     }
     return out;
   }
@@ -20322,7 +20335,7 @@ function parseBibtex(text) {
 }
 function parseReferences(text) {
   if (/@\w+\s*\{[^,\s]*\s*,/.test(text) && /\b(title|author)\s*=/.test(text)) return parseBibtex(text);
-  return splitEntries(splitDocument(text).list).map((e) => parseVancouver(e.raw, e.n));
+  return splitEntries(splitDocument(text).list).map((e) => ({ ...parseVancouver(e.raw, e.n), ...e.folded ? { folded: e.folded } : {} }));
 }
 
 // src/refcheck/citing.ts
@@ -20933,6 +20946,13 @@ async function runRefcheck(opts) {
   const notes = [];
   const seen = /* @__PURE__ */ new Set();
   const refs = parsed.filter((r) => !seen.has(r.n) && seen.add(r.n));
+  for (const r of refs) {
+    for (const line of r.folded ?? []) {
+      notes.push(
+        `Reference ${r.n}: the line "${line.slice(0, 80)}${line.length > 80 ? "\u2026" : ""}" was read as part of it (a wrapped line), not as a reference of its own \u2014 if it is one, number it "n." in the list.`
+      );
+    }
+  }
   for (const r of parsed.filter((x) => !refs.includes(x))) {
     notes.push(
       `Reference number ${r.n} appears twice in the list: only the first is checked. Unchecked repeat: "${r.raw.slice(0, 120)}${r.raw.length > 120 ? "\u2026" : ""}"`

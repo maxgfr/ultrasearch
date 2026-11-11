@@ -207,6 +207,110 @@ describe("refcheck — parsing a bibliography", () => {
     expect(book[2]!.raw).toContain("2019. p. 100-110.");
   });
 
+  it("settles a doubtful number by what follows it", () => {
+    const entries = (lines: string[]) => splitEntries(lines.join("\n"));
+    // A list that really is numbered in the 1800s: it goes on from 1802.
+    const high = entries([
+      "1795. Smith J. First title here. J A. 2020;1:1.",
+      "1802. Doe J. Second title here. J B. 2021;2:2.",
+      "1803. Roe B. Third title here. J C. 2022;3:3.",
+    ]);
+    expect(high.map((e) => e.n)).toEqual([1795, 1802, 1803]);
+    // A bare list starting over with a corporate author, then going on to 2.
+    const who = entries([
+      "1 Smith J. First title here. J A. 2020;1:1.",
+      "2 Doe J. Second title here. J B. 2021;2:2.",
+      "1 World Health Organization. Global report on the subject. Geneva: WHO; 2020.",
+      "2 Roe B. Fourth title here. J C. 2022;3:3.",
+    ]);
+    expect(who.map((e) => e.n)).toEqual([1, 2, 1, 2]);
+    expect(who[2]!.raw).toMatch(/^World Health Organization/);
+    // A surname with particles, after a bare number, opens a reference.
+    const particles = entries([
+      "1 Smith J. First title here. J A. 2020;1:1.",
+      "2 van der Berg A. Second title here. J B. 2021;2:2.",
+      "3 de Souza R. Third title here. J C. 2022;3:3.",
+    ]);
+    expect(particles.map((e) => e.n)).toEqual([1, 2, 3]);
+    // A wrapped line that the list does not go on from is kept, and named.
+    const wrapped = entries([
+      "1 Smith J. First title here. J A. 2020;1:1.",
+      "2 Doe J. A book on the subject. 2nd ed.",
+      "1 New York: Springer; 2019. p. 10-20.",
+      "3 Roe B. Third title here. J C. 2022;3:3.",
+      "12 of The Lancet supplement, reprinted.",
+    ]);
+    expect(wrapped.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(wrapped[1]!.folded).toEqual(["1 New York: Springer; 2019. p. 10-20."]);
+    expect(wrapped[2]!.raw).toContain("12 of The Lancet");
+    // Two wrapped dates in a row look like a list going on: they are dates.
+    const dates = entries([
+      "1. Smith J. First title here. J A. 2020;1:1.",
+      "2. Doe J. Second title here. J B. 2021;2:2.",
+      "3. Roe B. Third title here. J C. Erratum in:",
+      "2020 Mar;382(5):100-110.",
+      "2021 Jan;383(1):1-2.",
+      "4. Poe C. Fourth title here. J D. 2022;4:4.",
+    ]);
+    expect(dates.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(dates[2]!.folded).toEqual(["2020 Mar;382(5):100-110.", "2021 Jan;383(1):1-2."]);
+    const dotted = entries([
+      "1. Smith J. First title here. J A.",
+      "2019. p. 100-110. Available from: https://x.test/a",
+      "2020. p. 111-120. Available from: https://x.test/b",
+      "2. Doe J. Second title here. J B. 2021;2:2.",
+    ]);
+    expect(dotted.map((e) => e.n)).toEqual([1, 2]);
+    // Inside reference 1 the next line is 2 whatever a wrapped "1 …" says.
+    const first = entries([
+      "1 Smith J. A book on the subject. 2nd ed.",
+      "1 New York: Springer; 2019. p. 10-20.",
+      "2 Doe J. Second title here. J B. 2021;2:2.",
+      "3 Roe B. Third title here. J C. 2022;3:3.",
+    ]);
+    expect(first.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(first[0]!.folded).toEqual(["1 New York: Springer; 2019. p. 10-20."]);
+    // A bare jump ahead that is neither continued nor followed by authors is a wrapped line.
+    const jump = entries([
+      "1 Smith J. First title here. J A. 2020;1:1.",
+      "2 Doe J. Second title here. J B. 2021;2:2.",
+      "3 Roe B. Third title here. J C. 2022;3",
+      "12 Suppl A):45-50.",
+      "4 Poe C. Fourth title here. J D. 2023;4:4.",
+    ]);
+    expect(jump.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(jump[2]!.folded).toEqual(["12 Suppl A):45-50."]);
+    // In a list numbered with markers, a bare number is a wrapped line.
+    const marked = entries([
+      "1. Smith J. First title here. J A. 2020;1:1.",
+      "2. Doe J. Un article cité. Paris:",
+      "3 de La Revue française, numéro spécial.",
+      "3. Roe B. Third title here. J C. 2022;3:3.",
+      "4. Poe C. Fourth title, published on the",
+      "5 de Mayo de 2020 in Mexico City.",
+      "5. Moe D. Fifth title here. J E. 2023;5:5.",
+    ]);
+    expect(marked.map((e) => e.n)).toEqual([1, 2, 3, 4, 5]);
+    expect(marked[1]!.raw).toContain("3 de La Revue française");
+    expect(marked[3]!.raw).toContain("5 de Mayo de 2020");
+  });
+
+  it("names, in the run's notes, every line it read as part of the reference above", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-refcheck-fold-"));
+    try {
+      const doc = join(dir, "refs.md");
+      writeFileSync(
+        doc,
+        ["## References", "", "1. Smith J. First title here. J A.", "2020 Mar;382(5):100-110.", "2. Doe J. Second title here. J B. 2021;2:2."].join("\n"),
+      );
+      const r = await runRefcheck({ refs: doc, out: join(dir, "out"), offline: true });
+      expect(r.references.map((e) => e.n)).toEqual([1, 2]);
+      expect(r.notes.join("\n")).toContain('Reference 1: the line "2020 Mar;382(5):100-110." was read as part of it (a wrapped line)');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps every reference of a list numbered with gaps, sparsely, from 12, or twice over", () => {
     const list = (ns: number[], bare = false) =>
       splitEntries(
