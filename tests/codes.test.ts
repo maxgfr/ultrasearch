@@ -41,6 +41,15 @@ describe("extractCodes — real codes", () => {
     expect(m).toMatchObject({ code: "RENTREE10", via: "text", strength: "strong", discount: "10%", minSpend: "50 €", expires: "2026-10-31" });
   });
 
+  it("FR: an unaccented 'des' is a minimum only when the amount is followed by what makes it one", () => {
+    // "des 10€ de remise" is "some 10 € off", not "from 10 €".
+    const [off] = extractCodes("Profitez des 10€ de remise avec le code promo BIENVENUE10.", fr);
+    expect(off).toMatchObject({ code: "BIENVENUE10", discount: "10 €" });
+    expect(off).not.toHaveProperty("minSpend");
+    const [min] = extractCodes("Profitez de 10% de réduction avec le code promo RENTREE10 des 50€ d'achat.", fr);
+    expect(min).toMatchObject({ code: "RENTREE10", discount: "10%", minSpend: "50 €" });
+  });
+
   it("EN (US): 'use code', minimum after the discount, mm/dd expiry", () => {
     const [m] = extractCodes("Use code SAVE20 for 20% off orders over $50. Expires 10/31/2026.", { lang: "en", region: "us", now: NOW });
     expect(m).toMatchObject({ code: "SAVE20", strength: "strong", discount: "20%", minSpend: "$50", expires: "2026-10-31" });

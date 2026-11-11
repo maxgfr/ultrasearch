@@ -17,21 +17,12 @@ import { searchViaFirecrawl } from "../engine.js";
 
 // Re-exported so the rest of the tree keeps its existing import path.
 export {
-  FIRECRAWL_DEFAULT_BASE,
   firecrawlBase,
   firecrawlIsExplicit,
-  looksLikeFirecrawl,
   probeFirecrawl,
-  resetFirecrawlProbeCache,
-  apiPrefix,
   mapScrapeResponse,
   mapSearchResponse,
   scrapeViaFirecrawl,
-  searchViaFirecrawl,
-  type FirecrawlOptions,
-  type FirecrawlScrape,
-  type FirecrawlHit,
-  type ScrapeAttempt,
 } from "../engine.js";
 
 export const firecrawlBackend: Backend = async (ctx): Promise<BackendResult> => {

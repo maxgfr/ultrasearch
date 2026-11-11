@@ -84,7 +84,8 @@ const ABSTRACT_BACKENDS = new Set<string>(["crossref", "europepmc", "semanticsch
 import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from "./providers/ncbi.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
-import { writeDossier } from "./dossier.js";
+import { RENUMBERS, reportsOverwritten, staleReportNote, writeDossier } from "./dossier.js";
+import { isNoWrite } from "./no-write.js";
 import { describeServices } from "./services.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
@@ -401,6 +402,8 @@ export function ignoredByMaxProfile(options: GatherOptions): string[] {
   if (resolveSearchProfile(options) !== "max") return [];
   const out: string[] = [];
   if (options.webEngine !== "auto") out.push("--web-engine");
+  // A lower cap somebody typed is raised like the default is: say so.
+  if (options.perSourceAsked !== undefined && options.perSourceAsked < MAX_PROFILE_KNOBS.perSource) out.push("--per-source");
   return out;
 }
 
@@ -459,6 +462,10 @@ export function hostList(typed: string[]): string[] {
 // the tiered reports afterward.
 export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const t0 = Date.now();
+  // Before a single request: a gather into a directory that holds a report
+  // would renumber the sources under it, and learning that after a 15-minute
+  // deep run is learning it too late. A default directory is new by construction.
+  const staleReports = options.out && !isNoWrite() ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
   const profile = resolveSearchProfile(options);
@@ -603,7 +610,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const readNcbi = (doc: NcbiDocument): Promise<NcbiRead> => {
     let p = ncbiCache.get(doc.textUrl);
     if (!p) {
-      p = readNcbiDocument(doc, { cache: !!options.cache });
+      p = readNcbiDocument(doc);
       ncbiCache.set(doc.textUrl, p);
     }
     return p;
@@ -1133,6 +1140,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(browser !== "off" || extractorUse.has("browser") ? { browser: { mode: browser, pages: extractorUse.get("browser") ?? 0 } } : {}),
   };
   const notes = [
+    ...(staleReports.length ? [staleReportNote(staleReports)] : []),
     ...results.flatMap((res) => res.notes),
     // Deduped: every per-page hydrate note names its URL and so is unique, but
     // the instance-level ones (an explicitly-configured Firecrawl that is down)
@@ -1179,7 +1187,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
       ? [
           `--search max: every lane at its ceiling (pages ${options.pages}, breadth ${options.webBreadth}, ${options.rounds} round(s), ${options.perSource} per backend, Firecrawl /search in discovery).`,
           ...(ignoredByMaxProfile(options).length
-            ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine, not one.`]
+            ? [`--search max supersedes ${ignoredByMaxProfile(options).join(" / ")}: max means every engine and every recall knob at its ceiling.`]
             : []),
           // Do NOT guess why. A running SearXNG whose upstreams are throttling
           // (brave 429, duckduckgo CAPTCHA) contributes nothing and reports

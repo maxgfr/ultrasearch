@@ -1,5 +1,6 @@
 import type { Backend, BackendResult, RawSource, SourceMeta } from "../types.js";
 import { httpGet, decodeEntities, contactUa } from "./fetch.js";
+import { sinceDate } from "../util.js";
 import { rankedKeywords } from "../engine.js";
 
 function tag(block: string, name: string): string {
@@ -118,8 +119,11 @@ export function arxivQueries(question: string): string[] {
 // arXiv id / authors / year metadata for the BibTeX export.
 export const arxivBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
+  // --since: a submission-date range, ANDed onto every query the ladder tries.
+  const since = sinceDate(ctx.options.since);
+  const window = since ? ` AND submittedDate:[${since.replace(/-/g, "")}0000 TO ${new Date().toISOString().slice(0, 10).replace(/-/g, "")}2359]` : "";
   const get = (query: string) =>
-    httpGet(`https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}&start=0&max_results=${n}`, {
+    httpGet(`https://export.arxiv.org/api/query?search_query=${encodeURIComponent(window ? `(${query})${window}` : query)}&start=0&max_results=${n}`, {
       accept: "application/atom+xml",
       timeoutMs: 12000,
       userAgent: contactUa(),

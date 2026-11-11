@@ -205,11 +205,7 @@ export async function addSources(
       // A hit's own citeUrl is `fetch --cite-url` for that hit: the text comes
       // from `url`, the citation is the page. Without one, the provider decides.
       const p = await prepareSource(stateOf, url, { ...opts, title, ...(citeUrl ? { citeUrl } : {}), rescues });
-      const rec = arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? "");
-      if (p.ok && rec && !p.raw.meta?.arxivId) {
-        p.raw.title = rec.title;
-        p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
-      }
+      if (p.ok) withArxivRecord(p, arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? ""));
       let r: EnrichResult;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -229,6 +225,15 @@ export async function addSources(
     if (state && committed > 0) flushIndex(dir, state);
   }
   return tally(results);
+}
+
+// Fold an arXiv record into a source about to be committed: its own title
+// (unless the caller named one) and its bibliographic fields. A source that
+// already carries an arXiv id came from the arXiv backend and has them.
+function withArxivRecord(p: Extract<PrepareResult, { ok: true }>, rec: ArxivRecord | undefined, title?: string): void {
+  if (!rec || p.raw.meta?.arxivId) return;
+  if (!title) p.raw.title = rec.title;
+  p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
 }
 
 function tally(results: IngestOutcome[]): IngestResult {
@@ -368,6 +373,12 @@ export async function addSource(
   const state = loadState(dir);
   const p = await prepareSource(() => state, url, opts);
   if (!p.ok) return p.result;
+  // An arXiv paper gets its record (title, authors, year, DOI) as it does in a
+  // batch ingest — without it the source has no authors or year and is left
+  // out of refs.bib. Asked only once the page is known to be new to the
+  // dossier: one arXiv API call, and none for a duplicate.
+  const arxivId = arxivIdFromUrl(opts.citeUrl ?? url);
+  if (arxivId && !p.raw.meta?.arxivId) withArxivRecord(p, (await readArxivRecords([arxivId])).records.get(arxivId.toLowerCase()), opts.title);
   const r = commit(dir, state, p);
   flushIndex(dir, state);
   return r;
@@ -532,7 +543,7 @@ async function readSource(
   // which is how 40 efetch URLs used to come out of `ingest` as 40 cookie walls.
   let ncbiMiss: string | undefined;
   if (ncbi) {
-    const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
+    const got = await readNcbiDocument(ncbi);
     if (got.ok) {
       const backend: BackendKind = opts.backend ?? "host";
       const raw: RawSource = {

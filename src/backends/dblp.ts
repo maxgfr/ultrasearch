@@ -2,6 +2,7 @@ import type { Backend, BackendResult, RawSource } from "../types.js";
 import { httpJson, cleanInline, htmlTitle, htmlToText } from "./fetch.js";
 import { wallPattern } from "../walls.js";
 import { apiFailure } from "./backoff.js";
+import { sinceDate } from "../util.js";
 
 // Normalize dblp's `authors.author`, which is a single object for a one-author
 // paper and an array otherwise, into a list of author names.
@@ -55,7 +56,20 @@ export const dblpBackend: Backend = async (ctx): Promise<BackendResult> => {
     // three different things to act on, and "failed or empty (status 200)" was none.
     return { backend: "dblp", items: [], notes: [apiFailure("dblp search", { status: r.status, rateLimited: false, attempts: 1 }, ctx.question)] };
   }
-  const items: RawSource[] = hits.slice(0, n).map((h: any, i: number): RawSource => {
+  // --since: dblp's search has no date filter worth trusting, so a record is
+  // kept when its year is not before the --since year. Its year is all dblp
+  // gives; a record without one is kept rather than guessed about.
+  const sinceYear = sinceDate(ctx.options.since)?.slice(0, 4);
+  const inWindow = (h: any): boolean => !sinceYear || !(Number(h?.info?.year) > 0) || Number(h.info.year) >= Number(sinceYear);
+  const recent = hits.filter(inWindow);
+  if (!recent.length) {
+    return {
+      backend: "dblp",
+      items: [],
+      notes: [`dblp search returned ${hits.length} publication(s) for "${ctx.question}", none from ${sinceYear} on (--since).`],
+    };
+  }
+  const items: RawSource[] = recent.slice(0, n).map((h: any, i: number): RawSource => {
     const info = h.info ?? {};
     const title = cleanInline(String(info.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
     const authors = authorNames(info.authors);

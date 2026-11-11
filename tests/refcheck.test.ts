@@ -170,6 +170,76 @@ describe("refcheck — parsing a bibliography", () => {
     expect(parseReferences(doc)).toHaveLength(4);
   });
 
+  it("keeps a wrapped line that starts with a number inside its reference", () => {
+    // The date line reads like "reference 2020".
+    const list = [
+      "1. Smith J, Doe A. A trial of something. N Engl J Med.",
+      "2020 Mar;382(5):100-110.",
+      "2. Roe B. Another trial entirely. Lancet. 2019;393:10-20.",
+      "3. Poe C. A third trial altogether. BMJ. 2018;360:k1.",
+    ].join("\n");
+    expect(splitEntries(list).map((e) => e.n)).toEqual([1, 2, 3]);
+    const [first] = parseReferences(list);
+    expect(first).toMatchObject({ n: 1, year: "2020", volume: "382", issue: "5", pages: "100-110" });
+    // Two wrapped dates in a row, in a list numbered without punctuation.
+    const bare = splitEntries(
+      [
+        "1 Smith J. First title here. J A.",
+        "2020 Mar;1(1):1-2.",
+        "2 Doe J. Second title here. J B.",
+        "2021 Apr;2(2):3-4.",
+        "3 Roe B. Third title here. J C. 2022;3:3.",
+      ].join("\n"),
+    );
+    expect(bare.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(bare[1]!.raw).toContain("2021 Apr;2(2):3-4.");
+    // A year written like a list marker, as a book reference wraps.
+    const book = splitEntries(
+      [
+        "1. Smith J. First title here. J A. 2020;1:1.",
+        "2. Doe J. Second title here. J B. 2021;2:2.",
+        "3. Brown C. A book on the subject. London: BMJ Books;",
+        "2019. p. 100-110. Available from: https://example.test/book",
+        "4. Roe B. Fourth title here. J C. 2022;3:3.",
+      ].join("\n"),
+    );
+    expect(book.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(book[2]!.raw).toContain("2019. p. 100-110.");
+  });
+
+  it("keeps every reference of a list numbered with gaps, sparsely, from 12, or twice over", () => {
+    const list = (ns: number[], bare = false) =>
+      splitEntries(
+        ns.map((n, i) => `${bare ? n : `${n}.`} ${["Smith", "Doe", "Roe", "Poe", "Moe", "Lee"][i]} J. Title number ${i} here. J A. 2020;1:${i}.`).join("\n"),
+      ).map((e) => e.n);
+    for (const ns of [
+      [1, 2, 3, 5],
+      [3, 7, 12, 15],
+      [2, 4, 6, 8],
+      [1, 2, 5, 9, 10],
+      [1, 2, 3, 1, 2],
+      [12, 13],
+    ]) {
+      expect(list(ns), ns.join(" ")).toEqual(ns);
+    }
+    // Bare numbers with gaps still open references, and so does a bare list
+    // starting over at 1; only a leap to a year does not.
+    expect(list([1, 2, 5, 9], true)).toEqual([1, 2, 5, 9]);
+    expect(list([1, 2, 3, 1, 2], true)).toEqual([1, 2, 3, 1, 2]);
+    // …but a wrapped line that merely starts with "1 " stays in its reference.
+    const wrapped = splitEntries(
+      [
+        "1 Smith J. First title here. J A. 2020;1:1.",
+        "2 Doe J. Second title here. J B. 2021;2:2.",
+        "3 Brown C. A book on the subject. 2nd ed.",
+        "1 New York: Springer; 2019. p. 10-20.",
+        "4 Roe B. Fourth title here. J C. 2022;3:3.",
+      ].join("\n"),
+    );
+    expect(wrapped.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(wrapped[2]!.raw).toContain("New York: Springer; 2019.");
+  });
+
   it("parses BibTeX, braces, 'and others' and page ranges", () => {
     const bib = `@comment{x}
 @article{gurney2022,
@@ -212,10 +282,11 @@ describe("refcheck — reading the citing text", () => {
     expect(a.uncited).toEqual([4]);
     expect(a.unknown).toEqual([5]);
     expect(a.firstCitationOrder).toEqual([2, 1, 5, 3]);
-    expect(a.outOfOrder).toEqual([
-      { n: 1, after: 2 },
-      { n: 3, after: 5 },
-    ]);
+    // 5 is not in the list: it is reported as unknown, and sets no bar for 3.
+    expect(a.outOfOrder).toEqual([{ n: 1, after: 2 }]);
+    const cascade = analyseCiting("First [1]. A stray call [99]. Then [2] and [3].", [1, 2, 3]);
+    expect(cascade.unknown).toEqual([99]);
+    expect(cascade.outOfOrder).toEqual([]);
     const first = a.calls[0]!;
     expect(first.numerals).toEqual(["2.8"]);
     // "séries de 78 [21], 72 [22]": each figure goes to its own call.
@@ -354,7 +425,7 @@ describe("refcheck — the whole run", () => {
         doisBroken: 1,
         uncited: 1,
         unknownCalls: 1,
-        outOfOrder: 2,
+        outOfOrder: 1,
       });
       expect(r.citingFile).toBe(doc);
       const byN = Object.fromEntries(r.references.map((e) => [e.n, e]));
@@ -403,14 +474,36 @@ describe("refcheck — the whole run", () => {
       // Re-running over a report already written is refused — the report would
       // be checked against sources it was not written from — unless forced,
       // and then the report is kept and flagged. Into another dossier: never.
-      await expect(runRefcheck({ refs: doc, out, offline: true })).rejects.toThrow(
-        /already holds REPORT\.md from an earlier run — pass another --out, or --force/,
-      );
+      await expect(runRefcheck({ refs: doc, out, offline: true })).rejects.toThrow(/already holds REPORT\.md from an earlier run, .* or --force/);
       const forced = await runRefcheck({ refs: doc, out, offline: true, force: true });
       expect(forced.notes.join("\n")).toMatch(/REPORT\.md predate this run/);
       expect(existsSync(join(out, "REPORT.md"))).toBe(true);
       writeFileSync(join(dir, "sources.json"), "[]");
       await expect(runRefcheck({ refs: doc, out: dir, offline: true })).rejects.toThrow(/already holds a dossier/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names a number the list gives twice, and checks only the first — never two S<n>", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-refcheck-dup-"));
+    try {
+      const doc = join(dir, "refs.md");
+      writeFileSync(
+        doc,
+        [
+          "## References",
+          "",
+          "1. Smith J. First title here. J A. 2020;1:1.",
+          "2. Doe J. Second title here. J B. 2021;2:2.",
+          "1. Roe B. A second section starting over. J C. 2022;3:3.",
+        ].join("\n"),
+      );
+      const r = await runRefcheck({ refs: doc, out: join(dir, "out"), offline: true });
+      expect(r.references.map((e) => e.n)).toEqual([1, 2]);
+      expect(r.notes.join("\n")).toContain(
+        'Reference number 1 appears twice in the list: only the first is checked. Unchecked repeat: "Roe B. A second section',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

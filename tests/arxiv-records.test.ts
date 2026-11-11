@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { arxivQueries, parseArxivEntry, repairCollaboration } from "../src/backends/arxiv.js";
 import { runGather } from "../src/gather.js";
+import { addSource } from "../src/enrich.js";
 import type { GatherOptions, Source } from "../src/types.js";
 import { installFetchMock } from "./fetchmock.js";
 
@@ -93,6 +94,79 @@ describe("arXiv records", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain("id_list=2603.21376");
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("gives a single-URL fetch the same record, and keeps a title the caller named", async () => {
+    const feed = `<feed><entry>
+      <id>http://arxiv.org/abs/2603.21376v2</id>
+      <title>A transformer architecture alteration to incentivise externalised reasoning</title>
+      <summary>We propose an early-exit mechanism at intermediate layers, trained with reinforcement learning, and measure it.</summary>
+      <published>2026-03-22T19:28:21Z</published>
+      <author><name>Elizabeth Pavlova</name></author><author><name>Puria Radmard</name></author>
+    </entry></feed>`;
+    const asked: string[] = [];
+    installFetchMock((url) => {
+      if (url.includes("export.arxiv.org")) {
+        asked.push(url);
+        return { body: feed, contentType: "application/atom+xml" };
+      }
+      // The page itself reads fine; what it lacks is the record's fields.
+      if (url.includes("arxiv.org/"))
+        return {
+          body: `<article><h1>Early exits</h1><p>${"We propose an early-exit mechanism at intermediate layers of a transformer. ".repeat(6)}</p></article>`,
+        };
+      return undefined;
+    });
+    const dir = mkdtempSync(join(tmpdir(), "us-arxiv-one-"));
+    try {
+      await runGather({
+        question: "early exit transformer reinforcement learning",
+        mode: "research",
+        depth: "standard",
+        perSource: 6,
+        lang: "en",
+        webEngine: "auto",
+        excludeDomains: [],
+        json: false,
+        backends: ["fixture"],
+        out: dir,
+      });
+      asked.length = 0;
+      const r = await addSource(dir, "https://arxiv.org/abs/2603.21376");
+      expect(r.added, r.note).toBe(true);
+      const s = (JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[]).find((x) => x.id === r.id)!;
+      expect(s.title).toBe("A transformer architecture alteration to incentivise externalised reasoning");
+      expect(s.meta).toMatchObject({ arxivId: "2603.21376", authors: ["Elizabeth Pavlova", "Puria Radmard"] });
+      expect(readFileSync(join(dir, "refs.bib"), "utf8")).toContain("Elizabeth Pavlova and Puria Radmard");
+      // A duplicate is answered from the dossier: no second lookup.
+      const again = await addSource(dir, "https://arxiv.org/abs/2603.21376v2");
+      expect(again).toMatchObject({ id: r.id, added: false });
+      expect(asked).toHaveLength(1);
+      // A title the caller named is kept over the record's.
+      const other = mkdtempSync(join(tmpdir(), "us-arxiv-two-"));
+      try {
+        await runGather({
+          question: "q",
+          mode: "research",
+          depth: "standard",
+          perSource: 6,
+          lang: "en",
+          webEngine: "auto",
+          excludeDomains: [],
+          json: false,
+          backends: ["fixture"],
+          out: other,
+        });
+        const named = await addSource(other, "https://arxiv.org/abs/2603.21376", { title: "My own title" });
+        const t = (JSON.parse(readFileSync(join(other, "sources.json"), "utf8")) as Source[]).find((x) => x.id === named.id)!;
+        expect(t.title).toBe("My own title");
+        expect(t.meta?.authors).toEqual(["Elizabeth Pavlova", "Puria Radmard"]);
+      } finally {
+        rmSync(other, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -37,6 +37,10 @@ the doc↔CLI drift gate).
 3. **Tests stay offline.** Backends must go through the single HTTP layer in
    `src/backends/fetch.ts`; tests stub `globalThis.fetch` with fixtures. Never
    hit the live network in `vitest run`.
+   Dependency bumps come from dependabot. A **vitest major** gets a pull request
+   of its own, never folded into another: the coverage thresholds in
+   `vitest.config.ts` are tuned to the current major's instrumentation, and a
+   new one moves the numbers the ratchet compares.
 4. **The Node-18 floor is real.** The bundle declares `engines.node >=18`. Don't
    use a Node 20+ runtime API in `src/` — CI runs the committed bundle on Node 18.
 

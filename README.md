@@ -434,6 +434,12 @@ Two things worth knowing:
   pass `--allow-remote`. This server fetches arbitrary URLs; an exposed port is
   a fetch-anything primitive for whoever finds it. Browser `Origin`s are checked
   for the same reason.
+- **Paths are the client's to choose, unless you fence them.** Like the CLI,
+  the tools accept any absolute `run`, `out`, `master`, `run_root`, `runs`,
+  `refs` and `citing`. `ultrasearch mcp --root <dir>` (or
+  `ULTRASEARCH_MCP_ROOT`) refuses every one that resolves outside `<dir>`,
+  symlinks followed, and creates the default dossiers inside it — for a client
+  that should not read or write the rest of the disk.
 
 ## Security & trust boundary
 

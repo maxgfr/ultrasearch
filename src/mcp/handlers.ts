@@ -3,7 +3,8 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { runBackends } from "../backends/registry.js";
 import { runBrainstorm } from "../brainstorm.js";
 import { runCheck } from "../check.js";
-import { buildSource } from "../dossier.js";
+import { buildSource, RENUMBERS, reportsOverwritten } from "../dossier.js";
+import { withDossierLock } from "../dossier-lock.js";
 import { addSource, addSources } from "../enrich.js";
 import { parseWebResults } from "../backends/websearch.js";
 import { runGather } from "../gather.js";
@@ -38,6 +39,8 @@ import { capNotice, runVerifyCounted } from "../verify.js";
 import { runRefcheck } from "../refcheck/index.js";
 import { setDossierTemplate } from "../templates.js";
 import { withRunLock } from "../run-lock.js";
+import { TOOL_META } from "./tools.js";
+import { confineArgs } from "./confine.js";
 import { resolveBrowserRung, withBrowserClosed } from "../browser.js";
 import { isNoWrite, takeArtifacts } from "../no-write.js";
 
@@ -49,6 +52,8 @@ import { isNoWrite, takeArtifacts } from "../no-write.js";
 export interface HandlerDefaults {
   defaultRun?: string;
   allowWrite?: boolean;
+  /** Confine every path argument to this directory (`mcp --root`, see confine.ts). */
+  root?: string;
 }
 
 // Thrown for anything the caller can fix by calling again differently. The
@@ -181,6 +186,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     queries: strArray(args.queries),
     maxSources: positive(args.max_sources, "max_sources"),
     perSource: positive(args.per_source, "per_source") ?? caps.perSource,
+    ...(positive(args.per_source, "per_source") ? { perSourceAsked: positive(args.per_source, "per_source") } : {}),
     lang: str(args.lang) ?? "en",
     region: str(args.region),
     // Pilotable from MCP, at last: these were hardcoded, so a client could not
@@ -196,6 +202,7 @@ function gatherOptions(args: Record<string, unknown>): GatherOptions {
     browser: browserArg(args),
     ...(templateArg(args) ? { template: templateArg(args) } : {}),
     out,
+    ...(bool(args.force) ? { force: true } : {}),
     json: true,
   };
 }
@@ -216,7 +223,8 @@ function templateArg(args: Record<string, unknown>): TemplateName | undefined {
 const PAGE_TOOLS = new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
 
 export async function callTool(name: string, args: Record<string, unknown>, defaults: HandlerDefaults = {}): Promise<ToolOutcome> {
-  const run = () => dispatch(name, args, defaults);
+  const confined = confineArgs(name, args, defaults.root, defaults.defaultRun);
+  const run = () => dispatch(name, confined, defaults);
   const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
   return outcome(name, result);
 }
@@ -252,22 +260,26 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
     case "ultrasearch_plan":
       return handlePlan(args);
 
-    // A gather creates its dossier, so there is nothing yet to lock against.
+    // A gather creates its dossier, so by default there is nothing yet to lock
+    // against. Pointed at a directory (`out`, `master`), it is a writer of that
+    // directory like any other.
     case "ultrasearch_gather":
-      return await handleGather(args);
+      return await writing(str(args.out), name, () => handleGather(args));
     case "ultrasearch_brainstorm":
       return await handleBrainstorm(args);
     case "ultrasearch_merge":
-      return handleMerge(args);
-    // Creates its own output dir, like gather.
+      return await writing(str(args.master), name, () => handleMerge(args));
     case "ultrasearch_refcheck":
-      return await handleRefcheck(args);
+      return await writing(str(args.out), name, () => handleRefcheck(args));
 
     // Everything below mutates or reads ONE existing dossier, and is
     // serialized against other calls on the same one.
     default: {
       const run = requiredRun(args, defaults);
-      return await withRunLock(run, async () => {
+      // A call that only reads — check, read, a dry-run drop, a relink list —
+      // is serialized against this server's own calls and no further: it must
+      // not queue behind another process's long write.
+      return await (writesDossier(name, args) ? writing : reading)(run, name, async () => {
         switch (name) {
           case "ultrasearch_fetch":
             return await handleFetch(args, run);
@@ -291,6 +303,50 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
         }
       });
     }
+  }
+}
+
+// One call at a time per dossier inside this server (withRunLock), and one
+// writer at a time per dossier across processes (withDossierLock) — a CLI
+// `fetch` running beside this server allocates ids from the same sources.json.
+//
+// The cross-process lock is taken FIRST, outside the in-process chain: a call
+// waiting for another process must not hold the chain, or every read of the
+// same dossier queued behind it would wait for that other process too.
+// A relative path is left to the handler, which refuses it — no lock file is
+// ever created relative to the server's working directory.
+async function writing<T>(dir: string | undefined, name: string, fn: () => Promise<T> | T): Promise<T> {
+  if (!dir || !isAbsolute(dir)) return fn();
+  try {
+    return await withDossierLock(dir, name, () => withRunLock(dir, async () => fn()));
+  } catch (e) {
+    // Another writer that never let go is the caller's to act on, not a crash.
+    if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message)) throw new ToolError(e.message);
+    throw e;
+  }
+}
+
+/** Whether this call changes the dossier — not just whether the tool can. */
+function writesDossier(name: string, args: Record<string, unknown>): boolean {
+  if (!TOOL_META[name]?.write) return false;
+  if (name === "ultrasearch_drop" && bool(args.dry_run)) return false;
+  if (name === "ultrasearch_relink" && bool(args.list)) return false;
+  return true;
+}
+
+function reading<T>(dir: string, _name: string, fn: () => Promise<T> | T): Promise<T> {
+  return withRunLock(dir, async () => fn());
+}
+
+// `gather` and `merge` number their sources from S1: pointed at a directory that
+// holds a report, they are refused unless forced. Raised as a tool failure —
+// the caller picks another directory, or passes `force`.
+function refuseOverReport(dir: string | undefined, force: boolean, why: string): void {
+  if (!dir || isNoWrite()) return;
+  try {
+    reportsOverwritten(dir, force, why);
+  } catch (e) {
+    throw new ToolError((e as Error).message.replace("--force", "`force: true`"));
   }
 }
 
@@ -343,6 +399,7 @@ async function handleSearch(args: Record<string, unknown>): Promise<unknown> {
 
 async function handleGather(args: Record<string, unknown>): Promise<unknown> {
   const options = gatherOptions(args);
+  refuseOverReport(options.out, !!options.force, RENUMBERS("gather"));
   const res = await runGather(options);
   const head = {
     question: options.question,
@@ -420,7 +477,8 @@ function handleMerge(args: Record<string, unknown>): unknown {
   const master = str(args.master);
   if (master !== undefined && !isAbsolute(master)) throw new ToolError("`master` must be an absolute path.");
 
-  const res = runMerge({ runs, master, question: str(args.question), mode: str(args.mode) as ModeName | undefined });
+  refuseOverReport(master, bool(args.force), RENUMBERS("merge"));
+  const res = runMerge({ runs, master, question: str(args.question), mode: str(args.mode) as ModeName | undefined, force: bool(args.force) });
   return {
     run: res.dir,
     dossier_md: join(res.dir, "DOSSIER.md"),

@@ -1,14 +1,18 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { decodeEntities, cleanInline } from "./fetch.js";
 import { apiFailure, apiGet } from "./backoff.js";
+import { sinceDate } from "../util.js";
 
 // Europe PMC via its keyless REST API — biomedical & life-sciences literature,
 // the single largest corpus the physics/CS-leaning scholarly backends miss.
 // resultType=core returns the abstract inline, so it's a content backend.
 export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url =
-    `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}` + `&format=json&resultType=core&pageSize=${n}`;
+  // --since: a first-publication date range in the query itself.
+  const since = sinceDate(ctx.options.since);
+  // The far end is open: an issue dated ahead of today is still recent.
+  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO 3000-12-31]` : ctx.question;
+  const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}` + `&format=json&resultType=core&pageSize=${n}`;
   const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {

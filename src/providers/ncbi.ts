@@ -1,7 +1,7 @@
 import { decodeEntities, httpGet } from "../backends/fetch.js";
 import { pubmedAbstractUrl } from "../providers.js";
 import { apiGet, paceHost, withBackoff } from "../backends/backoff.js";
-import { looksLikeWall, MIN_USEFUL_CHARS, readPastCachedWall, usefulChars, wallPattern } from "../walls.js";
+import { looksLikeWall, MIN_USEFUL_CHARS, usefulChars, wallPattern } from "../walls.js";
 
 // PubMed and PMC, read where their text actually is.
 //
@@ -98,14 +98,21 @@ export function europePmcRecordUrl(pmcid: string): string {
  * short record is telling the truth about a record with no abstract, and
  * refusing it ("retry later") sent the reader to the PubMed page — the wall.
  */
-export async function readNcbiDocument(doc: NcbiDocument, opts: { cache?: boolean } = {}): Promise<NcbiRead> {
+export async function readNcbiDocument(doc: NcbiDocument): Promise<NcbiRead> {
   if (doc.kind === "pubmed") {
     // Paced (3 requests/s) and backed off: a 429 from E-utilities is a reason
     // to wait, never a verdict on the record.
+    //
+    // One retry loop, and every attempt in it paced. This used to go through
+    // the page reader, whose own retry (and second User-Agent attempt) ran
+    // inside each of these attempts, unpaced and impossible to switch off from
+    // here: one PMID could cost six E-utilities calls, three of them in a
+    // burst. It is read live, as Europe PMC's full text below always was — an
+    // abstract is a few kilobytes from an API that asks only to be paced.
     const out = await withBackoff(async () => {
       await paceHost(doc.textUrl);
-      const r = await readPastCachedWall(doc.textUrl, {}, !!opts.cache);
-      return { ...r, status: r.status ?? 0 };
+      const r = await httpGet(doc.textUrl, { accept: "text/plain, */*;q=0.1", retries: 0 });
+      return { ...r, text: r.ok ? r.body : "" };
     });
     const res = out.result;
     if (out.rateLimited) {

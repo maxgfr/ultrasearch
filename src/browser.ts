@@ -14,7 +14,7 @@
 // What the rung never does: accept a consent wall for the user (the page is
 // read as it renders, banner or not), or solve a challenge (a CAPTCHA or an
 // anti-bot check is reported and left to the human).
-import { browserHome, closeBrowserReads, detectBrowserBinary, type BrowserBinary } from "./engine.js";
+import { browserHome, canShowBrowserWindow, closeBrowserReads, detectBrowserBinary, type BrowserBinary } from "./engine.js";
 import { isNoWrite } from "./no-write.js";
 import type { BrowserMode } from "./types.js";
 
@@ -43,11 +43,13 @@ export interface ResolveBrowserOptions {
 const ENV = "ULTRASEARCH_BROWSER_FETCH";
 const NO_BINARY = "no Chrome, Brave, Chromium or Edge found (install one, or point ULTRASEARCH_BROWSER_BIN at it)";
 
-/** Whether this session can show a browser window: macOS and Windows always, Linux only under X11 or Wayland. */
-export function canShowWindow(platform: NodeJS.Platform, env: Record<string, string | undefined>): boolean {
-  if (platform === "darwin" || platform === "win32") return true;
-  return !!(env.DISPLAY || env.WAYLAND_DISPLAY);
-}
+/**
+ * Whether this session can show a browser window. The engine's answer, so the
+ * rung and the human handoff never disagree: macOS and Windows always, Linux
+ * only under X11 or Wayland — and never under CI, where a window nobody looks
+ * at only opens a browser for nothing.
+ */
+export const canShowWindow: (platform: NodeJS.Platform, env: Record<string, string | undefined>) => boolean = canShowBrowserWindow;
 
 /**
  * Decide the rung for one command. Never throws.
@@ -92,7 +94,7 @@ export function resolveBrowserRung(opts: ResolveBrowserOptions = {}): BrowserRun
   const { binary, missing } = detect();
   if (!binary) return { mode: "off", source: "default", reason: missing };
   if (!canShowWindow(platform, env)) {
-    return { mode: "off", source: "default", binary, reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" };
+    return { mode: "off", source: "default", binary, reason: "no window can be shown here (a CI run, or Linux without DISPLAY or WAYLAND_DISPLAY)" };
   }
   return { mode: "fallback", source: "default", binary };
 }

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { BackendKind, Manifest, RawSource, Source } from "./types.js";
 import { UNDER_COVERED_MIN, canonicalBackend } from "./types.js";
@@ -206,6 +206,55 @@ export function writeDossierIndex(dir: string, sources: Source[], manifest: Mani
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
 
+/** The two tiers a writer leaves in a dossier — what cites its [S#] ids. */
+export const REPORT_FILES = ["REPORT.md", "SUMMARY.md"] as const;
+
+/**
+ * The report files `dir` already holds — and a refusal to renumber the sources
+ * under them unless asked to.
+ *
+ * `gather`, `merge` and `refcheck` number their sources from S1. Run into a
+ * directory that holds a report, they leave it citing `[S1]` for a page that is
+ * no longer S1, and `check` then validates it against sources it was never
+ * written from. So that takes `--force`; the report is kept either way, and the
+ * caller says it predates the run (`staleReportNote`).
+ */
+export function reportsOverwritten(dir: string, force: boolean | undefined, why: string, files: readonly string[] = REPORT_FILES): string[] {
+  const stale = files.filter((f) => existsSync(join(dir, f)));
+  if (stale.length && !force) {
+    throw new Error(
+      `${dir} already holds ${stale.join(", ")} from an earlier run, and ${why} — pass another directory, ` +
+        `or --force to write there anyway (the report is kept, and must be re-read and re-checked against the new sources)`,
+    );
+  }
+  return stale;
+}
+
+/** Why `gather` and `merge` are refused over a report: both number from S1. */
+export const RENUMBERS = (command: string): string => `a new ${command} numbers its sources from S1 again, so the [S#] ids there would cite other pages`;
+
+/** The retrieval note for a run that was forced over a report. */
+export function staleReportNote(stale: string[]): string {
+  return `${stale.join(", ")} predate${stale.length > 1 ? "" : "s"} this run: the [S#] ids there cite the previous sources. Rewrite the report against this dossier, then render and check again.`;
+}
+
+// Extracts a previous run left behind: sources/S7.md survives a re-gather that
+// kept five sources, and reads as evidence to anyone browsing the directory.
+// Only files this tool names (S<n>.md) are touched.
+function removeOrphanExtracts(dir: string, sources: Source[]): void {
+  if (isNoWrite()) return;
+  const kept = new Set(sources.map((s) => s.extract));
+  let names: string[];
+  try {
+    names = readdirSync(join(dir, "sources"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (/^S\d+\.md$/.test(name) && !kept.has(`sources/${name}`)) unlinkSync(join(dir, "sources", name));
+  }
+}
+
 // Persist a run's dossier: sources/S#.md (cleaned extracts) plus the three index
 // files. The tiered reports (SUMMARY/REPORT.md) are written by the model
 // afterward, then `render` + `check` run.
@@ -222,7 +271,12 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
   });
 
   const m: Manifest = { ...manifest, sourceCount: sources.length };
-  return { dir, sources, paths: writeDossierIndex(dir, sources, m, template) };
+  const paths = writeDossierIndex(dir, sources, m, template);
+  // After the index, so a crash in between leaves extra files, never missing
+  // ones. Not after a run that found nothing: a re-gather whose every backend
+  // failed must not also delete what the previous run had read.
+  if (sources.length) removeOrphanExtracts(dir, sources);
+  return { dir, sources, paths };
 }
 
 // The model-facing dossier digest: the run's facts, the template to fill, the

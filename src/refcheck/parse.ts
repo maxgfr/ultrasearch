@@ -62,17 +62,51 @@ export function splitDocument(text: string): { body: string; list: string; hadHe
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
 
+/**
+ * Whether a numbered line opens a reference of its own.
+ *
+ * Never a leap to a year: that is a wrapped date ("2020 Mar;382(5):…",
+ * "2019. p. 100-110."), whatever its punctuation. Otherwise a number written AS
+ * a list marker — "[4]", "4.", "4)" — always does: a list with gaps, sparse
+ * numbering, one that starts at 12 or restarts in a second section keeps every
+ * entry (a repeated number is reported by runRefcheck, never folded into the
+ * entry above it). A BARE number followed by a capitalised word ("4 Smith J…")
+ * is the weak form, and opens a reference only when it moves the list forward
+ * or starts it over at 1.
+ */
+function opensReference(n: number, bare: boolean, prev: number | undefined, text: string): boolean {
+  if (prev === undefined) return true;
+  // A leap from a short list to a year is a wrapped date, however it is
+  // written: "2019. p. 100-110." has the shape of a marker too.
+  if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
+  if (!bare) return true;
+  if (n > prev) return true;
+  // A bare "1 …" after the list has gone on is a second section starting over
+  // only when what follows reads as a reference's authors ("1 Roe B. …"); a
+  // wrapped line such as "1 New York: Springer; 2019." stays where it is.
+  return n === 1 && startsWithAuthors(text);
+}
+
+function startsWithAuthors(text: string): boolean {
+  const stop = text.search(/\.\s/);
+  return stop > 0 && parseAuthorList(text.slice(0, stop)) !== undefined;
+}
+
 /** Split a reference list into its entries, numbered as written (or 1..n when the numbering was lost). */
 export function splitEntries(list: string): { n: number; raw: string }[] {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out: { n: number; raw: string }[] = [];
   if (numbered >= 2) {
+    // A wrapped line can start with a number too ("2020 Mar;382(5):100-110."):
+    // read as reference 2020 it took the year and pages of the reference it
+    // belongs to with it. See opensReference.
     for (const line of lines) {
       const t = line.trim();
       if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
-      if (m && (m[4] ?? "").length > 8) out.push({ n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4]!.trim() });
+      const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
+      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== undefined, out.at(-1)?.n, m[4]!)) out.push({ n, raw: m[4]!.trim() });
       else if (out.length) out[out.length - 1]!.raw += ` ${t}`;
     }
     return out;

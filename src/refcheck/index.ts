@@ -23,7 +23,7 @@ import type { Manifest, RawSource, Source } from "../types.js";
 import { VERSION } from "../types.js";
 import { officeToText, runId, slugify } from "../engine.js";
 import { extractPdf } from "../backends/pdf.js";
-import { buildSource, writeDossierIndex, writeSourceExtract } from "../dossier.js";
+import { buildSource, reportsOverwritten, writeDossierIndex, writeSourceExtract } from "../dossier.js";
 import { ensureDir, writeArtifact } from "../no-write.js";
 import { RUN_SLUG } from "../util.js";
 import { templateFor } from "../templates.js";
@@ -169,10 +169,21 @@ function summarise(entries: RefcheckEntry[], citing: CitingAnalysis | undefined)
 /** Run the whole check and write its outputs. */
 export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult> {
   const refsText = await readDocumentText(opts.refs);
-  const refs = parseReferences(refsText);
-  if (!refs.length)
+  const parsed = parseReferences(refsText);
+  if (!parsed.length)
     throw new Error(`no reference found in ${basename(opts.refs)} — expected a numbered list ("1. Author A. Title. Journal. 2020;…") or a .bib file`);
   const notes: string[] = [];
+  // Source S<n> IS reference n, and a citation [n] means one reference: a
+  // number the list gives twice (a second section restarting at 1, a typo)
+  // cannot be both. The first is checked; each repeat is named, never folded
+  // into a neighbour or banked as a second S<n> that `check` would refuse.
+  const seen = new Set<number>();
+  const refs = parsed.filter((r) => !seen.has(r.n) && seen.add(r.n));
+  for (const r of parsed.filter((x) => !refs.includes(x))) {
+    notes.push(
+      `Reference number ${r.n} appears twice in the list: only the first is checked. Unchecked repeat: "${r.raw.slice(0, 120)}${r.raw.length > 120 ? "…" : ""}"`,
+    );
+  }
 
   // The citing text: given, or the body of the reference file itself.
   let citingText: string | undefined;
@@ -205,12 +216,13 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
   // A report written against an earlier run would be `check`ed against this
   // run's sources as if it were about them. Refused unless asked for; kept,
   // and flagged, when it is.
-  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync(join(dir, f)));
-  if (stale.length && !opts.force) {
-    throw new Error(
-      `${dir} already holds ${stale.join(", ")} from an earlier run — pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`,
-    );
-  }
+  // The rendered pages too: they are the same report, and refcheck always refused them.
+  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from", [
+    "REPORT.md",
+    "SUMMARY.md",
+    "index.html",
+    "index.md",
+  ]);
   if (stale.length) notes.push(`${stale.join(", ")} predate this run — re-read them against the new REFCHECK.md, then render and check again.`);
 
   const entries: RefcheckEntry[] = refs.map((ref) => {

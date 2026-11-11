@@ -5,4 +5,4 @@
 // writeArtifact, so read-only operation stays a property of one module rather
 // than a promise each command keeps individually.
 
-export { setNoWrite, isNoWrite, ensureDir, writeArtifact, takeArtifacts, resetNoWrite, type Artifact } from "./engine.js";
+export { setNoWrite, isNoWrite, ensureDir, writeArtifact, takeArtifacts, resetNoWrite } from "./engine.js";

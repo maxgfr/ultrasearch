@@ -109,7 +109,7 @@ describe("readPastCachedWall", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("re-reads live when the cache serves a wall, and overwrites the cached copy", async () => {
+  it("re-reads live when the cache serves a wall", async () => {
     let walled = true;
     const spy = installFetchMock(() =>
       walled
@@ -122,17 +122,25 @@ describe("readPastCachedWall", () => {
     walled = false; // the host stopped throttling
     const second = await readPastCachedWall(url, {}, true);
     expect(second.text).toMatch(/abstract finally came through/);
-    expect(cacheMode().refresh).toBe(false); // the bypass never outlives the read
-    const third = await readPastCachedWall(url, {}, true);
-    expect(third.cached).toBe(true); // the good copy replaced the wall on disk
-    expect(spy).toHaveBeenCalledTimes(2); // the first read and the live re-read — never the third
+    expect(second.cached).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the bypass on until the LAST concurrent read is done", async () => {
-    installFetchMock(() => ({ body: "<p>Enable cookies for example.test and reload this page to continue.</p>", delayMs: 5 }));
-    const urls = ["https://a.test/1", "https://b.test/2", "https://c.test/3"];
-    for (const u of urls) await readPastCachedWall(u, {}, true); // warm the cache with walls
-    await Promise.all(urls.map((u) => readPastCachedWall(u, {}, true)));
+  it("never turns the cache off for the other reads in flight", async () => {
+    // One page whose cached copy is a wall, read live slowly; one good page
+    // cached beside it, read while that is in flight.
+    installFetchMock((url) =>
+      url.includes("walled")
+        ? { body: "<p>Enable cookies for example.test and reload this page to continue.</p>", delayMs: 20 }
+        : { body: `<article><h1>Scleral fixation</h1><p>${ARTICLE.replace(/^# .*\n\n/, "")}</p></article>` },
+    );
+    await readPastCachedWall("https://walled.test/1", {}, true);
+    await readPastCachedWall("https://ok.test/b", {}, true);
+    const live = readPastCachedWall("https://walled.test/1", {}, true);
+    await new Promise((r) => setTimeout(r, 8)); // the live re-read is under way
+    const good = await readPastCachedWall("https://ok.test/b", {}, true);
+    await live;
+    expect(good.cached).toBe(true);
     expect(cacheMode().refresh).toBe(false);
   });
 

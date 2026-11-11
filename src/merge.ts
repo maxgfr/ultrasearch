@@ -1,6 +1,6 @@
 import type { Depth, Manifest, ModeName, Provenance, RawSource, Source } from "./types.js";
 import { ALL_DEPTHS, VERSION } from "./types.js";
-import { readDossier, readSourceText, writeDossier } from "./dossier.js";
+import { readDossier, readSourceText, RENUMBERS, reportsOverwritten, staleReportNote, writeDossier } from "./dossier.js";
 import { fuseSources, defaultRunDir } from "./gather.js";
 import { dedupeNearDuplicates, identityKey, slugify, RUN_SLUG } from "./util.js";
 import { getMode } from "./modes/registry.js";
@@ -10,6 +10,8 @@ export interface MergeOptions {
   master?: string; // output dir (default: per mode + question)
   question?: string; // the original (umbrella) question
   mode?: ModeName;
+  /** Merge into a master that already holds a report (see `reportsOverwritten`). */
+  force?: boolean;
 }
 
 export interface MergeResult {
@@ -47,6 +49,8 @@ function toRawSource(s: Source, text: string): RawSource {
 // never the sub-run ids (which all restart at S1 and would collide).
 export function runMerge(options: MergeOptions): MergeResult {
   if (!options.runs.length) throw new Error("merge needs at least one --runs dossier");
+  // Before anything is read: a master that holds a report is not merged over.
+  const stale = options.master ? reportsOverwritten(options.master, options.force, RENUMBERS("merge")) : [];
   const dossiers = options.runs.map((dir) => ({ dir, ...readDossier(dir) }));
 
   // Per-sub-dossier ranked RawSource lists + a provenance index keyed by identity
@@ -123,6 +127,7 @@ export function runMerge(options: MergeOptions): MergeResult {
       depth === "deep"
         ? "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic --require-verify."
         : "agent: write the report against THIS master dossier's [S#] ids; then render + check.",
+      ...(stale.length ? [staleReportNote(stale)] : []),
     ],
     timings: {},
     mergedFrom: options.runs.slice(),

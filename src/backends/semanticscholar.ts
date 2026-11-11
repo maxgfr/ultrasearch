@@ -1,13 +1,18 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { cleanInline } from "./fetch.js";
 import { apiFailure, apiGet } from "./backoff.js";
+import { sinceDate } from "../util.js";
 
 // Semantic Scholar via the keyless Graph API. Returns paper abstracts +
 // metadata (DOI / arXiv id / venue / year) for the report and BibTeX.
 export const semanticscholarBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const fields = "title,abstract,url,year,authors,externalIds,venue";
-  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}`;
+  // --since: an open-ended `from:` publication range.
+  const since = sinceDate(ctx.options.since);
+  const url =
+    `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}` +
+    (since ? `&publicationDateOrYear=${since}:` : "");
   const r = await apiGet(url);
   const data: any[] = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {

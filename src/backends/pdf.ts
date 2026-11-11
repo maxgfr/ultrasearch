@@ -10,16 +10,9 @@
 
 export {
   pdfToText,
-  assessPdfText,
   ocrTools,
   ocrBudgetLeft,
-  resetOcrBudget,
   extractPdf,
   enabledExtractors,
   resetPdfLadderCache,
-  PDF_EXTRACTORS,
-  type PdfVerdict,
-  type PdfExtraction,
-  type PdfExtractorId,
-  type PdfLadderOptions,
 } from "../engine.js";

@@ -64,6 +64,8 @@ import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
 import { runRefcheck } from "./refcheck/index.js";
 import { setDossierTemplate } from "./templates.js";
+import { withDossierLock } from "./dossier-lock.js";
+import { defaultRunOutside } from "./mcp/confine.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -71,7 +73,7 @@ fetch + dedupe sources into a dossier, and write a citation-checked, tiered
 report (with self-contained HTML). The web-facing sibling of ultradoc.
 
 Usage:
-  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
+  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [--out <dir>] [--force] [options]
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
@@ -83,11 +85,11 @@ Usage:
   ultrasearch drop   --run <dossier-dir> (--id <S#,...> | --where wall|snippet|offtopic) [--dry-run] [--json]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
-  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
+  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--root <dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
-  ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
+  ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"] [--force]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
   ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
   ultrasearch browser open <url>
@@ -252,8 +254,11 @@ Options:
   --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
   --offline            For 'refcheck': parse and read the citing text only — no
                        PubMed, Crossref or doi.org lookup
-  --force              For 'refcheck': write into an --out that already holds a
-                       REPORT.md/SUMMARY.md from an earlier run (kept — re-check it)
+  --force              For 'gather' / 'merge' / 'refcheck': write into an --out
+                       (--master) that already holds a REPORT.md/SUMMARY.md from
+                       an earlier run. Refused without it: these commands number
+                       the sources from S1, so the report there would cite the
+                       wrong pages. The report is kept — rewrite and re-check it
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -278,11 +283,15 @@ Options:
                        fetch cache across runs — 24h TTL, keyed by canonical URL
                        + Accept-Language, successful extractions only
   --no-cache           Disable the on-disk fetch cache: every read is live — the
-                       page, its text endpoint (E-utilities, Europe PMC) and the
-                       landing-page fallback alike. A cached copy that turns out
-                       to be a wall is re-read live even without it
+                       page and the landing-page fallback alike (the E-utilities
+                       and Europe PMC text endpoints always are). A cached copy
+                       that turns out to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
+  --root <dir>         For 'mcp': confine every path a client names (run, out,
+                       master, run_root, runs, refs, citing) to this directory,
+                       symlinks followed; default dossiers are created inside it
+                       (also ULTRASEARCH_MCP_ROOT). Off by default
   --phase <name>       For 'orchestrate': emit one phase only — gather | verify
                        (exit 2 when its worklist does not exist yet)
   --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md —
@@ -393,6 +402,7 @@ export const VALUE_FLAGS = new Set([
   "max-subquestions",
   "max-verify",
   "run-root",
+  "root",
   "shards",
   "shard",
   "min-sources",
@@ -793,6 +803,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     // Unset unless asked for: no default FETCH budget (see GatherOptions).
     maxSources: p.values["max-sources"] ? num("max-sources", p.values["max-sources"], 0) : undefined,
     perSource: num("per-source", p.values["per-source"], caps.perSource),
+    ...(p.values["per-source"] ? { perSourceAsked: num("per-source", p.values["per-source"], caps.perSource) } : {}),
     lang: p.values.lang ?? "en",
     region: p.values.region,
     searxng: p.values.searxng,
@@ -815,6 +826,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
     out: p.values.out ? resolve(p.values.out) : undefined,
+    ...(p.bools.has("force") ? { force: true } : {}),
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
@@ -847,15 +859,58 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  if (!PAGE_COMMANDS.has(p.command)) return dispatch(p);
+  // One writer per dossier across processes (src/dossier-lock.ts): held for the
+  // whole command, because an id is allocated by a read at its start and a
+  // write at its end.
+  const target = dossierWritten(p);
+  const run = (): Promise<void> => (target ? withDossierLock(target, p.command, () => dispatch(p), { onWait: (m) => say(`ultrasearch: ${m}`) }) : dispatch(p));
+  if (!PAGE_COMMANDS.has(p.command)) return run();
   // A browser the engine launched is a detached process: a Ctrl-C that killed
   // only this one would leave its window behind.
   const uninstall = closeBrowserOnSignal();
   try {
-    await withBrowserClosed(() => dispatch(p));
+    await withBrowserClosed(run);
   } finally {
     uninstall();
   }
+}
+
+// Which flag names the dossier each writing command rewrites, in the order the
+// command itself reads them, and the flag — if it has one — that makes the
+// command change nothing. A command absent from here writes no dossier index
+// (see src/dossier-lock.ts for why `plan`, `brainstorm` and `orchestrate` are).
+// Every boolean flag parses on every command, so the read-only flag is the
+// command's own: `drop --list` still drops, and still takes the lock.
+const DOSSIER_FLAGS: Record<string, { dir: readonly string[]; readOnly?: string }> = {
+  gather: { dir: ["out"] },
+  merge: { dir: ["master"] },
+  fetch: { dir: ["out", "run"] },
+  "add-source": { dir: ["out", "run"] },
+  ingest: { dir: ["run", "out"] },
+  refcheck: { dir: ["out", "run"] },
+  render: { dir: ["run", "out"] },
+  verify: { dir: ["run", "out"] },
+  drop: { dir: ["run", "out"], readOnly: "dry-run" },
+  relink: { dir: ["run", "out"], readOnly: "list" },
+  human: { dir: ["run", "out"], readOnly: "list" },
+};
+
+/** The dossier directory this invocation writes into, when it names one. */
+function dossierWritten(p: Parsed): string | undefined {
+  const spec = DOSSIER_FLAGS[p.command];
+  // A listing or a dry run changes nothing, and must not queue behind a writer.
+  if (!spec || (spec.readOnly && p.bools.has(spec.readOnly))) return undefined;
+  const dir = spec.dir.map((flag) => p.values[flag]).find(Boolean);
+  return dir ? resolve(dir) : undefined;
+}
+
+// `mcp --root`: an existing directory, or a refusal before the server starts.
+function rootOf(raw: string | undefined, defaultRun: string | undefined): { root: string } | undefined {
+  if (!raw?.trim()) return undefined;
+  const root = resolve(raw);
+  if (!existsSync(root) || !statSync(root).isDirectory()) fail(`--root ${root} is not a directory`);
+  if (defaultRunOutside(root, defaultRun && resolve(defaultRun))) fail(`--run ${resolve(defaultRun!)} is outside --root ${root}`);
+  return { root };
 }
 
 /** One line for the person at the terminal. */
@@ -1177,6 +1232,7 @@ async function dispatch(p: Parsed): Promise<void> {
         master: p.values.master ? resolve(p.values.master) : undefined,
         question: p.values.q ?? p.values.question,
         mode,
+        force: p.bools.has("force"),
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
@@ -1507,6 +1563,9 @@ async function dispatch(p: Parsed): Promise<void> {
         // A default dossier makes `run` optional on every tool, for a server
         // dedicated to one piece of research.
         defaultRun: p.values.run,
+        // Off unless asked for: the server is normally the user's own agent,
+        // and the CLI it mirrors takes any path.
+        ...(rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT, p.values.run) ?? {}),
         maxResponseBytes,
       };
 

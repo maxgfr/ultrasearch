@@ -156,6 +156,13 @@ describe("--search max — the ceiling", () => {
     expect(ignoredByMaxProfile(o)).toEqual(["--web-engine"]);
   });
 
+  it("names a lower --per-source it raised, and leaves a higher one alone", () => {
+    expect(ignoredByMaxProfile(opts({ search: "max", perSource: 3, perSourceAsked: 3 }))).toEqual(["--per-source"]);
+    // The depth's default was nobody's choice; a higher cap is kept as given.
+    expect(ignoredByMaxProfile(opts({ search: "max", perSource: 6 }))).toEqual([]);
+    expect(ignoredByMaxProfile(opts({ search: "max", perSource: 80, perSourceAsked: 80 }))).toEqual([]);
+  });
+
   it("stays quiet when there was no pin to supersede, and off outside max", () => {
     expect(ignoredByMaxProfile(opts({ webResults: hits, search: "max" }))).toEqual([]);
     expect(ignoredByMaxProfile(opts({ webResults: hits, search: "full", webEngine: "mojeek" }))).toEqual([]);

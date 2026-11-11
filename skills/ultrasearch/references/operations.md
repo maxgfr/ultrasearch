@@ -9,6 +9,8 @@ decision surface; this is the operations manual.
 | Command | Exit | Meaning |
 |---|---|---|
 | `gather` | 1 | **Empty dossier** — every backend returned nothing usable. The output prints a 3-step bridge protocol. Never write tiers over this. |
+| `gather` · `merge` | 1 | `--out` / `--master` already holds a `REPORT.md` or `SUMMARY.md`. Both commands number the sources from S1, so that report would cite other pages: pass another directory, or `--force` (the report is kept, and must be rewritten and re-checked). A re-gather into a dossier also removes the `sources/S<n>.md` extracts the new run does not use — unless it found nothing at all. |
+| any writing command | 1 | Another ultrasearch process held the dossier for longer than `ULTRASEARCH_LOCK_WAIT_MS`. The error names its pid and the lock file. |
 | `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, a **cited source whose extract is a wall**, or a `--semantic`/`--min-sources`/`--strict-numerals`/`--fail-on-wall` failure. |
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |
 | `orchestrate` | 2 | The run dir does not exist, or `--phase <p>` was asked for before its worklist existed. The error names the command that produces it. |
@@ -42,10 +44,10 @@ turns that into a hard failure for a high-stakes run.
 ## The fetch cache
 
 **On by default.** Pass `--no-cache` for an all-live run — every read of the run,
-the page itself, its text endpoint (E-utilities, Europe PMC) and the
-landing-page fallback alike. A cached copy that turns out to be a **wall** is
-never served: the read is redone live (and the good copy replaces it on disk),
-cache or no cache.
+the page itself and the landing-page fallback alike. The text endpoints of
+PubMed and PMC (E-utilities, Europe PMC) are always read live, paced and backed
+off. A cached copy that turns out to be a **wall** is never served: that one
+read is redone live, cache or no cache (the stored copy expires with its TTL).
 
 - On disk, shared **across processes** — the deep tier's fan-out fetches an
   overlapping URL once instead of once per sub-question.
@@ -69,6 +71,13 @@ These services are free, keyless and unauthenticated. Staying welcome matters
 more than saving ten seconds.
 
 - `--concurrency <n>` (default 6) bounds in-flight page fetches.
+- **One writer per dossier.** Every command that rewrites a dossier (`gather`
+  into an existing `--out`, `merge`, `fetch`, `ingest`, `refcheck`, `relink`,
+  `drop`, `human`, `verify`, `render`) holds `<dossier>/.ultrasearch.lock` while
+  it runs, and so does each writing MCP tool. A second one waits its turn — so
+  several `fetch --out D` launched at once each get their own `[S#]` instead of
+  overwriting one another — and says it is waiting. A lock left by a process
+  that died is replaced on its own; `check`, `--list` and `--dry-run` never wait.
 - Rate-limited backends (GitHub, Stack Exchange, Semantic Scholar, PubMed) get a
   single query variant per run; the polite scholarly APIs (arXiv, Crossref,
   OpenAlex, Europe PMC, ClinicalTrials.gov, dblp) run their per-variant calls
@@ -102,6 +111,8 @@ more than saving ten seconds.
 | `ULTRASEARCH_OCR_LANG` | `eng` | tesseract language code(s) for OCR, e.g. `fra+eng`. Needs the matching language pack (`brew install tesseract-lang`). |
 | `ULTRASEARCH_OCR_TIMEOUT_MS` | 300000 | Ceiling for OCR of ONE document. |
 | `ULTRASEARCH_NO_WRITE` | unset | `1` makes every command write nothing, exactly as `--stdout` does — globally, and for the MCP server, which parses no CLI flags. See "Running without writing". |
+| `ULTRASEARCH_MCP_ROOT` | unset | Same as `mcp --root`: every path an MCP client names must resolve inside this directory. |
+| `ULTRASEARCH_LOCK_WAIT_MS` | 600000 | How long a writing command waits for another process to finish writing the same dossier before it gives up (`0` = do not wait). |
 | `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
 | `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |
 | `ULTRASEARCH_NO_WAYBACK` | unset | Set to disable the Wayback rescue for dead links. |

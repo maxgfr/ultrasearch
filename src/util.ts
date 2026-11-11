@@ -187,6 +187,22 @@ export function trustScore(_url: string, backend: BackendKind): number {
 // patterns. Deterministic, no LLM, no deps.
 // ---------------------------------------------------------------------------
 
+// The one spelling of a DOI as an identity key: percent-decoded, lower-case,
+// without a resolver prefix or the punctuation of the sentence it was lifted
+// from. Every key in this repo goes through here. There used to be two
+// spellings — `merge` stripped a trailing period and decoded `%2F`, `gather`
+// and `enrich` did neither — so one paper could stay two sources depending on
+// which command met it.
+export function doiKey(doi: string): string {
+  let d = doi.trim();
+  try {
+    d = decodeURIComponent(d);
+  } catch {
+    /* keep as given */
+  }
+  return `doi:${normalizeDoi(d).replace(/[.,;)\]]+$/, "")}`;
+}
+
 // Identity key for de-duplication that is stronger than URL: the same work
 // surfaced as an arXiv abstract, a DOI URL and a journal landing page (across
 // arxiv/crossref/openalex/semanticscholar) collapses to one key so it doesn't
@@ -194,11 +210,11 @@ export function trustScore(_url: string, backend: BackendKind): number {
 // identifiers parsed out of the URL itself, then the canonical URL.
 export function identityKey(item: RawSource): string {
   const doi = item.meta?.doi;
-  if (doi) return "doi:" + normalizeDoi(String(doi));
+  if (doi) return doiKey(String(doi));
   const arxiv = item.meta?.arxivId;
   if (arxiv) return "arxiv:" + String(arxiv).toLowerCase().replace(/v\d+$/, "");
   const urlDoi = doiFromUrl(item.url);
-  if (urlDoi) return "doi:" + urlDoi;
+  if (urlDoi) return doiKey(urlDoi);
   const urlArxiv = arxivIdFromUrl(item.url);
   if (urlArxiv) return "arxiv:" + urlArxiv;
   return urlIdentity(item.url);

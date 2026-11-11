@@ -161,9 +161,13 @@ export function analyseCiting(text: string, refNumbers: number[]): CitingAnalysi
     }
   }
   const outOfOrder: { n: number; after: number }[] = [];
+  // Only a reference that exists sets the bar: a call to a number the list
+  // does not hold is reported as unknown, and letting it count here made every
+  // later first citation "out of order" after a reference nobody can look up.
   let highest = 0;
   for (const n of firstCitationOrder) {
-    if (n < highest && known.has(n)) outOfOrder.push({ n, after: highest });
+    if (!known.has(n)) continue;
+    if (n < highest) outOfOrder.push({ n, after: highest });
     highest = Math.max(highest, n);
   }
   return {

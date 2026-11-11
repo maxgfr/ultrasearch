@@ -122,10 +122,8 @@ function buildUserQuestions(angles: BrainstormAngle[], signals: BrainstormSignal
   if (!signals.identifiers.some((id) => /^\d{4}$/.test(id))) {
     qs.push("Any timeframe or recency constraint — the current state, or the historical picture too?");
   }
-  if (qs.length < 4) {
-    qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
-  }
-  return qs.slice(0, 4);
+  qs.push("What angle fits best: a general briefing, debugging an error, a literature review, learning it, or market research?");
+  return qs;
 }
 
 // Candidate refined questions: the plain subject plus each angle label as a

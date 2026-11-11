@@ -158,9 +158,11 @@ describe("readNcbiDocument", () => {
   });
 
   it("says rate-limited, not 'nothing', when E-utilities never lets up", async () => {
-    installFetchMock(routes([["eutils", { status: 429, contentType: "application/json", body: '{"error":"API rate limit exceeded"}' }]]));
+    const spy = installFetchMock(routes([["eutils", { status: 429, contentType: "application/json", body: '{"error":"API rate limit exceeded"}' }]]));
     const r = await readNcbiDocument(ncbiDocument("https://pubmed.ncbi.nlm.nih.gov/1234567/")!);
     expect(!r.ok && r.why).toMatch(/E-utilities rate-limited the read of PMID 1234567 \(HTTP 429 after 3 attempts\)/);
+    // Three attempts are three calls, each paced — no retry nested inside them.
+    expect(spy).toHaveBeenCalledTimes(3);
   });
 
   it("keeps a record with no abstract — real, and flagged thin — but refuses a wall", async () => {
