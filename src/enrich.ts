@@ -532,7 +532,7 @@ async function readSource(
   // which is how 40 efetch URLs used to come out of `ingest` as 40 cookie walls.
   let ncbiMiss: string | undefined;
   if (ncbi) {
-    const got = await readNcbiDocument(ncbi, { cache: !!opts.cache });
+    const got = await readNcbiDocument(ncbi);
     if (got.ok) {
       const backend: BackendKind = opts.backend ?? "host";
       const raw: RawSource = {

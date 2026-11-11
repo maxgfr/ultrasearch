@@ -282,9 +282,9 @@ Options:
                        fetch cache across runs — 24h TTL, keyed by canonical URL
                        + Accept-Language, successful extractions only
   --no-cache           Disable the on-disk fetch cache: every read is live — the
-                       page, its text endpoint (E-utilities, Europe PMC) and the
-                       landing-page fallback alike. A cached copy that turns out
-                       to be a wall is re-read live even without it
+                       page and the landing-page fallback alike (the E-utilities
+                       and Europe PMC text endpoints always are). A cached copy
+                       that turns out to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
   --phase <name>       For 'orchestrate': emit one phase only — gather | verify

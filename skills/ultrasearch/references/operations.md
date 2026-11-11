@@ -44,10 +44,10 @@ turns that into a hard failure for a high-stakes run.
 ## The fetch cache
 
 **On by default.** Pass `--no-cache` for an all-live run — every read of the run,
-the page itself, its text endpoint (E-utilities, Europe PMC) and the
-landing-page fallback alike. A cached copy that turns out to be a **wall** is
-never served: the read is redone live (and the good copy replaces it on disk),
-cache or no cache.
+the page itself and the landing-page fallback alike. The text endpoints of
+PubMed and PMC (E-utilities, Europe PMC) are always read live, paced and backed
+off. A cached copy that turns out to be a **wall** is never served: that one
+read is redone live, cache or no cache (the stored copy expires with its TTL).
 
 - On disk, shared **across processes** — the deep tier's fan-out fetches an
   overlapping URL once instead of once per sub-question.

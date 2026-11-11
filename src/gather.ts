@@ -609,7 +609,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const readNcbi = (doc: NcbiDocument): Promise<NcbiRead> => {
     let p = ncbiCache.get(doc.textUrl);
     if (!p) {
-      p = readNcbiDocument(doc, { cache: !!options.cache });
+      p = readNcbiDocument(doc);
       ncbiCache.set(doc.textUrl, p);
     }
     return p;
