@@ -40,6 +40,7 @@ import { runRefcheck } from "../refcheck/index.js";
 import { setDossierTemplate } from "../templates.js";
 import { withRunLock } from "../run-lock.js";
 import { TOOL_META } from "./tools.js";
+import { confineArgs } from "./confine.js";
 import { resolveBrowserRung, withBrowserClosed } from "../browser.js";
 import { isNoWrite, takeArtifacts } from "../no-write.js";
 
@@ -51,6 +52,8 @@ import { isNoWrite, takeArtifacts } from "../no-write.js";
 export interface HandlerDefaults {
   defaultRun?: string;
   allowWrite?: boolean;
+  /** Confine every path argument to this directory (`mcp --root`, see confine.ts). */
+  root?: string;
 }
 
 // Thrown for anything the caller can fix by calling again differently. The
@@ -220,7 +223,8 @@ function templateArg(args: Record<string, unknown>): TemplateName | undefined {
 const PAGE_TOOLS = new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
 
 export async function callTool(name: string, args: Record<string, unknown>, defaults: HandlerDefaults = {}): Promise<ToolOutcome> {
-  const run = () => dispatch(name, args, defaults);
+  const confined = confineArgs(name, args, defaults.root, defaults.defaultRun);
+  const run = () => dispatch(name, confined, defaults);
   const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
   return outcome(name, result);
 }

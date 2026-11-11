@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename5, join as join30, relative as relative3, resolve as resolve5 } from "path";
+import { basename as basename5, join as join31, relative as relative4, resolve as resolve9 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync4, existsSync as existsSync20, statSync as statSync12, readdirSync as readdirSync9, readFileSync as readFileSync21 } from "fs";
+import { realpathSync as realpathSync5, existsSync as existsSync21, statSync as statSync12, readdirSync as readdirSync9, readFileSync as readFileSync21 } from "fs";
 
 // src/vendor/webindex-engine.mjs
 import { tmpdir } from "os";
@@ -638,7 +638,7 @@ function binaryName(name) {
   return process.platform === "win32" && name === "npx" ? "npx.cmd" : name;
 }
 function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
-  return new Promise((resolve9) => {
+  return new Promise((resolve92) => {
     let child;
     try {
       const bin = binaryName(cmd);
@@ -647,7 +647,7 @@ function runWithInput(cmd, args, input, timeoutMs, opts = {}) {
       const common = { stdio: ["pipe", "pipe", "pipe"], ...opts.env ? { env: opts.env } : {} };
       child = viaShell ? spawn2([bin, ...args].map(quote).join(" "), { ...common, shell: true, windowsHide: true }) : spawn2(bin, args, common);
     } catch (e) {
-      resolve9({ ok: false, stdout: "", error: e.message });
+      resolve92({ ok: false, stdout: "", error: e.message });
       return;
     }
     const chunks = [];
@@ -666,7 +666,7 @@ ${stderrTail}` : stderrHead + stderrTail).trim();
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve9(r);
+      resolve92(r);
     };
     const timer = setTimeout(
       () => {
@@ -2216,7 +2216,7 @@ function have(cmd) {
 function shAsync(cmd, args, opts = {}) {
   const timeoutMs = Math.min(opts.timeoutMs ?? defaultTimeoutMs(), MAX_TIMER_MS);
   if (opts.signal?.aborted) return Promise.resolve({ ok: false, status: 130, stdout: "", stderr: "aborted" });
-  return new Promise((resolve9) => {
+  return new Promise((resolve92) => {
     let settled = false;
     let timer;
     let onAbort;
@@ -2225,7 +2225,7 @@ function shAsync(cmd, args, opts = {}) {
       settled = true;
       clearTimeout(timer);
       if (onAbort) opts.signal?.removeEventListener("abort", onAbort);
-      resolve9(r);
+      resolve92(r);
     };
     let child;
     try {
@@ -4114,7 +4114,7 @@ function unmask(payload, key) {
 }
 async function connectWebSocket(url, opts = {}) {
   const { request } = await import("http");
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve92, reject) => {
     let u;
     try {
       u = new URL(url);
@@ -4149,7 +4149,7 @@ async function connectWebSocket(url, opts = {}) {
         socket.destroy();
         return settle(() => reject(new Error("WebSocket handshake failed: bad Accept")));
       }
-      settle(() => resolve9(new WsClient(socket, opts, head)));
+      settle(() => resolve92(new WsClient(socket, opts, head)));
     });
     req.on("response", (res) => {
       res.resume();
@@ -4289,14 +4289,14 @@ var init_ws = __esm({
           this.closing = true;
           this.writeClose(code, reason);
         }
-        await new Promise((resolve9) => {
+        await new Promise((resolve92) => {
           const timer = setTimeout(() => {
             this.socket.destroy();
             this.finish(code, reason);
           }, this.closeTimeoutMs);
           this.once("close", () => {
             clearTimeout(timer);
-            resolve9();
+            resolve92();
           });
         });
       }
@@ -4449,12 +4449,12 @@ ${method}`;
         if (this.isClosed) return Promise.reject(new Error(`CDP connection closed (${method})`));
         const id = ++this.nextId;
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve92, reject) => {
           const timer = setTimeout(() => {
             this.pending.delete(id);
             reject(new Error(`CDP command timed out: ${method} (${timeoutMs} ms)`));
           }, timeoutMs);
-          this.pending.set(id, { method, resolve: resolve9, reject, timer });
+          this.pending.set(id, { method, resolve: resolve92, reject, timer });
           try {
             this.ws.send(JSON.stringify({ id, method, params, sessionId: opts.sessionId }));
           } catch (e) {
@@ -4480,7 +4480,7 @@ ${method}`;
       /** Resolve with the params of the next matching event; reject on timeout or when the socket closes. */
       once(method, opts = {}) {
         const timeoutMs = opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-        return new Promise((resolve9, reject) => {
+        return new Promise((resolve92, reject) => {
           const cleanup = () => {
             clearTimeout(timer);
             this.off(method, handler, opts.sessionId);
@@ -4489,7 +4489,7 @@ ${method}`;
           const handler = (params) => {
             if (opts.predicate && !opts.predicate(params)) return;
             cleanup();
-            resolve9(params);
+            resolve92(params);
           };
           const onClose = () => {
             cleanup();
@@ -5057,11 +5057,11 @@ function dialHost(host) {
 }
 async function http(method, port, host, path, timeoutMs = REQUEST_TIMEOUT_MS) {
   const { request } = await import("http");
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve92, reject) => {
     const req = request({ host: dialHost(host), port, path, method, timeout: timeoutMs }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
-      res.on("end", () => resolve9({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      res.on("end", () => resolve92({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
       res.on("error", reject);
     });
     req.on("timeout", () => req.destroy(new Error(`DevTools request ${method} ${path} timed out after ${timeoutMs} ms`)));
@@ -6005,14 +6005,14 @@ var init_session = __esm({
           },
           /** Whether such an event has come, whatever was waited for. */
           saw: (match) => seen.some(match),
-          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve9, reject) => {
+          until: (match, timeoutMs, what, cancelledWhat) => new Promise((resolve92, reject) => {
             const timer = setTimeout(() => {
               wake = void 0;
               reject(new NavigationTimeoutError(`${what} within ${timeoutMs} ms`));
             }, timeoutMs);
             wake = () => {
               const hit = seen.find(match);
-              if (hit) resolve9(hit);
+              if (hit) resolve92(hit);
               else if (cancelled) reject(new Error(`${cancelledWhat} was cancelled: the page asked to confirm leaving it (beforeunload), and that was declined`));
               else if (closed) reject(new Error("the browser connection closed while waiting for the page to load"));
               else return;
@@ -8029,12 +8029,12 @@ function sleep(ms, signal) {
   return signal ? sleepUnlessAborted(ms, signal) : new Promise((r) => setTimeout(r, ms));
 }
 function sleepUnlessAborted(ms, signal) {
-  return new Promise((resolve9) => {
-    if (signal?.aborted) return resolve9();
+  return new Promise((resolve92) => {
+    if (signal?.aborted) return resolve92();
     const done = () => {
       clearTimeout(t);
       signal?.removeEventListener("abort", done);
-      resolve9();
+      resolve92();
     };
     const t = setTimeout(done, ms);
     signal?.addEventListener("abort", done, { once: true });
@@ -9855,7 +9855,7 @@ function pump() {
 async function acquire(limit, signal, cancelled) {
   if (queue.length === 0 && active < limit) active++;
   else {
-    await new Promise((resolve9, reject) => {
+    await new Promise((resolve92, reject) => {
       const onAbort = () => {
         queue.splice(queue.indexOf(waiter), 1);
         reject(cancelled());
@@ -9864,7 +9864,7 @@ async function acquire(limit, signal, cancelled) {
         limit,
         go: () => {
           signal?.removeEventListener("abort", onAbort);
-          resolve9();
+          resolve92();
         }
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -12266,11 +12266,11 @@ function toolSlots(max = MAX_IN_FLIGHT) {
   const waiting = [];
   return {
     acquire(signal) {
-      return new Promise((resolve9) => {
+      return new Promise((resolve92) => {
         const take = () => {
           active22++;
           let given = false;
-          resolve9(() => {
+          resolve92(() => {
             if (given) return;
             given = true;
             active22--;
@@ -12278,11 +12278,11 @@ function toolSlots(max = MAX_IN_FLIGHT) {
           });
         };
         if (active22 < max) return take();
-        if (signal?.aborted) return resolve9(void 0);
+        if (signal?.aborted) return resolve92(void 0);
         const leave = () => {
           const at = waiting.indexOf(wake);
           if (at >= 0) waiting.splice(at, 1);
-          resolve9(void 0);
+          resolve92(void 0);
         };
         const wake = () => {
           signal?.removeEventListener("abort", leave);
@@ -12325,7 +12325,7 @@ async function runStdioServer(adapter, opts = {}) {
     const ticket = { cancelled: false };
     queued.set(id, ticket);
     try {
-      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve9) => waiting.push(resolve9));
+      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve92) => waiting.push(resolve92));
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
@@ -12428,14 +12428,14 @@ async function startHttpServer(adapter, opts = {}) {
   server.requestTimeout = REQUEST_TIMEOUT_MS2;
   server.headersTimeout = 6e4;
   server.keepAliveTimeout = 12e4;
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve92, reject) => {
     server.once("error", reject);
     server.listen(opts.port ?? 0, bind, () => {
       server.removeListener("error", reject);
       const addr = server.address();
       const port = typeof addr === "object" && addr ? addr.port : opts.port ?? 0;
       const host = bind.includes(":") ? `[${bind}]` : bind;
-      resolve9({
+      resolve92({
         server,
         port,
         url: `http://${host}:${port}${MCP_PATH}`,
@@ -12590,7 +12590,7 @@ function sendJson(res, status, body, origin, extra = {}) {
 }
 var DRAIN_LIMIT = MAX_BODY_BYTES2 * 8;
 function readBody(req) {
-  return new Promise((resolve9, reject) => {
+  return new Promise((resolve92, reject) => {
     const chunks = [];
     let size = 0;
     let over = false;
@@ -12614,7 +12614,7 @@ function readBody(req) {
     });
     req.on("end", () => {
       if (over) reject(new Error("too large"));
-      else resolve9(Buffer.concat(chunks).toString("utf8"));
+      else resolve92(Buffer.concat(chunks).toString("utf8"));
     });
     req.on("error", reject);
     req.on("aborted", () => reject(new Error("client aborted the request")));
@@ -19953,8 +19953,8 @@ function refusedForChallenge(url, note) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync19, readFileSync as readFileSync20, realpathSync as realpathSync3, statSync as statSync11 } from "fs";
-import { isAbsolute as isAbsolute4, join as join29, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+import { existsSync as existsSync20, readFileSync as readFileSync20, realpathSync as realpathSync4, statSync as statSync11 } from "fs";
+import { isAbsolute as isAbsolute5, join as join30, relative as relative3, resolve as resolve5, sep as sep3 } from "path";
 
 // src/dossier-lock.ts
 import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, renameSync as renameSync2, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
@@ -21502,6 +21502,60 @@ function applyDefaultRun(schema, defaultRun2) {
   };
 }
 
+// src/mcp/confine.ts
+import { existsSync as existsSync19, realpathSync as realpathSync3 } from "fs";
+import { tmpdir as tmpdir6 } from "os";
+import { dirname as dirname4, isAbsolute as isAbsolute4, join as join29, relative as relative2, resolve as resolve4 } from "path";
+var PATH_ARGS = ["run", "out", "master", "run_root", "refs", "citing"];
+var PATH_LIST_ARGS = ["runs"];
+function real(path) {
+  let head = resolve4(path);
+  const tail = [];
+  while (!existsSync19(head)) {
+    const up = dirname4(head);
+    if (up === head) break;
+    tail.unshift(head.slice(up.length).replace(/^[\\/]/, ""));
+    head = up;
+  }
+  let base2 = head;
+  try {
+    base2 = realpathSync3(head);
+  } catch {
+  }
+  return join29(base2, ...tail);
+}
+function inside(root, path) {
+  const rel = relative2(root, real(path));
+  return rel === "" || !rel.startsWith("..") && !isAbsolute4(rel);
+}
+function confineArgs(name, args, root, defaultRun2) {
+  if (!root) return args;
+  const fence = real(root);
+  const out = { ...args };
+  const refuse = (key, value) => {
+    throw new ToolError(`\`${key}\` (${value}) is outside the directory this server is confined to (${fence}).`);
+  };
+  for (const key of PATH_ARGS) {
+    const v = out[key];
+    if (typeof v === "string" && v.trim() && isAbsolute4(v) && !inside(fence, v)) refuse(key, v);
+  }
+  for (const key of PATH_LIST_ARGS) {
+    const v = out[key];
+    if (Array.isArray(v)) {
+      for (const item of v) if (typeof item === "string" && isAbsolute4(item) && !inside(fence, item)) refuse(key, item);
+    }
+  }
+  if (defaultRun2 && out.run === void 0 && !inside(fence, defaultRun2)) refuse("run (the server's --run default)", defaultRun2);
+  const blank2 = (key) => typeof out[key] !== "string" || !out[key].trim();
+  if (name === "ultrasearch_gather" && blank2("out") && typeof out.question === "string") {
+    const dir = defaultRunDir(typeof out.mode === "string" ? out.mode : "topic", out.question);
+    out.out = join29(fence, relative2(join29(tmpdir6(), "ultrasearch"), dir));
+  }
+  if (name === "ultrasearch_merge" && blank2("master")) out.master = join29(fence, `merge-${runId()}`);
+  if (name === "ultrasearch_refcheck" && blank2("out")) out.out = join29(fence, `refcheck-${runId()}`);
+  return out;
+}
+
 // src/mcp/handlers.ts
 var MAX_READ_LINES = 2e3;
 var MAX_READ_BYTES = 8 * 1024 * 1024;
@@ -21554,9 +21608,9 @@ function browserArg(args) {
 function requiredRun(args, defaults) {
   const run = str2(args.run) ?? defaults.defaultRun;
   if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
-  if (!isAbsolute4(run)) throw new ToolError("`run` must be an absolute path.");
-  const abs = resolve4(run);
-  if (!existsSync19(join29(abs, "manifest.json"))) {
+  if (!isAbsolute5(run)) throw new ToolError("`run` must be an absolute path.");
+  const abs = resolve5(run);
+  if (!existsSync20(join30(abs, "manifest.json"))) {
     throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
   }
   return abs;
@@ -21573,7 +21627,7 @@ function gatherOptions(args) {
     }
   }
   const out = str2(args.out);
-  if (out !== void 0 && !isAbsolute4(out)) throw new ToolError("`out` must be an absolute path.");
+  if (out !== void 0 && !isAbsolute5(out)) throw new ToolError("`out` must be an absolute path.");
   const depth = oneOf(str2(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
   const caps = DEPTH_CAPS[depth];
   const web = webResultsArg(args.web_results);
@@ -21611,7 +21665,8 @@ function templateArg(args) {
 }
 var PAGE_TOOLS = /* @__PURE__ */ new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
 async function callTool(name, args, defaults = {}) {
-  const run = () => dispatch(name, args, defaults);
+  const confined = confineArgs(name, args, defaults.root, defaults.defaultRun);
+  const run = () => dispatch(name, confined, defaults);
   const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
   return outcome(name, result);
 }
@@ -21755,9 +21810,9 @@ async function handleGather(args) {
   }
   return {
     run: res.dir,
-    dossier_md: join29(res.dir, "DOSSIER.md"),
+    dossier_md: join30(res.dir, "DOSSIER.md"),
     ...head,
-    next: `Read ${join29(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+    next: `Read ${join30(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
   };
 }
 async function handleBrainstorm(args) {
@@ -21775,14 +21830,14 @@ async function handleBrainstorm(args) {
 }
 function artifactMap(dir) {
   const files = {};
-  for (const a of takeArtifacts()) files[relative2(dir, a.path) || a.path] = a.content;
+  for (const a of takeArtifacts()) files[relative3(dir, a.path) || a.path] = a.content;
   return files;
 }
 function handlePlan(args) {
   const question = requiredStr(args, "question", "the umbrella question to decompose.");
   const mode2 = oneOf(str2(args.mode), ALL_MODES, "mode", "topic");
   const runRoot = str2(args.run_root);
-  if (runRoot !== void 0 && !isAbsolute4(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
+  if (runRoot !== void 0 && !isAbsolute5(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
   const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
   if (isNoWrite()) takeArtifacts();
   return {
@@ -21794,16 +21849,16 @@ function handleMerge(args) {
   const runs = strArray(args.runs);
   if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
   for (const r of runs) {
-    if (!isAbsolute4(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync19(join29(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+    if (!isAbsolute5(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
+    if (!existsSync20(join30(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
   }
   const master = str2(args.master);
-  if (master !== void 0 && !isAbsolute4(master)) throw new ToolError("`master` must be an absolute path.");
+  if (master !== void 0 && !isAbsolute5(master)) throw new ToolError("`master` must be an absolute path.");
   refuseOverReport(master, bool(args.force), RENUMBERS("merge"));
   const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode), force: bool(args.force) });
   return {
     run: res.dir,
-    dossier_md: join29(res.dir, "DOSSIER.md"),
+    dossier_md: join30(res.dir, "DOSSIER.md"),
     sources: res.sources.length,
     merged_from: runs.length,
     next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
@@ -21824,10 +21879,10 @@ async function handleRefcheck(args) {
     ["citing", citing],
     ["out", out]
   ]) {
-    if (v !== void 0 && !isAbsolute4(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
+    if (v !== void 0 && !isAbsolute5(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
   }
-  if (!existsSync19(refs)) throw new ToolError(`no file at ${refs}`);
-  if (citing && !existsSync19(citing)) throw new ToolError(`no file at ${citing}`);
+  if (!existsSync20(refs)) throw new ToolError(`no file at ${refs}`);
+  if (citing && !existsSync20(citing)) throw new ToolError(`no file at ${citing}`);
   let res;
   try {
     res = await runRefcheck({ refs, citing, out, offline: bool(args.offline), force: bool(args.force) });
@@ -21837,7 +21892,7 @@ async function handleRefcheck(args) {
   const hasDossier = res.references.some((e) => e.sourceId);
   return {
     dir: res.dir,
-    report: join29(res.dir, "REFCHECK.md"),
+    report: join30(res.dir, "REFCHECK.md"),
     summary: res.summary,
     ...res.citing ? { citing: res.citing } : {},
     // One line per reference that needs a look, not the whole record set.
@@ -21849,7 +21904,7 @@ async function handleRefcheck(args) {
       ...e.doi?.resolves === false ? { doi: "does not resolve" } : {}
     })),
     notes: res.notes,
-    next: hasDossier ? `Read ${join29(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join29(res.dir, "REFCHECK.md")}.`
+    next: hasDossier ? `Read ${join30(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join30(res.dir, "REFCHECK.md")}.`
   };
 }
 async function handleIngest(args, run) {
@@ -21962,28 +22017,28 @@ function handleRender(args, run) {
 }
 function handleRead(args, run) {
   const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute4(raw) ? raw : join29(run, raw);
-  let real;
+  const target = isAbsolute5(raw) ? raw : join30(run, raw);
+  let real2;
   try {
-    real = realpathSync3(target);
+    real2 = realpathSync4(target);
   } catch {
     throw new ToolError(`no such file: ${raw}`);
   }
-  const root = realpathSync3(run);
-  if (real !== root && !real.startsWith(root + sep3)) {
+  const root = realpathSync4(run);
+  if (real2 !== root && !real2.startsWith(root + sep3)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
-  const st = statSync11(real);
+  const st = statSync11(real2);
   if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
   if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync20(real, "utf8").split("\n");
+  const lines = readFileSync20(real2, "utf8").split("\n");
   const total = lines.length;
   const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
   if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
   const requestedEnd = Math.floor(num3(args.end_line) ?? total);
   const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
   return {
-    path: isAbsolute4(raw) ? real : raw,
+    path: isAbsolute5(raw) ? real2 : raw,
     start_line: start,
     end_line: end,
     total_lines: total,
@@ -22191,7 +22246,7 @@ Usage:
   ultrasearch drop   --run <dossier-dir> (--id <S#,...> | --where wall|snippet|offtopic) [--dry-run] [--json]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
-  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
+  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--root <dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
@@ -22394,6 +22449,10 @@ Options:
                        that turns out to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
+  --root <dir>         For 'mcp': confine every path a client names (run, out,
+                       master, run_root, runs, refs, citing) to this directory,
+                       symlinks followed; default dossiers are created inside it
+                       (also ULTRASEARCH_MCP_ROOT). Off by default
   --phase <name>       For 'orchestrate': emit one phase only \u2014 gather | verify
                        (exit 2 when its worklist does not exist yet)
   --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md \u2014
@@ -22503,6 +22562,7 @@ var VALUE_FLAGS = /* @__PURE__ */ new Set([
   "max-subquestions",
   "max-verify",
   "run-root",
+  "root",
   "shards",
   "shard",
   "min-sources",
@@ -22570,10 +22630,10 @@ function parseList(s) {
   return s.split(",").map((x) => x.trim()).filter(Boolean);
 }
 function resolveApplyPaths(spec) {
-  if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
-  const abs = resolve5(spec);
-  if (existsSync20(abs) && statSync12(abs).isDirectory()) {
-    const files = readdirSync9(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
+  if (spec.includes(",")) return parseList(spec).map((x) => resolve9(x));
+  const abs = resolve9(spec);
+  if (existsSync21(abs) && statSync12(abs).isDirectory()) {
+    const files = readdirSync9(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve9(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -22607,8 +22667,8 @@ function readWebResultsPayload(spec) {
       fail("--web-results -: could not read stdin");
     }
   }
-  const abs = resolve5(spec);
-  if (!existsSync20(abs)) fail(`--web-results file not found: ${abs}`);
+  const abs = resolve9(spec);
+  if (!existsSync21(abs)) fail(`--web-results file not found: ${abs}`);
   try {
     return readFileSync21(abs, "utf8");
   } catch (e) {
@@ -22650,7 +22710,7 @@ function sourceNum(rel) {
   return Number(/^sources\/S(\d+)\.md$/.exec(rel)?.[1] ?? 0);
 }
 function emitArtifacts(dir, asJson, extra = {}) {
-  const artifacts = takeArtifacts().map((a) => ({ rel: relative3(dir, a.path) || basename5(a.path), content: a.content }));
+  const artifacts = takeArtifacts().map((a) => ({ rel: relative4(dir, a.path) || basename5(a.path), content: a.content }));
   if (asJson) {
     const files = {};
     for (const a of artifacts) files[a.rel] = a.content;
@@ -22795,7 +22855,7 @@ function buildGatherOptions(p, opts = {}) {
     // already in the wild keeps working; `--no-cache` is the escape hatch.
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
-    out: p.values.out ? resolve5(p.values.out) : void 0,
+    out: p.values.out ? resolve9(p.values.out) : void 0,
     ...p.bools.has("force") ? { force: true } : {},
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
@@ -22843,7 +22903,13 @@ var DOSSIER_FLAGS = {
 function dossierWritten(p) {
   if (p.bools.has("list") || p.bools.has("dry-run")) return void 0;
   const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
-  return dir ? resolve5(dir) : void 0;
+  return dir ? resolve9(dir) : void 0;
+}
+function rootOf(raw) {
+  if (!raw?.trim()) return void 0;
+  const root = resolve9(raw);
+  if (!existsSync21(root) || !statSync12(root).isDirectory()) fail(`--root ${root} is not a directory`);
+  return { root };
 }
 var say = (line) => void process.stderr.write(`${line}
 `);
@@ -22947,8 +23013,8 @@ async function dispatch2(p) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join30(resolve5(runDir), "manifest.json");
-        if (!existsSync20(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
+        const mf = join31(resolve9(runDir), "manifest.json");
+        if (!existsSync21(mf)) fail(`no dossier at ${resolve9(runDir)} (no manifest.json)`);
         try {
           manifest = upgradeLegacyManifest(JSON.parse(readFileSync21(mf, "utf8")));
         } catch (e) {
@@ -22967,7 +23033,7 @@ async function dispatch2(p) {
         process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
         return;
       }
-      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve5(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
+      const head = runDir ? `ultrasearch ${VERSION} \u2014 ${resolve9(runDir)}` : `ultrasearch ${VERSION} \u2014 the engine, and the optional helpers`;
       process.stdout.write(`${head}
 
 ${formatServices(rows)}
@@ -23010,8 +23076,8 @@ ${formatServices(rows)}
     case "human": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve5(dir);
-      if (!existsSync20(join30(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
+      const rdir = resolve9(dir);
+      if (!existsSync21(join31(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
       const secs = p.values.timeout === void 0 ? void 0 : num4("timeout", p.values.timeout, 300);
       if (secs !== void 0 && secs < 1) fail(`invalid --timeout "${p.values.timeout}" (expected seconds \u2265 1)`);
       const { chosen, skipped, missing } = selectForHuman(rdir, p.values.id ? parseList(p.values.id) : void 0);
@@ -23098,7 +23164,7 @@ ${formatServices(rows)}
       }
       out.push("  ask the user:");
       for (const q of result.userQuestions) out.push(`    ? ${q}`);
-      out.push(`  written: ${resolve5(result.dir)}/BRAINSTORM.md`);
+      out.push(`  written: ${resolve9(result.dir)}/BRAINSTORM.md`);
       process.stdout.write(out.join("\n") + "\n");
       return;
     }
@@ -23106,7 +23172,7 @@ ${formatServices(rows)}
       const options = buildGatherOptions(p);
       const override = p.values.subquestions ? p.values.subquestions.split("|").map((s) => s.trim()).filter(Boolean) : void 0;
       const cap = p.values["max-subquestions"] ? num4("max-subquestions", p.values["max-subquestions"], 6) : void 0;
-      const runRoot = p.values["run-root"] ? resolve5(p.values["run-root"]) : void 0;
+      const runRoot = p.values["run-root"] ? resolve9(p.values["run-root"]) : void 0;
       const depth = p.values.depth !== void 0 ? options.depth : void 0;
       const result = runPlan(options.question, options.mode, override, cap, runRoot, depth);
       if (options.stdout) takeArtifacts();
@@ -23119,13 +23185,13 @@ ${formatServices(rows)}
       return;
     }
     case "merge": {
-      const runs = p.values.runs ? parseList(p.values.runs).map((d2) => resolve5(d2)) : [];
+      const runs = p.values.runs ? parseList(p.values.runs).map((d2) => resolve9(d2)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d2 of runs) if (!existsSync20(d2)) fail(`run dir not found: ${d2}`);
+      for (const d2 of runs) if (!existsSync21(d2)) fail(`run dir not found: ${d2}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
-        master: p.values.master ? resolve5(p.values.master) : void 0,
+        master: p.values.master ? resolve9(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
         mode: mode2,
         force: p.bools.has("force")
@@ -23151,7 +23217,7 @@ ${formatServices(rows)}
       const url = p.values.url;
       if (!url) fail("missing --url <u>");
       const browser = browserMode(p);
-      let r = await addSource(resolve5(dir), url, {
+      let r = await addSource(resolve9(dir), url, {
         question: p.values.q ?? p.values.question,
         title: p.values.title,
         citeUrl: p.values["cite-url"],
@@ -23161,7 +23227,7 @@ ${formatServices(rows)}
         browser
       });
       const refused = r.added ? void 0 : refusedForChallenge(url, r.note);
-      const handed = await handOffDuringRun(resolve5(dir), {
+      const handed = await handOffDuringRun(resolve9(dir), {
         browser,
         firecrawl: p.values.firecrawl,
         tell: say,
@@ -23185,7 +23251,7 @@ ${formatServices(rows)}
         if (r.id) process.stdout.write(`${r.id}
 `);
       }
-      const fetchHint = humanHint(resolve5(dir));
+      const fetchHint = humanHint(resolve9(dir));
       if (fetchHint) process.stderr.write(`ultrasearch: ${fetchHint}
 `);
       if (!r.id) await exitClosed(1);
@@ -23199,9 +23265,9 @@ ${formatServices(rows)}
       const files = p.values.files ? parseList(p.values.files) : [];
       const template = templateOf(p);
       if (template) {
-        if (!existsSync20(join30(resolve5(dir), "manifest.json"))) fail(`no dossier at ${resolve5(dir)} (no manifest.json)`);
-        setDossierTemplate(resolve5(dir), template);
-        process.stderr.write(`ultrasearch: ${resolve5(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
+        if (!existsSync21(join31(resolve9(dir), "manifest.json"))) fail(`no dossier at ${resolve9(dir)} (no manifest.json)`);
+        setDossierTemplate(resolve9(dir), template);
+        process.stderr.write(`ultrasearch: ${resolve9(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
 `);
         if (!spec && !listed.length && !files.length) return;
       }
@@ -23222,10 +23288,10 @@ ${formatServices(rows)}
         firecrawl: p.values.firecrawl,
         browser: browserMode(p)
       };
-      const web = hits.length ? await addSources(resolve5(dir), hits, enrichOpts) : void 0;
-      const local2 = files.length ? await addFiles(resolve5(dir), files, enrichOpts) : void 0;
+      const web = hits.length ? await addSources(resolve9(dir), hits, enrichOpts) : void 0;
+      const local2 = files.length ? await addFiles(resolve9(dir), files, enrichOpts) : void 0;
       const refused = (web?.results ?? []).flatMap((o) => o.added || o.repaired ? [] : refusedForChallenge(o.url, o.note) ?? []);
-      const handed = await handOffDuringRun(resolve5(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const handed = await handOffDuringRun(resolve9(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
       const results = [...web?.results ?? [], ...local2?.results ?? []].map((o) => {
         const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
         if (!h || o.added || o.repaired) return o;
@@ -23257,10 +23323,10 @@ ${formatServices(rows)}
         }
         const what = files.length ? hits.length ? "input(s)" : "file(s)" : "URL(s)";
         const fixed = repaired ? `, repaired ${repaired} in place` : "";
-        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve5(dir)}
+        process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve9(dir)}
 `);
       }
-      const ingestHint = humanHint(resolve5(dir));
+      const ingestHint = humanHint(resolve9(dir));
       if (ingestHint) process.stderr.write(`ultrasearch: ${ingestHint}
 `);
       if (!r.added && !repaired) await exitClosed(1);
@@ -23292,7 +23358,7 @@ ${formatServices(rows)}
           `  citing:   ${r.citing.calls} call(s) \xB7 ${s.uncited} never cited \xB7 ${s.unknownCalls} unknown number(s) \xB7 ${s.outOfOrder} out of order`,
           ...r.offline ? [] : [`  figures:  ${s.numeralsChecked} checked against abstracts, ${s.numeralsAbsent} not found`]
         ] : [`  citing:   none \u2014 pass --citing <file> to check orphans, order and figures`],
-        `  report:   ${join30(r.dir, "REFCHECK.md")}`,
+        `  report:   ${join31(r.dir, "REFCHECK.md")}`,
         ...r.references.some((e) => e.sourceId) ? [`  dossier:  ${r.dir} \u2014 source S<n> is reference n; write REPORT.md (verification template), then check --run ${r.dir}`] : []
       ];
       process.stderr.write(lines.join("\n") + "\n");
@@ -23301,7 +23367,7 @@ ${formatServices(rows)}
     case "render": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve5(dir);
+      const rdir = resolve9(dir);
       if (isNoWrite()) {
         if (p.bools.has("no-md")) {
           process.stderr.write("ultrasearch render: --stdout --no-md leaves nothing to emit (--stdout never produces HTML).\n");
@@ -23319,7 +23385,7 @@ ${formatServices(rows)}
       if (wantHtml || wantMd) {
         const ctx = loadRenderContext(rdir);
         if (wantHtml) {
-          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve5(p.values.out) : void 0);
+          written.html = writeHtml(ctx, p.values.out && p.values.run ? resolve9(p.values.out) : void 0);
           process.stderr.write(`ultrasearch: wrote ${written.html}
 `);
         }
@@ -23335,7 +23401,7 @@ ${formatServices(rows)}
     case "verify": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve5(dir);
+      const rdir = resolve9(dir);
       if (p.values.apply) {
         const result = applyVerdicts(rdir, resolveApplyPaths(p.values.apply));
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(result, null, 2) + "\n");
@@ -23377,10 +23443,10 @@ ${formatServices(rows)}
         process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
         process.exit(2);
       }
-      const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
+      const engineAbs = realpathSync5(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync20(resolve5(dir))) {
-          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve5(dir)}
+        if (!existsSync21(resolve9(dir))) {
+          process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve9(dir)}
 `);
           process.exit(2);
         }
@@ -23403,15 +23469,15 @@ ${formatServices(rows)}
       for (const w of res.written) lines.push(`  ${w}`);
       const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
       if (workflows.length) {
-        const orch = join30(resolve5(dir), "orchestration");
+        const orch = join31(resolve9(dir), "orchestration");
         lines.push("");
-        lines.push(`Fan out: dispatch one subagent per batch with ${join30(orch, "agents", "<role>.md")} (batches in ${join30(orch, "RUNBOOK.md")}),`);
+        lines.push(`Fan out: dispatch one subagent per batch with ${join31(orch, "agents", "<role>.md")} (batches in ${join31(orch, "RUNBOOK.md")}),`);
         lines.push("  or play the contracts yourself, sequentially, from RUNBOOK.md (or re-run with --eco).");
         lines.push("Optional \u2014 Claude Code: launch with the Workflow tool for one-call parallel fan-out:");
         for (const w of workflows) lines.push(`  Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold yourself (merge / verify --apply; RUNBOOK.md shows it) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join30(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join31(resolve9(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}
@@ -23430,6 +23496,9 @@ ${formatServices(rows)}
         // A default dossier makes `run` optional on every tool, for a server
         // dedicated to one piece of research.
         defaultRun: p.values.run,
+        // Off unless asked for: the server is normally the user's own agent,
+        // and the CLI it mirrors takes any path.
+        ...rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT) ?? {},
         maxResponseBytes
       };
       if (transport === "stdio") {
@@ -23472,14 +23541,14 @@ ${formatServices(rows)}
           void closeBrowserReads({ waitMs: 0 }).then(() => running.close()).finally(() => process.exit(0));
         });
       }
-      await new Promise((resolve9) => running.server.once("close", resolve9));
+      await new Promise((resolve10) => running.server.once("close", resolve10));
       return;
     }
     case "check": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const minSources = p.values["min-sources"] ? num4("min-sources", p.values["min-sources"], 1) : void 0;
-      const res = runCheck(resolve5(dir), {
+      const res = runCheck(resolve9(dir), {
         semantic: p.bools.has("semantic"),
         requireVerify: p.bools.has("require-verify"),
         strictNumerals: p.bools.has("strict-numerals"),
@@ -23489,7 +23558,7 @@ ${formatServices(rows)}
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify(res, null, 2) + "\n");
       } else {
-        process.stdout.write(formatCheckReport(res, resolve5(dir)) + "\n");
+        process.stdout.write(formatCheckReport(res, resolve9(dir)) + "\n");
       }
       if (!res.ok) process.exit(1);
       return;
@@ -23500,7 +23569,7 @@ ${formatServices(rows)}
       const where = p.values.where === void 0 ? void 0 : oneOf2("where", p.values.where, DROP_WHERE);
       const ids = p.values.id ? parseList(p.values.id) : [];
       if (!ids.length && !where) fail("drop: pass --id <S#,...> or --where wall|snippet|offtopic");
-      const r = dropSources(resolve5(dir), { ids, where, dryRun: p.bools.has("dry-run") });
+      const r = dropSources(resolve9(dir), { ids, where, dryRun: p.bools.has("dry-run") });
       if (p.bools.has("json")) process.stdout.write(JSON.stringify(r, null, 2) + "\n");
       else process.stdout.write(formatDropReport(r) + "\n");
       if (r.missing.length) process.exitCode = 1;
@@ -23509,7 +23578,7 @@ ${formatServices(rows)}
     case "relink": {
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
-      const rdir = resolve5(dir);
+      const rdir = resolve9(dir);
       if (p.bools.has("list")) {
         const issues = listIssues(rdir);
         if (p.bools.has("json")) process.stdout.write(JSON.stringify(issues, null, 2) + "\n");
@@ -23565,7 +23634,7 @@ function invokedAsThisModule() {
   if (argv1 === void 0) return false;
   const modulePath = fileURLToPath2(import.meta.url);
   try {
-    if (realpathSync4(argv1) === realpathSync4(modulePath)) return true;
+    if (realpathSync5(argv1) === realpathSync5(modulePath)) return true;
   } catch {
   }
   return import.meta.url === pathToFileURL2(argv1).href;

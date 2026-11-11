@@ -111,6 +111,7 @@ more than saving ten seconds.
 | `ULTRASEARCH_OCR_LANG` | `eng` | tesseract language code(s) for OCR, e.g. `fra+eng`. Needs the matching language pack (`brew install tesseract-lang`). |
 | `ULTRASEARCH_OCR_TIMEOUT_MS` | 300000 | Ceiling for OCR of ONE document. |
 | `ULTRASEARCH_NO_WRITE` | unset | `1` makes every command write nothing, exactly as `--stdout` does — globally, and for the MCP server, which parses no CLI flags. See "Running without writing". |
+| `ULTRASEARCH_MCP_ROOT` | unset | Same as `mcp --root`: every path an MCP client names must resolve inside this directory. |
 | `ULTRASEARCH_LOCK_WAIT_MS` | 600000 | How long a writing command waits for another process to finish writing the same dossier before it gives up (`0` = do not wait). |
 | `ULTRASEARCH_CACHE_DIR` | `$TMPDIR/ultrasearch/cache` | Where the fetch cache lives. |
 | `ULTRASEARCH_CACHE_TTL_MS` | 24h | Cache lifetime. `0` = always stale, always refetch. |

@@ -38,6 +38,8 @@ export interface AdapterOptions {
   defaultRun?: string;
   /** Whether the tools whose product is a file on disk are offered at all. */
   allowWrite?: boolean;
+  /** Confine every path argument to this directory (see confine.ts). */
+  root?: string;
 }
 
 export function ultrasearchAdapter(opts: AdapterOptions = {}): McpAdapter {

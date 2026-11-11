@@ -84,7 +84,7 @@ Usage:
   ultrasearch drop   --run <dossier-dir> (--id <S#,...> | --where wall|snippet|offtopic) [--dry-run] [--json]
   ultrasearch modes  [--json]
   ultrasearch doctor [--run <dossier-dir>] [--json]
-  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--port <n>] [--bind <addr>]
+  ultrasearch mcp    [--transport stdio|http] [--run <dossier-dir>] [--root <dir>] [--port <n>] [--bind <addr>]
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
@@ -287,6 +287,10 @@ Options:
                        that turns out to be a wall is re-read live even without it
   --out <dir>          Dossier output dir   (default: /tmp/ultrasearch/<slug>/<id>)
   --run <dir>          For render/check/verify/orchestrate: the run dir to operate on
+  --root <dir>         For 'mcp': confine every path a client names (run, out,
+                       master, run_root, runs, refs, citing) to this directory,
+                       symlinks followed; default dossiers are created inside it
+                       (also ULTRASEARCH_MCP_ROOT). Off by default
   --phase <name>       For 'orchestrate': emit one phase only — gather | verify
                        (exit 2 when its worklist does not exist yet)
   --eco                For 'orchestrate': emit only RUNBOOK.md + agents/*.md —
@@ -397,6 +401,7 @@ export const VALUE_FLAGS = new Set([
   "max-subquestions",
   "max-verify",
   "run-root",
+  "root",
   "shards",
   "shard",
   "min-sources",
@@ -893,6 +898,14 @@ function dossierWritten(p: Parsed): string | undefined {
   if (p.bools.has("list") || p.bools.has("dry-run")) return undefined;
   const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
   return dir ? resolve(dir) : undefined;
+}
+
+// `mcp --root`: an existing directory, or a refusal before the server starts.
+function rootOf(raw: string | undefined): { root: string } | undefined {
+  if (!raw?.trim()) return undefined;
+  const root = resolve(raw);
+  if (!existsSync(root) || !statSync(root).isDirectory()) fail(`--root ${root} is not a directory`);
+  return { root };
 }
 
 /** One line for the person at the terminal. */
@@ -1545,6 +1558,9 @@ async function dispatch(p: Parsed): Promise<void> {
         // A default dossier makes `run` optional on every tool, for a server
         // dedicated to one piece of research.
         defaultRun: p.values.run,
+        // Off unless asked for: the server is normally the user's own agent,
+        // and the CLI it mirrors takes any path.
+        ...(rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT) ?? {}),
         maxResponseBytes,
       };
 
