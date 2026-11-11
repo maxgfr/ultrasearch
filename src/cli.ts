@@ -65,6 +65,7 @@ import { probeServices, formatServices, stackControl, describeWebSearchLane } fr
 import { runRefcheck } from "./refcheck/index.js";
 import { setDossierTemplate } from "./templates.js";
 import { withDossierLock } from "./dossier-lock.js";
+import { defaultRunOutside } from "./mcp/confine.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -904,10 +905,11 @@ function dossierWritten(p: Parsed): string | undefined {
 }
 
 // `mcp --root`: an existing directory, or a refusal before the server starts.
-function rootOf(raw: string | undefined): { root: string } | undefined {
+function rootOf(raw: string | undefined, defaultRun: string | undefined): { root: string } | undefined {
   if (!raw?.trim()) return undefined;
   const root = resolve(raw);
   if (!existsSync(root) || !statSync(root).isDirectory()) fail(`--root ${root} is not a directory`);
+  if (defaultRunOutside(root, defaultRun && resolve(defaultRun))) fail(`--run ${resolve(defaultRun!)} is outside --root ${root}`);
   return { root };
 }
 
@@ -1563,7 +1565,7 @@ async function dispatch(p: Parsed): Promise<void> {
         defaultRun: p.values.run,
         // Off unless asked for: the server is normally the user's own agent,
         // and the CLI it mirrors takes any path.
-        ...(rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT) ?? {}),
+        ...(rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT, p.values.run) ?? {}),
         maxResponseBytes,
       };
 

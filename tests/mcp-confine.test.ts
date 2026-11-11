@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { callTool } from "../src/mcp/handlers.js";
-import { confineArgs } from "../src/mcp/confine.js";
+import { confineArgs, defaultRunOutside } from "../src/mcp/confine.js";
 
 const temps: string[] = [];
 const temp = (): string => {
@@ -85,6 +87,36 @@ describe("mcp --root", () => {
       expect(() => confineArgs("ultrasearch_gather", { question: "q", [key]: value }, root)).toThrow(/must be an absolute path inside/);
     }
     expect(() => confineArgs("ultrasearch_merge", { runs: ["rel/dir"] }, root)).toThrow(/must be an absolute path inside/);
+  });
+
+  it("refuses a `..` segment, which the OS would walk through a symlink", () => {
+    const root = temp();
+    const outside = temp();
+    symlinkSync(outside, join(root, "link"));
+    // Opened through the link, `link/..` is the parent of `outside`.
+    const sneaky = `${root}/link/../${basename(outside)}/anything.txt`;
+    expect(() => confineArgs("ultrasearch_refcheck", { refs: sneaky }, root)).toThrow(/must not contain a `\.\.` segment/);
+    expect(() => confineArgs("ultrasearch_merge", { runs: [`${root}/a/../b`] }, root)).toThrow(/`\.\.` segment/);
+  });
+
+  it("applies the --run default only to the tools that operate on a dossier", () => {
+    const root = temp();
+    const outside = temp();
+    expect(() => confineArgs("ultrasearch_gather", { question: "q" }, root, outside)).not.toThrow();
+    expect(() => confineArgs("ultrasearch_modes", {}, root, outside)).not.toThrow();
+    expect(() => confineArgs("ultrasearch_read", { path: "DOSSIER.md" }, root, outside)).toThrow(/--run default/);
+    expect(defaultRunOutside(root, outside)).toBe(true);
+    expect(defaultRunOutside(root, join(root, "d"))).toBe(false);
+    expect(defaultRunOutside(root, undefined)).toBe(false);
+  });
+
+  it("the server refuses to start with a --run default outside its --root", () => {
+    const root = temp();
+    const outside = temp();
+    const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "ultrasearch.mjs");
+    const r = spawnSync(process.execPath, [cli, "mcp", "--root", root, "--run", outside], { encoding: "utf8", input: "" });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain(`--run ${outside} is outside --root ${root}`);
   });
 
   it("is enforced by callTool, end to end", async () => {

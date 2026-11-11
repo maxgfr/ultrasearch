@@ -16,6 +16,23 @@ import { runId } from "../util.js";
 // directory under the temp root creates it under the fence instead: a dossier
 // the next call cannot reach would be no use.
 
+/** The tools that operate on one existing dossier, and so fall back to `--run`. */
+const RUN_TOOLS = new Set([
+  "ultrasearch_fetch",
+  "ultrasearch_ingest",
+  "ultrasearch_check",
+  "ultrasearch_relink",
+  "ultrasearch_drop",
+  "ultrasearch_verify",
+  "ultrasearch_render",
+  "ultrasearch_read",
+]);
+
+/** Whether a server's `--run` default lies outside its `--root`: refused at start. */
+export function defaultRunOutside(root: string, defaultRun: string | undefined): boolean {
+  return !!defaultRun && !inside(real(root), defaultRun);
+}
+
 /** The arguments that name a file or a directory, per kind. */
 const PATH_ARGS = ["run", "out", "master", "run_root", "refs", "citing"] as const;
 const PATH_LIST_ARGS = ["runs"] as const;
@@ -61,8 +78,12 @@ export function confineArgs(name: string, args: Record<string, unknown>, root: s
   // A relative path would be judged against the server's working directory,
   // which the client does not know and the fence does not cover: refused here,
   // before anything (a lock file included) is created from it.
+  // A `..` segment is refused outright: the fence resolves a path's symlinks
+  // after normalising it, while the OS walks `link/..` through the link — so
+  // `<root>/link/../f` is judged as `<root>/f` and opened outside the root.
   const check = (key: string, v: string): void => {
     if (!isAbsolute(v)) throw new ToolError(`\`${key}\` must be an absolute path inside ${fence} (got "${v}").`);
+    if (v.split(/[\\/]/).includes("..")) throw new ToolError(`\`${key}\` must not contain a \`..\` segment (got "${v}").`);
     if (!inside(fence, v)) refuse(key, v);
   };
   const blank = (key: string) => typeof out[key] !== "string" || !(out[key] as string).trim();
@@ -71,10 +92,11 @@ export function confineArgs(name: string, args: Record<string, unknown>, root: s
     const v = out[key];
     if (Array.isArray(v)) for (const item of v) if (typeof item === "string") check(key, item);
   }
-  // A default dossier set by the operator is theirs to place; one a client
-  // would inherit from outside the fence is not usable through it. A `run`
-  // left blank in any way (absent, null, "") falls back to it.
-  if (defaultRun && blank("run") && !inside(fence, defaultRun)) refuse("run (the server's --run default)", defaultRun);
+  // The operator's `--run` default is checked once, when the server starts
+  // (see `defaultRunOutside`); this is the same check for a server built in
+  // process. Only a tool that operates on a dossier falls back to it, and only
+  // when `run` is left blank in any way (absent, null, "").
+  if (defaultRun && RUN_TOOLS.has(name) && blank("run") && !inside(fence, defaultRun)) refuse("run (the server's --run default)", defaultRun);
 
   if (name === "ultrasearch_gather" && blank("out") && typeof out.question === "string") {
     const dir = defaultRunDir(typeof out.mode === "string" ? out.mode : "topic", out.question);
