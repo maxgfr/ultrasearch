@@ -5,7 +5,7 @@ import { FileHandle } from 'node:fs/promises';
 import { Readable, Writable } from 'node:stream';
 import { Server } from 'node:http';
 
-declare const ENGINE_VERSION = "1.37.1";
+declare const ENGINE_VERSION = "1.37.2";
 
 interface Brand {
     /** Human-readable engine consumer, used in notes and diagnostics. */
@@ -1062,8 +1062,6 @@ declare function dialHost(host: string): string;
 declare function getVersion(port: number, host?: string): Promise<BrowserVersion>;
 declare function listTargets(port: number, host?: string): Promise<TargetInfo[]>;
 declare function listPages(port: number, host?: string): Promise<TargetInfo[]>;
-/** Open a tab. Chrome >= 111 wants PUT; older and other builds only answer GET. */
-declare function newTarget(port: number, url?: string, host?: string): Promise<TargetInfo>;
 declare function closeTarget(port: number, id: string, host?: string): Promise<void>;
 declare function activateTarget(port: number, id: string, host?: string): Promise<void>;
 /** True when something answers DevTools on `port`. Never throws. */
@@ -1081,10 +1079,9 @@ declare const discovery_isPortAlive: typeof isPortAlive;
 declare const discovery_listPages: typeof listPages;
 declare const discovery_listTargets: typeof listTargets;
 declare const discovery_loopbackSocketUrl: typeof loopbackSocketUrl;
-declare const discovery_newTarget: typeof newTarget;
 declare const discovery_parseCdpEndpoint: typeof parseCdpEndpoint;
 declare namespace discovery {
-  export { type discovery_BrowserVersion as BrowserVersion, type discovery_CdpEndpoint as CdpEndpoint, type discovery_TargetInfo as TargetInfo, discovery_activateTarget as activateTarget, discovery_assertLoopback as assertLoopback, discovery_closeTarget as closeTarget, discovery_dialHost as dialHost, discovery_getVersion as getVersion, discovery_isPortAlive as isPortAlive, discovery_listPages as listPages, discovery_listTargets as listTargets, discovery_loopbackSocketUrl as loopbackSocketUrl, discovery_newTarget as newTarget, discovery_parseCdpEndpoint as parseCdpEndpoint };
+  export { type discovery_BrowserVersion as BrowserVersion, type discovery_CdpEndpoint as CdpEndpoint, type discovery_TargetInfo as TargetInfo, discovery_activateTarget as activateTarget, discovery_assertLoopback as assertLoopback, discovery_closeTarget as closeTarget, discovery_dialHost as dialHost, discovery_getVersion as getVersion, discovery_isPortAlive as isPortAlive, discovery_listPages as listPages, discovery_listTargets as listTargets, discovery_loopbackSocketUrl as loopbackSocketUrl, discovery_parseCdpEndpoint as parseCdpEndpoint };
 }
 
 /** The slice of a child process the launcher uses. */
@@ -1307,7 +1304,7 @@ declare class BrowserSession {
      * (a cold server, a render-blocking script that holds even DOMContentLoaded)
      * is the page now, still loading: it resolves, with a `note`.
      */
-    navigate(url: string, opts?: NavigateOptions): Promise<NavigationResult>;
+    navigate(given: string, opts?: NavigateOptions): Promise<NavigationResult>;
     /**
      * Run a history move or a reload and wait until the main frame shows another
      * document (or the same one, scrolled). One that committed but has not loaded
@@ -2782,7 +2779,7 @@ declare function forgeRef(ref: RepoRef, opts?: Pick<ForgeOptions, "kind">): Repo
  * fabricate one just to ask this question is exactly why a second copy of this
  * function grew downstream.
  */
-declare function apiBase(ref: Pick<RepoRef, "host"> | string, opts?: ForgeOptions): string;
+declare function apiBase(ref: (Pick<RepoRef, "host"> & Partial<Pick<RepoRef, "webUrl">>) | string, opts?: ForgeOptions): string;
 /**
  * Auth headers when a token is in the environment; none when it is not.
  *
@@ -5116,6 +5113,12 @@ interface McpAdapter {
      * overflow; only the skill knows which argument makes the result smaller.
      */
     capAdvice?: CapAdvice;
+    /**
+     * The tools this adapter already runs one at a time on its own (the browser
+     * tools, behind their run lock). They take none of the server's slots: held
+     * while queued on that lock, four of them kept every other tool waiting.
+     */
+    serialized?(name: string): boolean;
     /** Omit to advertise no prompts; the capability is declared either way. */
     prompts?: PromptDecl[];
     getPrompt?(name: string, args: Record<string, unknown>): PromptResult;
@@ -5156,6 +5159,14 @@ interface HttpOptions extends ServerOptions {
      * everyone's: the others limit what a caller can do, this limits who calls.
      */
     bearerToken?: string;
+    /**
+     * Serve no browser page unless its origin is named in `allowOrigin`, or a
+     * token guards the server. Loopback origins are otherwise allowed — a local
+     * dev UI talking to its own server — but when this server drives the user's
+     * browser (`mcp --browser`), a page on any localhost port could run script
+     * in it through webindex_browser_eval.
+     */
+    strictOrigin?: boolean;
 }
 interface RunningHttpServer {
     server: Server;
