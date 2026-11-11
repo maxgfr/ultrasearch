@@ -5,7 +5,7 @@ import { type ExtractResult, looksLikeWall } from "./engine.js";
 // (webindex ≥ 1.36: `looksLikeWall`, `wallPattern`, `usefulChars`…, lifted from
 // this file). Re-exported so the import path the modules use stays the same;
 // the cache-bypassing read below is this skill's policy and stays here.
-export { isWordedWall, looksLikeWall, MIN_USEFUL_CHARS, proseOutweighsWall, usefulChars, wallPattern } from "./engine.js";
+export { isWordedWall, looksLikeWall, MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./engine.js";
 
 /**
  * A cached read that refuses to serve a cached WALL.

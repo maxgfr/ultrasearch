@@ -7,14 +7,8 @@
 
 export {
   docFormatForUrl,
-  docFormatForContentType,
   DOC_EXTENSIONS,
   extractDocument,
   enabledDocExtractors,
   resetDocLadderCache,
-  DOC_EXTRACTORS,
-  type DocFormat,
-  type DocExtraction,
-  type DocExtractorId,
-  type DocLadderOptions,
 } from "../engine.js";

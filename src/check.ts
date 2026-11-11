@@ -22,11 +22,6 @@ import { sourceTextWithoutPassageLabels } from "./passages.js";
 import { MIN_USEFUL_CHARS, usefulChars, wallPattern } from "./walls.js";
 import { hasOpenQuestions } from "./templates.js";
 
-// The claim parser lives in claims.ts (shared with verify/render); re-export
-// the historical surface so existing importers keep working unchanged.
-export { codeMask, hintMask, appendixMask, extractUnits, unitsOfFile, unitSourceTokens } from "./claims.js";
-export type { Unit } from "./claims.js";
-
 // Tiers + extra docs that may carry citations. REPORT is hard-checked for
 // per-claim coverage; SUMMARY/glossary are warn-only (a digest needn't repeat a
 // source on every line), but a dangling [S#] in ANY file fails.

@@ -2,4 +2,4 @@
 //
 // Generic promise-chain-per-key. Kept as an import path.
 
-export { resetRunLocks, withRunLock } from "./engine.js";
+export { withRunLock } from "./engine.js";
