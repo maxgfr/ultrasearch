@@ -82,6 +82,13 @@ function alive(pid: number): boolean {
 // file never got its holder written (a crash between the two steps) and has
 // been sitting there for longer than that takes.
 function abandoned(path: string, holder: Holder | undefined): boolean {
+  // Our own pid is alive by definition, but the lock is only ours if this
+  // process took it: one left by an earlier process that had the same pid (a
+  // restarted container hands it out again) is as dead as any other.
+  if (holder && holder.host === hostname() && holder.pid === process.pid) {
+    const mine = held.get(path);
+    return !mine || mine.since !== holder.since;
+  }
   if (holder) return holder.host === hostname() && !alive(holder.pid);
   try {
     return Date.now() - statSync(path).mtimeMs > 10_000;
@@ -99,12 +106,18 @@ function abandoned(path: string, holder: Holder | undefined): boolean {
 // lock that is still the abandoned one is removed. A live lock can only be
 // removed by its own holder (see release), so nothing can replace the dead one
 // between that second read and the unlink.
-function clearAbandoned(path: string): void {
+//
+// Returns "cleared" when the lock is gone, "busy" when another waiter is on it
+// (wait, then look again), or the reason it cannot be removed at all — a
+// dossier directory this user may not write, say — so the caller can stop
+// instead of retrying for ever.
+function clearAbandoned(path: string): "cleared" | "busy" | { error: string } {
   const clearing = `${path}.clearing`;
   let fd: number;
   try {
     fd = openSync(clearing, "wx");
-  } catch {
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") return { error: (e as Error).message };
     // Another waiter is clearing. One that died doing it left this file: it
     // takes milliseconds, so one this old is nobody's.
     try {
@@ -112,13 +125,14 @@ function clearAbandoned(path: string): void {
     } catch {
       /* gone already */
     }
-    return;
+    return "busy";
   }
   closeSync(fd);
   try {
     if (existsSync(path) && abandoned(path, readHolder(path))) unlinkSync(path);
-  } catch {
-    /* someone else's business now: the next attempt sees what is there */
+    return "cleared";
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? "cleared" : { error: (e as Error).message };
   } finally {
     removeQuietly(clearing);
   }
@@ -181,8 +195,11 @@ export async function withDossierLock<T>(dir: string, command: string, fn: () =>
   while (!(mine = tryAcquire(path, command))) {
     const holder = readHolder(path);
     if (abandoned(path, holder)) {
-      clearAbandoned(path);
-      continue;
+      const cleared = clearAbandoned(path);
+      if (cleared === "cleared") continue;
+      if (cleared !== "busy") {
+        throw new Error(`${path} was left by a process that is gone (${describe(holder)}), and could not be removed: ${cleared.error} — delete it by hand`);
+      }
     }
     if (Date.now() >= deadline) {
       throw new Error(

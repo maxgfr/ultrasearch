@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dirname } from "node:path";
@@ -201,13 +201,36 @@ describe("one writer per dossier, across processes", () => {
 
   it("gives up on a live holder after the wait, naming it and the file to delete", async () => {
     const dir = temp();
-    // This very process holds it: alive by definition.
-    writeFileSync(lockOf(dir), holder(process.pid));
+    // The process that started this test runner: alive, and not us.
+    writeFileSync(lockOf(dir), holder(process.ppid));
     await expect(withDossierLock(dir, "fetch", () => undefined, { waitMs: 30, pollMs: 5 })).rejects.toThrow(
-      new RegExp(`is being written by another ultrasearch process \\(pid ${process.pid}, \`fetch\`, since 2026-11-10.*delete .*\\${LOCK_FILE}`),
+      new RegExp(`is being written by another ultrasearch process \\(pid ${process.ppid}, \`fetch\`, since 2026-11-10.*delete .*\\${LOCK_FILE}`),
     );
     // A lock it does not own is left exactly as found.
-    expect(readFileSync(lockOf(dir), "utf8")).toBe(holder(process.pid));
+    expect(readFileSync(lockOf(dir), "utf8")).toBe(holder(process.ppid));
+  });
+
+  it("takes over a lock bearing its own pid that it never took — a restarted container reuses pids", async () => {
+    const dir = temp();
+    writeFileSync(lockOf(dir), holder(process.pid));
+    let ran = false;
+    await withDossierLock(dir, "fetch", () => void (ran = true), { waitMs: 0 });
+    expect(ran).toBe(true);
+  });
+
+  it("stops at once, naming the file, when a dead lock cannot be removed", async () => {
+    const dir = temp();
+    writeFileSync(lockOf(dir), holder(DEAD_PID));
+    chmodSync(dir, 0o555);
+    try {
+      const t0 = Date.now();
+      await expect(withDossierLock(dir, "drop", () => undefined, { waitMs: 60_000, pollMs: 5 })).rejects.toThrow(
+        /was left by a process that is gone .* could not be removed: .* delete it by hand/,
+      );
+      expect(Date.now() - t0).toBeLessThan(2000);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
   });
 
   it("never removes a lock that is no longer the one it took", async () => {
@@ -284,7 +307,7 @@ describe("one writer per dossier, across processes", () => {
   it("the MCP server: a read or a dry run never waits on another process's lock, a write does", async () => {
     const dir = temp();
     await runGather(opts({ out: dir }));
-    writeFileSync(lockOf(dir), holder(process.pid));
+    writeFileSync(lockOf(dir), holder(process.ppid));
     process.env.ULTRASEARCH_LOCK_WAIT_MS = "100";
     try {
       const t0 = Date.now();
