@@ -65,6 +65,9 @@ function envInt(suffix, def, min = 0, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isFinite(n)) return def;
   return Math.min(max, Math.max(min, Math.trunc(n)));
 }
+function countOption(value, def) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(1, Math.floor(value)) : def;
+}
 var DEFAULT_BRAND, current, MAX_TIMER_MS;
 var init_brand = __esm({
   "src/brand.ts"() {
@@ -1600,11 +1603,11 @@ function openDocumentText(xml, budget) {
       const p = paragraphs[paragraphs.length - 1];
       const table = tables[tables.length - 1];
       if (name === "text:p" || name === "text:h") {
-        const level = name === "text:h" ? Math.min(6, Number(attr(attrs, "text:outline-level")) || 1) : 0;
+        const level = name === "text:h" ? Math.min(6, Math.max(1, Number(attr(attrs, "text:outline-level")) || 1)) : 0;
         paragraphs.push({ text: "", prefix: level ? `${"#".repeat(level)} ` : listItem && !table ? "- " : "" });
         listItem = false;
       } else if (name === "text:list-item") listItem = true;
-      else if (name === "text:s") add2(p, " ".repeat(Math.min(100, Number(attr(attrs, "text:c")) || 1)));
+      else if (name === "text:s") add2(p, " ".repeat(Math.min(100, Math.max(1, Number(attr(attrs, "text:c")) || 1))));
       else if (name === "text:tab") add2(p, "	");
       else if (name === "text:line-break") add2(p, "\n");
       else if (name === "office:spreadsheet") spreadsheet = true;
@@ -1699,7 +1702,9 @@ function packageText(bytes, budget) {
 function readOffice(bytes) {
   try {
     const text = packageText(bytes, new Budget()).replace(/\n{3,}/g, "\n\n").trim();
-    return { text: text.length > MAX_OUTPUT_CHARS ? text.slice(0, text.lastIndexOf("\n", MAX_OUTPUT_CHARS)) : text };
+    if (text.length <= MAX_OUTPUT_CHARS) return { text };
+    const lineEnd = text.lastIndexOf("\n", MAX_OUTPUT_CHARS);
+    return { text: text.slice(0, lineEnd < 0 ? MAX_OUTPUT_CHARS : lineEnd) };
   } catch (e) {
     return { failure: e instanceof Refused ? e.message : "the built-in reader could not parse it" };
   }
@@ -2933,6 +2938,7 @@ function foldTerm(raw) {
   return foldPlural(deaccent(raw.toLowerCase()));
 }
 function subtokens(raw) {
+  if (raw.length > MAX_IDENT) return [];
   const spaced = raw.replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{L})(\\p{N})", "gu"), "$1 $2").replace(new RegExp("(\\p{N})(\\p{L})", "gu"), "$1 $2");
   const parts = spaced.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
   if (parts.length < 2) return [];
@@ -2950,6 +2956,7 @@ function expandTokens(tokens, max = 8) {
   const byCanonical = /* @__PURE__ */ new Map();
   for (const raw of tokens) {
     if (byCanonical.size >= max) break;
+    if (raw.length > MAX_KEYWORD_CHARS) continue;
     const canonical = foldTerm(raw);
     if (!canonical || byCanonical.has(canonical)) continue;
     const plain2 = deaccent(raw.toLowerCase());
@@ -3103,7 +3110,7 @@ function slugify(input, opts = {}) {
   const head = readable.slice(0, Math.max(0, max - tag.length - 1)).replace(/-+$/, "");
   return head ? `${head}-${tag}` : tag;
 }
-var STOPWORDS, LOCALE_STOPWORDS, extraSets, TOKEN_RE, CJK_CHAR, CJK_RUNS, ACCENT_CLASSES, BASE_OF, NON_ASCII, MAX_PATTERNS, VARIANT_PRIORITY, LIGATURE_SPELLING, LIGATURE_OF, SHORT_VARIANT, ATX_OPEN, ATX_CLOSE, MD_ESCAPE;
+var STOPWORDS, LOCALE_STOPWORDS, extraSets, TOKEN_RE, CJK_CHAR, CJK_RUNS, ACCENT_CLASSES, BASE_OF, NON_ASCII, MAX_IDENT, MAX_PATTERNS, MAX_KEYWORD_CHARS, VARIANT_PRIORITY, LIGATURE_SPELLING, LIGATURE_OF, SHORT_VARIANT, ATX_OPEN, ATX_CLOSE, MD_ESCAPE;
 var init_text = __esm({
   "src/text.ts"() {
     "use strict";
@@ -3323,7 +3330,9 @@ var init_text = __esm({
       for (const ch of cls) BASE_OF.set(ch, base2);
     }
     NON_ASCII = /[\u0080-\uffff]/;
+    MAX_IDENT = 64;
     MAX_PATTERNS = 24;
+    MAX_KEYWORD_CHARS = 256;
     VARIANT_PRIORITY = { original: 0, folded: 1, subtoken: 2 };
     LIGATURE_SPELLING = { \u0153: "oe", \u00E6: "ae", \u00DF: "ss" };
     LIGATURE_OF = { oe: "\u0153", ae: "\xE6", ss: "\xDF" };
@@ -3437,7 +3446,7 @@ function pushTerm(raw, out, expand2) {
   const t = foldCached(raw);
   if (t.length < 2) return;
   out.push(t);
-  if (!expand2 || raw.length > MAX_IDENT) return;
+  if (!expand2 || raw.length > MAX_IDENT2) return;
   for (const sub of subtermsCached(raw, t)) out.push(sub);
 }
 function pushBigrams(run, out) {
@@ -3492,9 +3501,9 @@ function bm25Stem(t) {
 function docTokens(doc, titleWeight, headingWeight, body) {
   const out = body ? [...body] : bm25Tokenize(doc.body);
   const headings = bm25Tokenize(doc.headings);
-  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  for (let r = 0; r < headingWeight; r++) for (const t of headings) out.push(t);
   const title = bm25Tokenize(doc.title);
-  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  for (let r = 0; r < titleWeight; r++) for (const t of title) out.push(t);
   for (let i = 0; i < out.length; i++) out[i] = bm25Stem(out[i]);
   return out;
 }
@@ -3829,7 +3838,7 @@ function fuse(lists, keyOf = (item) => canonicalizeUrl(item.url)) {
   for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
   const merged = [...best.values()];
   for (const it of merged) it.score = fused.get(keyOf(it)) ?? 0;
-  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  merged.sort((a, b) => b.score - a.score || byCodeUnit(a.url, b.url));
   return merged;
 }
 function coverageWindow(nTerms) {
@@ -3842,7 +3851,7 @@ function termCoverage(items, queryTerms, top = coverageWindow(queryTerms.length)
 function underCovered(cov, min = UNDER_COVERED_MIN) {
   return cov.filter((c) => c.sources < min).map((c) => c.term);
 }
-var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, STEM_CACHE_MAX, stemCache, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT, UNDER_COVERED_MIN;
+var byCodeUnit, indexTokenCache, WORD_SPLIT, NON_ASCII2, CJK_CHAR2, CJK_RUNS2, IDENT_BOUNDARY, MAX_IDENT2, FOLD_CACHE_MAX, foldCache, NO_SUBTERMS, subtermCache, subtermExtras, STEM_CACHE_MAX, stemCache, MASK32, unsigned64, PAIR_CACHE_MAX, URL_IN_TEXT, UNDER_COVERED_MIN;
 var init_rank = __esm({
   "src/rank.ts"() {
     "use strict";
@@ -3857,7 +3866,7 @@ var init_rank = __esm({
     CJK_CHAR2 = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
     CJK_RUNS2 = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
     IDENT_BOUNDARY = new RegExp("_|[\\p{Ll}\\p{N}]\\p{Lu}|\\p{Lu}\\p{Lu}\\p{Ll}|\\p{L}\\p{N}|\\p{N}\\p{L}", "u");
-    MAX_IDENT = 64;
+    MAX_IDENT2 = 64;
     FOLD_CACHE_MAX = 5e4;
     foldCache = /* @__PURE__ */ new Map();
     NO_SUBTERMS = [];
@@ -3877,7 +3886,7 @@ var init_rank = __esm({
 import { existsSync as existsSync3, readdirSync as readdirSync3, readFileSync as readFileSync5, statSync } from "fs";
 import { join as join5, resolve } from "path";
 function videoRoot(out) {
-  return resolve(out ?? env("VIDEO_DIR") ?? userTmpDir("video"));
+  return resolve((out?.trim() ? out : void 0) ?? env("VIDEO_DIR") ?? userTmpDir("video"));
 }
 function servesLang(meta, lang) {
   if (!lang) return true;
@@ -3996,7 +4005,7 @@ function searchVideoRuns(dir, query, opts = {}) {
     }
   }
   const index = buildBm25Index(query, docs);
-  const scored = docs.map((d) => ({ d, score: Math.round(bm25Score(index, d) * 1e3) / 1e3 })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.d.key.localeCompare(b.d.key) || a.d.parts[0].start - b.d.parts[0].start).slice(0, opts.limit ?? 10);
+  const scored = docs.map((d) => ({ d, score: Math.round(bm25Score(index, d) * 1e3) / 1e3 })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || (a.d.key < b.d.key ? -1 : a.d.key > b.d.key ? 1 : 0) || a.d.parts[0].start - b.d.parts[0].start).slice(0, opts.limit ?? 10);
   return scored.map(({ d, score }) => {
     let best = d.parts[0];
     let top = 0;
@@ -5450,7 +5459,9 @@ function detectBrowserBinary(opts = {}) {
   const explicit = opts.env ? opts.env("BROWSER_BIN") : env("BROWSER_BIN");
   if (explicit) {
     const bare = !/[\\/]/.test(explicit);
-    const options = bare ? (sys.PATH ?? "").split(":").filter(Boolean).map((d) => posix.join(d, explicit)) : [explicit];
+    const win = platform === "win32";
+    const names = win && !/\.[a-z0-9]+$/i.test(explicit) ? [explicit, `${explicit}.exe`] : [explicit];
+    const options = bare ? (sys.PATH ?? (win ? sys.Path : void 0) ?? "").split(win ? ";" : ":").filter(Boolean).flatMap((d) => names.map((n) => (win ? win32 : posix).join(d, n))) : [explicit];
     const found = options.find(exists);
     if (!found) throw new Error(`BROWSER_BIN points at "${explicit}", which is not an executable file`);
     return { kind: kindOf(found), path: found };
@@ -8181,7 +8192,10 @@ function probeFirecrawl(base2, explicit = false) {
     const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS2);
     try {
       const res = await fetch(`${base2}/`, { signal: ctrl.signal });
-      const body = await res.text().catch(() => "");
+      const body = await readCappedBytes(res, PROBE_BODY_BYTES).then(
+        (b) => b.toString("utf8"),
+        () => ""
+      );
       return explicit || looksLikeFirecrawl(res.headers.get("content-type"), body);
     } catch {
       return false;
@@ -8324,7 +8338,7 @@ async function searchViaFirecrawl(query, limit, opts = {}) {
   }
   return { hits: mapSearchResponse(r.data) };
 }
-var FIRECRAWL_DEFAULT_BASE, PROBE_TIMEOUT_MS2, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, SERVER_MARGIN_MS, SCRAPE_MAX_AGE_MS, PROBE_DOWN_TTL_MS, ProbeMemo, probeCache, prefixCache;
+var FIRECRAWL_DEFAULT_BASE, PROBE_TIMEOUT_MS2, PROBE_BODY_BYTES, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, SERVER_MARGIN_MS, SCRAPE_MAX_AGE_MS, PROBE_DOWN_TTL_MS, ProbeMemo, probeCache, prefixCache;
 var init_firecrawl = __esm({
   "src/firecrawl.ts"() {
     "use strict";
@@ -8334,6 +8348,7 @@ var init_firecrawl = __esm({
     init_trim();
     FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
     PROBE_TIMEOUT_MS2 = 2e3;
+    PROBE_BODY_BYTES = 4096;
     SCRAPE_TIMEOUT_MS = 45e3;
     SEARCH_TIMEOUT_MS = 3e4;
     SERVER_MARGIN_MS = { scrape: 5e3, search: 2e3 };
@@ -9081,7 +9096,15 @@ async function fetchAndExtract(url, opts = {}) {
   if (opts.signal?.aborted) return cancelled();
   const video = opts.video === false ? void 0 : knownVideo(url);
   if (video) {
-    if (opts.authorizeUrl && !await opts.authorizeUrl(url)) return { text: "", finalUrl: url, status: 0, note: `Refused ${url}: not a public address.` };
+    if (opts.authorizeUrl) {
+      let refusal2;
+      try {
+        if (!await opts.authorizeUrl(url)) refusal2 = "the URL is not authorized";
+      } catch (e) {
+        refusal2 = `its authorization failed (${e.message})`;
+      }
+      if (refusal2) return { text: "", finalUrl: url, status: 0, note: `Refused ${url}: ${refusal2}.` };
+    }
     const t = await transcribeVideo(url, {
       lang: opts.acceptLanguage?.split(/[,;]/)[0]?.trim() || void 0,
       signal: opts.signal,
@@ -9187,7 +9210,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
       asBrowser ? { ...fetchOpts, userAgent: contactUa() } : { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" }
     );
     if (opts.signal?.aborted) return cancelled();
-    if (!challengeUrl(again.url)) res = again;
+    if (again.status !== 0 && !challengeUrl(again.url)) res = again;
   }
   if (challengeUrl(res.url)) {
     seen.page = true;
@@ -9197,7 +9220,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
   }
   if (!res.ok) {
-    seen.page = true;
+    seen.page = !(res.truncated && res.status >= 200 && res.status < 300);
     const wait = res.retryAfterMs !== void 0 ? `, retry after ${Math.ceil(res.retryAfterMs / 1e3)} s` : "";
     const why = res.status === 429 ? `rate-limited (HTTP 429${wait})` : `status ${res.status}${res.error ? ", " + res.error : ""}${wait}`;
     return {
@@ -10558,7 +10581,7 @@ var init_read = __esm({
 });
 
 // src/version.ts
-var ENGINE_VERSION = "1.37.0";
+var ENGINE_VERSION = "1.37.1";
 
 // src/index.ts
 init_brand();
@@ -10658,6 +10681,7 @@ var Renderer = class {
     this.refs = { ...table.refs };
     this.containers = new Set(table.containers ?? []);
     this.next = table.next;
+    for (const [k, v] of Object.entries(this.refs)) if (!this.refOf.has(v)) this.refOf.set(v, k);
   }
   frames;
   hints;
@@ -10669,10 +10693,18 @@ var Renderer = class {
   controls = [];
   seen = /* @__PURE__ */ new Set();
   trees = /* @__PURE__ */ new Map();
+  /**
+   * The ref of a node, by its backendDOMNodeId. Looked up in a map built once:
+   * scanning the table for every node made a snapshot quadratic in its refs,
+   * and a single-page app's table only grows — 5000 refs took seconds.
+   */
+  refOf = /* @__PURE__ */ new Map();
   refFor(backendId) {
-    for (const [k2, v] of Object.entries(this.refs)) if (v === backendId) return k2;
+    const known = this.refOf.get(backendId);
+    if (known !== void 0) return known;
     const k = `e${this.next++}`;
     this.refs[k] = backendId;
+    this.refOf.set(backendId, k);
     return k;
   }
   frameTree(backendId) {
@@ -10694,7 +10726,7 @@ var Renderer = class {
     const out = [];
     for (const id of n.childIds ?? []) {
       const c = tree.byId.get(id);
-      if (c) out.push(...this.collect(tree, c, parent));
+      if (c) for (const item of this.collect(tree, c, parent)) out.push(item);
     }
     return out;
   }
@@ -10799,7 +10831,8 @@ function renderSnapshot(nodes, opts) {
       if (opts.interactive) flat(over, lines, opts.refs.url);
       else nested(over, 1, lines);
       if (lines.length === 0) continue;
-      all.push({ text: OVERLAY_HEADER, ref: false }, ...opts.interactive ? lines.map((l) => ({ ...l, text: `  ${l.text}` })) : lines);
+      all.push({ text: OVERLAY_HEADER, ref: false });
+      for (const l of lines) all.push(opts.interactive ? { ...l, text: `  ${l.text}` } : l);
     }
     if (main.root) items = merge(r.collect(main, main.root));
   }
@@ -11002,12 +11035,58 @@ init_exec2();
 init_brand();
 init_exec2();
 init_forge_host();
-init_text();
 import { createHash as createHash2, randomBytes as randomBytes2 } from "crypto";
-import { existsSync as existsSync8, mkdirSync as mkdirSync4, readdirSync as readdirSync6, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync6 } from "fs";
+import { existsSync as existsSync8, mkdirSync as mkdirSync5, readdirSync as readdirSync6, renameSync as renameSync4, rmSync as rmSync6, statSync as statSync6 } from "fs";
 import { basename as basename3, join as join13, resolve as resolve4 } from "path";
+
+// src/private-dir.ts
+init_no_write();
+import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync4 } from "fs";
+import { dirname } from "path";
+function openPrivateTmpDir(dir, create) {
+  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
+  if (create) mkdirSync4(dirname(dirname(dir)), { recursive: true });
+  for (const p of [dirname(dir), dir]) {
+    if (create) mkdirPrivate(p);
+    let st;
+    try {
+      st = lstatSync2(p);
+    } catch (e) {
+      if (e.code === "ENOENT") return {};
+      return { refused: `${p} cannot be inspected (${e.message})` };
+    }
+    if (st.isSymbolicLink()) return { refused: `${p} is a symbolic link` };
+    if (!st.isDirectory()) return { refused: `${p} is not a directory` };
+    if (st.uid !== uid) return { refused: `${p} belongs to another user` };
+    if (st.mode & 18) return { refused: `${p} is writable by other users` };
+    if (st.mode & 63 && !isNoWrite()) {
+      try {
+        chmodSync2(p, 448);
+      } catch {
+      }
+    }
+  }
+  return { dir };
+}
+function mkdirPrivate(p) {
+  try {
+    mkdirSync4(p, { mode: 448 });
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+}
+
+// src/repo.ts
+init_text();
 function repoCacheRoot() {
   return env("REPO_DIR") ?? brand().repoDir ?? userTmpDir("repos");
+}
+function openRepoCache() {
+  const root = repoCacheRoot();
+  if (env("REPO_DIR") !== void 0 || brand().repoDir !== void 0 || typeof process.getuid !== "function") return root;
+  const { refused } = openPrivateTmpDir(root, true);
+  if (refused) throw new Error(`the clone cache is not used: ${refused}. Remove it, or set ${envName("REPO_DIR")} to a directory only you can write.`);
+  return root;
 }
 var cloneTimeoutMs = () => envInt("GIT_CLONE_TIMEOUT_MS", 3e5, 1e3, MAX_TIMER_MS);
 var fetchTimeoutMs = () => envInt("GIT_FETCH_TIMEOUT_MS", 12e4, 1e3, MAX_TIMER_MS);
@@ -11123,10 +11202,11 @@ function repoSegments(host, rest, kind) {
 async function ensureClone(ref, opts = {}) {
   if (ref.isLocal) return resolve4(ref.raw);
   if (!ref.cloneUrl) throw new Error(`"${ref.raw}" does not name a repository that can be cloned`);
-  if (!have("git")) throw new Error(`git is not installed or not on PATH \u2014 cannot clone ${ref.cloneUrl}`);
+  if (!have("git")) throw new Error(`git is not installed or not on PATH \u2014 cannot clone ${shownUrl(ref.cloneUrl)}`);
   const branch = opts.branch?.trim() || void 0;
   if (branch?.startsWith("-")) throw new Error(`"${branch}" is not a branch name`);
-  const dir = join13(repoCacheRoot(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
+  if (!ref.slug || ref.slug === "." || ref.slug === ".." || /[/\\\0]/.test(ref.slug)) throw new Error(`"${ref.slug}" is not a repository slug`);
+  const dir = join13(openRepoCache(), branch ? `${ref.slug}@${branchSlug(branch)}` : ref.slug);
   const pending = inflight2.get(dir);
   if (pending && !opts.refresh) {
     return pending.catch((e) => {
@@ -11160,6 +11240,13 @@ async function obtainClone(ref, dir, opts) {
   if (existsSync8(join13(target, ".git"))) return opts.refresh ? refreshClone(ref, target, opts.branch) : target;
   return freshClone(ref, dir, opts.branch);
 }
+function shownUrl(cloneUrl) {
+  return (cloneUrl ?? "").replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1");
+}
+function gitSaid(ref, r) {
+  const said = r.stderr.trim() || `exit ${r.status}`;
+  return ref.cloneUrl ? said.split(ref.cloneUrl).join(shownUrl(ref.cloneUrl)) : said;
+}
 async function refreshClone(ref, dir, branch) {
   deepened.delete(dir);
   const probe = await shAsync("git", ["-C", dir, "rev-parse", "--is-shallow-repository"], { timeoutMs: 1e4 });
@@ -11168,13 +11255,12 @@ async function refreshClone(ref, dir, branch) {
     timeoutMs: fetchTimeoutMs()
   });
   if (!fetched.ok) {
-    throw Object.assign(
-      new Error(`refresh failed for ${ref.cloneUrl}: ${fetched.stderr.trim() || `exit ${fetched.status}`} (the cached tree at ${dir} is unchanged)`),
-      { cachedTree: dir }
-    );
+    throw Object.assign(new Error(`refresh failed for ${shownUrl(ref.cloneUrl)}: ${gitSaid(ref, fetched)} (the cached tree at ${dir} is unchanged)`), {
+      cachedTree: dir
+    });
   }
   const reset = await shAsync("git", ["-C", dir, "reset", "--quiet", "--hard", "FETCH_HEAD"], { timeoutMs: fetchTimeoutMs() });
-  if (!reset.ok) throw new Error(`refresh of ${dir} fetched ${ref.cloneUrl} but could not check it out: ${reset.stderr.trim() || `exit ${reset.status}`}`);
+  if (!reset.ok) throw new Error(`refresh of ${dir} fetched ${shownUrl(ref.cloneUrl)} but could not check it out: ${gitSaid(ref, reset)}`);
   return dir;
 }
 var STALE_STAGING_MS = 24 * 60 * 60 * 1e3;
@@ -11195,7 +11281,7 @@ function sweepStaging(staging) {
 }
 async function freshClone(ref, dir, branch) {
   const staging = join13(repoCacheRoot(), ".partial");
-  mkdirSync4(staging, { recursive: true });
+  mkdirSync5(staging, { recursive: true });
   sweepStaging(staging);
   const attempt = async (filter) => {
     const tmp = join13(staging, `${basename3(dir)}-${process.pid}-${randomBytes2(4).toString("hex")}`);
@@ -11211,20 +11297,20 @@ async function freshClone(ref, dir, branch) {
     if (!done.r.ok) {
       throw new Error(
         [
-          `git clone failed for ${ref.cloneUrl}`,
-          `  attempt 1 (--filter=blob:none): ${first.stderr.trim() || `exit ${first.status}`}`,
-          `  attempt 2 (no filter):          ${done.r.stderr.trim() || `exit ${done.r.status}`}`
+          `git clone failed for ${shownUrl(ref.cloneUrl)}`,
+          `  attempt 1 (--filter=blob:none): ${gitSaid(ref, first)}`,
+          `  attempt 2 (no filter):          ${gitSaid(ref, done.r)}`
         ].join("\n")
       );
     }
   }
-  if (!existsSync8(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${ref.cloneUrl}`);
+  if (!existsSync8(done.tmp) || readdirSync6(done.tmp).length === 0) throw new Error(`clone produced an empty tree for ${shownUrl(ref.cloneUrl)}`);
   if (existsSync8(dir) && !existsSync8(join13(dir, ".git"))) rmSync6(dir, { recursive: true, force: true });
   try {
     renameSync4(done.tmp, dir);
   } catch (e) {
     discard(done.tmp);
-    if (!existsSync8(join13(dir, ".git"))) throw new Error(`could not move the clone of ${ref.cloneUrl} into ${dir}: ${e.message}`);
+    if (!existsSync8(join13(dir, ".git"))) throw new Error(`could not move the clone of ${shownUrl(ref.cloneUrl)} into ${dir}: ${e.message}`);
   }
   return dir;
 }
@@ -11575,7 +11661,7 @@ function relaxTerms(terms) {
   return [...best, ...qualifiers];
 }
 async function searchOnce(ref, forge, repoAt, terms, kind, opts) {
-  const limit = Math.max(1, opts.limit ?? 10);
+  const limit = countOption(opts.limit, 10);
   const q = terms.join(" ");
   if (forge === "github") {
     const canon = await canonicalLookup(ref, opts);
@@ -11625,7 +11711,7 @@ async function listReleases(ref, opts = {}) {
   const forge = forgeKind(ref.host, opts);
   const repoAt = forge && repoPath(ref, forge);
   if (!forge || !repoAt) return { items: [], note: `Cannot list releases for "${ref.raw}".` };
-  const limit = Math.max(1, opts.limit ?? 20);
+  const limit = countOption(opts.limit, 20);
   const url = `${apiBase(ref, opts)}/${repoAt}/releases?per_page=${limit}${forge === "gitlab" ? "" : `&limit=${limit}`}`;
   const r = await forgeGet(url, forge, ref, opts);
   if (!r.ok) return failed(r, forge, ref, "Listing releases", opts);
@@ -11647,7 +11733,7 @@ async function listTags(ref, opts = {}) {
   const forge = forgeKind(ref.host, opts);
   const repoAt = forge && repoPath(ref, forge);
   if (!forge || !repoAt) return { items: [], note: `Cannot list tags for "${ref.raw}".` };
-  const limit = Math.max(1, opts.limit ?? 50);
+  const limit = countOption(opts.limit, 50);
   const url = forge === "gitlab" ? `${apiBase(ref, opts)}/${repoAt}/repository/tags?per_page=${limit}` : `${apiBase(ref, opts)}/${repoAt}/tags?per_page=${limit}&limit=${limit}`;
   const r = await forgeGet(url, forge, ref, opts);
   if (!r.ok) return failed(r, forge, ref, "Listing tags", opts);
@@ -12676,13 +12762,17 @@ function parseSitemap(xml) {
     return out;
   }
   const isIndex = /<sitemapindex(?=[\s/>])/i.test(body);
+  const httpLoc = (inner) => {
+    const loc = tagText(inner, "loc");
+    return loc && /^https?:\/\//i.test(loc) ? loc : void 0;
+  };
   for (const el of elements(body, "sitemap")) {
-    const loc = tagText(el.inner, "loc");
+    const loc = httpLoc(el.inner);
     if (loc) out.sitemaps.push(loc);
   }
   if (isIndex) return out;
   for (const el of elements(body, "url")) {
-    const loc = tagText(el.inner, "loc");
+    const loc = httpLoc(el.inner);
     if (!loc) continue;
     const lastmod = tagText(el.inner, "lastmod");
     out.urls.push({ loc, ...lastmod ? { lastmod } : {} });
@@ -12981,8 +13071,8 @@ async function searchViaKeyless(engine, query, opts = {}) {
   const spec = SPECS[engine];
   const q = query.trim();
   if (!q) return { hits: [], note: "Empty query." };
-  const pages = Math.max(1, opts.pages ?? 1);
-  const limit = Math.max(1, opts.limit ?? 10);
+  const pages = countOption(opts.pages, 1);
+  const limit = countOption(opts.limit, 10);
   const localised = !!(opts.lang || opts.region);
   const kl = localised ? ddgRegion(opts.lang, opts.region) : "wt-wt";
   const acceptLanguage = acceptLanguageHeader(opts.lang, opts.region);
@@ -13049,6 +13139,7 @@ init_trim();
 init_url();
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 var PROBE_TIMEOUT_MS4 = 2e3;
+var PROBE_BODY_BYTES2 = 4096;
 var QUERY_TIMEOUT_MS = 8e3;
 function searxngBase(opts = {}) {
   const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
@@ -13068,7 +13159,10 @@ function probeSearxng(base2, explicit = false) {
     const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS4);
     try {
       const res = await fetch(`${base2}/healthz`, { signal: ctrl.signal });
-      const body = await res.text().catch(() => "");
+      const body = await readCappedBytes(res, PROBE_BODY_BYTES2).then(
+        (b) => b.toString("utf8"),
+        () => ""
+      );
       return explicit || res.ok && /^\s*ok\s*$/i.test(body);
     } catch {
       return false;
@@ -13091,8 +13185,8 @@ async function searchViaSearxng(query, opts = {}) {
       ]
     );
   }
-  const pages = Math.max(1, opts.pages ?? 1);
-  const limit = Math.max(1, opts.limit ?? 10);
+  const pages = countOption(opts.pages, 1);
+  const limit = countOption(opts.limit, 10);
   const acceptLanguage = acceptLanguageHeader(opts.lang, opts.region);
   const language = searxngLanguage(opts.lang, opts.region);
   const root = `${base2}/search?q=${encodeURIComponent(query)}&format=json&safesearch=1` + (language ? `&language=${encodeURIComponent(language)}` : "");
@@ -13257,7 +13351,7 @@ async function search(query, opts = {}) {
   if (!hits.length) notes.push(closingNote(rungs, opts.signal?.aborted === true));
   return { hits, notes, rungs, searched: rungs.some((r) => answered2(r.outcome)) };
 }
-var limitOf = (opts) => Math.max(1, opts.limit ?? 10);
+var limitOf = (opts) => countOption(opts.limit, 10);
 function firecrawlHits(found, limit) {
   const seen = /* @__PURE__ */ new Set();
   const hits = [];
@@ -13293,7 +13387,7 @@ function closingNote(rungs, cancelled) {
 // src/stack.ts
 init_brand();
 import { spawnSync as spawnSync3 } from "child_process";
-import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync7, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
 import { dirname as dirname2, join as join15, resolve as resolve6 } from "path";
 
 // src/cache.ts
@@ -13303,10 +13397,10 @@ init_video();
 init_firecrawl();
 init_url();
 init_no_write();
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
+import { join as join14 } from "path";
 init_brand();
 init_mode();
-import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
-import { dirname, join as join14 } from "path";
 var DEFAULT_TTL_MS = 24 * 60 * 60 * 1e3;
 function cacheDir() {
   return namedCacheDir() ?? userTmpDir("cache");
@@ -13460,45 +13554,16 @@ function writeCache(url, res, now, acceptLanguage = "", extractor = "native", va
 var ensured = /* @__PURE__ */ new Set();
 function ensureDir2(dir) {
   if (ensured.has(dir)) return;
-  mkdirSync5(dir, { recursive: true });
+  mkdirSync6(dir, { recursive: true });
   ensured.add(dir);
 }
 function openCacheDir(create) {
   const dir = cacheDir();
-  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
-  if (namedCacheDir() !== void 0 || uid === void 0) {
+  if (namedCacheDir() !== void 0 || typeof process.getuid !== "function") {
     if (create) ensureDir2(dir);
     return { dir };
   }
-  if (create) mkdirSync5(dirname(dirname(dir)), { recursive: true });
-  for (const p of [dirname(dir), dir]) {
-    if (create) mkdirPrivate(p);
-    let st;
-    try {
-      st = lstatSync2(p);
-    } catch (e) {
-      if (e.code === "ENOENT") return {};
-      return { refused: `${p} cannot be inspected (${e.message})` };
-    }
-    if (st.isSymbolicLink()) return { refused: `${p} is a symbolic link` };
-    if (!st.isDirectory()) return { refused: `${p} is not a directory` };
-    if (st.uid !== uid) return { refused: `${p} belongs to another user` };
-    if (st.mode & 18) return { refused: `${p} is writable by other users` };
-    if (st.mode & 63 && !isNoWrite()) {
-      try {
-        chmodSync2(p, 448);
-      } catch {
-      }
-    }
-  }
-  return { dir };
-}
-function mkdirPrivate(p) {
-  try {
-    mkdirSync5(p, { mode: 448 });
-  } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-  }
+  return openPrivateTmpDir(dir, create);
 }
 var announced = /* @__PURE__ */ new Set();
 function entryDir(create) {
@@ -13981,7 +14046,7 @@ function untrustedStack() {
 function writeIfChanged(path, content) {
   try {
     if (existsSync10(path) && readFileSync10(path, "utf8") === content) return;
-    mkdirSync6(dirname2(path), { recursive: true, mode: 448 });
+    mkdirSync7(dirname2(path), { recursive: true, mode: 448 });
     writeFileSync6(path, content);
   } catch {
   }
@@ -15178,12 +15243,21 @@ function assertWorkflowSafe(script, phaseName) {
     }
   }
 }
+var OWN_CONSTANTS = /* @__PURE__ */ new Set(["meta", "RUN", "ENGINE", "WORKLIST", "AGENTS", "BATCHES", "SCHEMA", "contract", "results"]);
+var oneLine = (s) => s.replace(/[\r\n\u2028\u2029]+/g, " ");
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
   const scriptPath = join17(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
+  for (const name of Object.keys(constants2)) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || OWN_CONSTANTS.has(name)) {
+      throw new Error(
+        `workflow script for phase "${phase.name}": "${name}" is not a usable constant name \u2014 an identifier, other than ${[...OWN_CONSTANTS].join(", ")}.`
+      );
+    }
+  }
   const script = [
     `export const meta = ${JSON.stringify(meta)}`,
     ``,
@@ -15191,10 +15265,10 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, c
     `// Workflow tool for a one-call parallel fan-out:`,
     `// Workflow({ scriptPath: ${JSON.stringify(scriptPath)} }).`,
     `// Any other host: dispatch one subagent per batch with`,
-    `// ${join17(runAbs, "orchestration", "agents", `${emission.role}.md`)}, or follow RUNBOOK.md alone.`,
+    `// ${oneLine(join17(runAbs, "orchestration", "agents", `${emission.role}.md`))}, or follow RUNBOOK.md alone.`,
     `//`,
     `// Emitted by \`${cli} orchestrate\` from the CURRENT worklist. The worklist is the`,
-    `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${phase.name}\``,
+    `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${oneLine(phase.name)}\``,
     `// before launching this.`,
     ``,
     `// Constants for THIS run, injected at emit time \u2014 the harness forbids reading`,
@@ -15231,7 +15305,7 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, c
     ``,
     `// One-writer rule: this workflow only COLLECTS the subagents' fragments.`,
     `// The main agent runs the fold itself:`,
-    ...hint.map((l) => `//   ${l}`),
+    ...hint.map((l) => `//   ${oneLine(l)}`),
     `return { phase: ${JSON.stringify(phase.name)}, worklist: WORKLIST, results: results.filter(Boolean) }`,
     ``
   ].join("\n");
@@ -15831,37 +15905,31 @@ async function runStdioServer(adapter, opts = {}) {
     void p.finally(() => inFlight.delete(p));
     return p;
   };
-  let active2 = 0;
-  const waiting = [];
+  const slots = toolSlots();
   const queued = /* @__PURE__ */ new Map();
   let negotiated;
   const handleOpts = { notify: send };
   const runToolCall = async (msg, id, reply) => {
-    const ticket = { cancelled: false };
+    const ticket = new AbortController();
     queued.set(id, ticket);
+    let release;
     try {
-      while (active2 >= MAX_IN_FLIGHT) await new Promise((resolve9) => waiting.push(resolve9));
+      release = await slots.acquire(ticket.signal);
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
-    if (ticket.cancelled) {
-      waiting.shift()?.();
-      return;
-    }
-    active2++;
+    if (!release) return;
     try {
       await server.handle(msg, reply, handleOpts);
     } finally {
-      active2--;
-      waiting.shift()?.();
+      release();
     }
   };
   const dispatch = async (msg, reply) => {
     if (msg !== null && typeof msg === "object" && !Array.isArray(msg)) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
-        const ticket = typeof target === "string" || typeof target === "number" ? queued.get(target) : void 0;
-        if (ticket) ticket.cancelled = true;
+        if (typeof target === "string" || typeof target === "number") queued.get(target)?.abort();
       }
       if (msg.method === "tools/call" && (typeof msg.id === "string" || typeof msg.id === "number")) {
         await runToolCall(msg, msg.id, reply);
