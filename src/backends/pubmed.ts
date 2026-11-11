@@ -1,16 +1,22 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
 import { cleanInline } from "./fetch.js";
 import { apiFailure, apiGet } from "./backoff.js";
+import { sinceDate } from "../util.js";
 
 // PubMed via the keyless NCBI E-utilities: esearch → idlist, then esummary →
 // metadata (two-call pattern, like wikipedia). esummary has no abstract, so we
 // return metadata + a DOI/PubMed link without `text` and let the gatherer
 // hydrate the landing page. `tool=ultrasearch` only — no email/PII, stays
 // keyless. Complements Europe PMC with MeSH-indexed / clinical records.
+const today = (): string => new Date().toISOString().slice(0, 10);
+
 export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
-  const esearch = `${base}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
+  // --since: E-utilities takes a publication-date window, and wants both ends.
+  const since = sinceDate(ctx.options.since);
+  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=${today().replace(/-/g, "/")}` : "";
+  const esearch = `${base}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}${window}`;
   const sr = await apiGet(esearch);
   const ids: string[] = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {

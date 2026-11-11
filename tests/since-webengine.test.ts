@@ -9,6 +9,11 @@ import { duckduckgoBackend } from "../src/backends/duckduckgo.js";
 import { ddgliteBackend } from "../src/backends/ddglite.js";
 import { searxngBackend } from "../src/backends/searxng.js";
 import { wikipediaBackend } from "../src/backends/wikipedia.js";
+import { pubmedBackend } from "../src/backends/pubmed.js";
+import { europepmcBackend } from "../src/backends/europepmc.js";
+import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
+import { arxivBackend } from "../src/backends/arxiv.js";
+import { dblpBackend } from "../src/backends/dblp.js";
 import { installFetchMock } from "./fetchmock.js";
 import { makeCtx } from "./ctx.js";
 
@@ -89,6 +94,57 @@ describe("E5: --since is wired into date-capable backends", () => {
     const spy = installFetchMock(() => ({ body: JSON.stringify({ items: [] }), contentType: "application/json" }));
     await stackexchangeBackend(makeCtx("error", { since }));
     expect(String(spy.mock.calls[0]![0])).toContain("fromdate=1672531200");
+  });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const json = (o: unknown) => ({ body: JSON.stringify(o), contentType: "application/json" });
+
+  it("pubmed asks esearch for a publication-date window, both ends given", async () => {
+    const spy = installFetchMock(() => json({ esearchresult: { idlist: [] } }));
+    await pubmedBackend(makeCtx("cataract", { since }));
+    const url = String(spy.mock.calls[0]![0]);
+    expect(url).toContain(`&datetype=pdat&mindate=2023/01/01&maxdate=${today.replace(/-/g, "/")}`);
+  });
+
+  it("europepmc ANDs a first-publication range onto the query", async () => {
+    const spy = installFetchMock(() => json({ resultList: { result: [] } }));
+    await europepmcBackend(makeCtx("cataract surgery", { since }));
+    expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).toContain(`query=(cataract surgery) AND FIRST_PDATE:[2023-01-01 TO ${today}]`);
+  });
+
+  it("semanticscholar adds an open-ended publication range", async () => {
+    const spy = installFetchMock(() => json({ data: [] }));
+    await semanticscholarBackend(makeCtx("transformer", { since }));
+    expect(String(spy.mock.calls[0]![0])).toContain("&publicationDateOrYear=2023-01-01:");
+  });
+
+  it("arxiv ANDs a submission-date range onto every query it tries", async () => {
+    const spy = installFetchMock(() => ({ body: "<feed></feed>", contentType: "application/atom+xml" }));
+    await arxivBackend(makeCtx("early exit transformer reinforcement", { since }));
+    const urls = spy.mock.calls.map((c) => decodeURIComponent(String(c[0])));
+    expect(urls.length).toBeGreaterThan(1);
+    for (const u of urls) expect(u).toContain(`) AND submittedDate:[202301010000 TO ${today.replace(/-/g, "")}2359]`);
+  });
+
+  it("dblp keeps the records from the --since year on, and says so when none are", async () => {
+    const hit = (year: string, title: string) => ({ info: { title, year, ee: `https://x.test/${title}` } });
+    installFetchMock(() =>
+      json({ result: { hits: { hit: [hit("2019", "old"), hit("2024", "new"), { info: { title: "undated", ee: "https://x.test/u" } }] } } }),
+    );
+    const r = await dblpBackend(makeCtx("transformer", { since }));
+    expect(r.items.map((i) => i.title)).toEqual(["new", "undated"]);
+    installFetchMock(() => json({ result: { hits: { hit: [hit("2019", "old")] } } }));
+    const none = await dblpBackend(makeCtx("transformer", { since }));
+    expect(none.items).toEqual([]);
+    expect(none.notes[0]).toBe('dblp search returned 1 publication(s) for "transformer", none from 2023 on (--since).');
+  });
+
+  it("leaves the scholarly requests alone without --since", async () => {
+    const spy = installFetchMock(() => json({ esearchresult: { idlist: [] }, resultList: { result: [] }, data: [] }));
+    await pubmedBackend(makeCtx("cataract"));
+    await europepmcBackend(makeCtx("cataract"));
+    await semanticscholarBackend(makeCtx("cataract"));
+    for (const c of spy.mock.calls) expect(String(c[0])).not.toMatch(/mindate|FIRST_PDATE|publicationDateOrYear/);
   });
 
   it("hackernews adds a created_at numeric filter", async () => {

@@ -13949,7 +13949,9 @@ function arxivQueries(question) {
 }
 var arxivBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const get2 = (query) => httpGet(`https://export.arxiv.org/api/query?search_query=${encodeURIComponent(query)}&start=0&max_results=${n}`, {
+  const since = sinceDate(ctx.options.since);
+  const window = since ? ` AND submittedDate:[${since.replace(/-/g, "")}0000 TO ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replace(/-/g, "")}2359]` : "";
+  const get2 = (query) => httpGet(`https://export.arxiv.org/api/query?search_query=${encodeURIComponent(window ? `(${query})${window}` : query)}&start=0&max_results=${n}`, {
     accept: "application/atom+xml",
     timeoutMs: 12e3,
     userAgent: contactUa()
@@ -14144,7 +14146,8 @@ ${abstract || "(no abstract provided by OpenAlex)"}`,
 var semanticscholarBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const fields = "title,abstract,url,year,authors,externalIds,venue";
-  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}`;
+  const since = sinceDate(ctx.options.since);
+  const url = `https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(ctx.question)}&limit=${n}&fields=${fields}` + (since ? `&publicationDateOrYear=${since}:` : "");
   const r = await apiGet(url);
   const data = r.ok && Array.isArray(r.data?.data) ? r.data.data : [];
   if (!r.ok || !data.length) {
@@ -14177,7 +14180,9 @@ ${abstract || "(no abstract provided by Semantic Scholar)"}`,
 // src/backends/europepmc.ts
 var europepmcBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
-  const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(ctx.question)}&format=json&resultType=core&pageSize=${n}`;
+  const since = sinceDate(ctx.options.since);
+  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}]` : ctx.question;
+  const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=core&pageSize=${n}`;
   const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
   if (!r.ok || !results.length) {
@@ -14207,10 +14212,13 @@ ${abstract || "(no abstract provided by Europe PMC)"}`,
 };
 
 // src/backends/pubmed.ts
+var today = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 var pubmedBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base2 = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
-  const esearch2 = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}`;
+  const since = sinceDate(ctx.options.since);
+  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=${today().replace(/-/g, "/")}` : "";
+  const esearch2 = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}${window}`;
   const sr = await apiGet(esearch2);
   const ids = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
   if (!sr.ok || !ids.length) {
@@ -14360,7 +14368,17 @@ var dblpBackend = async (ctx) => {
   if (!r.ok || !hits.length) {
     return { backend: "dblp", items: [], notes: [apiFailure("dblp search", { status: r.status, rateLimited: false, attempts: 1 }, ctx.question)] };
   }
-  const items = hits.slice(0, n).map((h, i) => {
+  const sinceYear = sinceDate(ctx.options.since)?.slice(0, 4);
+  const inWindow = (h) => !sinceYear || !(Number(h?.info?.year) > 0) || Number(h.info.year) >= Number(sinceYear);
+  const recent = hits.filter(inWindow);
+  if (!recent.length) {
+    return {
+      backend: "dblp",
+      items: [],
+      notes: [`dblp search returned ${hits.length} publication(s) for "${ctx.question}", none from ${sinceYear} on (--since).`]
+    };
+  }
+  const items = recent.slice(0, n).map((h, i) => {
     const info = h.info ?? {};
     const title = cleanInline(String(info.title ?? "Untitled")).replace(/\.$/, "") || "Untitled";
     const authors = authorNames(info.authors);
@@ -15042,7 +15060,7 @@ function consensus(values) {
   return best;
 }
 function aggregateCodes(sources, manifest) {
-  const today = manifest.builtAt.slice(0, 10);
+  const today2 = manifest.builtAt.slice(0, 10);
   const groups = /* @__PURE__ */ new Map();
   for (const s of [...sources].sort((a, b) => idNum(a.id) - idNum(b.id))) {
     for (const mention of s.meta?.codes ?? []) {
@@ -15058,8 +15076,8 @@ function aggregateCodes(sources, manifest) {
     const strength = ms.some((m) => m.strength === "strong") ? "strong" : "weak";
     const domains = new Set(g.map((x) => x.source.domain)).size;
     const expires = ms.map((m) => m.expires).filter((d) => !!d).sort().at(-1);
-    const future = !!expires && expires >= today;
-    const isExpired = !!expires && expires < today || ms.some((m) => m.expired) && !future;
+    const future = !!expires && expires >= today2;
+    const isExpired = !!expires && expires < today2 || ms.some((m) => m.expired) && !future;
     const discount = consensus(ms.map((m) => m.discount));
     const minSpend = consensus(ms.map((m) => m.minSpend));
     const score = 3 * Number(structured) + 2 * Math.min(domains, 4) + Number(strength === "strong") + Number(!!discount) + Number(future) - 5 * Number(isExpired);
