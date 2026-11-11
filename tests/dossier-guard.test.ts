@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, symlinkSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { dirname } from "node:path";
@@ -208,6 +208,28 @@ describe("one writer per dossier, across processes", () => {
     );
     // A lock it does not own is left exactly as found.
     expect(readFileSync(lockOf(dir), "utf8")).toBe(holder(process.ppid));
+  });
+
+  it("serialises two calls in one process that name the same dossier two ways", async () => {
+    const dir = temp();
+    const alias = join(temp(), "alias");
+    symlinkSync(dir, alias);
+    let inside = 0;
+    let most = 0;
+    const work = (path: string) =>
+      withDossierLock(
+        path,
+        "fetch",
+        async () => {
+          most = Math.max(most, ++inside);
+          await new Promise((r) => setTimeout(r, 20));
+          inside--;
+        },
+        { pollMs: 2 },
+      );
+    await Promise.all([work(dir), work(alias), work(dir), work(alias)]);
+    expect(most).toBe(1);
+    expect(existsSync(lockOf(dir))).toBe(false);
   });
 
   it("takes over a lock bearing its own pid that it never took — a restarted container reuses pids", async () => {

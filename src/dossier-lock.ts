@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { envInt } from "./engine.js";
@@ -85,9 +85,11 @@ function abandoned(path: string, holder: Holder | undefined): boolean {
   // Our own pid is alive by definition, but the lock is only ours if this
   // process took it: one left by an earlier process that had the same pid (a
   // restarted container hands it out again) is as dead as any other.
+  // Matched on `since`, which is unique within the process, not on the path
+  // as spelled: a dossier named two ways (a symlink, /tmp vs /private/tmp) is
+  // still one lock held by one call.
   if (holder && holder.host === hostname() && holder.pid === process.pid) {
-    const mine = held.get(path);
-    return !mine || mine.since !== holder.since;
+    return ![...held.values()].some((mine) => mine.since === holder.since);
   }
   if (holder) return holder.host === hostname() && !alive(holder.pid);
   try {
@@ -186,7 +188,9 @@ const describe = (h: Holder | undefined): string =>
  */
 export async function withDossierLock<T>(dir: string, command: string, fn: () => Promise<T> | T, opts: DossierLockOptions = {}): Promise<T> {
   if (isNoWrite() || !existsSync(dir)) return fn();
-  const path = join(dir, LOCK_FILE);
+  // One spelling per directory, so every call — whatever path it was given —
+  // contends for the same file and is recorded under the same key.
+  const path = join(realpathSync(dir), LOCK_FILE);
   const waitMs = opts.waitMs ?? envInt("LOCK_WAIT_MS", 600_000, 0, 86_400_000);
   const pollMs = opts.pollMs ?? 150;
   const deadline = Date.now() + waitMs;
