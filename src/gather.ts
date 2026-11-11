@@ -85,6 +85,7 @@ import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
 import { RENUMBERS, reportsOverwritten, staleReportNote, writeDossier } from "./dossier.js";
+import { isNoWrite } from "./no-write.js";
 import { describeServices } from "./services.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
@@ -464,7 +465,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
   // Before a single request: a gather into a directory that holds a report
   // would renumber the sources under it, and learning that after a 15-minute
   // deep run is learning it too late. A default directory is new by construction.
-  const staleReports = options.out && !options.stdout ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
+  const staleReports = options.out && !isNoWrite() ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
   const profile = resolveSearchProfile(options);

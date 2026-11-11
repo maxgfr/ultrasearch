@@ -11,6 +11,7 @@ import { readDossier, reportsOverwritten, RENUMBERS } from "../src/dossier.js";
 import { LOCK_FILE, withDossierLock } from "../src/dossier-lock.js";
 import { setNoWrite } from "../src/no-write.js";
 import { callTool } from "../src/mcp/handlers.js";
+import { installFetchMock } from "./fetchmock.js";
 import type { GatherOptions } from "../src/types.js";
 
 // The committed bundle: what a second process actually is.
@@ -51,11 +52,40 @@ describe("a dossier that holds a report is not renumbered under it", () => {
     await runGather(opts({ out: dir }));
     writeFileSync(join(dir, "REPORT.md"), REPORT("S1"));
     const before = readFileSync(join(dir, "sources.json"), "utf8");
-    // A backend that does not exist would throw first if the guard ran late.
-    await expect(runGather(opts({ out: dir, question: "something else entirely" }))).rejects.toThrow(
+    // A network backend: had the guard run late, it would have been asked.
+    const spy = installFetchMock(() => ({ body: "{}", contentType: "application/json" }));
+    await expect(runGather(opts({ out: dir, question: "something else entirely", backends: ["wikipedia"] }))).rejects.toThrow(
       /already holds REPORT\.md from an earlier run, and a new gather numbers its sources from S1 again.* --force/,
     );
+    expect(spy).not.toHaveBeenCalled();
     expect(readFileSync(join(dir, "sources.json"), "utf8")).toBe(before);
+  });
+
+  it("is not set off by a rendered page alone: only the tiers cite [S#] ids", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "index.html"), "<p>someone else's page</p>");
+    await expect(runGather(opts({ out: dir }))).resolves.toBeDefined();
+  });
+
+  it("a re-gather that finds nothing leaves the previous extracts on disk", async () => {
+    const dir = temp();
+    const first = await runGather(opts({ out: dir }));
+    installFetchMock(() => ({ status: 503, body: "" }));
+    const empty = await runGather(opts({ out: dir, backends: ["wikipedia"] }));
+    expect(empty.sources).toEqual([]);
+    for (const s of first.sources) expect(existsSync(join(dir, s.extract)), s.extract).toBe(true);
+  });
+
+  it("an MCP gather that writes nothing is not refused", async () => {
+    const dir = temp();
+    writeFileSync(join(dir, "REPORT.md"), REPORT("S1"));
+    process.env.ULTRASEARCH_NO_WRITE = "1";
+    try {
+      const res = await callTool("ultrasearch_gather", { question: "what is rate limiting", backends: ["fixture"], out: dir });
+      expect(JSON.parse(res.text).run).toBeNull();
+    } finally {
+      delete process.env.ULTRASEARCH_NO_WRITE;
+    }
   });
 
   it("gather --force writes there, keeps the report, and says it predates the run", async () => {
@@ -180,6 +210,37 @@ describe("one writer per dossier, across processes", () => {
     expect(readFileSync(lockOf(dir), "utf8")).toBe(holder(process.pid));
   });
 
+  it("never removes a lock that is no longer the one it took", async () => {
+    const dir = temp();
+    const successor = holder(process.pid);
+    await withDossierLock(dir, "fetch", () => {
+      // Mistaken for dead and replaced while it ran: the successor's lock stays.
+      writeFileSync(lockOf(dir), successor);
+    });
+    expect(readFileSync(lockOf(dir), "utf8")).toBe(successor);
+  });
+
+  it("lets one waiter at a time clear a dead lock, so two waiters never both get in", async () => {
+    const dir = temp();
+    writeFileSync(lockOf(dir), holder(DEAD_PID));
+    let inside = 0;
+    let most = 0;
+    const work = () =>
+      withDossierLock(
+        dir,
+        "fetch",
+        async () => {
+          most = Math.max(most, ++inside);
+          await new Promise((r) => setTimeout(r, 15));
+          inside--;
+        },
+        { pollMs: 1 },
+      );
+    await Promise.all(Array.from({ length: 6 }, work));
+    expect(most).toBe(1);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it("cannot tell whether a holder on another machine is alive, so it waits for it", async () => {
     const dir = temp();
     writeFileSync(lockOf(dir), holder(DEAD_PID, "another-host.test"));
@@ -220,6 +281,26 @@ describe("one writer per dossier, across processes", () => {
     expect(existsSync(lockOf(dir))).toBe(false);
   });
 
+  it("the MCP server: a read or a dry run never waits on another process's lock, a write does", async () => {
+    const dir = temp();
+    await runGather(opts({ out: dir }));
+    writeFileSync(lockOf(dir), holder(process.pid));
+    process.env.ULTRASEARCH_LOCK_WAIT_MS = "100";
+    try {
+      const t0 = Date.now();
+      const write = callTool("ultrasearch_drop", { run: dir, ids: ["S1"] });
+      // Sent while the write is waiting: answered at once, not after it.
+      const dry = await callTool("ultrasearch_drop", { run: dir, ids: ["S1"], dry_run: true });
+      const check = await callTool("ultrasearch_check", { run: dir });
+      expect(Date.now() - t0).toBeLessThan(90);
+      expect(JSON.parse(dry.text)).toBeDefined();
+      expect(check.text).toBeDefined();
+      await expect(write).rejects.toThrow(/is being written by another ultrasearch process/);
+    } finally {
+      delete process.env.ULTRASEARCH_LOCK_WAIT_MS;
+    }
+  });
+
   it("the CLI holds the lock for a writing command and not for a listing", async () => {
     const dir = temp();
     await runGather(opts({ out: dir }));
@@ -232,6 +313,10 @@ describe("one writer per dossier, across processes", () => {
     expect(writer.stderr).toContain("is being written by another ultrasearch process");
     const reader = spawnSync(process.execPath, [CLI, "drop", "--run", dir, "--id", "S1", "--dry-run"], { encoding: "utf8", env });
     expect(reader.status).toBe(0);
+    // A flag the command does not read changes nothing: this drop still drops, so it still waits.
+    const stray = spawnSync(process.execPath, [CLI, "drop", "--run", dir, "--id", "S1", "--list"], { encoding: "utf8", env });
+    expect(stray.status).toBe(1);
+    expect(readDossier(dir).sources.map((s) => s.id)).toContain("S1");
     expect(spawnSync(process.execPath, [CLI, "check", "--run", dir], { encoding: "utf8", env }).stderr).not.toContain("waiting for another");
   });
 });

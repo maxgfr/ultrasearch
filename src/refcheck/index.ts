@@ -205,7 +205,13 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
   // A report written against an earlier run would be `check`ed against this
   // run's sources as if it were about them. Refused unless asked for; kept,
   // and flagged, when it is.
-  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from");
+  // The rendered pages too: they are the same report, and refcheck always refused them.
+  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from", [
+    "REPORT.md",
+    "SUMMARY.md",
+    "index.html",
+    "index.md",
+  ]);
   if (stale.length) notes.push(`${stale.join(", ")} predate this run — re-read them against the new REFCHECK.md, then render and check again.`);
 
   const entries: RefcheckEntry[] = refs.map((ref) => {

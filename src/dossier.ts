@@ -206,8 +206,8 @@ export function writeDossierIndex(dir: string, sources: Source[], manifest: Mani
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
 
-/** What a writer leaves in a dossier: the two tiers, and what `render` builds from them. */
-export const REPORT_FILES = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"] as const;
+/** The two tiers a writer leaves in a dossier — what cites its [S#] ids. */
+export const REPORT_FILES = ["REPORT.md", "SUMMARY.md"] as const;
 
 /**
  * The report files `dir` already holds — and a refusal to renumber the sources
@@ -219,8 +219,8 @@ export const REPORT_FILES = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"
  * written from. So that takes `--force`; the report is kept either way, and the
  * caller says it predates the run (`staleReportNote`).
  */
-export function reportsOverwritten(dir: string, force: boolean | undefined, why: string): string[] {
-  const stale = REPORT_FILES.filter((f) => existsSync(join(dir, f)));
+export function reportsOverwritten(dir: string, force: boolean | undefined, why: string, files: readonly string[] = REPORT_FILES): string[] {
+  const stale = files.filter((f) => existsSync(join(dir, f)));
   if (stale.length && !force) {
     throw new Error(
       `${dir} already holds ${stale.join(", ")} from an earlier run, and ${why} — pass another directory, ` +
@@ -272,8 +272,10 @@ export function writeDossier(dir: string, rawSources: RawSource[], manifest: Man
 
   const m: Manifest = { ...manifest, sourceCount: sources.length };
   const paths = writeDossierIndex(dir, sources, m, template);
-  // After the index, so a crash in between leaves extra files, never missing ones.
-  removeOrphanExtracts(dir, sources);
+  // After the index, so a crash in between leaves extra files, never missing
+  // ones. Not after a run that found nothing: a re-gather whose every backend
+  // failed must not also delete what the previous run had read.
+  if (sources.length) removeOrphanExtracts(dir, sources);
   return { dir, sources, paths };
 }
 
