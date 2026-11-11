@@ -60,6 +60,15 @@ describe("resolveBrowserRung — the default", () => {
     expect(canShowWindow("linux", {})).toBe(false);
     expect(canShowWindow("linux", { DISPLAY: ":1" })).toBe(true);
   });
+
+  it("shows no window under CI, on any platform — as the human handoff already decided", () => {
+    expect(canShowWindow("darwin", { CI: "true" })).toBe(false);
+    expect(canShowWindow("win32", { CI: "1" })).toBe(false);
+    expect(canShowWindow("darwin", { CI: "false" })).toBe(true);
+    const r = resolveBrowserRung({ env: { CI: "true" }, platform: "darwin", detect: () => ({ path: "/x/chrome", kind: "chrome" }) as never, noWrite: false });
+    expect(r.mode).toBe("off");
+    expect(r.reason).toMatch(/CI run/);
+  });
 });
 
 describe("resolveBrowserRung — no-write", () => {

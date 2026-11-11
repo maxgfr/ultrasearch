@@ -13581,10 +13581,7 @@ var wikipediaBackend = async (ctx) => {
 // src/browser.ts
 var ENV = "ULTRASEARCH_BROWSER_FETCH";
 var NO_BINARY = "no Chrome, Brave, Chromium or Edge found (install one, or point ULTRASEARCH_BROWSER_BIN at it)";
-function canShowWindow2(platform, env2) {
-  if (platform === "darwin" || platform === "win32") return true;
-  return !!(env2.DISPLAY || env2.WAYLAND_DISPLAY);
-}
+var canShowWindow2 = canShowWindow;
 function resolveBrowserRung(opts = {}) {
   const env2 = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
@@ -13612,7 +13609,7 @@ function resolveBrowserRung(opts = {}) {
   const { binary, missing } = detect();
   if (!binary) return { mode: "off", source: "default", reason: missing };
   if (!canShowWindow2(platform, env2)) {
-    return { mode: "off", source: "default", binary, reason: "no display to show a browser window in (Linux without DISPLAY or WAYLAND_DISPLAY)" };
+    return { mode: "off", source: "default", binary, reason: "no window can be shown here (a CI run, or Linux without DISPLAY or WAYLAND_DISPLAY)" };
   }
   return { mode: "fallback", source: "default", binary };
 }
