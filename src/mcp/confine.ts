@@ -58,24 +58,30 @@ export function confineArgs(name: string, args: Record<string, unknown>, root: s
   const refuse = (key: string, value: string): never => {
     throw new ToolError(`\`${key}\` (${value}) is outside the directory this server is confined to (${fence}).`);
   };
-  for (const key of PATH_ARGS) {
-    const v = out[key];
-    if (typeof v === "string" && v.trim() && isAbsolute(v) && !inside(fence, v)) refuse(key, v);
-  }
+  // A relative path would be judged against the server's working directory,
+  // which the client does not know and the fence does not cover: refused here,
+  // before anything (a lock file included) is created from it.
+  const check = (key: string, v: string): void => {
+    if (!isAbsolute(v)) throw new ToolError(`\`${key}\` must be an absolute path inside ${fence} (got "${v}").`);
+    if (!inside(fence, v)) refuse(key, v);
+  };
+  const blank = (key: string) => typeof out[key] !== "string" || !(out[key] as string).trim();
+  for (const key of PATH_ARGS) if (!blank(key)) check(key, out[key] as string);
   for (const key of PATH_LIST_ARGS) {
     const v = out[key];
-    if (Array.isArray(v)) for (const item of v) if (typeof item === "string" && isAbsolute(item) && !inside(fence, item)) refuse(key, item);
+    if (Array.isArray(v)) for (const item of v) if (typeof item === "string") check(key, item);
   }
   // A default dossier set by the operator is theirs to place; one a client
-  // would inherit from outside the fence is not usable through it.
-  if (defaultRun && out.run === undefined && !inside(fence, defaultRun)) refuse("run (the server's --run default)", defaultRun);
+  // would inherit from outside the fence is not usable through it. A `run`
+  // left blank in any way (absent, null, "") falls back to it.
+  if (defaultRun && blank("run") && !inside(fence, defaultRun)) refuse("run (the server's --run default)", defaultRun);
 
-  const blank = (key: string) => typeof out[key] !== "string" || !(out[key] as string).trim();
   if (name === "ultrasearch_gather" && blank("out") && typeof out.question === "string") {
     const dir = defaultRunDir(typeof out.mode === "string" ? out.mode : "topic", out.question);
     out.out = join(fence, relative(join(tmpdir(), "ultrasearch"), dir));
   }
   if (name === "ultrasearch_merge" && blank("master")) out.master = join(fence, `merge-${runId()}`);
   if (name === "ultrasearch_refcheck" && blank("out")) out.out = join(fence, `refcheck-${runId()}`);
+  if (name === "ultrasearch_brainstorm" && blank("out")) out.out = join(fence, `brainstorm-${runId()}`);
   return out;
 }

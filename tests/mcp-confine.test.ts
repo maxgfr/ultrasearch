@@ -64,11 +64,27 @@ describe("mcp --root", () => {
     expect(String(g.out).startsWith(join(root, "topic-what-is-rate-limiting"))).toBe(true);
     expect(String(confineArgs("ultrasearch_merge", { runs: [join(root, "a")] }, root).master).startsWith(join(root, "merge-"))).toBe(true);
     expect(String(confineArgs("ultrasearch_refcheck", { refs: join(root, "r.txt") }, root).out).startsWith(join(root, "refcheck-"))).toBe(true);
+    expect(String(confineArgs("ultrasearch_brainstorm", { question: "q" }, root).out).startsWith(join(root, "brainstorm-"))).toBe(true);
   });
 
-  it("refuses a server default dossier outside the root when the client relies on it", () => {
+  it("refuses a server default dossier outside the root when the client relies on it, however `run` is left blank", () => {
     const root = temp();
-    expect(() => confineArgs("ultrasearch_check", {}, root, temp())).toThrow(/the server's --run default/);
+    const outside = temp();
+    for (const args of [{}, { run: null }, { run: "" }, { run: "  " }]) {
+      expect(() => confineArgs("ultrasearch_check", args, root, outside), JSON.stringify(args)).toThrow(/the server's --run default/);
+    }
+  });
+
+  it("refuses a relative path before anything is created from it", () => {
+    const root = temp();
+    for (const [key, value] of [
+      ["out", "../ro"],
+      ["master", "m"],
+      ["run", "./d"],
+    ] as const) {
+      expect(() => confineArgs("ultrasearch_gather", { question: "q", [key]: value }, root)).toThrow(/must be an absolute path inside/);
+    }
+    expect(() => confineArgs("ultrasearch_merge", { runs: ["rel/dir"] }, root)).toThrow(/must be an absolute path inside/);
   });
 
   it("is enforced by callTool, end to end", async () => {
