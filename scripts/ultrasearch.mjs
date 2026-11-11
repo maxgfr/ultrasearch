@@ -41,13 +41,15 @@ import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises"
 import { existsSync as existsSync7, statSync as statSync5 } from "fs";
 import { isAbsolute as isAbsolute2, join as join10 } from "path";
 import { join as join11 } from "path";
+import { chmodSync as chmodSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync4 } from "fs";
+import { dirname } from "path";
 import { promisify } from "util";
 import { gunzip } from "zlib";
 import { spawnSync as spawnSync3 } from "child_process";
-import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync6, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync10, lstatSync as lstatSync3, mkdirSync as mkdirSync7, readFileSync as readFileSync10, statSync as statSync8, writeFileSync as writeFileSync6 } from "fs";
 import { dirname as dirname2, join as join15, resolve as resolve6 } from "path";
-import { chmodSync as chmodSync2, existsSync as existsSync9, lstatSync as lstatSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
-import { dirname, join as join14 } from "path";
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, readFileSync as readFileSync9, readdirSync as readdirSync7, rmSync as rmSync7, statSync as statSync7 } from "fs";
+import { join as join14 } from "path";
 import { readFileSync as readFileSync11 } from "fs";
 import { existsSync as existsSync11 } from "fs";
 import { join as join18, resolve as resolve7 } from "path";
@@ -1651,11 +1653,11 @@ function openDocumentText(xml, budget) {
       const p = paragraphs[paragraphs.length - 1];
       const table = tables[tables.length - 1];
       if (name === "text:p" || name === "text:h") {
-        const level = name === "text:h" ? Math.min(6, Number(attr(attrs, "text:outline-level")) || 1) : 0;
+        const level = name === "text:h" ? Math.min(6, Math.max(1, Number(attr(attrs, "text:outline-level")) || 1)) : 0;
         paragraphs.push({ text: "", prefix: level ? `${"#".repeat(level)} ` : listItem && !table ? "- " : "" });
         listItem = false;
       } else if (name === "text:list-item") listItem = true;
-      else if (name === "text:s") add2(p, " ".repeat(Math.min(100, Number(attr(attrs, "text:c")) || 1)));
+      else if (name === "text:s") add2(p, " ".repeat(Math.min(100, Math.max(1, Number(attr(attrs, "text:c")) || 1))));
       else if (name === "text:tab") add2(p, "	");
       else if (name === "text:line-break") add2(p, "\n");
       else if (name === "office:spreadsheet") spreadsheet = true;
@@ -1750,7 +1752,9 @@ function packageText(bytes, budget) {
 function readOffice(bytes) {
   try {
     const text = packageText(bytes, new Budget()).replace(/\n{3,}/g, "\n\n").trim();
-    return { text: text.length > MAX_OUTPUT_CHARS ? text.slice(0, text.lastIndexOf("\n", MAX_OUTPUT_CHARS)) : text };
+    if (text.length <= MAX_OUTPUT_CHARS) return { text };
+    const lineEnd = text.lastIndexOf("\n", MAX_OUTPUT_CHARS);
+    return { text: text.slice(0, lineEnd < 0 ? MAX_OUTPUT_CHARS : lineEnd) };
   } catch (e) {
     return { failure: e instanceof Refused ? e.message : "the built-in reader could not parse it" };
   }
@@ -2951,6 +2955,7 @@ function foldTerm(raw) {
   return foldPlural(deaccent(raw.toLowerCase()));
 }
 function subtokens(raw) {
+  if (raw.length > MAX_IDENT) return [];
   const spaced = raw.replace(new RegExp("([\\p{Ll}\\p{N}])(\\p{Lu})", "gu"), "$1 $2").replace(new RegExp("(\\p{Lu}+)(\\p{Lu}\\p{Ll})", "gu"), "$1 $2").replace(new RegExp("(\\p{L})(\\p{N})", "gu"), "$1 $2").replace(new RegExp("(\\p{N})(\\p{L})", "gu"), "$1 $2");
   const parts = spaced.split(/[^\p{L}\p{M}\p{N}]+/u).filter(Boolean);
   if (parts.length < 2) return [];
@@ -2968,6 +2973,7 @@ function expandTokens(tokens, max = 8) {
   const byCanonical = /* @__PURE__ */ new Map();
   for (const raw of tokens) {
     if (byCanonical.size >= max) break;
+    if (raw.length > MAX_KEYWORD_CHARS) continue;
     const canonical = foldTerm(raw);
     if (!canonical || byCanonical.has(canonical)) continue;
     const plain2 = deaccent(raw.toLowerCase());
@@ -3096,7 +3102,9 @@ var CJK_RUNS;
 var ACCENT_CLASSES;
 var BASE_OF;
 var NON_ASCII;
+var MAX_IDENT;
 var MAX_PATTERNS;
+var MAX_KEYWORD_CHARS;
 var VARIANT_PRIORITY;
 var LIGATURE_SPELLING;
 var LIGATURE_OF;
@@ -3323,7 +3331,9 @@ var init_text = __esm({
       for (const ch of cls) BASE_OF.set(ch, base2);
     }
     NON_ASCII = /[\u0080-\uffff]/;
+    MAX_IDENT = 64;
     MAX_PATTERNS = 24;
+    MAX_KEYWORD_CHARS = 256;
     VARIANT_PRIORITY = { original: 0, folded: 1, subtoken: 2 };
     LIGATURE_SPELLING = { \u0153: "oe", \u00E6: "ae", \u00DF: "ss" };
     LIGATURE_OF = { oe: "\u0153", ae: "\xE6", ss: "\xDF" };
@@ -3418,7 +3428,7 @@ function pushTerm(raw, out, expand2) {
   const t = foldCached(raw);
   if (t.length < 2) return;
   out.push(t);
-  if (!expand2 || raw.length > MAX_IDENT) return;
+  if (!expand2 || raw.length > MAX_IDENT2) return;
   for (const sub of subtermsCached(raw, t)) out.push(sub);
 }
 function pushBigrams(run, out) {
@@ -3473,9 +3483,9 @@ function bm25Stem(t) {
 function docTokens(doc, titleWeight, headingWeight, body) {
   const out = body ? [...body] : bm25Tokenize(doc.body);
   const headings = bm25Tokenize(doc.headings);
-  for (let r = 0; r < headingWeight; r++) out.push(...headings);
+  for (let r = 0; r < headingWeight; r++) for (const t of headings) out.push(t);
   const title = bm25Tokenize(doc.title);
-  for (let r = 0; r < titleWeight; r++) out.push(...title);
+  for (let r = 0; r < titleWeight; r++) for (const t of title) out.push(t);
   for (let i = 0; i < out.length; i++) out[i] = bm25Stem(out[i]);
   return out;
 }
@@ -3786,7 +3796,7 @@ function fuse(lists, keyOf = (item) => canonicalizeUrl(item.url)) {
   for (const [key, it] of best) it.meta = { ...it.meta, foundBy: foundBy.get(key) ?? 1 };
   const merged = [...best.values()];
   for (const it of merged) it.score = fused.get(keyOf(it)) ?? 0;
-  merged.sort((a, b) => b.score - a.score || a.url.localeCompare(b.url));
+  merged.sort((a, b) => b.score - a.score || byCodeUnit(a.url, b.url));
   return merged;
 }
 function coverageWindow(nTerms) {
@@ -3806,7 +3816,7 @@ var NON_ASCII2;
 var CJK_CHAR2;
 var CJK_RUNS2;
 var IDENT_BOUNDARY;
-var MAX_IDENT;
+var MAX_IDENT2;
 var FOLD_CACHE_MAX;
 var foldCache;
 var NO_SUBTERMS;
@@ -3833,7 +3843,7 @@ var init_rank = __esm({
     CJK_CHAR2 = /[\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]/u;
     CJK_RUNS2 = /([\p{scx=Han}\p{scx=Hiragana}\p{scx=Katakana}]+)/u;
     IDENT_BOUNDARY = new RegExp("_|[\\p{Ll}\\p{N}]\\p{Lu}|\\p{Lu}\\p{Lu}\\p{Ll}|\\p{L}\\p{N}|\\p{N}\\p{L}", "u");
-    MAX_IDENT = 64;
+    MAX_IDENT2 = 64;
     FOLD_CACHE_MAX = 5e4;
     foldCache = /* @__PURE__ */ new Map();
     NO_SUBTERMS = [];
@@ -4945,7 +4955,9 @@ function detectBrowserBinary(opts = {}) {
   const explicit = opts.env ? opts.env("BROWSER_BIN") : env("BROWSER_BIN");
   if (explicit) {
     const bare = !/[\\/]/.test(explicit);
-    const options = bare ? (sys.PATH ?? "").split(":").filter(Boolean).map((d) => posix.join(d, explicit)) : [explicit];
+    const win = platform === "win32";
+    const names = win && !/\.[a-z0-9]+$/i.test(explicit) ? [explicit, `${explicit}.exe`] : [explicit];
+    const options = bare ? (sys.PATH ?? (win ? sys.Path : void 0) ?? "").split(win ? ";" : ":").filter(Boolean).flatMap((d) => names.map((n) => (win ? win32 : posix).join(d, n))) : [explicit];
     const found = options.find(exists);
     if (!found) throw new Error(`BROWSER_BIN points at "${explicit}", which is not an executable file`);
     return { kind: kindOf(found), path: found };
@@ -7704,7 +7716,10 @@ function probeFirecrawl(base2, explicit = false) {
     const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS2);
     try {
       const res = await fetch(`${base2}/`, { signal: ctrl.signal });
-      const body = await res.text().catch(() => "");
+      const body = await readCappedBytes(res, PROBE_BODY_BYTES).then(
+        (b) => b.toString("utf8"),
+        () => ""
+      );
       return explicit || looksLikeFirecrawl(res.headers.get("content-type"), body);
     } catch {
       return false;
@@ -7849,6 +7864,7 @@ async function searchViaFirecrawl(query, limit, opts = {}) {
 }
 var FIRECRAWL_DEFAULT_BASE;
 var PROBE_TIMEOUT_MS2;
+var PROBE_BODY_BYTES;
 var SCRAPE_TIMEOUT_MS;
 var SEARCH_TIMEOUT_MS;
 var SERVER_MARGIN_MS;
@@ -7866,6 +7882,7 @@ var init_firecrawl = __esm({
     init_trim();
     FIRECRAWL_DEFAULT_BASE = "http://localhost:3002";
     PROBE_TIMEOUT_MS2 = 2e3;
+    PROBE_BODY_BYTES = 4096;
     SCRAPE_TIMEOUT_MS = 45e3;
     SEARCH_TIMEOUT_MS = 3e4;
     SERVER_MARGIN_MS = { scrape: 5e3, search: 2e3 };
@@ -8589,7 +8606,15 @@ async function fetchAndExtract(url, opts = {}) {
   if (opts.signal?.aborted) return cancelled();
   const video = opts.video === false ? void 0 : knownVideo(url);
   if (video) {
-    if (opts.authorizeUrl && !await opts.authorizeUrl(url)) return { text: "", finalUrl: url, status: 0, note: `Refused ${url}: not a public address.` };
+    if (opts.authorizeUrl) {
+      let refusal2;
+      try {
+        if (!await opts.authorizeUrl(url)) refusal2 = "the URL is not authorized";
+      } catch (e) {
+        refusal2 = `its authorization failed (${e.message})`;
+      }
+      if (refusal2) return { text: "", finalUrl: url, status: 0, note: `Refused ${url}: ${refusal2}.` };
+    }
     const t = await transcribeVideo(url, {
       lang: opts.acceptLanguage?.split(/[,;]/)[0]?.trim() || void 0,
       signal: opts.signal,
@@ -8695,7 +8720,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
       asBrowser ? { ...fetchOpts, userAgent: contactUa() } : { ...fetchOpts, userAgent: browserUa(), acceptLanguage: opts.acceptLanguage ?? "en-US,en;q=0.9" }
     );
     if (opts.signal?.aborted) return cancelled();
-    if (!challengeUrl(again.url)) res = again;
+    if (again.status !== 0 && !challengeUrl(again.url)) res = again;
   }
   if (challengeUrl(res.url)) {
     seen.page = true;
@@ -8705,7 +8730,7 @@ async function readWithoutBrowser(url, opts, wantsPdf, wantsDoc, seen) {
     return { text: "", finalUrl: res.url, status: 304, etag: res.etag ?? opts.headers?.["if-none-match"], lastModified: res.lastModified };
   }
   if (!res.ok) {
-    seen.page = true;
+    seen.page = !(res.truncated && res.status >= 200 && res.status < 300);
     const wait = res.retryAfterMs !== void 0 ? `, retry after ${Math.ceil(res.retryAfterMs / 1e3)} s` : "";
     const why = res.status === 429 ? `rate-limited (HTTP 429${wait})` : `status ${res.status}${res.error ? ", " + res.error : ""}${wait}`;
     return {
@@ -10302,6 +10327,39 @@ init_exec2();
 init_brand();
 init_exec2();
 init_forge_host();
+init_no_write();
+function openPrivateTmpDir(dir, create) {
+  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
+  if (create) mkdirSync4(dirname(dirname(dir)), { recursive: true });
+  for (const p of [dirname(dir), dir]) {
+    if (create) mkdirPrivate(p);
+    let st;
+    try {
+      st = lstatSync2(p);
+    } catch (e) {
+      if (e.code === "ENOENT") return {};
+      return { refused: `${p} cannot be inspected (${e.message})` };
+    }
+    if (st.isSymbolicLink()) return { refused: `${p} is a symbolic link` };
+    if (!st.isDirectory()) return { refused: `${p} is not a directory` };
+    if (st.uid !== uid) return { refused: `${p} belongs to another user` };
+    if (st.mode & 18) return { refused: `${p} is writable by other users` };
+    if (st.mode & 63 && !isNoWrite()) {
+      try {
+        chmodSync2(p, 448);
+      } catch {
+      }
+    }
+  }
+  return { dir };
+}
+function mkdirPrivate(p) {
+  try {
+    mkdirSync4(p, { mode: 448 });
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+  }
+}
 init_text();
 var STALE_STAGING_MS = 24 * 60 * 60 * 1e3;
 init_brand();
@@ -10723,6 +10781,7 @@ init_trim();
 init_url();
 var SEARXNG_DEFAULT_BASE = "http://localhost:8888";
 var PROBE_TIMEOUT_MS4 = 2e3;
+var PROBE_BODY_BYTES2 = 4096;
 function searxngBase(opts = {}) {
   const raw = (opts.searxng ?? env("SEARXNG") ?? SEARXNG_DEFAULT_BASE).trim();
   if (!raw || raw.toLowerCase() === "off") return null;
@@ -10738,7 +10797,10 @@ function probeSearxng(base2, explicit = false) {
     const t = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS4);
     try {
       const res = await fetch(`${base2}/healthz`, { signal: ctrl.signal });
-      const body = await res.text().catch(() => "");
+      const body = await readCappedBytes(res, PROBE_BODY_BYTES2).then(
+        (b) => b.toString("utf8"),
+        () => ""
+      );
       return explicit || res.ok && /^\s*ok\s*$/i.test(body);
     } catch {
       return false;
@@ -10900,45 +10962,16 @@ function writeCache(url, res, now, acceptLanguage = "", extractor = "native", va
 var ensured = /* @__PURE__ */ new Set();
 function ensureDir2(dir) {
   if (ensured.has(dir)) return;
-  mkdirSync5(dir, { recursive: true });
+  mkdirSync6(dir, { recursive: true });
   ensured.add(dir);
 }
 function openCacheDir(create) {
   const dir = cacheDir();
-  const uid = typeof process.getuid === "function" ? process.getuid() : void 0;
-  if (namedCacheDir() !== void 0 || uid === void 0) {
+  if (namedCacheDir() !== void 0 || typeof process.getuid !== "function") {
     if (create) ensureDir2(dir);
     return { dir };
   }
-  if (create) mkdirSync5(dirname(dirname(dir)), { recursive: true });
-  for (const p of [dirname(dir), dir]) {
-    if (create) mkdirPrivate(p);
-    let st;
-    try {
-      st = lstatSync2(p);
-    } catch (e) {
-      if (e.code === "ENOENT") return {};
-      return { refused: `${p} cannot be inspected (${e.message})` };
-    }
-    if (st.isSymbolicLink()) return { refused: `${p} is a symbolic link` };
-    if (!st.isDirectory()) return { refused: `${p} is not a directory` };
-    if (st.uid !== uid) return { refused: `${p} belongs to another user` };
-    if (st.mode & 18) return { refused: `${p} is writable by other users` };
-    if (st.mode & 63 && !isNoWrite()) {
-      try {
-        chmodSync2(p, 448);
-      } catch {
-      }
-    }
-  }
-  return { dir };
-}
-function mkdirPrivate(p) {
-  try {
-    mkdirSync5(p, { mode: 448 });
-  } catch (e) {
-    if (e.code !== "EEXIST") throw e;
-  }
+  return openPrivateTmpDir(dir, create);
 }
 var announced = /* @__PURE__ */ new Set();
 function entryDir(create) {
@@ -11327,7 +11360,7 @@ function untrustedStack() {
 function writeIfChanged(path, content) {
   try {
     if (existsSync10(path) && readFileSync10(path, "utf8") === content) return;
-    mkdirSync6(dirname2(path), { recursive: true, mode: 448 });
+    mkdirSync7(dirname2(path), { recursive: true, mode: 448 });
     writeFileSync6(path, content);
   } catch {
   }
@@ -11686,12 +11719,21 @@ function assertWorkflowSafe(script, phaseName) {
     }
   }
 }
+var OWN_CONSTANTS = /* @__PURE__ */ new Set(["meta", "RUN", "ENGINE", "WORKLIST", "AGENTS", "BATCHES", "SCHEMA", "contract", "results"]);
+var oneLine = (s) => s.replace(/[\r\n\u2028\u2029]+/g, " ");
 function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, constants2 = {}) {
   const cli = brand().cli;
   const scriptPath = join17(runAbs, "orchestration", `${phase.name}.workflow.mjs`);
   const meta = { name: `${cli}-${phase.name}`, description: emission.description(phase.items), phases: [{ title: emission.title }] };
   const batches = phaseBatches(phase, emission, smallWorklist);
   const hint = emission.applyHint(runAbs, engineAbs, phase);
+  for (const name of Object.keys(constants2)) {
+    if (!/^[A-Za-z_$][\w$]*$/.test(name) || OWN_CONSTANTS.has(name)) {
+      throw new Error(
+        `workflow script for phase "${phase.name}": "${name}" is not a usable constant name \u2014 an identifier, other than ${[...OWN_CONSTANTS].join(", ")}.`
+      );
+    }
+  }
   const script = [
     `export const meta = ${JSON.stringify(meta)}`,
     ``,
@@ -11699,10 +11741,10 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, c
     `// Workflow tool for a one-call parallel fan-out:`,
     `// Workflow({ scriptPath: ${JSON.stringify(scriptPath)} }).`,
     `// Any other host: dispatch one subagent per batch with`,
-    `// ${join17(runAbs, "orchestration", "agents", `${emission.role}.md`)}, or follow RUNBOOK.md alone.`,
+    `// ${oneLine(join17(runAbs, "orchestration", "agents", `${emission.role}.md`))}, or follow RUNBOOK.md alone.`,
     `//`,
     `// Emitted by \`${cli} orchestrate\` from the CURRENT worklist. The worklist is the`,
-    `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${phase.name}\``,
+    `// source of truth: if it changes, re-run \`${cli} orchestrate --phase ${oneLine(phase.name)}\``,
     `// before launching this.`,
     ``,
     `// Constants for THIS run, injected at emit time \u2014 the harness forbids reading`,
@@ -11739,7 +11781,7 @@ function emitWorkflowScript(phase, emission, runAbs, engineAbs, smallWorklist, c
     ``,
     `// One-writer rule: this workflow only COLLECTS the subagents' fragments.`,
     `// The main agent runs the fold itself:`,
-    ...hint.map((l) => `//   ${l}`),
+    ...hint.map((l) => `//   ${oneLine(l)}`),
     `return { phase: ${JSON.stringify(phase.name)}, worklist: WORKLIST, results: results.filter(Boolean) }`,
     ``
   ].join("\n");
@@ -12316,37 +12358,31 @@ async function runStdioServer(adapter, opts = {}) {
     void p.finally(() => inFlight.delete(p));
     return p;
   };
-  let active22 = 0;
-  const waiting = [];
+  const slots = toolSlots();
   const queued = /* @__PURE__ */ new Map();
   let negotiated;
   const handleOpts = { notify: send };
   const runToolCall = async (msg, id, reply) => {
-    const ticket = { cancelled: false };
+    const ticket = new AbortController();
     queued.set(id, ticket);
+    let release2;
     try {
-      while (active22 >= MAX_IN_FLIGHT) await new Promise((resolve92) => waiting.push(resolve92));
+      release2 = await slots.acquire(ticket.signal);
     } finally {
       if (queued.get(id) === ticket) queued.delete(id);
     }
-    if (ticket.cancelled) {
-      waiting.shift()?.();
-      return;
-    }
-    active22++;
+    if (!release2) return;
     try {
       await server.handle(msg, reply, handleOpts);
     } finally {
-      active22--;
-      waiting.shift()?.();
+      release2();
     }
   };
   const dispatch3 = async (msg, reply) => {
     if (msg !== null && typeof msg === "object" && !Array.isArray(msg)) {
       if (msg.method === "notifications/cancelled") {
         const target = msg.params?.requestId;
-        const ticket = typeof target === "string" || typeof target === "number" ? queued.get(target) : void 0;
-        if (ticket) ticket.cancelled = true;
+        if (typeof target === "string" || typeof target === "number") queued.get(target)?.abort();
       }
       if (msg.method === "tools/call" && (typeof msg.id === "string" || typeof msg.id === "number")) {
         await runToolCall(msg, msg.id, reply);
@@ -12648,7 +12684,7 @@ configure({
 });
 
 // src/types.ts
-var VERSION = "1.45.4";
+var VERSION = "1.45.5";
 var ALL_BACKENDS = [
   "searxng",
   "firecrawl",
