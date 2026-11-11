@@ -74,15 +74,22 @@ export function splitDocument(text: string): { body: string; list: string; hadHe
  * is the weak form, and opens a reference only when it moves the list forward
  * or starts it over at 1.
  */
-function opensReference(n: number, bare: boolean, prev: number | undefined): boolean {
+function opensReference(n: number, bare: boolean, prev: number | undefined, text: string): boolean {
   if (prev === undefined) return true;
   // A leap from a short list to a year is a wrapped date, however it is
   // written: "2019. p. 100-110." has the shape of a marker too.
   if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
   if (!bare) return true;
-  // A bare "1 …" after the list has gone on is a second section starting
-  // over, not a wrapped line (no reference wraps onto "1 Capitalised").
-  return n > prev || n === 1;
+  if (n > prev) return true;
+  // A bare "1 …" after the list has gone on is a second section starting over
+  // only when what follows reads as a reference's authors ("1 Roe B. …"); a
+  // wrapped line such as "1 New York: Springer; 2019." stays where it is.
+  return n === 1 && startsWithAuthors(text);
+}
+
+function startsWithAuthors(text: string): boolean {
+  const stop = text.search(/\.\s/);
+  return stop > 0 && parseAuthorList(text.slice(0, stop)) !== undefined;
 }
 
 /** Split a reference list into its entries, numbered as written (or 1..n when the numbering was lost). */
@@ -99,7 +106,7 @@ export function splitEntries(list: string): { n: number; raw: string }[] {
       if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
       const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
-      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== undefined, out.at(-1)?.n)) out.push({ n, raw: m[4]!.trim() });
+      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== undefined, out.at(-1)?.n, m[4]!)) out.push({ n, raw: m[4]!.trim() });
       else if (out.length) out[out.length - 1]!.raw += ` ${t}`;
     }
     return out;

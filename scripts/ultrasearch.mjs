@@ -3,7 +3,7 @@
 // src/cli.ts
 import { basename as basename5, join as join31, relative as relative4, resolve as resolve9 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync5, existsSync as existsSync21, statSync as statSync12, readdirSync as readdirSync9, readFileSync as readFileSync21 } from "fs";
+import { realpathSync as realpathSync6, existsSync as existsSync21, statSync as statSync12, readdirSync as readdirSync9, readFileSync as readFileSync21 } from "fs";
 
 // src/vendor/webindex-engine.mjs
 import { tmpdir } from "os";
@@ -19952,11 +19952,11 @@ function refusedForChallenge(url, note) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync20, readFileSync as readFileSync20, realpathSync as realpathSync4, statSync as statSync11 } from "fs";
+import { existsSync as existsSync20, readFileSync as readFileSync20, realpathSync as realpathSync5, statSync as statSync11 } from "fs";
 import { isAbsolute as isAbsolute5, join as join30, relative as relative3, resolve as resolve5, sep as sep3 } from "path";
 
 // src/dossier-lock.ts
-import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, realpathSync as realpathSync3, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
 import { hostname } from "os";
 import { join as join27 } from "path";
 var LOCK_FILE = ".ultrasearch.lock";
@@ -19993,8 +19993,7 @@ function alive(pid) {
 }
 function abandoned(path, holder) {
   if (holder && holder.host === hostname() && holder.pid === process.pid) {
-    const mine = held.get(path);
-    return !mine || mine.since !== holder.since;
+    return ![...held.values()].some((mine) => mine.since === holder.since);
   }
   if (holder) return holder.host === hostname() && !alive(holder.pid);
   try {
@@ -20050,7 +20049,7 @@ var taken = 0;
 var describe2 = (h) => h ? `pid ${h.pid}${h.host === hostname() ? "" : ` on ${h.host}`}, \`${h.command}\`, since ${h.since}` : "an unidentified process";
 async function withDossierLock(dir, command2, fn, opts = {}) {
   if (isNoWrite() || !existsSync17(dir)) return fn();
-  const path = join27(dir, LOCK_FILE);
+  const path = join27(realpathSync3(dir), LOCK_FILE);
   const waitMs = opts.waitMs ?? envInt("LOCK_WAIT_MS", 6e5, 0, 864e5);
   const pollMs = opts.pollMs ?? 150;
   const deadline = Date.now() + waitMs;
@@ -20113,11 +20112,16 @@ function splitDocument(text) {
   }
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
-function opensReference(n, bare, prev) {
+function opensReference(n, bare, prev, text) {
   if (prev === void 0) return true;
   if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
   if (!bare) return true;
-  return n > prev || n === 1;
+  if (n > prev) return true;
+  return n === 1 && startsWithAuthors(text);
+}
+function startsWithAuthors(text) {
+  const stop = text.search(/\.\s/);
+  return stop > 0 && parseAuthorList(text.slice(0, stop)) !== void 0;
 }
 function splitEntries(list) {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
@@ -20129,7 +20133,7 @@ function splitEntries(list) {
       if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
       const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
-      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== void 0, out.at(-1)?.n)) out.push({ n, raw: m[4].trim() });
+      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== void 0, out.at(-1)?.n, m[4])) out.push({ n, raw: m[4].trim() });
       else if (out.length) out[out.length - 1].raw += ` ${t}`;
     }
     return out;
@@ -21527,7 +21531,7 @@ function applyDefaultRun(schema, defaultRun2) {
 }
 
 // src/mcp/confine.ts
-import { existsSync as existsSync19, realpathSync as realpathSync3 } from "fs";
+import { existsSync as existsSync19, realpathSync as realpathSync4 } from "fs";
 import { tmpdir as tmpdir6 } from "os";
 import { dirname as dirname4, isAbsolute as isAbsolute4, join as join29, relative as relative2, resolve as resolve4 } from "path";
 var RUN_TOOLS = /* @__PURE__ */ new Set([
@@ -21556,7 +21560,7 @@ function real(path) {
   }
   let base2 = head;
   try {
-    base2 = realpathSync3(head);
+    base2 = realpathSync4(head);
   } catch {
   }
   return join29(base2, ...tail);
@@ -22063,11 +22067,11 @@ function handleRead(args, run) {
   const target = isAbsolute5(raw) ? raw : join30(run, raw);
   let real2;
   try {
-    real2 = realpathSync4(target);
+    real2 = realpathSync5(target);
   } catch {
     throw new ToolError(`no such file: ${raw}`);
   }
-  const root = realpathSync4(run);
+  const root = realpathSync5(run);
   if (real2 !== root && !real2.startsWith(root + sep3)) {
     throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
   }
@@ -23488,7 +23492,7 @@ ${formatServices(rows)}
         process.stderr.write("ultrasearch orchestrate: --run <dir> is required (the run dir holding the worklists PLAN.json / VERIFY.todo.json).\n");
         process.exit(2);
       }
-      const engineAbs = realpathSync5(fileURLToPath2(import.meta.url));
+      const engineAbs = realpathSync6(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
         if (!existsSync21(resolve9(dir))) {
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve9(dir)}
@@ -23679,7 +23683,7 @@ function invokedAsThisModule() {
   if (argv1 === void 0) return false;
   const modulePath = fileURLToPath2(import.meta.url);
   try {
-    if (realpathSync5(argv1) === realpathSync5(modulePath)) return true;
+    if (realpathSync6(argv1) === realpathSync6(modulePath)) return true;
   } catch {
   }
   return import.meta.url === pathToFileURL2(argv1).href;

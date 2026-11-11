@@ -209,7 +209,9 @@ describe("refcheck — parsing a bibliography", () => {
 
   it("keeps every reference of a list numbered with gaps, sparsely, from 12, or twice over", () => {
     const list = (ns: number[], bare = false) =>
-      splitEntries(ns.map((n, i) => `${bare ? n : `${n}.`} Author${i} J. Title number ${i} here. J A. 2020;1:${i}.`).join("\n")).map((e) => e.n);
+      splitEntries(
+        ns.map((n, i) => `${bare ? n : `${n}.`} ${["Smith", "Doe", "Roe", "Poe", "Moe", "Lee"][i]} J. Title number ${i} here. J A. 2020;1:${i}.`).join("\n"),
+      ).map((e) => e.n);
     for (const ns of [
       [1, 2, 3, 5],
       [3, 7, 12, 15],
@@ -224,6 +226,18 @@ describe("refcheck — parsing a bibliography", () => {
     // starting over at 1; only a leap to a year does not.
     expect(list([1, 2, 5, 9], true)).toEqual([1, 2, 5, 9]);
     expect(list([1, 2, 3, 1, 2], true)).toEqual([1, 2, 3, 1, 2]);
+    // …but a wrapped line that merely starts with "1 " stays in its reference.
+    const wrapped = splitEntries(
+      [
+        "1 Smith J. First title here. J A. 2020;1:1.",
+        "2 Doe J. Second title here. J B. 2021;2:2.",
+        "3 Brown C. A book on the subject. 2nd ed.",
+        "1 New York: Springer; 2019. p. 10-20.",
+        "4 Roe B. Fourth title here. J C. 2022;3:3.",
+      ].join("\n"),
+    );
+    expect(wrapped.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(wrapped[2]!.raw).toContain("New York: Springer; 2019.");
   });
 
   it("parses BibTeX, braces, 'and others' and page ranges", () => {
