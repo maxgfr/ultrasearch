@@ -434,9 +434,7 @@ describe("refcheck — the whole run", () => {
       // Re-running over a report already written is refused — the report would
       // be checked against sources it was not written from — unless forced,
       // and then the report is kept and flagged. Into another dossier: never.
-      await expect(runRefcheck({ refs: doc, out, offline: true })).rejects.toThrow(
-        /already holds REPORT\.md from an earlier run — pass another --out, or --force/,
-      );
+      await expect(runRefcheck({ refs: doc, out, offline: true })).rejects.toThrow(/already holds REPORT\.md from an earlier run, .* or --force/);
       const forced = await runRefcheck({ refs: doc, out, offline: true, force: true });
       expect(forced.notes.join("\n")).toMatch(/REPORT\.md predate this run/);
       expect(existsSync(join(out, "REPORT.md"))).toBe(true);

@@ -84,7 +84,7 @@ const ABSTRACT_BACKENDS = new Set<string>(["crossref", "europepmc", "semanticsch
 import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from "./providers/ncbi.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
-import { writeDossier } from "./dossier.js";
+import { RENUMBERS, reportsOverwritten, staleReportNote, writeDossier } from "./dossier.js";
 import { describeServices } from "./services.js";
 import { BROWSER_RESCUE_CAP, rescuesEmptyRead, resolveBrowserRung } from "./browser.js";
 import {
@@ -461,6 +461,10 @@ export function hostList(typed: string[]): string[] {
 // the tiered reports afterward.
 export async function runGather(options: GatherOptions): Promise<GatherResult> {
   const t0 = Date.now();
+  // Before a single request: a gather into a directory that holds a report
+  // would renumber the sources under it, and learning that after a 15-minute
+  // deep run is learning it too late. A default directory is new by construction.
+  const staleReports = options.out && !options.stdout ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
   const mode = getMode(options.mode);
   const backends = resolveBackends(options, mode);
   const profile = resolveSearchProfile(options);
@@ -1135,6 +1139,7 @@ export async function runGather(options: GatherOptions): Promise<GatherResult> {
     ...(browser !== "off" || extractorUse.has("browser") ? { browser: { mode: browser, pages: extractorUse.get("browser") ?? 0 } } : {}),
   };
   const notes = [
+    ...(staleReports.length ? [staleReportNote(staleReports)] : []),
     ...results.flatMap((res) => res.notes),
     // Deduped: every per-page hydrate note names its URL and so is unique, but
     // the instance-level ones (an explicitly-configured Firecrawl that is down)

@@ -427,6 +427,8 @@ export interface GatherOptions {
    * a number somebody chose.
    */
   perSourceAsked?: number;
+  /** Gather into an `out` that already holds a report (see `reportsOverwritten` in dossier.ts). */
+  force?: boolean;
   lang: string;
   region?: string; // region/country for locale-aware web search (else derived from lang)
   searxng?: string; // SearXNG base URL (else env / default)

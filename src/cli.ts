@@ -64,6 +64,7 @@ import { isNoWrite, setNoWrite, takeArtifacts } from "./no-write.js";
 import { probeServices, formatServices, stackControl, describeWebSearchLane } from "./services.js";
 import { runRefcheck } from "./refcheck/index.js";
 import { setDossierTemplate } from "./templates.js";
+import { withDossierLock } from "./dossier-lock.js";
 
 export const HELP = `ultrasearch v${VERSION}
 Recap everything the web says about a topic — fan out keyless web search,
@@ -71,7 +72,7 @@ fetch + dedupe sources into a dossier, and write a citation-checked, tiered
 report (with self-contained HTML). The web-facing sibling of ultradoc.
 
 Usage:
-  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
+  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [--out <dir>] [--force] [options]
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
@@ -87,7 +88,7 @@ Usage:
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
-  ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"]
+  ultrasearch merge  --runs "<dir1,dir2,…>" --master <dir> [--q "<question>"] [--force]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
   ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
   ultrasearch browser open <url>
@@ -252,8 +253,11 @@ Options:
   --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
   --offline            For 'refcheck': parse and read the citing text only — no
                        PubMed, Crossref or doi.org lookup
-  --force              For 'refcheck': write into an --out that already holds a
-                       REPORT.md/SUMMARY.md from an earlier run (kept — re-check it)
+  --force              For 'gather' / 'merge' / 'refcheck': write into an --out
+                       (--master) that already holds a REPORT.md/SUMMARY.md from
+                       an earlier run. Refused without it: these commands number
+                       the sources from S1, so the report there would cite the
+                       wrong pages. The report is kept — rewrite and re-check it
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page —
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -816,6 +820,7 @@ export function buildGatherOptions(p: Parsed, opts: { requireQuestion?: boolean 
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
     out: p.values.out ? resolve(p.values.out) : undefined,
+    ...(p.bools.has("force") ? { force: true } : {}),
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
@@ -848,15 +853,46 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     return;
   }
 
-  if (!PAGE_COMMANDS.has(p.command)) return dispatch(p);
+  // One writer per dossier across processes (src/dossier-lock.ts): held for the
+  // whole command, because an id is allocated by a read at its start and a
+  // write at its end.
+  const target = dossierWritten(p);
+  const run = (): Promise<void> => (target ? withDossierLock(target, p.command, () => dispatch(p), { onWait: (m) => say(`ultrasearch: ${m}`) }) : dispatch(p));
+  if (!PAGE_COMMANDS.has(p.command)) return run();
   // A browser the engine launched is a detached process: a Ctrl-C that killed
   // only this one would leave its window behind.
   const uninstall = closeBrowserOnSignal();
   try {
-    await withBrowserClosed(() => dispatch(p));
+    await withBrowserClosed(run);
   } finally {
     uninstall();
   }
+}
+
+// Which flag names the dossier each writing command rewrites, in the order the
+// command itself reads them. A command absent from here writes no dossier
+// index (see src/dossier-lock.ts for why `plan`, `brainstorm` and
+// `orchestrate` are).
+const DOSSIER_FLAGS: Record<string, readonly string[]> = {
+  gather: ["out"],
+  merge: ["master"],
+  fetch: ["out", "run"],
+  "add-source": ["out", "run"],
+  ingest: ["run", "out"],
+  refcheck: ["out", "run"],
+  render: ["run", "out"],
+  verify: ["run", "out"],
+  drop: ["run", "out"],
+  relink: ["run", "out"],
+  human: ["run", "out"],
+};
+
+/** The dossier directory this invocation writes into, when it names one. */
+function dossierWritten(p: Parsed): string | undefined {
+  // A listing or a dry run changes nothing, and must not queue behind a writer.
+  if (p.bools.has("list") || p.bools.has("dry-run")) return undefined;
+  const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
+  return dir ? resolve(dir) : undefined;
 }
 
 /** One line for the person at the terminal. */
@@ -1178,6 +1214,7 @@ async function dispatch(p: Parsed): Promise<void> {
         master: p.values.master ? resolve(p.values.master) : undefined,
         question: p.values.q ?? p.values.question,
         mode,
+        force: p.bools.has("force"),
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");

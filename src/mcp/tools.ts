@@ -151,6 +151,11 @@ export const TOOLS: ToolDecl[] = [
         browser: browserProp,
         template: templateProp,
         out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." },
+        force: {
+          type: "boolean",
+          description:
+            "Gather into an `out` that already holds a REPORT.md/SUMMARY.md. Refused without it: the sources are renumbered from S1, so that report would cite the wrong pages (it is kept, and must be rewritten).",
+        },
       },
       required: ["question"],
     },
@@ -315,6 +320,10 @@ export const TOOLS: ToolDecl[] = [
         master: { type: "string", description: "Absolute output directory (default: derived from mode and question)." },
         question: { type: "string", description: "The original umbrella question." },
         mode: modeProp,
+        force: {
+          type: "boolean",
+          description: "Merge into a `master` that already holds a REPORT.md/SUMMARY.md (kept; it must be rewritten against the merged ids).",
+        },
       },
       required: ["runs"],
     },

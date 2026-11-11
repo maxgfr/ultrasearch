@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { basename as basename5, join as join29, relative as relative3, resolve as resolve5 } from "path";
+import { basename as basename5, join as join30, relative as relative3, resolve as resolve5 } from "path";
 import { pathToFileURL as pathToFileURL2, fileURLToPath as fileURLToPath2 } from "url";
-import { realpathSync as realpathSync4, existsSync as existsSync19, statSync as statSync11, readdirSync as readdirSync6, readFileSync as readFileSync20 } from "fs";
+import { realpathSync as realpathSync4, existsSync as existsSync20, statSync as statSync12, readdirSync as readdirSync9, readFileSync as readFileSync21 } from "fs";
 
 // src/vendor/webindex-engine.mjs
 import { tmpdir } from "os";
@@ -5243,9 +5243,9 @@ function staleReason(path, raw, staleMs, now) {
   let at;
   let pid;
   try {
-    const held = JSON.parse(raw ?? "");
-    pid = held.pid;
-    at = typeof held.at === "number" ? held.at : Number.NaN;
+    const held2 = JSON.parse(raw ?? "");
+    pid = held2.pid;
+    at = typeof held2.at === "number" ? held2.at : Number.NaN;
   } catch {
     at = Number.NaN;
   }
@@ -5281,8 +5281,8 @@ function moveAsideStale(path, judged, token) {
 }
 function holds(path, token) {
   try {
-    const held = JSON.parse(readFileSync8(path, "utf8"));
-    return held.pid === process.pid && held.token === token;
+    const held2 = JSON.parse(readFileSync8(path, "utf8"));
+    return held2.pid === process.pid && held2.token === token;
   } catch {
     return false;
   }
@@ -8918,7 +8918,7 @@ function focusedSnippet(text, question, opts = {}) {
   for (let start2 = 0; start2 < sentences.length; start2++) {
     if (!sentences[start2].terms.size) continue;
     const section = sentences[start2].section;
-    const held = /* @__PURE__ */ new Set();
+    const held2 = /* @__PURE__ */ new Set();
     const inProse = /* @__PURE__ */ new Set();
     let prose = 0;
     let chars = 0;
@@ -8927,11 +8927,11 @@ function focusedSnippet(text, question, opts = {}) {
       if (s.section !== section || end2 > start2 && chars + s.text.length > maxChars) break;
       chars += s.text.length + 1;
       for (const t of s.terms) {
-        held.add(t);
+        held2.add(t);
         if (s.prose) inProse.add(t);
       }
       let score = 0;
-      for (const t of held) score += inProse.has(t) ? weight(t) : weight(t) / 2;
+      for (const t of held2) score += inProse.has(t) ? weight(t) : weight(t) / 2;
       for (const t of headingTerms[section]) score += weight(t);
       if (s.prose) prose++;
       if (!best || score > best.score + 1e-9 || Math.abs(score - best.score) <= 1e-9 && prose > best.prose) best = { start: start2, end: end2, score, prose };
@@ -15560,7 +15560,7 @@ async function runBackends(kinds, ctx) {
 }
 
 // src/dossier.ts
-import { existsSync as existsSync4, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync4, readdirSync as readdirSync4, readFileSync as readFileSync6, unlinkSync as unlinkSync3 } from "fs";
 import { isAbsolute as isAbsolute3, join as join12 } from "path";
 
 // src/authority.ts
@@ -15852,6 +15852,33 @@ function writeDossierIndex(dir, sources, manifest, template) {
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks2));
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
+var REPORT_FILES = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"];
+function reportsOverwritten(dir, force, why) {
+  const stale = REPORT_FILES.filter((f) => existsSync4(join12(dir, f)));
+  if (stale.length && !force) {
+    throw new Error(
+      `${dir} already holds ${stale.join(", ")} from an earlier run, and ${why} \u2014 pass another directory, or --force to write there anyway (the report is kept, and must be re-read and re-checked against the new sources)`
+    );
+  }
+  return stale;
+}
+var RENUMBERS = (command2) => `a new ${command2} numbers its sources from S1 again, so the [S#] ids there would cite other pages`;
+function staleReportNote(stale) {
+  return `${stale.join(", ")} predate${stale.length > 1 ? "" : "s"} this run: the [S#] ids there cite the previous sources. Rewrite the report against this dossier, then render and check again.`;
+}
+function removeOrphanExtracts(dir, sources) {
+  if (isNoWrite()) return;
+  const kept = new Set(sources.map((s) => s.extract));
+  let names;
+  try {
+    names = readdirSync4(join12(dir, "sources"));
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (/^S\d+\.md$/.test(name) && !kept.has(`sources/${name}`)) unlinkSync3(join12(dir, "sources", name));
+  }
+}
 function writeDossier(dir, rawSources, manifest, template) {
   ensureDir(join12(dir, "sources"));
   const sources = rawSources.map((rs, i) => {
@@ -15862,7 +15889,9 @@ function writeDossier(dir, rawSources, manifest, template) {
     return s;
   });
   const m = { ...manifest, sourceCount: sources.length };
-  return { dir, sources, paths: writeDossierIndex(dir, sources, m, template) };
+  const paths = writeDossierIndex(dir, sources, m, template);
+  removeOrphanExtracts(dir, sources);
+  return { dir, sources, paths };
 }
 function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
   const noWrite = isNoWrite();
@@ -16587,6 +16616,7 @@ function hostList(typed) {
 }
 async function runGather(options) {
   const t0 = Date.now();
+  const staleReports = options.out && !options.stdout ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
   const mode2 = getMode(options.mode);
   const backends = resolveBackends(options, mode2);
   const profile = resolveSearchProfile(options);
@@ -16965,6 +16995,7 @@ async function runGather(options) {
     ...browser !== "off" || extractorUse.has("browser") ? { browser: { mode: browser, pages: extractorUse.get("browser") ?? 0 } } : {}
   };
   const notes = [
+    ...staleReports.length ? [staleReportNote(staleReports)] : [],
     ...results.flatMap((res) => res.notes),
     // Deduped: every per-page hydrate note names its URL and so is unique, but
     // the instance-level ones (an explicitly-configured Firecrawl that is down)
@@ -18063,7 +18094,7 @@ import { join as join21 } from "path";
 
 // src/verify.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync4 } from "fs";
+import { existsSync as existsSync14, readFileSync as readFileSync15, readdirSync as readdirSync6 } from "fs";
 import { join as join20 } from "path";
 var HARD_FILES = ["REPORT.md"];
 var VALID_VERDICTS = ["supported", "partial", "refuted", "unsupported"];
@@ -18239,7 +18270,7 @@ function bindToWorklist(dir, verdicts, opts = {}) {
   const byKey = new Map(expected.map((p) => [pairKey(p), p]));
   const saved2 = /* @__PURE__ */ new Map();
   if (!opts.strict) {
-    for (const name of readdirSync4(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
+    for (const name of readdirSync6(dir).filter((name2) => /^VERIFY\.todo(?:\.\d+)?\.json$/.test(name2))) {
       try {
         const todo = JSON.parse(readFileSync15(join20(dir, name), "utf8"));
         if (!Array.isArray(todo?.pairs)) continue;
@@ -19476,6 +19507,7 @@ function toRawSource(s, text) {
 }
 function runMerge(options) {
   if (!options.runs.length) throw new Error("merge needs at least one --runs dossier");
+  const stale = options.master ? reportsOverwritten(options.master, options.force, RENUMBERS("merge")) : [];
   const dossiers = options.runs.map((dir2) => ({ dir: dir2, ...readDossier(dir2) }));
   const lists = [];
   const provByKey = /* @__PURE__ */ new Map();
@@ -19526,7 +19558,8 @@ function runMerge(options) {
       `Merged ${dossiers.length} sub-dossier(s) \u2192 ${merged.length} source(s) (${deduped.dropped} near-duplicate(s) collapsed).`,
       // Route D's gate on a deep master; route S's on a standard one, where
       // `--semantic` can only fail closed (no adjudicated VERIFY.json).
-      depth === "deep" ? "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic --require-verify." : "agent: write the report against THIS master dossier's [S#] ids; then render + check."
+      depth === "deep" ? "agent: write the report against THIS master dossier's [S#] ids; then verify + check --semantic --require-verify." : "agent: write the report against THIS master dossier's [S#] ids; then render + check.",
+      ...stale.length ? [staleReportNote(stale)] : []
     ],
     timings: {},
     mergedFrom: options.runs.slice(),
@@ -19909,12 +19942,124 @@ function refusedForChallenge(url, note) {
 }
 
 // src/mcp/handlers.ts
-import { existsSync as existsSync18, readFileSync as readFileSync19, realpathSync as realpathSync3, statSync as statSync10 } from "fs";
-import { isAbsolute as isAbsolute4, join as join28, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+import { existsSync as existsSync19, readFileSync as readFileSync20, realpathSync as realpathSync3, statSync as statSync11 } from "fs";
+import { isAbsolute as isAbsolute4, join as join29, relative as relative2, resolve as resolve4, sep as sep3 } from "path";
+
+// src/dossier-lock.ts
+import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, renameSync as renameSync2, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
+import { hostname } from "os";
+import { join as join27 } from "path";
+var LOCK_FILE = ".ultrasearch.lock";
+var held = /* @__PURE__ */ new Set();
+var exitHookInstalled = false;
+function releaseAllOnExit() {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.on("exit", () => {
+    for (const path of held) removeQuietly(path);
+  });
+}
+function removeQuietly(path) {
+  try {
+    unlinkSync4(path);
+  } catch {
+  }
+}
+function readHolder(path) {
+  try {
+    const h = JSON.parse(readFileSync18(path, "utf8"));
+    return typeof h.pid === "number" && typeof h.host === "string" ? { pid: h.pid, host: h.host, command: String(h.command ?? "?"), since: String(h.since ?? "") } : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code === "EPERM";
+  }
+}
+function abandoned(path, holder) {
+  if (holder) return holder.host === hostname() && !alive(holder.pid);
+  try {
+    return Date.now() - statSync10(path).mtimeMs > 1e4;
+  } catch {
+    return false;
+  }
+}
+function clearAbandoned(path, holder) {
+  const aside = `${path}.${process.pid}.stale`;
+  try {
+    renameSync2(path, aside);
+  } catch {
+    return;
+  }
+  const moved = readHolder(aside);
+  if (moved && (moved.pid !== holder?.pid || moved.since !== holder?.since) && !existsSync17(path)) {
+    try {
+      renameSync2(aside, path);
+      return;
+    } catch {
+    }
+  }
+  removeQuietly(aside);
+}
+function tryAcquire(path, command2) {
+  let fd;
+  try {
+    fd = openSync2(path, "wx");
+  } catch (e) {
+    if (e.code === "EEXIST") return false;
+    throw e;
+  }
+  try {
+    const holder = { pid: process.pid, host: hostname(), command: command2, since: (/* @__PURE__ */ new Date()).toISOString() };
+    writeSync2(fd, JSON.stringify(holder));
+  } finally {
+    closeSync2(fd);
+  }
+  return true;
+}
+var describe2 = (h) => h ? `pid ${h.pid}${h.host === hostname() ? "" : ` on ${h.host}`}, \`${h.command}\`, since ${h.since}` : "an unidentified process";
+async function withDossierLock(dir, command2, fn, opts = {}) {
+  if (isNoWrite() || !existsSync17(dir)) return fn();
+  const path = join27(dir, LOCK_FILE);
+  const waitMs = opts.waitMs ?? envInt("LOCK_WAIT_MS", 6e5, 0, 864e5);
+  const pollMs = opts.pollMs ?? 150;
+  const deadline = Date.now() + waitMs;
+  let told = false;
+  while (!tryAcquire(path, command2)) {
+    const holder = readHolder(path);
+    if (abandoned(path, holder)) {
+      clearAbandoned(path, holder);
+      continue;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${dir} is being written by another ultrasearch process (${describe2(holder)}) and did not come free in ${Math.round(waitMs / 1e3)} s \u2014 wait for it, or delete ${path} if that process is gone`
+      );
+    }
+    if (!told) {
+      told = true;
+      opts.onWait?.(`waiting for another ultrasearch process to finish writing ${dir} (${describe2(holder)})`);
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+  held.add(path);
+  releaseAllOnExit();
+  try {
+    return await fn();
+  } finally {
+    held.delete(path);
+    removeQuietly(path);
+  }
+}
 
 // src/refcheck/index.ts
-import { existsSync as existsSync17, readFileSync as readFileSync18 } from "fs";
-import { basename as basename3, extname, join as join27, resolve as resolve2 } from "path";
+import { existsSync as existsSync18, readFileSync as readFileSync19 } from "fs";
+import { basename as basename3, extname, join as join28, resolve as resolve2 } from "path";
 import { tmpdir as tmpdir5 } from "os";
 
 // src/refcheck/parse.ts
@@ -20664,8 +20809,8 @@ async function resolveReferences(refs) {
 var TEXT_EXT = /\.(txt|md|markdown|bib|bibtex|text|ris)$/i;
 async function readDocumentText(path) {
   const abs = resolve2(path);
-  if (!existsSync17(abs)) throw new Error(`file not found: ${abs}`);
-  const bytes = readFileSync18(abs);
+  if (!existsSync18(abs)) throw new Error(`file not found: ${abs}`);
+  const bytes = readFileSync19(abs);
   const ext = extname(abs).toLowerCase();
   if (TEXT_EXT.test(ext) || !ext) return bytes.toString("utf8");
   if (ext === ".pdf") {
@@ -20744,16 +20889,11 @@ async function runRefcheck(opts) {
   if (resolved) notes.push(...resolved.notes);
   else notes.push("Offline: nothing was resolved \u2014 metadata, DOIs and figures are unchecked.");
   const builtAt = (/* @__PURE__ */ new Date()).toISOString();
-  const dir = resolve2(opts.out ?? join27(tmpdir5(), "ultrasearch", `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`, runId()));
-  if (existsSync17(join27(dir, "sources.json")) && !existsSync17(join27(dir, "refcheck.json"))) {
+  const dir = resolve2(opts.out ?? join28(tmpdir5(), "ultrasearch", `refcheck-${slugify(basename3(opts.refs), RUN_SLUG)}`, runId()));
+  if (existsSync18(join28(dir, "sources.json")) && !existsSync18(join28(dir, "refcheck.json"))) {
     throw new Error(`${dir} already holds a dossier that refcheck did not write \u2014 pass another --out`);
   }
-  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync17(join27(dir, f)));
-  if (stale.length && !opts.force) {
-    throw new Error(
-      `${dir} already holds ${stale.join(", ")} from an earlier run \u2014 pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`
-    );
-  }
+  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from");
   if (stale.length) notes.push(`${stale.join(", ")} predate this run \u2014 re-read them against the new REFCHECK.md, then render and check again.`);
   const entries = refs.map((ref) => {
     const rec = resolved?.records.get(ref.n);
@@ -20792,7 +20932,7 @@ async function runRefcheck(opts) {
   });
   ensureDir(dir);
   if (resolved) {
-    ensureDir(join27(dir, "sources"));
+    ensureDir(join28(dir, "sources"));
     const manifest = {
       version: VERSION,
       question: `Reference check \u2014 ${basename3(opts.refs)}`,
@@ -20857,8 +20997,8 @@ async function runRefcheck(opts) {
     ...citing ? { citing: { ...citing, calls: citing.calls.length } } : {},
     notes
   };
-  writeArtifact(join27(dir, "refcheck.json"), JSON.stringify(result, null, 2));
-  writeArtifact(join27(dir, "REFCHECK.md"), renderRefcheckMarkdown(result));
+  writeArtifact(join28(dir, "refcheck.json"), JSON.stringify(result, null, 2));
+  writeArtifact(join28(dir, "REFCHECK.md"), renderRefcheckMarkdown(result));
   return result;
 }
 var cell2 = (s) => (s ?? "").replace(/\|/g, "\\|").replace(/\s+/g, " ").trim();
@@ -20965,469 +21105,6 @@ function renderRefcheckMarkdown(r) {
   return out.join("\n");
 }
 
-// src/mcp/handlers.ts
-var MAX_READ_LINES = 2e3;
-var MAX_READ_BYTES = 8 * 1024 * 1024;
-var DEFAULT_DEPTH = "standard";
-function str2(v) {
-  return typeof v === "string" && v.trim() !== "" ? v : void 0;
-}
-function num3(v) {
-  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : void 0;
-}
-function bool(v) {
-  return v === true || v === "true";
-}
-function strArray(v) {
-  return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
-}
-function positive(v, key) {
-  const n = num3(v);
-  if (n === void 0) return void 0;
-  if (n <= 0) throw new ToolError(`\`${key}\` must be greater than 0.`);
-  return n;
-}
-function requiredStr(args, key, hint) {
-  const v = str2(args[key]);
-  if (!v) throw new ToolError(`\`${key}\` is required \u2014 ${hint}`);
-  return v;
-}
-function oneOf(value, allowed, key, fallback2) {
-  if (value === void 0) return fallback2;
-  if (!allowed.includes(value)) {
-    throw new ToolError(`\`${key}\` must be one of: ${allowed.join(", ")} (got "${value}")`);
-  }
-  return value;
-}
-function webResultsArg(v) {
-  if (v === void 0 || v === null) return void 0;
-  if (!Array.isArray(v)) throw new ToolError("`web_results` must be an array of {url, title, snippet} objects (or of URL strings).");
-  if (!v.length) return void 0;
-  const parsed = parseWebResults(JSON.stringify(v));
-  if (!parsed.hits.length) {
-    throw new ToolError('`web_results` held no usable hit \u2014 expected [{"url": "https://\u2026"}, \u2026] (or a list of URL strings).');
-  }
-  return { hits: parsed.hits, rejected: parsed.rejected };
-}
-function browserArg(args) {
-  const v = str2(args.browser);
-  return resolveBrowserRung({ flag: v === void 0 ? void 0 : oneOf(v, ALL_BROWSER_MODES, "browser", "fallback") }).mode;
-}
-function requiredRun(args, defaults) {
-  const run = str2(args.run) ?? defaults.defaultRun;
-  if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
-  if (!isAbsolute4(run)) throw new ToolError("`run` must be an absolute path.");
-  const abs = resolve4(run);
-  if (!existsSync18(join28(abs, "manifest.json"))) {
-    throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
-  }
-  return abs;
-}
-function webEngineArg(v) {
-  const e = str2(v);
-  return e === void 0 ? void 0 : canonicalBackend(e);
-}
-function gatherOptions(args) {
-  const backends = strArray(args.backends)?.map(canonicalBackend);
-  if (backends) {
-    for (const b of backends) {
-      if (!ALL_BACKENDS.includes(b)) throw new ToolError(`unknown backend "${b}" \u2014 one of: ${[...ALL_BACKENDS].join(", ")}`);
-    }
-  }
-  const out = str2(args.out);
-  if (out !== void 0 && !isAbsolute4(out)) throw new ToolError("`out` must be an absolute path.");
-  const depth = oneOf(str2(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
-  const caps = DEPTH_CAPS[depth];
-  const web = webResultsArg(args.web_results);
-  return {
-    question: requiredStr(args, "question", "the topic or question to research."),
-    mode: oneOf(str2(args.mode), ALL_MODES, "mode", "topic"),
-    depth,
-    backends,
-    queries: strArray(args.queries),
-    maxSources: positive(args.max_sources, "max_sources"),
-    perSource: positive(args.per_source, "per_source") ?? caps.perSource,
-    ...positive(args.per_source, "per_source") ? { perSourceAsked: positive(args.per_source, "per_source") } : {},
-    lang: str2(args.lang) ?? "en",
-    region: str2(args.region),
-    // Pilotable from MCP, at last: these were hardcoded, so a client could not
-    // pin an engine, point at a SearXNG, or reach the web-search lane at all.
-    webEngine: oneOf(webEngineArg(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
-    search: oneOf(str2(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
-    ...web ? { webResults: web.hits, webResultsRejected: web.rejected } : {},
-    searxng: str2(args.searxng),
-    firecrawl: str2(args.firecrawl),
-    since: str2(args.since),
-    excludeDomains: strArray(args.exclude_domains) ?? [],
-    seedDomains: strArray(args.seed_domains),
-    browser: browserArg(args),
-    ...templateArg(args) ? { template: templateArg(args) } : {},
-    out,
-    json: true
-  };
-}
-function templateArg(args) {
-  const t = str2(args.template);
-  return t === void 0 ? void 0 : oneOf(t, ALL_TEMPLATES, "template", "verification");
-}
-var PAGE_TOOLS = /* @__PURE__ */ new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
-async function callTool(name, args, defaults = {}) {
-  const run = () => dispatch(name, args, defaults);
-  const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
-  return outcome(name, result);
-}
-var NO_WRITE_REFUSED_TOOLS = {
-  ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
-  ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
-  ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
-  ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
-  ultrasearch_drop: "it removes sources from a dossier on disk",
-  ultrasearch_refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references"
-};
-async function dispatch(name, args, defaults) {
-  const refused = NO_WRITE_REFUSED_TOOLS[name];
-  if (refused && isNoWrite()) {
-    throw new ToolError(
-      `\`${name}\` cannot run while ULTRASEARCH_NO_WRITE is set \u2014 ${refused}. Unset it, or use ultrasearch_gather, which streams its dossier back inline.`
-    );
-  }
-  switch (name) {
-    // These three touch no dossier at all.
-    case "ultrasearch_modes":
-      return { modes: listModes() };
-    case "ultrasearch_search":
-      return await handleSearch(args);
-    case "ultrasearch_plan":
-      return handlePlan(args);
-    // A gather creates its dossier, so there is nothing yet to lock against.
-    case "ultrasearch_gather":
-      return await handleGather(args);
-    case "ultrasearch_brainstorm":
-      return await handleBrainstorm(args);
-    case "ultrasearch_merge":
-      return handleMerge(args);
-    // Creates its own output dir, like gather.
-    case "ultrasearch_refcheck":
-      return await handleRefcheck(args);
-    // Everything below mutates or reads ONE existing dossier, and is
-    // serialized against other calls on the same one.
-    default: {
-      const run = requiredRun(args, defaults);
-      return await withRunLock(run, async () => {
-        switch (name) {
-          case "ultrasearch_fetch":
-            return await handleFetch(args, run);
-          case "ultrasearch_ingest":
-            return await handleIngest(args, run);
-          case "ultrasearch_check":
-            return handleCheck(args, run);
-          case "ultrasearch_relink":
-            return handleRelink(args, run);
-          case "ultrasearch_drop":
-            return handleDrop(args, run);
-          case "ultrasearch_verify":
-            return handleVerify(args, run);
-          case "ultrasearch_render":
-            return handleRender(args, run);
-          case "ultrasearch_read":
-            return handleRead(args, run);
-          default:
-            throw new ToolError(`unknown tool: ${name}`);
-        }
-      });
-    }
-  }
-}
-function outcome(name, result) {
-  return { text: JSON.stringify(result, null, 2) + "\n", artifact: artifactFor(name, result) };
-}
-function artifactFor(name, result) {
-  if (isNoWrite()) return void 0;
-  if (typeof result !== "object" || result === null) return void 0;
-  const r = result;
-  if (name === "ultrasearch_gather" || name === "ultrasearch_merge") return typeof r.dossier_md === "string" ? r.dossier_md : void 0;
-  if (name === "ultrasearch_brainstorm") return typeof r.path === "string" ? r.path : void 0;
-  return void 0;
-}
-async function handleSearch(args) {
-  const query = requiredStr(args, "query", "the search query.");
-  const chosen = requiredStr(args, "backend", `which backend to query, one of: ${[...ALL_BACKENDS].join(", ")}`);
-  const backend = oneOf(canonicalBackend(chosen), ALL_BACKENDS, "backend", ALL_BACKENDS[0]);
-  const options = gatherOptions({ ...args, question: query, depth: "summary" });
-  const results = await runBackends([backend], { question: query, mode: getMode(options.mode), options, variants: [query] });
-  const max = positive(args.max_sources, "max_sources") ?? 10;
-  const items = results.flatMap((r) => r.items).slice(0, max);
-  const notes = results.flatMap((r) => r.notes);
-  return {
-    query,
-    backend,
-    count: items.length,
-    // A backend that degraded is information, not a failure: it bounds what
-    // the caller may conclude from an empty result.
-    ...notes.length ? { notes } : {},
-    results: items.map((i) => ({ url: i.url, title: i.title, snippet: i.snippet })),
-    next: "Nothing was written. To cite any of this, ingest the URL with ultrasearch_fetch into a dossier, or run ultrasearch_gather."
-  };
-}
-async function handleGather(args) {
-  const options = gatherOptions(args);
-  const res = await runGather(options);
-  const head = {
-    question: options.question,
-    mode: options.mode,
-    depth: options.depth,
-    sources: res.sources.length,
-    // The mode's own result, inline — for deals, the codes to try with their [S#].
-    ...Object.fromEntries(extraSummaries(res.sources, res.manifest).map((s) => [s.key, s.data])),
-    ...res.manifest.notes?.length ? { notes: res.manifest.notes } : {}
-  };
-  if (isNoWrite()) {
-    return {
-      run: null,
-      ...head,
-      artifacts: artifactMap(res.dir),
-      next: "Nothing was written. Answer from the artifacts above, citing [S#]. ultrasearch_check cannot run without files \u2014 the grounding discipline is yours."
-    };
-  }
-  return {
-    run: res.dir,
-    dossier_md: join28(res.dir, "DOSSIER.md"),
-    ...head,
-    next: `Read ${join28(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
-  };
-}
-async function handleBrainstorm(args) {
-  const options = gatherOptions(args);
-  const res = await runBrainstorm(options);
-  if (isNoWrite()) {
-    return {
-      ...res,
-      dir: null,
-      artifacts: artifactMap(res.dir),
-      next: "Nothing was written. Pick an angle, then run ultrasearch_gather on the sharpened question."
-    };
-  }
-  return { ...res, next: "Pick an angle, then run ultrasearch_gather on the sharpened question." };
-}
-function artifactMap(dir) {
-  const files = {};
-  for (const a of takeArtifacts()) files[relative2(dir, a.path) || a.path] = a.content;
-  return files;
-}
-function handlePlan(args) {
-  const question = requiredStr(args, "question", "the umbrella question to decompose.");
-  const mode2 = oneOf(str2(args.mode), ALL_MODES, "mode", "topic");
-  const runRoot = str2(args.run_root);
-  if (runRoot !== void 0 && !isAbsolute4(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
-  const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
-  if (isNoWrite()) takeArtifacts();
-  return {
-    ...res,
-    next: "Run ultrasearch_gather on each sub-question into its own dir, then ultrasearch_merge them into one dossier before writing anything."
-  };
-}
-function handleMerge(args) {
-  const runs = strArray(args.runs);
-  if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
-  for (const r of runs) {
-    if (!isAbsolute4(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
-    if (!existsSync18(join28(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
-  }
-  const master = str2(args.master);
-  if (master !== void 0 && !isAbsolute4(master)) throw new ToolError("`master` must be an absolute path.");
-  const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode) });
-  return {
-    run: res.dir,
-    dossier_md: join28(res.dir, "DOSSIER.md"),
-    sources: res.sources.length,
-    merged_from: runs.length,
-    next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
-  };
-}
-async function handleFetch(args, run) {
-  const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
-  if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
-  const res = await addSource(run, url, { question: str2(args.question), title: str2(args.title), citeUrl: str2(args.cite_url), browser: browserArg(args) });
-  return { run, url, ...res };
-}
-async function handleRefcheck(args) {
-  const refs = requiredStr(args, "refs", "the absolute path to the reference list.");
-  const citing = str2(args.citing);
-  const out = str2(args.out);
-  for (const [k, v] of [
-    ["refs", refs],
-    ["citing", citing],
-    ["out", out]
-  ]) {
-    if (v !== void 0 && !isAbsolute4(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
-  }
-  if (!existsSync18(refs)) throw new ToolError(`no file at ${refs}`);
-  if (citing && !existsSync18(citing)) throw new ToolError(`no file at ${citing}`);
-  let res;
-  try {
-    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline), force: bool(args.force) });
-  } catch (e) {
-    throw new ToolError(e.message);
-  }
-  const hasDossier = res.references.some((e) => e.sourceId);
-  return {
-    dir: res.dir,
-    report: join28(res.dir, "REFCHECK.md"),
-    summary: res.summary,
-    ...res.citing ? { citing: res.citing } : {},
-    // One line per reference that needs a look, not the whole record set.
-    issues: res.references.filter((e) => e.status !== "ok").map((e) => ({
-      n: e.n,
-      status: e.status,
-      ...e.sourceId ? { source: e.sourceId } : {},
-      fields: e.fields.filter((f) => f.status !== "match"),
-      ...e.doi?.resolves === false ? { doi: "does not resolve" } : {}
-    })),
-    notes: res.notes,
-    next: hasDossier ? `Read ${join28(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join28(res.dir, "REFCHECK.md")}.`
-  };
-}
-async function handleIngest(args, run) {
-  const web = webResultsArg(args.web_results);
-  const listed = strArray(args.urls) ?? [];
-  for (const u of listed) {
-    if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
-  }
-  const hits = [...listed, ...web?.hits ?? []];
-  const template = templateArg(args);
-  if (template) {
-    setDossierTemplate(run, template);
-    if (!hits.length) return { run, template, next: "DOSSIER.md now carries that template. Write the report to it, then ultrasearch_check." };
-  }
-  if (!hits.length) throw new ToolError("`web_results` or `urls` is required \u2014 the URLs to fold into the dossier.");
-  const res = await addSources(run, hits, { question: str2(args.question), firecrawl: str2(args.firecrawl), cache: true, browser: browserArg(args) });
-  return {
-    run,
-    ...res,
-    ...web?.rejected ? { rejected: web.rejected } : {},
-    // Say what to do next, and only when there IS something to do: a partial
-    // ingest is normal (walls, dead links), and the caller needs to know which
-    // URLs never became citable rather than assume all of them did.
-    ...res.skipped ? { next: "Some URLs were not added \u2014 read each result's `note`. A refused page is not citable; find a primary source that carries the text." } : {}
-  };
-}
-function handleCheck(args, run) {
-  const res = runCheck(run, {
-    semantic: bool(args.semantic),
-    requireVerify: bool(args.require_verify),
-    strictNumerals: bool(args.strict_numerals),
-    failOnWall: bool(args.fail_on_wall),
-    minSources: positive(args.min_sources, "min_sources")
-  });
-  return { run, ...res };
-}
-function handleRelink(args, run) {
-  const id = str2(args.id);
-  const url = str2(args.url);
-  if (bool(args.list)) return { run, issues: listIssues(run) };
-  if (id || url) {
-    if (!id || !url) throw new ToolError("`id` and `url` go together \u2014 pass both to repoint one source, or neither to run the automatic pass.");
-    const res = relink(run, id, url, { title: str2(args.title) });
-    if (!res.relinked) throw new ToolError(res.note ?? `${id} was not relinked.`);
-    return { run, ...res };
-  }
-  const { repaired, remaining } = autoRelink(run);
-  return {
-    run,
-    repaired,
-    remaining,
-    next: remaining.length ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url." : "Every source cites a page a reader can open."
-  };
-}
-function handleDrop(args, run) {
-  const ids = strArray(args.ids) ?? [];
-  const whereRaw = str2(args.where);
-  if (whereRaw !== void 0 && !DROP_WHERE.includes(whereRaw)) {
-    throw new ToolError(`\`where\` must be one of: ${DROP_WHERE.join(", ")}.`);
-  }
-  if (!ids.length && !whereRaw) throw new ToolError("Pass `ids` or `where` \u2014 which sources to remove.");
-  const res = dropSources(run, { ids, where: whereRaw, dryRun: bool(args.dry_run) });
-  return {
-    ...res,
-    next: res.citedBy.length ? "Some report tiers cite a dropped id \u2014 rewrite those claims onto another source, then run ultrasearch_check." : res.dryRun ? "Nothing was changed. Call again without dry_run to remove these." : "Done. Ids are never reused; the next source ingested takes a fresh one."
-  };
-}
-function handleVerify(args, run) {
-  const shards = positive(args.shards, "shards");
-  const shard = num3(args.shard);
-  for (const [key, value] of [
-    ["shards", shards],
-    ["shard", shard]
-  ]) {
-    if (value !== void 0 && !Number.isInteger(value)) throw new ToolError(`\`${key}\` must be a whole number.`);
-  }
-  if (shards !== void 0 && shard === void 0) throw new ToolError("`shards` requires `shard` (0-based) \u2014 or drop both for the whole worklist.");
-  if (shards === void 0 && shard !== void 0) throw new ToolError("`shard` requires `shards` \u2014 the number of stripes the worklist is split into.");
-  if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
-    throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
-  }
-  const built = runVerifyCounted(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
-  const cut = capNotice(built, (n) => `max_verify: ${n}`);
-  return {
-    ...built.worklist,
-    run,
-    ...cut ? { warning: cut } : {},
-    next: "For each pair, read the cited source and judge it supported / partial / refuted / unsupported. Rewrite any claim its source does not carry."
-  };
-}
-function handleRender(args, run) {
-  if (isNoWrite()) {
-    if (bool(args.no_md)) throw new ToolError("`no_md` with ULTRASEARCH_NO_WRITE leaves nothing to render \u2014 no HTML is produced in that mode.");
-    writeReportMarkdown(run);
-    return {
-      run,
-      written: [],
-      artifacts: artifactMap(run),
-      next: "Nothing was written; index.md is above. index.html is skipped \u2014 it is only useful as a file."
-    };
-  }
-  const wantHtml = !bool(args.no_html);
-  const wantMd = !bool(args.no_md);
-  if (!wantHtml && !wantMd) throw new ToolError("both `no_html` and `no_md` were set \u2014 there is nothing left to render.");
-  const ctx = loadRenderContext(run);
-  const written = [];
-  if (wantHtml) written.push(writeHtml(ctx));
-  if (wantMd) written.push(writeReportMarkdown(ctx));
-  return { run, written };
-}
-function handleRead(args, run) {
-  const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
-  const target = isAbsolute4(raw) ? raw : join28(run, raw);
-  let real;
-  try {
-    real = realpathSync3(target);
-  } catch {
-    throw new ToolError(`no such file: ${raw}`);
-  }
-  const root = realpathSync3(run);
-  if (real !== root && !real.startsWith(root + sep3)) {
-    throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
-  }
-  const st = statSync10(real);
-  if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
-  if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
-  const lines = readFileSync19(real, "utf8").split("\n");
-  const total = lines.length;
-  const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
-  if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
-  const requestedEnd = Math.floor(num3(args.end_line) ?? total);
-  const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
-  return {
-    path: isAbsolute4(raw) ? real : raw,
-    start_line: start,
-    end_line: end,
-    total_lines: total,
-    truncated: end < Math.min(total, requestedEnd),
-    content: lines.slice(start - 1, end).join("\n")
-  };
-}
-
 // src/mcp/tools.ts
 var MODE_ENUM = [...ALL_MODES].sort();
 var DEPTH_ENUM = [...ALL_DEPTHS].sort();
@@ -21523,7 +21200,11 @@ var TOOLS = [
         firecrawl: firecrawlProp,
         browser: browserProp,
         template: templateProp,
-        out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." }
+        out: { type: "string", description: "Absolute directory to write the dossier to (default: a timestamped dir under the temp root)." },
+        force: {
+          type: "boolean",
+          description: "Gather into an `out` that already holds a REPORT.md/SUMMARY.md. Refused without it: the sources are renumbered from S1, so that report would cite the wrong pages (it is kept, and must be rewritten)."
+        }
       },
       required: ["question"]
     }
@@ -21668,7 +21349,11 @@ var TOOLS = [
         runs: { type: "array", items: { type: "string" }, description: "The sub-dossier directories to union." },
         master: { type: "string", description: "Absolute output directory (default: derived from mode and question)." },
         question: { type: "string", description: "The original umbrella question." },
-        mode: modeProp
+        mode: modeProp,
+        force: {
+          type: "boolean",
+          description: "Merge into a `master` that already holds a REPORT.md/SUMMARY.md (kept; it must be rewritten against the merged ids)."
+        }
       },
       required: ["runs"]
     }
@@ -21803,6 +21488,496 @@ function applyDefaultRun(schema, defaultRun2) {
       run: { ...existing, description: `${existing.description} Optional \u2014 defaults to ${defaultRun2}.` }
     },
     required: schema.required.filter((r) => r !== "run")
+  };
+}
+
+// src/mcp/handlers.ts
+var MAX_READ_LINES = 2e3;
+var MAX_READ_BYTES = 8 * 1024 * 1024;
+var DEFAULT_DEPTH = "standard";
+function str2(v) {
+  return typeof v === "string" && v.trim() !== "" ? v : void 0;
+}
+function num3(v) {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : void 0;
+}
+function bool(v) {
+  return v === true || v === "true";
+}
+function strArray(v) {
+  return Array.isArray(v) && v.every((x) => typeof x === "string") ? v : void 0;
+}
+function positive(v, key) {
+  const n = num3(v);
+  if (n === void 0) return void 0;
+  if (n <= 0) throw new ToolError(`\`${key}\` must be greater than 0.`);
+  return n;
+}
+function requiredStr(args, key, hint) {
+  const v = str2(args[key]);
+  if (!v) throw new ToolError(`\`${key}\` is required \u2014 ${hint}`);
+  return v;
+}
+function oneOf(value, allowed, key, fallback2) {
+  if (value === void 0) return fallback2;
+  if (!allowed.includes(value)) {
+    throw new ToolError(`\`${key}\` must be one of: ${allowed.join(", ")} (got "${value}")`);
+  }
+  return value;
+}
+function webResultsArg(v) {
+  if (v === void 0 || v === null) return void 0;
+  if (!Array.isArray(v)) throw new ToolError("`web_results` must be an array of {url, title, snippet} objects (or of URL strings).");
+  if (!v.length) return void 0;
+  const parsed = parseWebResults(JSON.stringify(v));
+  if (!parsed.hits.length) {
+    throw new ToolError('`web_results` held no usable hit \u2014 expected [{"url": "https://\u2026"}, \u2026] (or a list of URL strings).');
+  }
+  return { hits: parsed.hits, rejected: parsed.rejected };
+}
+function browserArg(args) {
+  const v = str2(args.browser);
+  return resolveBrowserRung({ flag: v === void 0 ? void 0 : oneOf(v, ALL_BROWSER_MODES, "browser", "fallback") }).mode;
+}
+function requiredRun(args, defaults) {
+  const run = str2(args.run) ?? defaults.defaultRun;
+  if (!run) throw new ToolError("`run` is required: the dossier directory returned by ultrasearch_gather.");
+  if (!isAbsolute4(run)) throw new ToolError("`run` must be an absolute path.");
+  const abs = resolve4(run);
+  if (!existsSync19(join29(abs, "manifest.json"))) {
+    throw new ToolError(`no dossier at ${abs} \u2014 build one first with ultrasearch_gather (it returns the directory to pass here).`);
+  }
+  return abs;
+}
+function webEngineArg(v) {
+  const e = str2(v);
+  return e === void 0 ? void 0 : canonicalBackend(e);
+}
+function gatherOptions(args) {
+  const backends = strArray(args.backends)?.map(canonicalBackend);
+  if (backends) {
+    for (const b of backends) {
+      if (!ALL_BACKENDS.includes(b)) throw new ToolError(`unknown backend "${b}" \u2014 one of: ${[...ALL_BACKENDS].join(", ")}`);
+    }
+  }
+  const out = str2(args.out);
+  if (out !== void 0 && !isAbsolute4(out)) throw new ToolError("`out` must be an absolute path.");
+  const depth = oneOf(str2(args.depth), ALL_DEPTHS, "depth", DEFAULT_DEPTH);
+  const caps = DEPTH_CAPS[depth];
+  const web = webResultsArg(args.web_results);
+  return {
+    question: requiredStr(args, "question", "the topic or question to research."),
+    mode: oneOf(str2(args.mode), ALL_MODES, "mode", "topic"),
+    depth,
+    backends,
+    queries: strArray(args.queries),
+    maxSources: positive(args.max_sources, "max_sources"),
+    perSource: positive(args.per_source, "per_source") ?? caps.perSource,
+    ...positive(args.per_source, "per_source") ? { perSourceAsked: positive(args.per_source, "per_source") } : {},
+    lang: str2(args.lang) ?? "en",
+    region: str2(args.region),
+    // Pilotable from MCP, at last: these were hardcoded, so a client could not
+    // pin an engine, point at a SearXNG, or reach the web-search lane at all.
+    webEngine: oneOf(webEngineArg(args.web_engine), ALL_WEB_ENGINES, "web_engine", "auto"),
+    search: oneOf(str2(args.search), ALL_SEARCH_PROFILES, "search", "auto"),
+    ...web ? { webResults: web.hits, webResultsRejected: web.rejected } : {},
+    searxng: str2(args.searxng),
+    firecrawl: str2(args.firecrawl),
+    since: str2(args.since),
+    excludeDomains: strArray(args.exclude_domains) ?? [],
+    seedDomains: strArray(args.seed_domains),
+    browser: browserArg(args),
+    ...templateArg(args) ? { template: templateArg(args) } : {},
+    out,
+    ...bool(args.force) ? { force: true } : {},
+    json: true
+  };
+}
+function templateArg(args) {
+  const t = str2(args.template);
+  return t === void 0 ? void 0 : oneOf(t, ALL_TEMPLATES, "template", "verification");
+}
+var PAGE_TOOLS = /* @__PURE__ */ new Set(["ultrasearch_search", "ultrasearch_gather", "ultrasearch_brainstorm", "ultrasearch_fetch", "ultrasearch_ingest"]);
+async function callTool(name, args, defaults = {}) {
+  const run = () => dispatch(name, args, defaults);
+  const result = PAGE_TOOLS.has(name) ? await withBrowserClosed(run) : await run();
+  return outcome(name, result);
+}
+var NO_WRITE_REFUSED_TOOLS = {
+  ultrasearch_fetch: "it adds a new [S#] to a dossier on disk",
+  ultrasearch_ingest: "it adds new [S#] entries to a dossier on disk",
+  ultrasearch_merge: "it unions the sub-dossiers into a master dossier on disk",
+  ultrasearch_verify: "it emits a worklist for skeptics to read from disk",
+  ultrasearch_drop: "it removes sources from a dossier on disk",
+  ultrasearch_refcheck: "it writes refcheck.json, REFCHECK.md and a dossier of the resolved references"
+};
+async function dispatch(name, args, defaults) {
+  const refused = NO_WRITE_REFUSED_TOOLS[name];
+  if (refused && isNoWrite()) {
+    throw new ToolError(
+      `\`${name}\` cannot run while ULTRASEARCH_NO_WRITE is set \u2014 ${refused}. Unset it, or use ultrasearch_gather, which streams its dossier back inline.`
+    );
+  }
+  switch (name) {
+    // These three touch no dossier at all.
+    case "ultrasearch_modes":
+      return { modes: listModes() };
+    case "ultrasearch_search":
+      return await handleSearch(args);
+    case "ultrasearch_plan":
+      return handlePlan(args);
+    // A gather creates its dossier, so by default there is nothing yet to lock
+    // against. Pointed at a directory (`out`, `master`), it is a writer of that
+    // directory like any other.
+    case "ultrasearch_gather":
+      return await writing(str2(args.out), name, () => handleGather(args));
+    case "ultrasearch_brainstorm":
+      return await handleBrainstorm(args);
+    case "ultrasearch_merge":
+      return await writing(str2(args.master), name, () => handleMerge(args));
+    case "ultrasearch_refcheck":
+      return await writing(str2(args.out), name, () => handleRefcheck(args));
+    // Everything below mutates or reads ONE existing dossier, and is
+    // serialized against other calls on the same one.
+    default: {
+      const run = requiredRun(args, defaults);
+      return await (TOOL_META[name]?.write ? writing : reading)(run, name, async () => {
+        switch (name) {
+          case "ultrasearch_fetch":
+            return await handleFetch(args, run);
+          case "ultrasearch_ingest":
+            return await handleIngest(args, run);
+          case "ultrasearch_check":
+            return handleCheck(args, run);
+          case "ultrasearch_relink":
+            return handleRelink(args, run);
+          case "ultrasearch_drop":
+            return handleDrop(args, run);
+          case "ultrasearch_verify":
+            return handleVerify(args, run);
+          case "ultrasearch_render":
+            return handleRender(args, run);
+          case "ultrasearch_read":
+            return handleRead(args, run);
+          default:
+            throw new ToolError(`unknown tool: ${name}`);
+        }
+      });
+    }
+  }
+}
+async function writing(dir, name, fn) {
+  if (!dir) return fn();
+  return withRunLock(dir, async () => {
+    try {
+      return await withDossierLock(dir, name, fn);
+    } catch (e) {
+      if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message))
+        throw new ToolError(e.message);
+      throw e;
+    }
+  });
+}
+function reading(dir, _name, fn) {
+  return withRunLock(dir, async () => fn());
+}
+function refuseOverReport(dir, force, why) {
+  if (!dir || isNoWrite()) return;
+  try {
+    reportsOverwritten(dir, force, why);
+  } catch (e) {
+    throw new ToolError(e.message.replace("--force", "`force: true`"));
+  }
+}
+function outcome(name, result) {
+  return { text: JSON.stringify(result, null, 2) + "\n", artifact: artifactFor(name, result) };
+}
+function artifactFor(name, result) {
+  if (isNoWrite()) return void 0;
+  if (typeof result !== "object" || result === null) return void 0;
+  const r = result;
+  if (name === "ultrasearch_gather" || name === "ultrasearch_merge") return typeof r.dossier_md === "string" ? r.dossier_md : void 0;
+  if (name === "ultrasearch_brainstorm") return typeof r.path === "string" ? r.path : void 0;
+  return void 0;
+}
+async function handleSearch(args) {
+  const query = requiredStr(args, "query", "the search query.");
+  const chosen = requiredStr(args, "backend", `which backend to query, one of: ${[...ALL_BACKENDS].join(", ")}`);
+  const backend = oneOf(canonicalBackend(chosen), ALL_BACKENDS, "backend", ALL_BACKENDS[0]);
+  const options = gatherOptions({ ...args, question: query, depth: "summary" });
+  const results = await runBackends([backend], { question: query, mode: getMode(options.mode), options, variants: [query] });
+  const max = positive(args.max_sources, "max_sources") ?? 10;
+  const items = results.flatMap((r) => r.items).slice(0, max);
+  const notes = results.flatMap((r) => r.notes);
+  return {
+    query,
+    backend,
+    count: items.length,
+    // A backend that degraded is information, not a failure: it bounds what
+    // the caller may conclude from an empty result.
+    ...notes.length ? { notes } : {},
+    results: items.map((i) => ({ url: i.url, title: i.title, snippet: i.snippet })),
+    next: "Nothing was written. To cite any of this, ingest the URL with ultrasearch_fetch into a dossier, or run ultrasearch_gather."
+  };
+}
+async function handleGather(args) {
+  const options = gatherOptions(args);
+  refuseOverReport(options.out, !!options.force, RENUMBERS("gather"));
+  const res = await runGather(options);
+  const head = {
+    question: options.question,
+    mode: options.mode,
+    depth: options.depth,
+    sources: res.sources.length,
+    // The mode's own result, inline — for deals, the codes to try with their [S#].
+    ...Object.fromEntries(extraSummaries(res.sources, res.manifest).map((s) => [s.key, s.data])),
+    ...res.manifest.notes?.length ? { notes: res.manifest.notes } : {}
+  };
+  if (isNoWrite()) {
+    return {
+      run: null,
+      ...head,
+      artifacts: artifactMap(res.dir),
+      next: "Nothing was written. Answer from the artifacts above, citing [S#]. ultrasearch_check cannot run without files \u2014 the grounding discipline is yours."
+    };
+  }
+  return {
+    run: res.dir,
+    dossier_md: join29(res.dir, "DOSSIER.md"),
+    ...head,
+    next: `Read ${join29(res.dir, "DOSSIER.md")} with ultrasearch_read, write the report citing [S#], then prove it with ultrasearch_check.`
+  };
+}
+async function handleBrainstorm(args) {
+  const options = gatherOptions(args);
+  const res = await runBrainstorm(options);
+  if (isNoWrite()) {
+    return {
+      ...res,
+      dir: null,
+      artifacts: artifactMap(res.dir),
+      next: "Nothing was written. Pick an angle, then run ultrasearch_gather on the sharpened question."
+    };
+  }
+  return { ...res, next: "Pick an angle, then run ultrasearch_gather on the sharpened question." };
+}
+function artifactMap(dir) {
+  const files = {};
+  for (const a of takeArtifacts()) files[relative2(dir, a.path) || a.path] = a.content;
+  return files;
+}
+function handlePlan(args) {
+  const question = requiredStr(args, "question", "the umbrella question to decompose.");
+  const mode2 = oneOf(str2(args.mode), ALL_MODES, "mode", "topic");
+  const runRoot = str2(args.run_root);
+  if (runRoot !== void 0 && !isAbsolute4(runRoot)) throw new ToolError("`run_root` must be an absolute path.");
+  const res = runPlan(question, mode2, strArray(args.subquestions), positive(args.max_subquestions, "max_subquestions"), runRoot);
+  if (isNoWrite()) takeArtifacts();
+  return {
+    ...res,
+    next: "Run ultrasearch_gather on each sub-question into its own dir, then ultrasearch_merge them into one dossier before writing anything."
+  };
+}
+function handleMerge(args) {
+  const runs = strArray(args.runs);
+  if (!runs?.length) throw new ToolError("`runs` is required \u2014 the sub-dossier directories to union.");
+  for (const r of runs) {
+    if (!isAbsolute4(r)) throw new ToolError(`\`runs\` must contain absolute paths (got "${r}").`);
+    if (!existsSync19(join29(r, "manifest.json"))) throw new ToolError(`no dossier at ${r} \u2014 every entry of \`runs\` must be a gathered dossier.`);
+  }
+  const master = str2(args.master);
+  if (master !== void 0 && !isAbsolute4(master)) throw new ToolError("`master` must be an absolute path.");
+  refuseOverReport(master, bool(args.force), RENUMBERS("merge"));
+  const res = runMerge({ runs, master, question: str2(args.question), mode: str2(args.mode), force: bool(args.force) });
+  return {
+    run: res.dir,
+    dossier_md: join29(res.dir, "DOSSIER.md"),
+    sources: res.sources.length,
+    merged_from: runs.length,
+    next: `Write ONE report against ${res.dir}, citing the merged [S#] ids, then prove it with ultrasearch_check.`
+  };
+}
+async function handleFetch(args, run) {
+  const url = requiredStr(args, "url", "an absolute http(s) URL to fetch.");
+  if (!/^https?:\/\//i.test(url)) throw new ToolError("`url` must be an absolute http(s) URL.");
+  const res = await addSource(run, url, { question: str2(args.question), title: str2(args.title), citeUrl: str2(args.cite_url), browser: browserArg(args) });
+  return { run, url, ...res };
+}
+async function handleRefcheck(args) {
+  const refs = requiredStr(args, "refs", "the absolute path to the reference list.");
+  const citing = str2(args.citing);
+  const out = str2(args.out);
+  for (const [k, v] of [
+    ["refs", refs],
+    ["citing", citing],
+    ["out", out]
+  ]) {
+    if (v !== void 0 && !isAbsolute4(v)) throw new ToolError(`\`${k}\` must be an absolute path.`);
+  }
+  if (!existsSync19(refs)) throw new ToolError(`no file at ${refs}`);
+  if (citing && !existsSync19(citing)) throw new ToolError(`no file at ${citing}`);
+  let res;
+  try {
+    res = await runRefcheck({ refs, citing, out, offline: bool(args.offline), force: bool(args.force) });
+  } catch (e) {
+    throw new ToolError(e.message);
+  }
+  const hasDossier = res.references.some((e) => e.sourceId);
+  return {
+    dir: res.dir,
+    report: join29(res.dir, "REFCHECK.md"),
+    summary: res.summary,
+    ...res.citing ? { citing: res.citing } : {},
+    // One line per reference that needs a look, not the whole record set.
+    issues: res.references.filter((e) => e.status !== "ok").map((e) => ({
+      n: e.n,
+      status: e.status,
+      ...e.sourceId ? { source: e.sourceId } : {},
+      fields: e.fields.filter((f) => f.status !== "match"),
+      ...e.doi?.resolves === false ? { doi: "does not resolve" } : {}
+    })),
+    notes: res.notes,
+    next: hasDossier ? `Read ${join29(res.dir, "REFCHECK.md")}; ${res.dir} is a dossier in which source S<n> is reference n \u2014 write REPORT.md to the verification template, citing [S#], then ultrasearch_check with run: ${res.dir}.` : `Read ${join29(res.dir, "REFCHECK.md")}.`
+  };
+}
+async function handleIngest(args, run) {
+  const web = webResultsArg(args.web_results);
+  const listed = strArray(args.urls) ?? [];
+  for (const u of listed) {
+    if (!/^https?:\/\//i.test(u)) throw new ToolError(`\`urls\` must hold absolute http(s) URLs (got "${u}").`);
+  }
+  const hits = [...listed, ...web?.hits ?? []];
+  const template = templateArg(args);
+  if (template) {
+    setDossierTemplate(run, template);
+    if (!hits.length) return { run, template, next: "DOSSIER.md now carries that template. Write the report to it, then ultrasearch_check." };
+  }
+  if (!hits.length) throw new ToolError("`web_results` or `urls` is required \u2014 the URLs to fold into the dossier.");
+  const res = await addSources(run, hits, { question: str2(args.question), firecrawl: str2(args.firecrawl), cache: true, browser: browserArg(args) });
+  return {
+    run,
+    ...res,
+    ...web?.rejected ? { rejected: web.rejected } : {},
+    // Say what to do next, and only when there IS something to do: a partial
+    // ingest is normal (walls, dead links), and the caller needs to know which
+    // URLs never became citable rather than assume all of them did.
+    ...res.skipped ? { next: "Some URLs were not added \u2014 read each result's `note`. A refused page is not citable; find a primary source that carries the text." } : {}
+  };
+}
+function handleCheck(args, run) {
+  const res = runCheck(run, {
+    semantic: bool(args.semantic),
+    requireVerify: bool(args.require_verify),
+    strictNumerals: bool(args.strict_numerals),
+    failOnWall: bool(args.fail_on_wall),
+    minSources: positive(args.min_sources, "min_sources")
+  });
+  return { run, ...res };
+}
+function handleRelink(args, run) {
+  const id = str2(args.id);
+  const url = str2(args.url);
+  if (bool(args.list)) return { run, issues: listIssues(run) };
+  if (id || url) {
+    if (!id || !url) throw new ToolError("`id` and `url` go together \u2014 pass both to repoint one source, or neither to run the automatic pass.");
+    const res = relink(run, id, url, { title: str2(args.title) });
+    if (!res.relinked) throw new ToolError(res.note ?? `${id} was not relinked.`);
+    return { run, ...res };
+  }
+  const { repaired, remaining } = autoRelink(run);
+  return {
+    run,
+    repaired,
+    remaining,
+    next: remaining.length ? "Each remaining entry carries the reason and what would settle it. Search for the page, then call ultrasearch_relink again with id + url." : "Every source cites a page a reader can open."
+  };
+}
+function handleDrop(args, run) {
+  const ids = strArray(args.ids) ?? [];
+  const whereRaw = str2(args.where);
+  if (whereRaw !== void 0 && !DROP_WHERE.includes(whereRaw)) {
+    throw new ToolError(`\`where\` must be one of: ${DROP_WHERE.join(", ")}.`);
+  }
+  if (!ids.length && !whereRaw) throw new ToolError("Pass `ids` or `where` \u2014 which sources to remove.");
+  const res = dropSources(run, { ids, where: whereRaw, dryRun: bool(args.dry_run) });
+  return {
+    ...res,
+    next: res.citedBy.length ? "Some report tiers cite a dropped id \u2014 rewrite those claims onto another source, then run ultrasearch_check." : res.dryRun ? "Nothing was changed. Call again without dry_run to remove these." : "Done. Ids are never reused; the next source ingested takes a fresh one."
+  };
+}
+function handleVerify(args, run) {
+  const shards = positive(args.shards, "shards");
+  const shard = num3(args.shard);
+  for (const [key, value] of [
+    ["shards", shards],
+    ["shard", shard]
+  ]) {
+    if (value !== void 0 && !Number.isInteger(value)) throw new ToolError(`\`${key}\` must be a whole number.`);
+  }
+  if (shards !== void 0 && shard === void 0) throw new ToolError("`shards` requires `shard` (0-based) \u2014 or drop both for the whole worklist.");
+  if (shards === void 0 && shard !== void 0) throw new ToolError("`shard` requires `shards` \u2014 the number of stripes the worklist is split into.");
+  if (shards !== void 0 && shard !== void 0 && (shard < 0 || shard >= shards)) {
+    throw new ToolError(`\`shard\` must be between 0 and ${shards - 1}.`);
+  }
+  const built = runVerifyCounted(run, { maxVerify: positive(args.max_verify, "max_verify"), shards, shard });
+  const cut = capNotice(built, (n) => `max_verify: ${n}`);
+  return {
+    ...built.worklist,
+    run,
+    ...cut ? { warning: cut } : {},
+    next: "For each pair, read the cited source and judge it supported / partial / refuted / unsupported. Rewrite any claim its source does not carry."
+  };
+}
+function handleRender(args, run) {
+  if (isNoWrite()) {
+    if (bool(args.no_md)) throw new ToolError("`no_md` with ULTRASEARCH_NO_WRITE leaves nothing to render \u2014 no HTML is produced in that mode.");
+    writeReportMarkdown(run);
+    return {
+      run,
+      written: [],
+      artifacts: artifactMap(run),
+      next: "Nothing was written; index.md is above. index.html is skipped \u2014 it is only useful as a file."
+    };
+  }
+  const wantHtml = !bool(args.no_html);
+  const wantMd = !bool(args.no_md);
+  if (!wantHtml && !wantMd) throw new ToolError("both `no_html` and `no_md` were set \u2014 there is nothing left to render.");
+  const ctx = loadRenderContext(run);
+  const written = [];
+  if (wantHtml) written.push(writeHtml(ctx));
+  if (wantMd) written.push(writeReportMarkdown(ctx));
+  return { run, written };
+}
+function handleRead(args, run) {
+  const raw = requiredStr(args, "path", "a path relative to the dossier, or an absolute path inside it.");
+  const target = isAbsolute4(raw) ? raw : join29(run, raw);
+  let real;
+  try {
+    real = realpathSync3(target);
+  } catch {
+    throw new ToolError(`no such file: ${raw}`);
+  }
+  const root = realpathSync3(run);
+  if (real !== root && !real.startsWith(root + sep3)) {
+    throw new ToolError(`path is outside the dossier: ${raw}. Use your own file tool for anything else.`);
+  }
+  const st = statSync11(real);
+  if (!st.isFile()) throw new ToolError(`not a file: ${raw}`);
+  if (st.size > MAX_READ_BYTES) throw new ToolError(`file is too large to read (${st.size} bytes): ${raw}`);
+  const lines = readFileSync20(real, "utf8").split("\n");
+  const total = lines.length;
+  const start = Math.max(1, Math.floor(num3(args.start_line) ?? 1));
+  if (start > total) throw new ToolError(`start_line ${start} is past the end of the file (${total} lines).`);
+  const requestedEnd = Math.floor(num3(args.end_line) ?? total);
+  const end = Math.min(total, Math.max(start, requestedEnd), start + MAX_READ_LINES - 1);
+  return {
+    path: isAbsolute4(raw) ? real : raw,
+    start_line: start,
+    end_line: end,
+    total_lines: total,
+    truncated: end < Math.min(total, requestedEnd),
+    content: lines.slice(start - 1, end).join("\n")
   };
 }
 
@@ -21993,7 +22168,7 @@ fetch + dedupe sources into a dossier, and write a citation-checked, tiered
 report (with self-contained HTML). The web-facing sibling of ultradoc.
 
 Usage:
-  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [options]
+  ultrasearch gather --q "<topic/question>" [--mode <m>] [--depth <d>] [--out <dir>] [--force] [options]
   ultrasearch queries --q "<question>" [--mode <m>] [--depth <d>] [--lang <c>] [--json]
   ultrasearch search --backend <kind> --q "<query>" [options]
   ultrasearch fetch  --url <u> --out <dossier-dir> [--q "<question>"] [--title <s>] [--cite-url <page>]
@@ -22009,7 +22184,7 @@ Usage:
                      [--allow-origin <o,...>] [--allow-remote] [--max-response-bytes <n>]
   ultrasearch brainstorm --q "<vague question>" [--mode <m>] [--out <dir>] [--json]
   ultrasearch plan   --q "<question>" [--mode <m>] [--subquestions "a|b|c"] [--run-root <dir>] [--max-subquestions <n>]
-  ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"]
+  ultrasearch merge  --runs "<dir1,dir2,\u2026>" --master <dir> [--q "<question>"] [--force]
   ultrasearch verify --run <dossier-dir> [--apply <files>] [--shards <n> --shard <i>] [--max-verify <n>]
   ultrasearch orchestrate --run <run-dir> [--phase gather|verify] [--eco] [--list] [--browser <m>]
   ultrasearch browser open <url>
@@ -22174,8 +22349,11 @@ Options:
   --citing <file>      For 'refcheck': the text that cites them (.md/.txt/.docx/.pdf)
   --offline            For 'refcheck': parse and read the citing text only \u2014 no
                        PubMed, Crossref or doi.org lookup
-  --force              For 'refcheck': write into an --out that already holds a
-                       REPORT.md/SUMMARY.md from an earlier run (kept \u2014 re-check it)
+  --force              For 'gather' / 'merge' / 'refcheck': write into an --out
+                       (--master) that already holds a REPORT.md/SUMMARY.md from
+                       an earlier run. Refused without it: these commands number
+                       the sources from S1, so the report there would cite the
+                       wrong pages. The report is kept \u2014 rewrite and re-check it
   --cite-url <page>    For 'fetch': read the text from --url but CITE this page \u2014
                        when you know the document an endpoint returns
   --id <S#>            For 'relink': the source to repoint. For 'drop': the
@@ -22383,8 +22561,8 @@ function parseList(s) {
 function resolveApplyPaths(spec) {
   if (spec.includes(",")) return parseList(spec).map((x) => resolve5(x));
   const abs = resolve5(spec);
-  if (existsSync19(abs) && statSync11(abs).isDirectory()) {
-    const files = readdirSync6(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
+  if (existsSync20(abs) && statSync12(abs).isDirectory()) {
+    const files = readdirSync9(abs).filter((f) => /verdict/i.test(f) && /\.json$/i.test(f)).sort().map((f) => resolve5(abs, f));
     if (!files.length) fail(`no verdict files (*verdict*.json) in directory ${abs}`);
     return files;
   }
@@ -22413,15 +22591,15 @@ function parseShardArgs(shardsRaw, shardRaw) {
 function readWebResultsPayload(spec) {
   if (spec === "-") {
     try {
-      return readFileSync20(0, "utf8");
+      return readFileSync21(0, "utf8");
     } catch {
       fail("--web-results -: could not read stdin");
     }
   }
   const abs = resolve5(spec);
-  if (!existsSync19(abs)) fail(`--web-results file not found: ${abs}`);
+  if (!existsSync20(abs)) fail(`--web-results file not found: ${abs}`);
   try {
-    return readFileSync20(abs, "utf8");
+    return readFileSync21(abs, "utf8");
   } catch (e) {
     fail(`--web-results: could not read ${abs} (${e.message})`);
   }
@@ -22607,6 +22785,7 @@ function buildGatherOptions(p, opts = {}) {
     cache: !p.bools.has("no-cache"),
     browser: browserMode(p),
     out: p.values.out ? resolve5(p.values.out) : void 0,
+    ...p.bools.has("force") ? { force: true } : {},
     json: p.bools.has("json"),
     // Read from the gate, not the flag, so ULTRASEARCH_NO_WRITE=1 alone still
     // reshapes the guidance. main() calls setNoWrite before this runs.
@@ -22627,13 +22806,33 @@ async function main(argv = process.argv.slice(2)) {
     process.exitCode = 2;
     return;
   }
-  if (!PAGE_COMMANDS.has(p.command)) return dispatch2(p);
+  const target = dossierWritten(p);
+  const run = () => target ? withDossierLock(target, p.command, () => dispatch2(p), { onWait: (m) => say(`ultrasearch: ${m}`) }) : dispatch2(p);
+  if (!PAGE_COMMANDS.has(p.command)) return run();
   const uninstall = closeBrowserOnSignal();
   try {
-    await withBrowserClosed(() => dispatch2(p));
+    await withBrowserClosed(run);
   } finally {
     uninstall();
   }
+}
+var DOSSIER_FLAGS = {
+  gather: ["out"],
+  merge: ["master"],
+  fetch: ["out", "run"],
+  "add-source": ["out", "run"],
+  ingest: ["run", "out"],
+  refcheck: ["out", "run"],
+  render: ["run", "out"],
+  verify: ["run", "out"],
+  drop: ["run", "out"],
+  relink: ["run", "out"],
+  human: ["run", "out"]
+};
+function dossierWritten(p) {
+  if (p.bools.has("list") || p.bools.has("dry-run")) return void 0;
+  const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
+  return dir ? resolve5(dir) : void 0;
 }
 var say = (line) => void process.stderr.write(`${line}
 `);
@@ -22737,10 +22936,10 @@ async function dispatch2(p) {
       const runDir = p.values.run;
       let manifest;
       if (runDir) {
-        const mf = join29(resolve5(runDir), "manifest.json");
-        if (!existsSync19(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
+        const mf = join30(resolve5(runDir), "manifest.json");
+        if (!existsSync20(mf)) fail(`no dossier at ${resolve5(runDir)} (no manifest.json)`);
         try {
-          manifest = upgradeLegacyManifest(JSON.parse(readFileSync20(mf, "utf8")));
+          manifest = upgradeLegacyManifest(JSON.parse(readFileSync21(mf, "utf8")));
         } catch (e) {
           fail(`could not read ${mf}: ${e.message}`);
         }
@@ -22801,7 +23000,7 @@ ${formatServices(rows)}
       const dir = p.values.run ?? p.values.out;
       if (!dir) fail("missing --run <dossier-dir>");
       const rdir = resolve5(dir);
-      if (!existsSync19(join29(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
+      if (!existsSync20(join30(rdir, "manifest.json"))) fail(`no dossier at ${rdir} (no manifest.json)`);
       const secs = p.values.timeout === void 0 ? void 0 : num4("timeout", p.values.timeout, 300);
       if (secs !== void 0 && secs < 1) fail(`invalid --timeout "${p.values.timeout}" (expected seconds \u2265 1)`);
       const { chosen, skipped, missing } = selectForHuman(rdir, p.values.id ? parseList(p.values.id) : void 0);
@@ -22911,13 +23110,14 @@ ${formatServices(rows)}
     case "merge": {
       const runs = p.values.runs ? parseList(p.values.runs).map((d2) => resolve5(d2)) : [];
       if (!runs.length) fail('missing --runs "<dir1,dir2,\u2026>"');
-      for (const d2 of runs) if (!existsSync19(d2)) fail(`run dir not found: ${d2}`);
+      for (const d2 of runs) if (!existsSync20(d2)) fail(`run dir not found: ${d2}`);
       const mode2 = p.values.mode ? oneOf2("mode", p.values.mode, ALL_MODES) : void 0;
       const result = runMerge({
         runs,
         master: p.values.master ? resolve5(p.values.master) : void 0,
         question: p.values.q ?? p.values.question,
-        mode: mode2
+        mode: mode2,
+        force: p.bools.has("force")
       });
       if (p.bools.has("json")) {
         process.stdout.write(JSON.stringify({ dir: result.dir, manifest: result.manifest }, null, 2) + "\n");
@@ -22988,7 +23188,7 @@ ${formatServices(rows)}
       const files = p.values.files ? parseList(p.values.files) : [];
       const template = templateOf(p);
       if (template) {
-        if (!existsSync19(join29(resolve5(dir), "manifest.json"))) fail(`no dossier at ${resolve5(dir)} (no manifest.json)`);
+        if (!existsSync20(join30(resolve5(dir), "manifest.json"))) fail(`no dossier at ${resolve5(dir)} (no manifest.json)`);
         setDossierTemplate(resolve5(dir), template);
         process.stderr.write(`ultrasearch: ${resolve5(dir)} now asks for the ${template} template (DOSSIER.md rewritten)
 `);
@@ -23081,7 +23281,7 @@ ${formatServices(rows)}
           `  citing:   ${r.citing.calls} call(s) \xB7 ${s.uncited} never cited \xB7 ${s.unknownCalls} unknown number(s) \xB7 ${s.outOfOrder} out of order`,
           ...r.offline ? [] : [`  figures:  ${s.numeralsChecked} checked against abstracts, ${s.numeralsAbsent} not found`]
         ] : [`  citing:   none \u2014 pass --citing <file> to check orphans, order and figures`],
-        `  report:   ${join29(r.dir, "REFCHECK.md")}`,
+        `  report:   ${join30(r.dir, "REFCHECK.md")}`,
         ...r.references.some((e) => e.sourceId) ? [`  dossier:  ${r.dir} \u2014 source S<n> is reference n; write REPORT.md (verification template), then check --run ${r.dir}`] : []
       ];
       process.stderr.write(lines.join("\n") + "\n");
@@ -23168,7 +23368,7 @@ ${formatServices(rows)}
       }
       const engineAbs = realpathSync4(fileURLToPath2(import.meta.url));
       if (p.bools.has("list")) {
-        if (!existsSync19(resolve5(dir))) {
+        if (!existsSync20(resolve5(dir))) {
           process.stderr.write(`ultrasearch orchestrate: run dir not found: ${resolve5(dir)}
 `);
           process.exit(2);
@@ -23192,15 +23392,15 @@ ${formatServices(rows)}
       for (const w of res.written) lines.push(`  ${w}`);
       const workflows = res.written.filter((w) => w.endsWith(".workflow.mjs"));
       if (workflows.length) {
-        const orch = join29(resolve5(dir), "orchestration");
+        const orch = join30(resolve5(dir), "orchestration");
         lines.push("");
-        lines.push(`Fan out: dispatch one subagent per batch with ${join29(orch, "agents", "<role>.md")} (batches in ${join29(orch, "RUNBOOK.md")}),`);
+        lines.push(`Fan out: dispatch one subagent per batch with ${join30(orch, "agents", "<role>.md")} (batches in ${join30(orch, "RUNBOOK.md")}),`);
         lines.push("  or play the contracts yourself, sequentially, from RUNBOOK.md (or re-run with --eco).");
         lines.push("Optional \u2014 Claude Code: launch with the Workflow tool for one-call parallel fan-out:");
         for (const w of workflows) lines.push(`  Workflow({ scriptPath: ${JSON.stringify(w)} })`);
         lines.push("Then run the fold yourself (merge / verify --apply; RUNBOOK.md shows it) \u2014 you stay the sole writer.");
       } else {
-        lines.push(`Follow ${join29(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
+        lines.push(`Follow ${join30(resolve5(dir), "orchestration", "RUNBOOK.md")} sequentially (the eco path).`);
       }
       process.stdout.write(lines.join("\n") + "\n");
       for (const n of res.notices) process.stderr.write(`ultrasearch orchestrate: note \u2014 ${n}

@@ -23,7 +23,7 @@ import type { Manifest, RawSource, Source } from "../types.js";
 import { VERSION } from "../types.js";
 import { officeToText, runId, slugify } from "../engine.js";
 import { extractPdf } from "../backends/pdf.js";
-import { buildSource, writeDossierIndex, writeSourceExtract } from "../dossier.js";
+import { buildSource, reportsOverwritten, writeDossierIndex, writeSourceExtract } from "../dossier.js";
 import { ensureDir, writeArtifact } from "../no-write.js";
 import { RUN_SLUG } from "../util.js";
 import { templateFor } from "../templates.js";
@@ -205,12 +205,7 @@ export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult
   // A report written against an earlier run would be `check`ed against this
   // run's sources as if it were about them. Refused unless asked for; kept,
   // and flagged, when it is.
-  const stale = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"].filter((f) => existsSync(join(dir, f)));
-  if (stale.length && !opts.force) {
-    throw new Error(
-      `${dir} already holds ${stale.join(", ")} from an earlier run — pass another --out, or --force to rewrite the check there (the report is kept, and must be re-read and re-checked against the new sources)`,
-    );
-  }
+  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from");
   if (stale.length) notes.push(`${stale.join(", ")} predate this run — re-read them against the new REFCHECK.md, then render and check again.`);
 
   const entries: RefcheckEntry[] = refs.map((ref) => {
