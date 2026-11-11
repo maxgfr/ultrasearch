@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+## [1.46.1](https://github.com/maxgfr/ultrasearch/compare/v1.46.0...v1.46.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* **refcheck:** settle a doubtful reference number by what follows it, and name every line folded ([775a7fa](https://github.com/maxgfr/ultrasearch/commit/775a7fa1996e63028843622626f8ffc08c82fbdb))
+
 # [1.46.0](https://github.com/maxgfr/ultrasearch/compare/v1.45.5...v1.46.0) (2026-11-11)
 
 
