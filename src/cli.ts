@@ -875,28 +875,31 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 }
 
 // Which flag names the dossier each writing command rewrites, in the order the
-// command itself reads them. A command absent from here writes no dossier
-// index (see src/dossier-lock.ts for why `plan`, `brainstorm` and
-// `orchestrate` are).
-const DOSSIER_FLAGS: Record<string, readonly string[]> = {
-  gather: ["out"],
-  merge: ["master"],
-  fetch: ["out", "run"],
-  "add-source": ["out", "run"],
-  ingest: ["run", "out"],
-  refcheck: ["out", "run"],
-  render: ["run", "out"],
-  verify: ["run", "out"],
-  drop: ["run", "out"],
-  relink: ["run", "out"],
-  human: ["run", "out"],
+// command itself reads them, and the flag — if it has one — that makes the
+// command change nothing. A command absent from here writes no dossier index
+// (see src/dossier-lock.ts for why `plan`, `brainstorm` and `orchestrate` are).
+// Every boolean flag parses on every command, so the read-only flag is the
+// command's own: `drop --list` still drops, and still takes the lock.
+const DOSSIER_FLAGS: Record<string, { dir: readonly string[]; readOnly?: string }> = {
+  gather: { dir: ["out"] },
+  merge: { dir: ["master"] },
+  fetch: { dir: ["out", "run"] },
+  "add-source": { dir: ["out", "run"] },
+  ingest: { dir: ["run", "out"] },
+  refcheck: { dir: ["out", "run"] },
+  render: { dir: ["run", "out"] },
+  verify: { dir: ["run", "out"] },
+  drop: { dir: ["run", "out"], readOnly: "dry-run" },
+  relink: { dir: ["run", "out"], readOnly: "list" },
+  human: { dir: ["run", "out"], readOnly: "list" },
 };
 
 /** The dossier directory this invocation writes into, when it names one. */
 function dossierWritten(p: Parsed): string | undefined {
+  const spec = DOSSIER_FLAGS[p.command];
   // A listing or a dry run changes nothing, and must not queue behind a writer.
-  if (p.bools.has("list") || p.bools.has("dry-run")) return undefined;
-  const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
+  if (!spec || (spec.readOnly && p.bools.has(spec.readOnly))) return undefined;
+  const dir = spec.dir.map((flag) => p.values[flag]).find(Boolean);
   return dir ? resolve(dir) : undefined;
 }
 

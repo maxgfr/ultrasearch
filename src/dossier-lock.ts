@@ -1,4 +1,4 @@
-import { closeSync, existsSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { envInt } from "./engine.js";
@@ -37,14 +37,14 @@ interface Holder {
 
 // The dossiers this process holds, so a `process.exit` — which skips every
 // `finally` — still releases them.
-const held = new Set<string>();
+const held = new Map<string, Holder>();
 let exitHookInstalled = false;
 
 function releaseAllOnExit(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const path of held) removeQuietly(path);
+    for (const [path, mine] of held) release(path, mine);
   });
 }
 
@@ -90,45 +90,66 @@ function abandoned(path: string, holder: Holder | undefined): boolean {
   }
 }
 
-// Take an abandoned lock out of the way. Renamed rather than deleted, and
-// checked afterwards: between reading the dead holder and acting on it another
-// waiter may already have replaced the lock, and deleting THAT would let two
-// writers in. A live lock renamed by mistake is put back.
-function clearAbandoned(path: string, holder: Holder | undefined): void {
-  const aside = `${path}.${process.pid}.stale`;
+// Take an abandoned lock out of the way — one waiter at a time.
+//
+// Several waiters can see the same dead holder at once. If each of them removed
+// "the lock" on that evidence, the second would remove the lock the first had
+// just taken, and two writers would run. So clearing takes a lock of its own
+// (`<lock>.clearing`, O_EXCL), and under it the holder is read AGAIN: only a
+// lock that is still the abandoned one is removed. A live lock can only be
+// removed by its own holder (see release), so nothing can replace the dead one
+// between that second read and the unlink.
+function clearAbandoned(path: string): void {
+  const clearing = `${path}.clearing`;
+  let fd: number;
   try {
-    renameSync(path, aside);
+    fd = openSync(clearing, "wx");
   } catch {
-    return; // someone else cleared it first
-  }
-  const moved = readHolder(aside);
-  if (moved && (moved.pid !== holder?.pid || moved.since !== holder?.since) && !existsSync(path)) {
+    // Another waiter is clearing. One that died doing it left this file: it
+    // takes milliseconds, so one this old is nobody's.
     try {
-      renameSync(aside, path);
-      return;
+      if (Date.now() - statSync(clearing).mtimeMs > 10_000) unlinkSync(clearing);
     } catch {
-      /* fall through: drop it */
+      /* gone already */
     }
+    return;
   }
-  removeQuietly(aside);
+  closeSync(fd);
+  try {
+    if (existsSync(path) && abandoned(path, readHolder(path))) unlinkSync(path);
+  } catch {
+    /* someone else's business now: the next attempt sees what is there */
+  } finally {
+    removeQuietly(clearing);
+  }
 }
 
-function tryAcquire(path: string, command: string): boolean {
+// Remove the lock only if it is still the one this call wrote. A process
+// mistaken for dead and replaced must not, on finishing, remove its successor's.
+function release(path: string, mine: Holder): void {
+  const now = readHolder(path);
+  if (now && now.pid === mine.pid && now.host === mine.host && now.since === mine.since) removeQuietly(path);
+}
+
+function tryAcquire(path: string, command: string): Holder | undefined {
   let fd: number;
   try {
     fd = openSync(path, "wx");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return false;
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") return undefined;
     throw e;
   }
+  // `since` carries a counter so two locks this process takes in the same
+  // millisecond are still told apart by release.
+  const holder: Holder = { pid: process.pid, host: hostname(), command, since: `${new Date().toISOString()}#${++taken}` };
   try {
-    const holder: Holder = { pid: process.pid, host: hostname(), command, since: new Date().toISOString() };
     writeSync(fd, JSON.stringify(holder));
   } finally {
     closeSync(fd);
   }
-  return true;
+  return holder;
 }
+let taken = 0;
 
 export interface DossierLockOptions {
   /** How long to wait for another writer, in ms (default ULTRASEARCH_LOCK_WAIT_MS, else 10 minutes). */
@@ -156,10 +177,11 @@ export async function withDossierLock<T>(dir: string, command: string, fn: () =>
   const pollMs = opts.pollMs ?? 150;
   const deadline = Date.now() + waitMs;
   let told = false;
-  while (!tryAcquire(path, command)) {
+  let mine: Holder | undefined;
+  while (!(mine = tryAcquire(path, command))) {
     const holder = readHolder(path);
     if (abandoned(path, holder)) {
-      clearAbandoned(path, holder);
+      clearAbandoned(path);
       continue;
     }
     if (Date.now() >= deadline) {
@@ -174,12 +196,12 @@ export async function withDossierLock<T>(dir: string, command: string, fn: () =>
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  held.add(path);
+  held.set(path, mine);
   releaseAllOnExit();
   try {
     return await fn();
   } finally {
     held.delete(path);
-    removeQuietly(path);
+    release(path, mine);
   }
 }

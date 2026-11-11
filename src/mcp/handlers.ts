@@ -276,10 +276,10 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
     // serialized against other calls on the same one.
     default: {
       const run = requiredRun(args, defaults);
-      // A tool that only reads (check, read) is serialized against this
-      // server's own calls and no further: it must not queue behind another
-      // process's long write.
-      return await (TOOL_META[name]?.write ? writing : reading)(run, name, async () => {
+      // A call that only reads — check, read, a dry-run drop, a relink list —
+      // is serialized against this server's own calls and no further: it must
+      // not queue behind another process's long write.
+      return await (writesDossier(name, args) ? writing : reading)(run, name, async () => {
         switch (name) {
           case "ultrasearch_fetch":
             return await handleFetch(args, run);
@@ -309,18 +309,29 @@ async function dispatch(name: string, args: Record<string, unknown>, defaults: H
 // One call at a time per dossier inside this server (withRunLock), and one
 // writer at a time per dossier across processes (withDossierLock) — a CLI
 // `fetch` running beside this server allocates ids from the same sources.json.
+//
+// The cross-process lock is taken FIRST, outside the in-process chain: a call
+// waiting for another process must not hold the chain, or every read of the
+// same dossier queued behind it would wait for that other process too.
+// A relative path is left to the handler, which refuses it — no lock file is
+// ever created relative to the server's working directory.
 async function writing<T>(dir: string | undefined, name: string, fn: () => Promise<T> | T): Promise<T> {
-  if (!dir) return fn();
-  return withRunLock(dir, async () => {
-    try {
-      return await withDossierLock(dir, name, fn);
-    } catch (e) {
-      // Another writer that never let go is the caller's to act on, not a crash.
-      if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message))
-        throw new ToolError(e.message);
-      throw e;
-    }
-  });
+  if (!dir || !isAbsolute(dir)) return fn();
+  try {
+    return await withDossierLock(dir, name, () => withRunLock(dir, async () => fn()));
+  } catch (e) {
+    // Another writer that never let go is the caller's to act on, not a crash.
+    if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message)) throw new ToolError(e.message);
+    throw e;
+  }
+}
+
+/** Whether this call changes the dossier — not just whether the tool can. */
+function writesDossier(name: string, args: Record<string, unknown>): boolean {
+  if (!TOOL_META[name]?.write) return false;
+  if (name === "ultrasearch_drop" && bool(args.dry_run)) return false;
+  if (name === "ultrasearch_relink" && bool(args.list)) return false;
+  return true;
 }
 
 function reading<T>(dir: string, _name: string, fn: () => Promise<T> | T): Promise<T> {
