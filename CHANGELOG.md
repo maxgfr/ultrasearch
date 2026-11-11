@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.46.0](https://github.com/maxgfr/ultrasearch/compare/v1.45.5...v1.46.0) (2026-11-11)
+
+
+### Bug Fixes
+
+* **backoff:** try a 502, a 504 or a dropped connection once more ([54f738d](https://github.com/maxgfr/ultrasearch/commit/54f738d9e3f70c9c72ebabc3ba2f8486edb64b7a))
+* **browser:** keep the browser rung off under CI ([f752268](https://github.com/maxgfr/ultrasearch/commit/f7522680b69cee047f4043ab119a8971321b3579))
+* **codes:** stop reading 'des 10€ de remise' as a minimum spend ([e75eaf7](https://github.com/maxgfr/ultrasearch/commit/e75eaf7dc1e6407c2bd68012ba940c88aa6a20e1))
+* **dossier:** narrow the report guard to the tiers, and spare extracts on an empty run ([bfa4d4f](https://github.com/maxgfr/ultrasearch/commit/bfa4d4f4cbf4182015ae062ea3a69167ca5ece78))
+* **dossier:** refuse to renumber a report's sources, and let one process write a dossier at a time ([3b18b54](https://github.com/maxgfr/ultrasearch/commit/3b18b54fa117296bca1c068462fabdf32f3ce189))
+* **fetch:** look up the arXiv record of a single fetched paper ([bde8a51](https://github.com/maxgfr/ultrasearch/commit/bde8a515c8d369471f410be5afd5756fe9f3fa16))
+* **gather:** say when --search max raised an explicit --per-source ([74e389c](https://github.com/maxgfr/ultrasearch/commit/74e389c8fff0dce76796965d889e6b8bde8b6ed8))
+* **identity:** spell a DOI one way in every command ([3a8623c](https://github.com/maxgfr/ultrasearch/commit/3a8623c3cb1e9b4ebd73fdec00975d5941f46f5e))
+* **lock:** let readers past a waiting writer, read flags per command, clear a dead lock once ([2cde3b8](https://github.com/maxgfr/ultrasearch/commit/2cde3b884cb3aedd3db25e47d55e48bbc6d6b82c))
+* **lock:** never spin on a dead lock, and see through a reused pid ([3105ac7](https://github.com/maxgfr/ultrasearch/commit/3105ac79a3222bc76339e755dbf3f8bfa1851027))
+* **lock:** one lock per dossier however its path is spelled ([3550e84](https://github.com/maxgfr/ultrasearch/commit/3550e840cb490654c3d3deba830420357b5b7890))
+* **mcp:** close three ways past --root ([9b74ee7](https://github.com/maxgfr/ultrasearch/commit/9b74ee7201406169d2f368234dae8416d9de4868))
+* **mcp:** refuse a .. segment under --root, and check --run against it at start ([6d8208d](https://github.com/maxgfr/ultrasearch/commit/6d8208d4ce96fd4fff4fdc74a7d743a3d7f49d5d))
+* **ncbi:** read a PubMed abstract with one paced retry loop ([fc596fa](https://github.com/maxgfr/ultrasearch/commit/fc596fad5ec18bc3acc364d3a9f38bec14a5239d))
+* **pepper:** keep a price of 0 and count expired threads among those returned ([6b8899c](https://github.com/maxgfr/ultrasearch/commit/6b8899c8ed54f9c3993b5afb8d8c21e6ae1b4faf))
+* **refcheck:** a bare '1 …' restarts the list only when authors follow ([4e49a45](https://github.com/maxgfr/ultrasearch/commit/4e49a45b59cf74e57df72a2c1d29f9500ace1116))
+* **refcheck:** a wrapped year with a dot stays put, and a repeated number is named ([f3a0aef](https://github.com/maxgfr/ultrasearch/commit/f3a0aef802834e8cfd9f69d3b20bbc42de1750ca))
+* **refcheck:** keep every numbered reference; refuse only a wrapped date ([26f9931](https://github.com/maxgfr/ultrasearch/commit/26f993151abfbdfcd1a5d3a192a213753ad64c05))
+* **refcheck:** read a wrapped reference line and an unknown call for what they are ([39641bd](https://github.com/maxgfr/ultrasearch/commit/39641bd430958bcf327fd33861f2449c6ac7815f))
+* **release:** fail when sync-version cannot find a version to set ([04323c5](https://github.com/maxgfr/ultrasearch/commit/04323c500661b9a983f1f291bbd4fd17aeeedb11))
+* **since:** leave the far end of the PubMed and Europe PMC windows open ([ab8800b](https://github.com/maxgfr/ultrasearch/commit/ab8800bc20651b8552c10d49d0f6cea8a0cee2fc))
+* **walls:** re-read a cached wall without turning the cache off for every other read ([e17bb5c](https://github.com/maxgfr/ultrasearch/commit/e17bb5cded5bfe6413c746b913f954eb0ca7e750))
+
+
+### Features
+
+* **mcp:** confine every path a client names with --root ([31e8e15](https://github.com/maxgfr/ultrasearch/commit/31e8e153dd2980a188c9908f234f4ae62caf0fb6))
+* **since:** filter the scholarly backends by date too ([e3c58fc](https://github.com/maxgfr/ultrasearch/commit/e3c58fc5fa6d182817e33a81b26bf7e3071d5078))
+
 ## [1.45.5](https://github.com/maxgfr/ultrasearch/compare/v1.45.4...v1.45.5) (2026-11-11)
 
 
