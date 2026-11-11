@@ -125,6 +125,56 @@ describe("withBackoff", () => {
     expect(out.gaveUpOnRetryAfterMs).toBe(120_000);
   });
 
+  it("tries a 502, a 504 or a dropped connection once more — and only once", async () => {
+    for (const fail of [{ status: 502 }, { status: 504 }, { status: 0, error: "ECONNRESET: socket hang up" }]) {
+      const seq = [fail, { status: 200 }];
+      const waits: number[] = [];
+      const out = await withBackoff(async () => seq.shift()!, { baseMs: 1000, sleepFn: async (ms) => void waits.push(ms) });
+      expect(out.result.status, JSON.stringify(fail)).toBe(200);
+      expect(waits).toEqual([1000]);
+      expect(out.rateLimited).toBe(false);
+    }
+    let calls = 0;
+    const down = await withBackoff(
+      async () => {
+        calls++;
+        return { status: 502 };
+      },
+      { baseMs: 0 },
+    );
+    expect(calls).toBe(2);
+    expect(down).toMatchObject({ attempts: 2, rateLimited: false });
+  });
+
+  it("does not try again what another attempt cannot change", async () => {
+    for (const final of [
+      { status: 404 },
+      { status: 500 },
+      { status: 0, error: "timed out after 12000 ms" },
+      { status: 0, error: "ENOTFOUND: getaddrinfo ENOTFOUND api.example.test" },
+      { status: 0, error: "cancelled" },
+      { status: 0 },
+    ]) {
+      let calls = 0;
+      await withBackoff(
+        async () => {
+          calls++;
+          return final;
+        },
+        { baseMs: 0 },
+      );
+      expect(calls, JSON.stringify(final)).toBe(1);
+    }
+  });
+
+  it("apiGet recovers from one 502 that the engine's disabled retry used to cost the backend", async () => {
+    let n = 0;
+    const spy = installFetchMock(() => (n++ === 0 ? { status: 502, body: "Bad Gateway" } : { body: '{"ok":1}', contentType: "application/json" }));
+    const r = await apiGet("https://api.example.test/gw", { baseMs: 0 });
+    expect(r).toMatchObject({ ok: true, data: { ok: 1 }, attempts: 2 });
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a 403 the engine flagged as rate-limited as throttled, and a 404 as final", () => {
     expect(isThrottled({ status: 403, rateLimited: true })).toBe(true);
     expect(isThrottled({ status: 404 })).toBe(false);

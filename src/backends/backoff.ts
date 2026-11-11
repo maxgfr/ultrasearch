@@ -15,7 +15,14 @@ import { envInt } from "../engine.js";
 //   • a Retry-After of up to 30 s is honoured as given; a longer one is not
 //     waited out — the backend reports itself rate-limited and the run goes on;
 //   • without Retry-After, exponential back-off from ULTRASEARCH_BACKOFF_MS
-//     (default 1000 ms: 1 s, then 2 s).
+//     (default 1000 ms: 1 s, then 2 s);
+//   • a passing failure — a 502 or 504 from a gateway, a connection reset — is
+//     tried once more after the first back-off. Turning the engine's retry off
+//     had made a single 502 from Crossref or OpenAlex lose the backend for the
+//     variant. Not a timeout (the whole budget is spent, and a host silent that
+//     long rarely answers a second time — the engine's own rule), and not a
+//     failure no retry can change: an unknown host, a bad certificate, an
+//     invalid URL.
 
 /** What the back-off loop needs to know about one attempt. */
 export interface BackoffAttempt {
@@ -24,6 +31,8 @@ export interface BackoffAttempt {
   retryAfterMs?: number;
   /** Engine's own rate-limit verdict (a 429, or a 403 with x-ratelimit-remaining: 0). */
   rateLimited?: boolean;
+  /** The engine's description of a failure with no answer (status 0). */
+  error?: string;
 }
 
 export interface BackoffOptions {
@@ -54,6 +63,16 @@ export function isThrottled(a: BackoffAttempt): boolean {
   return a.status === 429 || a.status === 503 || a.rateLimited === true;
 }
 
+// No answer, and asking again will not change that.
+const FINAL_ERROR =
+  /timed out|cancelled|ENOTFOUND|EAI_AGAIN|ERR_INVALID_URL|CERT|SELF_SIGNED|UNABLE_TO_(?:VERIFY|GET)|redirect count exceeded|scheme must be|unknown scheme|bad port|invalid url|failed to parse url/i;
+
+/** A failure worth one more try: a gateway's 502/504, or a connection that dropped. */
+export function isTransient(a: BackoffAttempt): boolean {
+  if (a.status === 502 || a.status === 504) return true;
+  return a.status === 0 && !!a.error && !FINAL_ERROR.test(a.error);
+}
+
 /** Run `call` until it is not throttled, waiting politely in between. */
 export async function withBackoff<T extends BackoffAttempt>(call: () => Promise<T>, opts: BackoffOptions = {}): Promise<BackoffOutcome<T>> {
   const attempts = Math.max(1, Math.floor(opts.attempts ?? 3));
@@ -61,9 +80,18 @@ export async function withBackoff<T extends BackoffAttempt>(call: () => Promise<
   const capMs = opts.capMs ?? envInt("BACKOFF_CAP_MS", 30_000, 0, 300_000);
   const pause = opts.sleepFn ?? sleep;
   let waitedMs = 0;
+  let transientRetried = false;
   for (let i = 1; ; i++) {
     const result = await call();
-    if (!isThrottled(result)) return { result, attempts: i, waitedMs, rateLimited: false };
+    if (!isThrottled(result)) {
+      // One more try for a passing failure, never more: it is not a throttle,
+      // and a gateway that fails twice is down for this run.
+      if (!isTransient(result) || transientRetried || i >= attempts) return { result, attempts: i, waitedMs, rateLimited: false };
+      transientRetried = true;
+      if (baseMs > 0) await pause(baseMs);
+      waitedMs += baseMs;
+      continue;
+    }
     if (i >= attempts) return { result, attempts: i, waitedMs, rateLimited: true };
     const asked = result.retryAfterMs;
     if (asked !== undefined && asked > capMs) {
