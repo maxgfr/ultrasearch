@@ -10,7 +10,8 @@ export const europepmcBackend: Backend = async (ctx): Promise<BackendResult> => 
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   // --since: a first-publication date range in the query itself.
   const since = sinceDate(ctx.options.since);
-  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO ${new Date().toISOString().slice(0, 10)}]` : ctx.question;
+  // The far end is open: an issue dated ahead of today is still recent.
+  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO 3000-12-31]` : ctx.question;
   const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}` + `&format=json&resultType=core&pageSize=${n}`;
   const r = await apiGet(url);
   const results: any[] = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];

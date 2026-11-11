@@ -10076,14 +10076,14 @@ async function read(url, opts) {
   const timeoutMs = opts.timeoutMs ?? envInt("BROWSER_TIMEOUT_MS", 3e4, 5e3, 3e5);
   const human = opts.human === true ? {} : opts.human || void 0;
   const humanMs = human ? (human.timeoutMs ?? humanTimeoutMs()) + (askFirst(human, deps) === "ask" ? humanAskTimeoutMs() + ASK_GRACE_MS : 0) : 0;
-  const release = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
+  const release2 = await acquire(envInt("BROWSER_CONCURRENCY", 1, 1, 4), signal, cancelled);
   if (signal?.aborted) {
-    release();
+    release2();
     throw cancelled();
   }
   const run = { stopped: false };
   const work = track(render(url, opts, deps, timeoutMs, run));
-  work.then(release, release);
+  work.then(release2, release2);
   let stop;
   const cut = new Promise((_, reject) => {
     stop = reject;
@@ -11474,9 +11474,9 @@ ${pulled.stderr}` : ""}`, code: 1 };
   const up = run("docker", ["compose", "-f", file, ...profiles, "up", "-d", "--wait"], { timeoutMs: UP_TIMEOUT_MS });
   if (!up.ok) {
     const why = up.timedOut ? ` \u2014 the services were not healthy within ${UP_TIMEOUT_MS / 1e3}s` : "";
-    const taken = up.timedOut ? "" : `
+    const taken2 = up.timedOut ? "" : `
   a port already taken? ${spec.ports.map(([port, name, variable]) => `:${port} (${name}, ${envName(variable)})`).join(", ")} \u2014 stop what holds it, or point that variable at it and leave this service down.`;
-    return { message: `${tag2}: up failed${why}.${taken}${up.stderr ? `
+    return { message: `${tag2}: up failed${why}.${taken2}${up.stderr ? `
 ${up.stderr}` : ""}`, code: 1 };
   }
   return { message: [`${tag2}: ${spec.summary}`, ...spec.postUp?.(file, run) ?? []].join("\n"), code: 0 };
@@ -12530,12 +12530,12 @@ async function route(req, res, adapter, opts, slots) {
   });
   const handle = async (m, reply, o) => {
     if (m?.method !== "tools/call") return mcp.handle(m, reply, o);
-    const release = await slots.acquire(lost.signal);
-    if (!release) return;
+    const release2 = await slots.acquire(lost.signal);
+    if (!release2) return;
     try {
       await mcp.handle(m, reply, o);
     } finally {
-      release();
+      release2();
     }
   };
   const single = Array.isArray(parsed) ? void 0 : parsed;
@@ -14181,7 +14181,7 @@ ${abstract || "(no abstract provided by Semantic Scholar)"}`,
 var europepmcBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
-  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO ${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}]` : ctx.question;
+  const query = since ? `(${ctx.question}) AND FIRST_PDATE:[${since} TO 3000-12-31]` : ctx.question;
   const url = `https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=${encodeURIComponent(query)}&format=json&resultType=core&pageSize=${n}`;
   const r = await apiGet(url);
   const results = r.ok && Array.isArray(r.data?.resultList?.result) ? r.data.resultList.result : [];
@@ -14212,12 +14212,11 @@ ${abstract || "(no abstract provided by Europe PMC)"}`,
 };
 
 // src/backends/pubmed.ts
-var today = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 var pubmedBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base2 = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
   const since = sinceDate(ctx.options.since);
-  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=${today().replace(/-/g, "/")}` : "";
+  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=3000` : "";
   const esearch2 = `${base2}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}${window}`;
   const sr = await apiGet(esearch2);
   const ids = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
@@ -15060,7 +15059,7 @@ function consensus(values) {
   return best;
 }
 function aggregateCodes(sources, manifest) {
-  const today2 = manifest.builtAt.slice(0, 10);
+  const today = manifest.builtAt.slice(0, 10);
   const groups = /* @__PURE__ */ new Map();
   for (const s of [...sources].sort((a, b) => idNum(a.id) - idNum(b.id))) {
     for (const mention of s.meta?.codes ?? []) {
@@ -15076,8 +15075,8 @@ function aggregateCodes(sources, manifest) {
     const strength = ms.some((m) => m.strength === "strong") ? "strong" : "weak";
     const domains = new Set(g.map((x) => x.source.domain)).size;
     const expires = ms.map((m) => m.expires).filter((d) => !!d).sort().at(-1);
-    const future = !!expires && expires >= today2;
-    const isExpired = !!expires && expires < today2 || ms.some((m) => m.expired) && !future;
+    const future = !!expires && expires >= today;
+    const isExpired = !!expires && expires < today || ms.some((m) => m.expired) && !future;
     const discount = consensus(ms.map((m) => m.discount));
     const minSpend = consensus(ms.map((m) => m.minSpend));
     const score = 3 * Number(structured) + 2 * Math.min(domains, 4) + Number(strength === "strong") + Number(!!discount) + Number(future) - 5 * Number(isExpired);
@@ -15860,9 +15859,9 @@ function writeDossierIndex(dir, sources, manifest, template) {
   writeArtifact(dossierMd, renderDossierMarkdown(sources, manifest, template, blocks2));
   return { dir, sourcesJson, dossierMd, manifestJson };
 }
-var REPORT_FILES = ["REPORT.md", "SUMMARY.md", "index.html", "index.md"];
-function reportsOverwritten(dir, force, why) {
-  const stale = REPORT_FILES.filter((f) => existsSync4(join12(dir, f)));
+var REPORT_FILES = ["REPORT.md", "SUMMARY.md"];
+function reportsOverwritten(dir, force, why, files = REPORT_FILES) {
+  const stale = files.filter((f) => existsSync4(join12(dir, f)));
   if (stale.length && !force) {
     throw new Error(
       `${dir} already holds ${stale.join(", ")} from an earlier run, and ${why} \u2014 pass another directory, or --force to write there anyway (the report is kept, and must be re-read and re-checked against the new sources)`
@@ -15898,7 +15897,7 @@ function writeDossier(dir, rawSources, manifest, template) {
   });
   const m = { ...manifest, sourceCount: sources.length };
   const paths = writeDossierIndex(dir, sources, m, template);
-  removeOrphanExtracts(dir, sources);
+  if (sources.length) removeOrphanExtracts(dir, sources);
   return { dir, sources, paths };
 }
 function renderDossierMarkdown(sources, manifest, template, extraBlocks = []) {
@@ -16624,7 +16623,7 @@ function hostList(typed) {
 }
 async function runGather(options) {
   const t0 = Date.now();
-  const staleReports = options.out && !options.stdout ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
+  const staleReports = options.out && !isNoWrite() ? reportsOverwritten(options.out, options.force, RENUMBERS("gather")) : [];
   const mode2 = getMode(options.mode);
   const backends = resolveBackends(options, mode2);
   const profile = resolveSearchProfile(options);
@@ -19957,17 +19956,17 @@ import { existsSync as existsSync20, readFileSync as readFileSync20, realpathSyn
 import { isAbsolute as isAbsolute5, join as join30, relative as relative3, resolve as resolve5, sep as sep3 } from "path";
 
 // src/dossier-lock.ts
-import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, renameSync as renameSync2, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync17, openSync as openSync2, readFileSync as readFileSync18, statSync as statSync10, unlinkSync as unlinkSync4, writeSync as writeSync2 } from "fs";
 import { hostname } from "os";
 import { join as join27 } from "path";
 var LOCK_FILE = ".ultrasearch.lock";
-var held = /* @__PURE__ */ new Set();
+var held = /* @__PURE__ */ new Map();
 var exitHookInstalled = false;
 function releaseAllOnExit() {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    for (const path of held) removeQuietly(path);
+    for (const [path, mine] of held) release(path, mine);
   });
 }
 function removeQuietly(path) {
@@ -20000,39 +19999,47 @@ function abandoned(path, holder) {
     return false;
   }
 }
-function clearAbandoned(path, holder) {
-  const aside = `${path}.${process.pid}.stale`;
+function clearAbandoned(path) {
+  const clearing = `${path}.clearing`;
+  let fd;
   try {
-    renameSync2(path, aside);
+    fd = openSync2(clearing, "wx");
   } catch {
-    return;
-  }
-  const moved = readHolder(aside);
-  if (moved && (moved.pid !== holder?.pid || moved.since !== holder?.since) && !existsSync17(path)) {
     try {
-      renameSync2(aside, path);
-      return;
+      if (Date.now() - statSync10(clearing).mtimeMs > 1e4) unlinkSync4(clearing);
     } catch {
     }
+    return;
   }
-  removeQuietly(aside);
+  closeSync2(fd);
+  try {
+    if (existsSync17(path) && abandoned(path, readHolder(path))) unlinkSync4(path);
+  } catch {
+  } finally {
+    removeQuietly(clearing);
+  }
+}
+function release(path, mine) {
+  const now = readHolder(path);
+  if (now && now.pid === mine.pid && now.host === mine.host && now.since === mine.since) removeQuietly(path);
 }
 function tryAcquire(path, command2) {
   let fd;
   try {
     fd = openSync2(path, "wx");
   } catch (e) {
-    if (e.code === "EEXIST") return false;
+    if (e.code === "EEXIST") return void 0;
     throw e;
   }
+  const holder = { pid: process.pid, host: hostname(), command: command2, since: `${(/* @__PURE__ */ new Date()).toISOString()}#${++taken}` };
   try {
-    const holder = { pid: process.pid, host: hostname(), command: command2, since: (/* @__PURE__ */ new Date()).toISOString() };
     writeSync2(fd, JSON.stringify(holder));
   } finally {
     closeSync2(fd);
   }
-  return true;
+  return holder;
 }
+var taken = 0;
 var describe2 = (h) => h ? `pid ${h.pid}${h.host === hostname() ? "" : ` on ${h.host}`}, \`${h.command}\`, since ${h.since}` : "an unidentified process";
 async function withDossierLock(dir, command2, fn, opts = {}) {
   if (isNoWrite() || !existsSync17(dir)) return fn();
@@ -20041,10 +20048,11 @@ async function withDossierLock(dir, command2, fn, opts = {}) {
   const pollMs = opts.pollMs ?? 150;
   const deadline = Date.now() + waitMs;
   let told = false;
-  while (!tryAcquire(path, command2)) {
+  let mine;
+  while (!(mine = tryAcquire(path, command2))) {
     const holder = readHolder(path);
     if (abandoned(path, holder)) {
-      clearAbandoned(path, holder);
+      clearAbandoned(path);
       continue;
     }
     if (Date.now() >= deadline) {
@@ -20058,13 +20066,13 @@ async function withDossierLock(dir, command2, fn, opts = {}) {
     }
     await new Promise((r) => setTimeout(r, pollMs));
   }
-  held.add(path);
+  held.set(path, mine);
   releaseAllOnExit();
   try {
     return await fn();
   } finally {
     held.delete(path);
-    removeQuietly(path);
+    release(path, mine);
   }
 }
 
@@ -20095,29 +20103,24 @@ function splitDocument(text) {
   }
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
-function continuesList(n, prev, opens, at) {
-  if (prev === void 0 || n === prev + 1) return true;
+function opensReference(n, bare, prev) {
+  if (!bare) return true;
+  if (prev === void 0) return true;
   if (n <= prev) return false;
-  for (let i = at + 1; i < opens.length; i++) {
-    const next = opens[i]?.n;
-    if (next === prev + 1) return false;
-    if (next === n + 1) return true;
-  }
-  return false;
+  const year = n >= 1800 && n <= 2099;
+  return n === prev + 1 || !year;
 }
 function splitEntries(list) {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out = [];
   if (numbered >= 2) {
-    const kept = lines.map((line) => line.trim()).filter((t, i) => t && !HEADING.test(lines[i]));
-    const opens = kept.map((t) => {
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
-      return m && (m[4] ?? "").length > 8 ? { n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4].trim() } : void 0;
-    });
-    for (const [i, t] of kept.entries()) {
-      const open2 = opens[i];
-      if (open2 && continuesList(open2.n, out.at(-1)?.n, opens, i)) out.push(open2);
+      const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
+      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== void 0, out.at(-1)?.n)) out.push({ n, raw: m[4].trim() });
       else if (out.length) out[out.length - 1].raw += ` ${t}`;
     }
     return out;
@@ -20904,7 +20907,12 @@ async function runRefcheck(opts) {
   if (existsSync18(join28(dir, "sources.json")) && !existsSync18(join28(dir, "refcheck.json"))) {
     throw new Error(`${dir} already holds a dossier that refcheck did not write \u2014 pass another --out`);
   }
-  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from");
+  const stale = reportsOverwritten(dir, opts.force, "a new check replaces the sources it was written from", [
+    "REPORT.md",
+    "SUMMARY.md",
+    "index.html",
+    "index.md"
+  ]);
   if (stale.length) notes.push(`${stale.join(", ")} predate this run \u2014 re-read them against the new REFCHECK.md, then render and check again.`);
   const entries = refs.map((ref) => {
     const rec = resolved?.records.get(ref.n);
@@ -21535,24 +21543,26 @@ function confineArgs(name, args, root, defaultRun2) {
   const refuse = (key, value) => {
     throw new ToolError(`\`${key}\` (${value}) is outside the directory this server is confined to (${fence}).`);
   };
-  for (const key of PATH_ARGS) {
-    const v = out[key];
-    if (typeof v === "string" && v.trim() && isAbsolute4(v) && !inside(fence, v)) refuse(key, v);
-  }
+  const check = (key, v) => {
+    if (!isAbsolute4(v)) throw new ToolError(`\`${key}\` must be an absolute path inside ${fence} (got "${v}").`);
+    if (!inside(fence, v)) refuse(key, v);
+  };
+  const blank2 = (key) => typeof out[key] !== "string" || !out[key].trim();
+  for (const key of PATH_ARGS) if (!blank2(key)) check(key, out[key]);
   for (const key of PATH_LIST_ARGS) {
     const v = out[key];
     if (Array.isArray(v)) {
-      for (const item of v) if (typeof item === "string" && isAbsolute4(item) && !inside(fence, item)) refuse(key, item);
+      for (const item of v) if (typeof item === "string") check(key, item);
     }
   }
-  if (defaultRun2 && out.run === void 0 && !inside(fence, defaultRun2)) refuse("run (the server's --run default)", defaultRun2);
-  const blank2 = (key) => typeof out[key] !== "string" || !out[key].trim();
+  if (defaultRun2 && blank2("run") && !inside(fence, defaultRun2)) refuse("run (the server's --run default)", defaultRun2);
   if (name === "ultrasearch_gather" && blank2("out") && typeof out.question === "string") {
     const dir = defaultRunDir(typeof out.mode === "string" ? out.mode : "topic", out.question);
     out.out = join29(fence, relative2(join29(tmpdir6(), "ultrasearch"), dir));
   }
   if (name === "ultrasearch_merge" && blank2("master")) out.master = join29(fence, `merge-${runId()}`);
   if (name === "ultrasearch_refcheck" && blank2("out")) out.out = join29(fence, `refcheck-${runId()}`);
+  if (name === "ultrasearch_brainstorm" && blank2("out")) out.out = join29(fence, `brainstorm-${runId()}`);
   return out;
 }
 
@@ -21708,7 +21718,7 @@ async function dispatch(name, args, defaults) {
     // serialized against other calls on the same one.
     default: {
       const run = requiredRun(args, defaults);
-      return await (TOOL_META[name]?.write ? writing : reading)(run, name, async () => {
+      return await (writesDossier(name, args) ? writing : reading)(run, name, async () => {
         switch (name) {
           case "ultrasearch_fetch":
             return await handleFetch(args, run);
@@ -21734,16 +21744,19 @@ async function dispatch(name, args, defaults) {
   }
 }
 async function writing(dir, name, fn) {
-  if (!dir) return fn();
-  return withRunLock(dir, async () => {
-    try {
-      return await withDossierLock(dir, name, fn);
-    } catch (e) {
-      if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message))
-        throw new ToolError(e.message);
-      throw e;
-    }
-  });
+  if (!dir || !isAbsolute5(dir)) return fn();
+  try {
+    return await withDossierLock(dir, name, () => withRunLock(dir, async () => fn()));
+  } catch (e) {
+    if (e instanceof Error && !(e instanceof ToolError) && / is being written by another ultrasearch process /.test(e.message)) throw new ToolError(e.message);
+    throw e;
+  }
+}
+function writesDossier(name, args) {
+  if (!TOOL_META[name]?.write) return false;
+  if (name === "ultrasearch_drop" && bool(args.dry_run)) return false;
+  if (name === "ultrasearch_relink" && bool(args.list)) return false;
+  return true;
 }
 function reading(dir, _name, fn) {
   return withRunLock(dir, async () => fn());
@@ -22888,21 +22901,22 @@ async function main(argv = process.argv.slice(2)) {
   }
 }
 var DOSSIER_FLAGS = {
-  gather: ["out"],
-  merge: ["master"],
-  fetch: ["out", "run"],
-  "add-source": ["out", "run"],
-  ingest: ["run", "out"],
-  refcheck: ["out", "run"],
-  render: ["run", "out"],
-  verify: ["run", "out"],
-  drop: ["run", "out"],
-  relink: ["run", "out"],
-  human: ["run", "out"]
+  gather: { dir: ["out"] },
+  merge: { dir: ["master"] },
+  fetch: { dir: ["out", "run"] },
+  "add-source": { dir: ["out", "run"] },
+  ingest: { dir: ["run", "out"] },
+  refcheck: { dir: ["out", "run"] },
+  render: { dir: ["run", "out"] },
+  verify: { dir: ["run", "out"] },
+  drop: { dir: ["run", "out"], readOnly: "dry-run" },
+  relink: { dir: ["run", "out"], readOnly: "list" },
+  human: { dir: ["run", "out"], readOnly: "list" }
 };
 function dossierWritten(p) {
-  if (p.bools.has("list") || p.bools.has("dry-run")) return void 0;
-  const dir = DOSSIER_FLAGS[p.command]?.map((flag) => p.values[flag]).find(Boolean);
+  const spec = DOSSIER_FLAGS[p.command];
+  if (!spec || spec.readOnly && p.bools.has(spec.readOnly)) return void 0;
+  const dir = spec.dir.map((flag) => p.values[flag]).find(Boolean);
   return dir ? resolve9(dir) : void 0;
 }
 function rootOf(raw) {

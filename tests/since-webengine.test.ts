@@ -103,13 +103,14 @@ describe("E5: --since is wired into date-capable backends", () => {
     const spy = installFetchMock(() => json({ esearchresult: { idlist: [] } }));
     await pubmedBackend(makeCtx("cataract", { since }));
     const url = String(spy.mock.calls[0]![0]);
-    expect(url).toContain(`&datetype=pdat&mindate=2023/01/01&maxdate=${today.replace(/-/g, "/")}`);
+    // Open-ended: an issue dated ahead of today is still recent.
+    expect(url).toContain("&datetype=pdat&mindate=2023/01/01&maxdate=3000");
   });
 
   it("europepmc ANDs a first-publication range onto the query", async () => {
     const spy = installFetchMock(() => json({ resultList: { result: [] } }));
     await europepmcBackend(makeCtx("cataract surgery", { since }));
-    expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).toContain(`query=(cataract surgery) AND FIRST_PDATE:[2023-01-01 TO ${today}]`);
+    expect(decodeURIComponent(String(spy.mock.calls[0]![0]))).toContain("query=(cataract surgery) AND FIRST_PDATE:[2023-01-01 TO 3000-12-31]");
   });
 
   it("semanticscholar adds an open-ended publication range", async () => {

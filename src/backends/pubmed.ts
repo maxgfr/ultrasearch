@@ -8,14 +8,13 @@ import { sinceDate } from "../util.js";
 // return metadata + a DOI/PubMed link without `text` and let the gatherer
 // hydrate the landing page. `tool=ultrasearch` only — no email/PII, stays
 // keyless. Complements Europe PMC with MeSH-indexed / clinical records.
-const today = (): string => new Date().toISOString().slice(0, 10);
-
 export const pubmedBackend: Backend = async (ctx): Promise<BackendResult> => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
   // --since: E-utilities takes a publication-date window, and wants both ends.
+  // The far end is open: an issue dated ahead of today is still recent.
   const since = sinceDate(ctx.options.since);
-  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=${today().replace(/-/g, "/")}` : "";
+  const window = since ? `&datetype=pdat&mindate=${since.replace(/-/g, "/")}&maxdate=3000` : "";
   const esearch = `${base}/esearch.fcgi?db=pubmed&retmode=json&retmax=${n}&tool=ultrasearch&term=${encodeURIComponent(ctx.question)}${window}`;
   const sr = await apiGet(esearch);
   const ids: string[] = sr.ok && Array.isArray(sr.data?.esearchresult?.idlist) ? sr.data.esearchresult.idlist : [];
