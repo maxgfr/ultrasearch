@@ -9,7 +9,7 @@ decision surface; this is the operations manual.
 | Command | Exit | Meaning |
 |---|---|---|
 | `gather` | 1 | **Empty dossier** — every backend returned nothing usable. The output prints a 3-step bridge protocol. Never write tiers over this. |
-| `gather` · `merge` | 1 | `--out` / `--master` already holds a `REPORT.md` or `SUMMARY.md`. Both commands number the sources from S1, so that report would cite other pages: pass another directory, or `--force` (the report is kept, and must be rewritten and re-checked). |
+| `gather` · `merge` | 1 | `--out` / `--master` already holds a `REPORT.md` or `SUMMARY.md`. Both commands number the sources from S1, so that report would cite other pages: pass another directory, or `--force` (the report is kept, and must be rewritten and re-checked). A re-gather into a dossier also removes the `sources/S<n>.md` extracts the new run does not use — unless it found nothing at all. |
 | any writing command | 1 | Another ultrasearch process held the dossier for longer than `ULTRASEARCH_LOCK_WAIT_MS`. The error names its pid and the lock file. |
 | `check` | 1 | Ungrounded: a dangling `[S#]`, an unmarked unsourced claim, no citations at all, a **cited source whose extract is a wall**, or a `--semantic`/`--min-sources`/`--strict-numerals`/`--fail-on-wall` failure. |
 | `verify --apply` | 1 | The semantic gate failed — a claim its source refutes, or one whose every cited source is unsupported. |

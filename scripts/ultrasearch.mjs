@@ -19992,6 +19992,10 @@ function alive(pid) {
   }
 }
 function abandoned(path, holder) {
+  if (holder && holder.host === hostname() && holder.pid === process.pid) {
+    const mine = held.get(path);
+    return !mine || mine.since !== holder.since;
+  }
   if (holder) return holder.host === hostname() && !alive(holder.pid);
   try {
     return Date.now() - statSync10(path).mtimeMs > 1e4;
@@ -20004,17 +20008,20 @@ function clearAbandoned(path) {
   let fd;
   try {
     fd = openSync2(clearing, "wx");
-  } catch {
+  } catch (e) {
+    if (e.code !== "EEXIST") return { error: e.message };
     try {
       if (Date.now() - statSync10(clearing).mtimeMs > 1e4) unlinkSync4(clearing);
     } catch {
     }
-    return;
+    return "busy";
   }
   closeSync2(fd);
   try {
     if (existsSync17(path) && abandoned(path, readHolder(path))) unlinkSync4(path);
-  } catch {
+    return "cleared";
+  } catch (e) {
+    return e.code === "ENOENT" ? "cleared" : { error: e.message };
   } finally {
     removeQuietly(clearing);
   }
@@ -20052,8 +20059,11 @@ async function withDossierLock(dir, command2, fn, opts = {}) {
   while (!(mine = tryAcquire(path, command2))) {
     const holder = readHolder(path);
     if (abandoned(path, holder)) {
-      clearAbandoned(path);
-      continue;
+      const cleared = clearAbandoned(path);
+      if (cleared === "cleared") continue;
+      if (cleared !== "busy") {
+        throw new Error(`${path} was left by a process that is gone (${describe2(holder)}), and could not be removed: ${cleared.error} \u2014 delete it by hand`);
+      }
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -20104,11 +20114,10 @@ function splitDocument(text) {
   return { body: [...lines.slice(0, at), ...lines.slice(end)].join("\n"), list: lines.slice(at + 1, end).join("\n"), hadHeading: true };
 }
 function opensReference(n, bare, prev) {
-  if (!bare) return true;
   if (prev === void 0) return true;
-  if (n <= prev) return false;
-  const year = n >= 1800 && n <= 2099;
-  return n === prev + 1 || !year;
+  if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
+  if (!bare) return true;
+  return n > prev || n === 1;
 }
 function splitEntries(list) {
   const lines = list.replace(/\r\n?/g, "\n").split("\n");
@@ -20878,10 +20887,17 @@ function summarise(entries, citing) {
 }
 async function runRefcheck(opts) {
   const refsText = await readDocumentText(opts.refs);
-  const refs = parseReferences(refsText);
-  if (!refs.length)
+  const parsed = parseReferences(refsText);
+  if (!parsed.length)
     throw new Error(`no reference found in ${basename3(opts.refs)} \u2014 expected a numbered list ("1. Author A. Title. Journal. 2020;\u2026") or a .bib file`);
   const notes = [];
+  const seen = /* @__PURE__ */ new Set();
+  const refs = parsed.filter((r) => !seen.has(r.n) && seen.add(r.n));
+  for (const r of parsed.filter((x) => !refs.includes(x))) {
+    notes.push(
+      `Reference number ${r.n} appears twice in the list: only the first is checked. Unchecked repeat: "${r.raw.slice(0, 120)}${r.raw.length > 120 ? "\u2026" : ""}"`
+    );
+  }
   let citingText;
   let citingFile;
   if (opts.citing) {
@@ -21514,6 +21530,19 @@ function applyDefaultRun(schema, defaultRun2) {
 import { existsSync as existsSync19, realpathSync as realpathSync3 } from "fs";
 import { tmpdir as tmpdir6 } from "os";
 import { dirname as dirname4, isAbsolute as isAbsolute4, join as join29, relative as relative2, resolve as resolve4 } from "path";
+var RUN_TOOLS = /* @__PURE__ */ new Set([
+  "ultrasearch_fetch",
+  "ultrasearch_ingest",
+  "ultrasearch_check",
+  "ultrasearch_relink",
+  "ultrasearch_drop",
+  "ultrasearch_verify",
+  "ultrasearch_render",
+  "ultrasearch_read"
+]);
+function defaultRunOutside(root, defaultRun2) {
+  return !!defaultRun2 && !inside(real(root), defaultRun2);
+}
 var PATH_ARGS = ["run", "out", "master", "run_root", "refs", "citing"];
 var PATH_LIST_ARGS = ["runs"];
 function real(path) {
@@ -21545,6 +21574,7 @@ function confineArgs(name, args, root, defaultRun2) {
   };
   const check = (key, v) => {
     if (!isAbsolute4(v)) throw new ToolError(`\`${key}\` must be an absolute path inside ${fence} (got "${v}").`);
+    if (v.split(/[\\/]/).includes("..")) throw new ToolError(`\`${key}\` must not contain a \`..\` segment (got "${v}").`);
     if (!inside(fence, v)) refuse(key, v);
   };
   const blank2 = (key) => typeof out[key] !== "string" || !out[key].trim();
@@ -21555,7 +21585,7 @@ function confineArgs(name, args, root, defaultRun2) {
       for (const item of v) if (typeof item === "string") check(key, item);
     }
   }
-  if (defaultRun2 && blank2("run") && !inside(fence, defaultRun2)) refuse("run (the server's --run default)", defaultRun2);
+  if (defaultRun2 && RUN_TOOLS.has(name) && blank2("run") && !inside(fence, defaultRun2)) refuse("run (the server's --run default)", defaultRun2);
   if (name === "ultrasearch_gather" && blank2("out") && typeof out.question === "string") {
     const dir = defaultRunDir(typeof out.mode === "string" ? out.mode : "topic", out.question);
     out.out = join29(fence, relative2(join29(tmpdir6(), "ultrasearch"), dir));
@@ -22919,10 +22949,11 @@ function dossierWritten(p) {
   const dir = spec.dir.map((flag) => p.values[flag]).find(Boolean);
   return dir ? resolve9(dir) : void 0;
 }
-function rootOf(raw) {
+function rootOf(raw, defaultRun2) {
   if (!raw?.trim()) return void 0;
   const root = resolve9(raw);
   if (!existsSync21(root) || !statSync12(root).isDirectory()) fail(`--root ${root} is not a directory`);
+  if (defaultRunOutside(root, defaultRun2 && resolve9(defaultRun2))) fail(`--run ${resolve9(defaultRun2)} is outside --root ${root}`);
   return { root };
 }
 var say = (line) => void process.stderr.write(`${line}
@@ -23512,7 +23543,7 @@ ${formatServices(rows)}
         defaultRun: p.values.run,
         // Off unless asked for: the server is normally the user's own agent,
         // and the CLI it mirrors takes any path.
-        ...rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT) ?? {},
+        ...rootOf(p.values.root ?? process.env.ULTRASEARCH_MCP_ROOT, p.values.run) ?? {},
         maxResponseBytes
       };
       if (transport === "stdio") {
