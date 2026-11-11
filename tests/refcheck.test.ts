@@ -171,33 +171,45 @@ describe("refcheck — parsing a bibliography", () => {
   });
 
   it("keeps a wrapped line that starts with a number inside its reference", () => {
-    // The date line reads like "reference 2020"; the repeat like a second 2.
+    // The date line reads like "reference 2020".
     const list = [
       "1. Smith J, Doe A. A trial of something. N Engl J Med.",
       "2020 Mar;382(5):100-110.",
       "2. Roe B. Another trial entirely. Lancet. 2019;393:10-20.",
-      "2. Suppl data for the same trial, printed on its own line.",
       "3. Poe C. A third trial altogether. BMJ. 2018;360:k1.",
     ].join("\n");
-    const entries = splitEntries(list);
-    expect(entries.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(splitEntries(list).map((e) => e.n)).toEqual([1, 2, 3]);
     const [first] = parseReferences(list);
     expect(first).toMatchObject({ n: 1, year: "2020", volume: "382", issue: "5", pages: "100-110" });
-    expect(entries[1]!.raw).toContain("Suppl data");
-  });
-
-  it("follows a list whose numbering has a gap, and one that does not start at 1", () => {
-    const gap = splitEntries(
+    // Two wrapped dates in a row, in a list numbered without punctuation.
+    const bare = splitEntries(
       [
-        "1. Smith J. First title here. J A. 2020;1:1.",
-        "2. Doe J. Second title here. J B. 2021;2:2.",
-        "5. Roe B. Fifth title here. J C. 2022;3:3.",
-        "6. Poe C. Sixth title here. J D. 2023;4:4.",
+        "1 Smith J. First title here. J A.",
+        "2020 Mar;1(1):1-2.",
+        "2 Doe J. Second title here. J B.",
+        "2021 Apr;2(2):3-4.",
+        "3 Roe B. Third title here. J C. 2022;3:3.",
       ].join("\n"),
     );
-    expect(gap.map((e) => e.n)).toEqual([1, 2, 5, 6]);
-    const excerpt = splitEntries(["[12] Smith J. First title here. J A. 2020;1:1.", "[13] Doe J. Second title here. J B. 2021;2:2."].join("\n"));
-    expect(excerpt.map((e) => e.n)).toEqual([12, 13]);
+    expect(bare.map((e) => e.n)).toEqual([1, 2, 3]);
+    expect(bare[1]!.raw).toContain("2021 Apr;2(2):3-4.");
+  });
+
+  it("keeps every reference of a list numbered with gaps, sparsely, from 12, or twice over", () => {
+    const list = (ns: number[], bare = false) =>
+      splitEntries(ns.map((n, i) => `${bare ? n : `${n}.`} Author${i} J. Title number ${i} here. J A. 2020;1:${i}.`).join("\n")).map((e) => e.n);
+    for (const ns of [
+      [1, 2, 3, 5],
+      [3, 7, 12, 15],
+      [2, 4, 6, 8],
+      [1, 2, 5, 9, 10],
+      [1, 2, 3, 1, 2],
+      [12, 13],
+    ]) {
+      expect(list(ns), ns.join(" ")).toEqual(ns);
+    }
+    // Bare numbers with gaps still open references; only a leap to a year does not.
+    expect(list([1, 2, 5, 9], true)).toEqual([1, 2, 5, 9]);
   });
 
   it("parses BibTeX, braces, 'and others' and page ranges", () => {

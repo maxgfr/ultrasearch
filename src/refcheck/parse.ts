@@ -63,21 +63,23 @@ export function splitDocument(text: string): { body: string; list: string; hadHe
 }
 
 /**
- * Whether a line numbered `n` opens the next reference of a list whose last
- * one is `prev`. The next number always does. A jump ahead does only when the
- * list goes on from it (n + 1 shows up before prev + 1): a list with a gap
- * keeps its numbering, while a stray number — a year, a volume, a repeat —
- * stays inside the reference it was wrapped out of.
+ * Whether a numbered line opens a reference of its own.
+ *
+ * A number written AS a list marker — "[4]", "4.", "4)" — always does,
+ * whatever came before it: a list with gaps, sparse numbering, a list that
+ * starts at 12 or restarts in a second section all keep every entry (a repeated
+ * number then surfaces as a duplicate, rather than vanishing into the entry
+ * above it). A BARE number followed by a capitalised word ("4 Smith J…") is the
+ * weak form, and also how a wrapped date reads: "2020 Mar;382(5):100-110." on
+ * its own line. That one opens a reference only when it moves the list
+ * forward, and not by leaping to a year.
  */
-function continuesList(n: number, prev: number | undefined, opens: ({ n: number } | undefined)[], at: number): boolean {
-  if (prev === undefined || n === prev + 1) return true;
+function opensReference(n: number, bare: boolean, prev: number | undefined): boolean {
+  if (!bare) return true;
+  if (prev === undefined) return true;
   if (n <= prev) return false;
-  for (let i = at + 1; i < opens.length; i++) {
-    const next = opens[i]?.n;
-    if (next === prev + 1) return false;
-    if (next === n + 1) return true;
-  }
-  return false;
+  const year = n >= 1800 && n <= 2099;
+  return n === prev + 1 || !year;
 }
 
 /** Split a reference list into its entries, numbered as written (or 1..n when the numbering was lost). */
@@ -86,18 +88,15 @@ export function splitEntries(list: string): { n: number; raw: string }[] {
   const numbered = lines.filter((l) => NUMBERED.test(l) && l.trim().length > 12).length;
   const out: { n: number; raw: string }[] = [];
   if (numbered >= 2) {
-    // Every line that could open a reference, in order. Whether it does is
-    // decided against its neighbours below: a wrapped line can start with a
-    // number too ("2020 Mar;382(5):100-110."), and read as reference 2020 it
-    // takes the year and pages of the reference it belongs to with it.
-    const kept = lines.map((line) => line.trim()).filter((t, i) => t && !HEADING.test(lines[i]!));
-    const opens = kept.map((t) => {
+    // A wrapped line can start with a number too ("2020 Mar;382(5):100-110."):
+    // read as reference 2020 it took the year and pages of the reference it
+    // belongs to with it. See opensReference.
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || HEADING.test(line)) continue;
       const m = NUMBERED.exec(t);
-      return m && (m[4] ?? "").length > 8 ? { n: Number(m[1] ?? m[2] ?? m[3]), raw: m[4]!.trim() } : undefined;
-    });
-    for (const [i, t] of kept.entries()) {
-      const open = opens[i];
-      if (open && continuesList(open.n, out.at(-1)?.n, opens, i)) out.push(open);
+      const n = m ? Number(m[1] ?? m[2] ?? m[3]) : 0;
+      if (m && (m[4] ?? "").length > 8 && opensReference(n, m[3] !== undefined, out.at(-1)?.n)) out.push({ n, raw: m[4]!.trim() });
       else if (out.length) out[out.length - 1]!.raw += ` ${t}`;
     }
     return out;
