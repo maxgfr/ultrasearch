@@ -17159,11 +17159,7 @@ async function addSources(dir, hits, opts = {}) {
     for (const hit of hits) {
       const { url, title, citeUrl } = typeof hit === "string" ? { url: hit, title: void 0, citeUrl: void 0 } : hit;
       const p = await prepareSource(stateOf, url, { ...opts, title, ...citeUrl ? { citeUrl } : {}, rescues });
-      const rec = arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? "");
-      if (p.ok && rec && !p.raw.meta?.arxivId) {
-        p.raw.title = rec.title;
-        p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
-      }
+      if (p.ok) withArxivRecord(p, arxiv.get(arxivIdFromUrl(citeUrl ?? url) ?? ""));
       let r;
       if (p.ok) {
         r = commit(dir, stateOf(), p);
@@ -17177,6 +17173,11 @@ async function addSources(dir, hits, opts = {}) {
     if (state && committed > 0) flushIndex(dir, state);
   }
   return tally(results);
+}
+function withArxivRecord(p, rec, title) {
+  if (!rec || p.raw.meta?.arxivId) return;
+  if (!title) p.raw.title = rec.title;
+  p.raw.meta = { ...arxivMeta(rec), ...p.raw.meta };
 }
 function tally(results) {
   const repaired = results.filter((r) => r.repaired).length;
@@ -17268,6 +17269,8 @@ async function addSource(dir, url, opts = {}) {
   const state = loadState(dir);
   const p = await prepareSource(() => state, url, opts);
   if (!p.ok) return p.result;
+  const arxivId = arxivIdFromUrl(opts.citeUrl ?? url);
+  if (arxivId && !p.raw.meta?.arxivId) withArxivRecord(p, (await readArxivRecords([arxivId])).records.get(arxivId.toLowerCase()), opts.title);
   const r = commit(dir, state, p);
   flushIndex(dir, state);
   return r;
