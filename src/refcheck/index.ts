@@ -169,10 +169,21 @@ function summarise(entries: RefcheckEntry[], citing: CitingAnalysis | undefined)
 /** Run the whole check and write its outputs. */
 export async function runRefcheck(opts: RefcheckOptions): Promise<RefcheckResult> {
   const refsText = await readDocumentText(opts.refs);
-  const refs = parseReferences(refsText);
-  if (!refs.length)
+  const parsed = parseReferences(refsText);
+  if (!parsed.length)
     throw new Error(`no reference found in ${basename(opts.refs)} — expected a numbered list ("1. Author A. Title. Journal. 2020;…") or a .bib file`);
   const notes: string[] = [];
+  // Source S<n> IS reference n, and a citation [n] means one reference: a
+  // number the list gives twice (a second section restarting at 1, a typo)
+  // cannot be both. The first is checked; each repeat is named, never folded
+  // into a neighbour or banked as a second S<n> that `check` would refuse.
+  const seen = new Set<number>();
+  const refs = parsed.filter((r) => !seen.has(r.n) && seen.add(r.n));
+  for (const r of parsed.filter((x) => !refs.includes(x))) {
+    notes.push(
+      `Reference number ${r.n} appears twice in the list: only the first is checked. Unchecked repeat: "${r.raw.slice(0, 120)}${r.raw.length > 120 ? "…" : ""}"`,
+    );
+  }
 
   // The citing text: given, or the body of the reference file itself.
   let citingText: string | undefined;

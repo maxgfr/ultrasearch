@@ -65,21 +65,24 @@ export function splitDocument(text: string): { body: string; list: string; hadHe
 /**
  * Whether a numbered line opens a reference of its own.
  *
- * A number written AS a list marker — "[4]", "4.", "4)" — always does,
- * whatever came before it: a list with gaps, sparse numbering, a list that
- * starts at 12 or restarts in a second section all keep every entry (a repeated
- * number then surfaces as a duplicate, rather than vanishing into the entry
- * above it). A BARE number followed by a capitalised word ("4 Smith J…") is the
- * weak form, and also how a wrapped date reads: "2020 Mar;382(5):100-110." on
- * its own line. That one opens a reference only when it moves the list
- * forward, and not by leaping to a year.
+ * Never a leap to a year: that is a wrapped date ("2020 Mar;382(5):…",
+ * "2019. p. 100-110."), whatever its punctuation. Otherwise a number written AS
+ * a list marker — "[4]", "4.", "4)" — always does: a list with gaps, sparse
+ * numbering, one that starts at 12 or restarts in a second section keeps every
+ * entry (a repeated number is reported by runRefcheck, never folded into the
+ * entry above it). A BARE number followed by a capitalised word ("4 Smith J…")
+ * is the weak form, and opens a reference only when it moves the list forward
+ * or starts it over at 1.
  */
 function opensReference(n: number, bare: boolean, prev: number | undefined): boolean {
-  if (!bare) return true;
   if (prev === undefined) return true;
-  if (n <= prev) return false;
-  const year = n >= 1800 && n <= 2099;
-  return n === prev + 1 || !year;
+  // A leap from a short list to a year is a wrapped date, however it is
+  // written: "2019. p. 100-110." has the shape of a marker too.
+  if (n >= 1800 && n <= 2099 && n !== prev + 1 && prev < 1800) return false;
+  if (!bare) return true;
+  // A bare "1 …" after the list has gone on is a second section starting
+  // over, not a wrapped line (no reference wraps onto "1 Capitalised").
+  return n > prev || n === 1;
 }
 
 /** Split a reference list into its entries, numbered as written (or 1..n when the numbering was lost). */

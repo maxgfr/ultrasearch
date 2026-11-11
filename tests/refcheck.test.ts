@@ -193,6 +193,18 @@ describe("refcheck — parsing a bibliography", () => {
     );
     expect(bare.map((e) => e.n)).toEqual([1, 2, 3]);
     expect(bare[1]!.raw).toContain("2021 Apr;2(2):3-4.");
+    // A year written like a list marker, as a book reference wraps.
+    const book = splitEntries(
+      [
+        "1. Smith J. First title here. J A. 2020;1:1.",
+        "2. Doe J. Second title here. J B. 2021;2:2.",
+        "3. Brown C. A book on the subject. London: BMJ Books;",
+        "2019. p. 100-110. Available from: https://example.test/book",
+        "4. Roe B. Fourth title here. J C. 2022;3:3.",
+      ].join("\n"),
+    );
+    expect(book.map((e) => e.n)).toEqual([1, 2, 3, 4]);
+    expect(book[2]!.raw).toContain("2019. p. 100-110.");
   });
 
   it("keeps every reference of a list numbered with gaps, sparsely, from 12, or twice over", () => {
@@ -208,8 +220,10 @@ describe("refcheck — parsing a bibliography", () => {
     ]) {
       expect(list(ns), ns.join(" ")).toEqual(ns);
     }
-    // Bare numbers with gaps still open references; only a leap to a year does not.
+    // Bare numbers with gaps still open references, and so does a bare list
+    // starting over at 1; only a leap to a year does not.
     expect(list([1, 2, 5, 9], true)).toEqual([1, 2, 5, 9]);
+    expect(list([1, 2, 3, 1, 2], true)).toEqual([1, 2, 3, 1, 2]);
   });
 
   it("parses BibTeX, braces, 'and others' and page ranges", () => {
@@ -452,6 +466,30 @@ describe("refcheck — the whole run", () => {
       expect(existsSync(join(out, "REPORT.md"))).toBe(true);
       writeFileSync(join(dir, "sources.json"), "[]");
       await expect(runRefcheck({ refs: doc, out: dir, offline: true })).rejects.toThrow(/already holds a dossier/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names a number the list gives twice, and checks only the first — never two S<n>", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-refcheck-dup-"));
+    try {
+      const doc = join(dir, "refs.md");
+      writeFileSync(
+        doc,
+        [
+          "## References",
+          "",
+          "1. Smith J. First title here. J A. 2020;1:1.",
+          "2. Doe J. Second title here. J B. 2021;2:2.",
+          "1. Roe B. A second section starting over. J C. 2022;3:3.",
+        ].join("\n"),
+      );
+      const r = await runRefcheck({ refs: doc, out: join(dir, "out"), offline: true });
+      expect(r.references.map((e) => e.n)).toEqual([1, 2]);
+      expect(r.notes.join("\n")).toContain(
+        'Reference number 1 appears twice in the list: only the first is checked. Unchecked repeat: "Roe B. A second section',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
