@@ -106,7 +106,7 @@ export const TOOLS: ToolDecl[] = [
           enum: BACKEND_ENUM,
           description:
             "Which backend to query. There is no default: a general web sweep is what ultrasearch_gather does, and picking one here is the point of this tool. " +
-            "Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web.",
+            "Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref/zenodo for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web.",
         },
         lang: langProp,
         max_sources: { type: "number", description: "Cap on results returned (default 10)." },

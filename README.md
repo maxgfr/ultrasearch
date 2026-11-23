@@ -82,7 +82,7 @@ Each mode is a **report template** + a **backend-priority profile**:
 |------|-----|--------|
 | `topic` *(default)* | a general briefing on any subject | Wikipedia + general web |
 | `bug` | debugging an error / symptom | Stack Overflow, GitHub issues, Hacker News, changelogs |
-| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed, dblp (+ `refs.bib`) |
+| `research` | a scholarly literature review | arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC, PubMed, dblp, Zenodo (+ `refs.bib`) |
 | `clinical` | a clinical / biomedical evidence review | PubMed, Europe PMC, ClinicalTrials.gov, Crossref — no arXiv (+ `refs.bib`) |
 | `learn` | learning a topic from scratch | general web + docs → glossary, lesson, exercises, rich HTML |
 | `startup` | market research for a product/idea | general web → competitors, market sizing, pricing, GTM |
@@ -165,9 +165,13 @@ command that reads pages closes it on the way out. It never accepts a consent
 wall for you and never solves a challenge: a CAPTCHA is handed to the human with
 `ultrasearch browser open <url>`, or — for every such page of a dossier —
 `ultrasearch human --run <dir>`, which waits for them and repairs the sources.
-`gather`, `ingest` and `fetch` ask the person first, in one native dialog for
-the whole batch (Later / Solve it; `ULTRASEARCH_HUMAN_ASK=ask|always|never`),
-and bring nothing forward unless they say yes. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
+An agent's run (`gather --web-results`, `ingest`, `fetch`) asks nobody: it ends
+with a worklist of the walled pages (title, DOI) for the agent's web search to
+find another copy of, folded in with `ingest --web-results` and `citeUrl`; the
+person comes after, for what is still walled. A `gather` you run yourself asks
+you first, in one native dialog for the whole batch (Later / Solve it;
+`ULTRASEARCH_HUMAN_ASK=ask|always|never`), and brings nothing forward unless you
+say yes. Under `--stdout` / `ULTRASEARCH_NO_WRITE=1` it
 is off unless asked for, since a browser writes its profile. `ultrasearch doctor`
 shows the binary, the mode and why it is off when it is.
 
@@ -277,8 +281,8 @@ tool passes no hits and keeps the cascade as before.
 
 Mode-specific backends run in both profiles: Wikipedia, the keyless
 StackExchange (multi-site) / Hacker News / GitHub APIs, and the scholarly APIs
-(arXiv / Crossref / OpenAlex / Semantic Scholar / Europe PMC / PubMed / dblp) —
-all keyless.
+(arXiv / Crossref / OpenAlex / Semantic Scholar / Europe PMC / PubMed / dblp /
+Zenodo) — all keyless.
 
 Each run plans **query variants** and fans backends out across them, re-ranks
 sources by how well their fetched text covers the question, dedupes the same

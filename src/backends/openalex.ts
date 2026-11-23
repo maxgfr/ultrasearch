@@ -1,5 +1,5 @@
 import type { Backend, BackendResult, RawSource } from "../types.js";
-import { cleanInline } from "./fetch.js";
+import { cleanInline, contactUa } from "./fetch.js";
 import { apiFailure, apiGet } from "./backoff.js";
 import { sinceDate } from "../util.js";
 
@@ -18,7 +18,10 @@ export const openalexBackend: Backend = async (ctx): Promise<BackendResult> => {
   const since = sinceDate(ctx.options.since);
   const url =
     `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` + (since ? `&filter=from_publication_date:${since}` : "");
-  const r = await apiGet(url);
+  // The contact UA, not the engine's browser UA: OpenAlex meters keyless use per
+  // client, and a probe in November 2026 got HTTP 429 "Insufficient budget" for
+  // the browser UA while the same URL with this UA returned 200 with results.
+  const r = await apiGet(url, { userAgent: contactUa() });
   const results: any[] = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
     return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r, ctx.question)] };

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, rmSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { addSource } from "../src/enrich.js";
+import { addSource, mergeRepairMeta } from "../src/enrich.js";
 import { writeFixtureDossier } from "./dossierfix.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 import type { Source } from "../src/types.js";
@@ -309,5 +309,24 @@ describe("addSource — walls and API endpoints", () => {
     const again = await addSource(dir, "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=34397876&rettype=abstract&retmode=text", {});
     expect(again).toMatchObject({ id: first.id, added: false });
     rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("mergeRepairMeta", () => {
+  it("keeps the old source's identity, fills its gaps from the read, and takes how the text was read from the read alone", () => {
+    const old = { doi: "10.1/x", authors: ["Doe, Jane"], year: 2023, venue: "", pmid: undefined, textVia: "https://old.test/api", waybackSnapshot: "2020" };
+    const read = { doi: "10.9/other", pmid: "123", venue: "Read Venue", textVia: "https://arxiv.org/abs/1", extractor: "browser" };
+    expect(mergeRepairMeta(old, read)).toEqual({
+      doi: "10.1/x",
+      authors: ["Doe, Jane"],
+      year: 2023,
+      pmid: "123",
+      venue: "Read Venue",
+      textVia: "https://arxiv.org/abs/1",
+      extractor: "browser",
+    });
+    // An old textVia / snapshot described a text that is gone.
+    expect(mergeRepairMeta(old, undefined)).toEqual({ doi: "10.1/x", authors: ["Doe, Jane"], year: 2023 });
+    expect(mergeRepairMeta(undefined, undefined)).toBeUndefined();
   });
 });

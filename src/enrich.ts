@@ -139,8 +139,44 @@ function commit(dir: string, state: IngestState, p: Prepared): EnrichResult {
   return { id, added: true, ...(p.note ? { note: p.note } : {}) };
 }
 
+// What a source's meta says about HOW its extract was read, not about the
+// document: the endpoint the text came from, the extractor that rendered it, the
+// Wayback snapshot it was recovered from. A repair writes a new extract, so the
+// new read alone decides these — the old source's (if any) described a text that
+// is gone.
+const READ_META = ["textVia", "extractor", "waybackSnapshot"] as const;
+
+/** A meta value that says nothing: absent, an empty string, an empty list. */
+function blankMeta(v: unknown): boolean {
+  return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+}
+
+// The meta of a repaired source: the two records MERGED, never the new read's
+// alone. Per field:
+//   - identity and bibliography (doi, pmid, pmcid, arxivId, authors, year,
+//     venue, alsoAt, foundBy, rank, codes, …): the OLD source wins. The repair
+//     keeps its url, and these fields describe that cited document — often from
+//     a bibliographic backend (Crossref, PubMed) that knows it better than a
+//     page read of some other copy does. The new read only fills what the old
+//     one lacked (an E-utilities record's PMID, an arXiv record's DOI).
+//   - how the text was read (READ_META): the NEW read wins, and an old value it
+//     does not repeat is dropped.
+// Losing the old fields is what this prevents: a Crossref source repaired from
+// an arXiv copy kept only `textVia`, dropped out of refs.bib, and was no longer
+// found by its DOI.
+export function mergeRepairMeta(old: SourceMeta | undefined, read: SourceMeta | undefined): SourceMeta | undefined {
+  const merged: SourceMeta = {};
+  for (const [k, v] of Object.entries(read ?? {})) if (!blankMeta(v)) merged[k] = v;
+  for (const [k, v] of Object.entries(old ?? {})) {
+    if ((READ_META as readonly string[]).includes(k) || blankMeta(v)) continue;
+    merged[k] = v;
+  }
+  return Object.keys(merged).length ? merged : undefined;
+}
+
 // Replace a weak source with the text a re-read found, keeping its id, url,
-// backend and score: the citation is the same document, only its text is new.
+// backend and score: the citation is the same document, only its text is new —
+// and so is its meta only where the read adds to it (mergeRepairMeta).
 function repair(dir: string, state: IngestState, p: Prepared, old: Source): EnrichResult {
   const raw: RawSource = {
     ...p.raw,
@@ -148,6 +184,7 @@ function repair(dir: string, state: IngestState, p: Prepared, old: Source): Enri
     backend: old.backend,
     score: old.score,
     title: p.raw.title && p.raw.title !== p.raw.url ? p.raw.title : old.title,
+    meta: mergeRepairMeta(old.meta, p.raw.meta),
   };
   const s = annotateExtras(p.text, buildSource(raw, old.id, new Date().toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);

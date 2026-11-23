@@ -33,6 +33,8 @@ export type BackendKind =
   // backend, each study record carries its own text.
   | "clinicaltrials"
   | "dblp"
+  // Zenodo publications (articles, reports, books…): records with an abstract.
+  | "zenodo"
   | "standards"
   // Community content backends: keyless public feeds/pages that already carry
   // text, so they are content backends, never part of the web DISCOVERY cascade.
@@ -65,6 +67,7 @@ export const ALL_BACKENDS: readonly BackendKind[] = [
   "pubmed",
   "clinicaltrials",
   "dblp",
+  "zenodo",
   "standards",
   "reddit",
   "pepper",

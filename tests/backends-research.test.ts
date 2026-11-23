@@ -1,5 +1,8 @@
 import "./_fastfetch.js"; // FIRST: instant backoff for the failure-path tests below
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { arxivBackend } from "../src/backends/arxiv.js";
 import { crossrefBackend } from "../src/backends/crossref.js";
 import { openalexBackend } from "../src/backends/openalex.js";
@@ -7,6 +10,7 @@ import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { pubmedBackend } from "../src/backends/pubmed.js";
 import { dblpBackend } from "../src/backends/dblp.js";
+import { zenodoBackend } from "../src/backends/zenodo.js";
 import { hackernewsBackend } from "../src/backends/hackernews.js";
 import { githubBackend } from "../src/backends/github.js";
 import { installFetchMock, routes } from "./fetchmock.js";
@@ -18,6 +22,10 @@ const jsonRoute = (frag: string, obj: unknown) => routes([[frag, { body: JSON.st
 const failWith = (status: number) => installFetchMock(() => ({ status, body: "" }));
 
 afterEach(() => vi.unstubAllGlobals());
+
+// A real Zenodo answer (2026-11-23, "graph neural networks", type=publication,
+// size=4), trimmed to the fields the parser reads.
+const ZENODO = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "fixtures", "api", "zenodo.json"), "utf8");
 
 const ARXIV = `<?xml version="1.0"?><feed>
 <title>ArXiv Query</title>
@@ -124,6 +132,13 @@ describe("research backends", () => {
     const r = await openalexBackend(makeCtx("bert"));
     expect(r.items[0]!.text).toContain("We introduce BERT");
     expect(r.items[0]!.meta?.doi).toBe("10.18653/v1/n19-1423");
+  });
+
+  it("openalex sends the polite contact UA (a browser UA hits the keyless per-client 429)", async () => {
+    const spy = installFetchMock(routes([["api.openalex.org", { body: OPENALEX, contentType: "application/json" }]]));
+    await openalexBackend(makeCtx("bert"));
+    const [, init] = spy.mock.calls[0]!;
+    expect(((init as RequestInit).headers as Record<string, string>)["user-agent"]).toMatch(/^ultrasearch\//);
   });
 
   it("semantic scholar parses abstract + externalIds", async () => {
@@ -306,6 +321,80 @@ describe("research backends", () => {
     expect(r.items[1]!.url).toBe("https://dblp.org/rec/x");
     // (the saved real-API fixture canary for dblp lives in parser-drift-api.test.ts)
   });
+
+  it("zenodo parses a real response: record page, DOI, creators, date, venue and the HTML abstract", async () => {
+    const spy = installFetchMock(routes([["zenodo.org/api/records", { body: ZENODO, contentType: "application/json" }]]));
+    const r = await zenodoBackend(makeCtx("graph neural networks"));
+    expect(r.items).toHaveLength(4);
+    expect(r.notes).toEqual(["Zenodo returned 4 publication(s)."]);
+    const [article, book, junkJournal, report] = r.items;
+    // An external DOI on a Zenodo record: cited by the record page, the DOI kept.
+    expect(article!.url).toBe("https://zenodo.org/records/7079003");
+    expect(article!.backend).toBe("zenodo");
+    expect(article!.title).toBe("DSAGLSTM-DTA: Prediction of Drug-Target Affinity using Dual Self-Attention and LSTM");
+    // No journal on the record: no venue — never the resource type, which would
+    // print as `journal = {Journal article}` in refs.bib.
+    expect(article!.meta).toEqual({ doi: "10.5121/mlaij.2022.9201", authors: ["Graph Neural Network"], year: 2022, venue: undefined });
+    // The HTML description becomes the abstract: no tags left, title first.
+    expect(article!.text).toMatch(/^DSAGLSTM-DTA: Prediction[^\n]*\n\nThe research on affinity between drugs and targets/);
+    expect(article!.text).not.toMatch(/<\/?p>/);
+    expect(article!.snippet.length).toBeLessThanOrEqual(360);
+    expect(article!.snippet).toMatch(/^The research on affinity/);
+    // "Family, Given" creators are kept as Zenodo gives them (BibTeX reads that form).
+    expect(book!.meta).toEqual({
+      doi: "10.5281/zenodo.17551461",
+      authors: ["Boreiri, Zahra", "Moeini, Ali", "Abedian, Rooholah"],
+      year: 2025,
+      venue: undefined,
+    });
+    expect(book!.url).toBe("https://zenodo.org/records/17551461");
+    // A "journal" that only repeats the record's title is no venue, and a report has none.
+    expect(junkJournal!.meta?.venue).toBeUndefined();
+    expect(report!.meta?.venue).toBeUndefined();
+    expect(report!.meta?.year).toBe(2026);
+    expect(report!.text).toContain("spectral foundations");
+    expect(report!.text).toContain("message passing are examined");
+    // Publications only, with the polite contact UA (a browser UA gets a 403).
+    const [reqUrl, init] = spy.mock.calls[0]!;
+    expect(String(reqUrl)).toContain("&type=publication&size=6");
+    expect(((init as RequestInit).headers as Record<string, string>)["user-agent"]).toMatch(/^ultrasearch\//);
+  });
+
+  it("zenodo takes a real journal title as the venue", async () => {
+    const body = JSON.parse(ZENODO);
+    body.hits.hits[0].metadata.journal = { title: "Machine Learning and Applications: An International Journal", volume: "9" };
+    installFetchMock(routes([["zenodo.org/api/records", { body: JSON.stringify(body), contentType: "application/json" }]]));
+    const [article] = (await zenodoBackend(makeCtx("graph neural networks"))).items;
+    expect(article!.meta?.venue).toBe("Machine Learning and Applications: An International Journal");
+  });
+
+  it("zenodo tells an empty answer, a throttle and a failure apart", async () => {
+    const note = async (res: { status?: number; body: string }) => {
+      installFetchMock(routes([["zenodo.org/api/records", { ...res, contentType: "application/json" }]]));
+      return (await zenodoBackend(makeCtx("attention"))).notes.join(" ");
+    };
+    expect(await note({ body: JSON.stringify({ hits: { hits: [], total: 0 } }) })).toBe('Zenodo search returned nothing for "attention".');
+    expect(await note({ status: 500, body: "" })).toBe("Zenodo search failed (status 500).");
+    expect(await note({ status: 429, body: "" })).toMatch(/^Zenodo search rate-limited \(HTTP 429/);
+  });
+
+  it("zenodo puts --since inside q as a publication_date range, and keeps the words plain", async () => {
+    const urls: string[] = [];
+    installFetchMock((url) => {
+      urls.push(decodeURIComponent(url));
+      return { body: JSON.stringify({ hits: { hits: [], total: 0 } }), contentType: "application/json" };
+    });
+    await zenodoBackend(makeCtx("graph neural networks", { since: "2023-01-01" }));
+    // Grouped: Zenodo ORs the words, and an ungrouped `a b AND date` requires only `b`.
+    expect(urls[0]).toContain("q=(graph neural networks) AND publication_date:[2023-01-01 TO *]&type=publication");
+    await zenodoBackend(makeCtx("graph neural networks"));
+    expect(urls[1]).toContain("q=graph neural networks&type=publication");
+    expect(urls[1]).not.toContain("publication_date");
+    // Query syntax in the question is neutralised: a bare `/` is an HTTP 500
+    // there, `field:` scopes a word, an uppercase NOT negates.
+    await zenodoBackend(makeCtx('A/B testing: (survey NOT "bandits'));
+    expect(urls[2]).toContain("q=A B testing survey not bandits&type=publication");
+  });
 });
 
 // Failure / empty / missing-field branches. Each scholarly-and-community backend
@@ -328,12 +417,13 @@ describe("research backends — failure & empty branches", () => {
     expect(r.notes?.[0]).toMatch(/no results/i);
   });
 
-  it("crossref / openalex / semanticscholar / dblp return empty on a failed status", async () => {
+  it("crossref / openalex / semanticscholar / dblp / zenodo return empty on a failed status", async () => {
     for (const [name, backend] of [
       ["crossref", crossrefBackend],
       ["openalex", openalexBackend],
       ["semanticscholar", semanticscholarBackend],
       ["dblp", dblpBackend],
+      ["zenodo", zenodoBackend],
     ] as const) {
       failWith(500);
       const r = await backend(makeCtx("x"));

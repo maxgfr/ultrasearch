@@ -9,15 +9,32 @@
 // source in place — through addSources, the very path `fetch --url` takes on a ⛔
 // source — so every [S#] a report cites keeps pointing at the same document.
 //
-// gather, ingest and fetch do the same for the pages a CHALLENGE stopped (a
-// CAPTCHA, an anti-bot check) before they end: the read that met one is over in
-// seconds, so a person who saw it come up had no time to solve it. Those pages
-// are handed over at the end of the run instead. The person is asked first —
+// A walled page is seldom the only copy of its document: a paper behind SSRN's
+// Cloudflare check is on arXiv, an article behind an anti-bot page is in PubMed
+// Central, an institutional repository, Zenodo, on the author's page. So the
+// recovery order is the agent's own web search for another copy first —
+// `ingest --web-results` with the walled url as the hit's `citeUrl` repairs the
+// source in place from it — and the person only for what is still walled. On a
+// live run that search found open copies of three of four walled pages in
+// seconds, while the dialog interrupted the person and a 300 s wait went on a
+// page nobody solved. gather, ingest and fetch therefore end with a web-search
+// worklist (webSearchWorklist): each page that needs a person, its title and
+// identifiers, and the command that folds a copy in; the `human` hint follows.
+//
+// gather, ingest and fetch can also hand the pages a CHALLENGE stopped (a
+// CAPTCHA, an anti-bot check) to the person before they end: the read that met
+// one is over in seconds, so a person who saw it come up had no time to solve
+// it. When the command was driven by an agent's web search (`searchFirst`: a
+// gather fed --web-results, and every ingest and fetch, which are an agent's
+// operations) and ULTRASEARCH_HUMAN_ASK is the default `ask`, nothing is asked
+// and nothing comes forward: the pages come back skipped, for the agent to
+// search first and to ask the person about afterwards (`ultrasearch human`).
+// Otherwise — a gather a person runs at the CLI — the person is asked first,
 // once for the whole batch, with the engine's native dialog (askHuman), since
-// an agent running the command reads its stderr and the person does not — and
-// nothing comes forward unless they say yes (ULTRASEARCH_HUMAN_ASK: `ask` by
-// default, `always` hands over unasked, `never` hands nothing over during a
-// run). On a yes the pages come forward one at a time, the browser coming
+// an agent running the command reads its stderr and the person does not, and
+// nothing comes forward unless they say yes (ULTRASEARCH_HUMAN_ASK: `always`
+// hands over unasked, even under searchFirst; `never` hands nothing over during
+// a run). On a yes the pages come forward one at a time, the browser coming
 // forward only then, each waiting ULTRASEARCH_HUMAN_TIMEOUT_MS (5 minutes by
 // default; 0 never waits during a run), and a notification says when it is
 // done. The first page nobody gets past ends it: nobody is at the window, and
@@ -31,6 +48,7 @@
 import { readDossier, readSourceText } from "./dossier.js";
 import { addSources } from "./enrich.js";
 import { askHuman, canShowBrowserWindow, type HumanAnswer, type HumanAskPage, humanAskMode, notifyHumanDone } from "./engine.js";
+import { identityKeys } from "./identity.js";
 import type { BrowserMode, Manifest, Source } from "./types.js";
 import { wallPattern } from "./walls.js";
 
@@ -94,6 +112,68 @@ export function humanHint(dir: string): string | undefined {
     return n ? `${n} page(s) need a human: ultrasearch human --run ${dir}` : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/** At most this many pages are named in the worklist; `human --list` names them all. */
+const WORKLIST_CAP = 15;
+
+/** What names a source's document beyond its url: doi:…, pmid:…, pmcid:…, arxiv:…. */
+function identifiersOf(s: Source): string[] {
+  const keys = new Set(identityKeys(s.url, s.meta));
+  for (const k of ["pmid", "pmcid"] as const) {
+    const v = s.meta?.[k];
+    if ((typeof v === "string" || typeof v === "number") && String(v).trim()) keys.add(`${k}:${String(v).trim()}`);
+  }
+  return [...keys];
+}
+
+export interface WorklistOptions {
+  /** No dossier on disk (gather --stdout): a copy is read directly, there is nothing to ingest it into. */
+  stdout?: boolean;
+  /** Pages the run refused for a challenge, not in the dossier: listed by url. */
+  refused?: HumanCandidate[];
+}
+
+/**
+ * The web-search worklist gather, ingest and fetch end with when pages need a
+ * person (humanCandidates, plus the refused pages they name): a head line, one
+ * line per page — its S#, title, identifiers, what stopped it, its url — and
+ * the instruction to search for another copy and fold it in with `citeUrl`,
+ * the person last. Empty when no page needs one. The lines come unindented: the
+ * caller prefixes them.
+ */
+export function webSearchWorklist(dir: string, sources: Source[], manifest: Pick<Manifest, "notes">, opts: WorklistOptions = {}): string[] {
+  const candidates = humanCandidates(sources, manifest);
+  const refused = (opts.refused ?? []).filter((c, i, all) => !sources.some((s) => s.url === c.url) && all.findIndex((x) => x.url === c.url) === i);
+  const items: string[] = [];
+  for (const c of candidates) {
+    const s = sources.find((x) => x.id === c.id);
+    const title = s?.title && s.title !== s.url ? `"${s.title.length > 140 ? `${s.title.slice(0, 139)}…` : s.title}"` : undefined;
+    items.push([c.id, title, ...(s ? identifiersOf(s) : []), c.why, c.url].filter(Boolean).join(" · "));
+  }
+  for (const c of refused) items.push(`not in the dossier · ${c.why} · ${c.url}`);
+  if (!items.length) return [];
+  const shown = items.slice(0, WORKLIST_CAP);
+  if (items.length > shown.length)
+    shown.push(`… and ${items.length - shown.length} more${opts.stdout ? "" : ` (ultrasearch human --run ${dir} --list names them all)`}`);
+  const where = "arXiv, PubMed Central / Europe PMC, an institutional repository, Zenodo, the author's page";
+  const instruction = opts.stdout
+    ? `→ web search each title (or DOI) for another copy — ${where} — and read that copy directly: ` +
+      "with --stdout there is no dossier to ingest it into, so cite it by its own address."
+    : `→ web search each title (or DOI) for another copy — ${where} — and fold them in: ` +
+      `ultrasearch ingest --run ${dir} --web-results <copies.json>, each hit carrying "citeUrl": "<walled url>" when it is the same work ` +
+      `(that repairs its S# in place). Only for what is still walled, after asking the user: ultrasearch human --run ${dir}`;
+  return [`${items.length} page(s) stopped at a wall or a human check — look for another copy with your web search first:`, ...shown, instruction];
+}
+
+/** webSearchWorklist for a dossier on disk; empty when it holds no such page (or cannot be read). */
+export function webSearchHint(dir: string, refused?: HumanCandidate[]): string[] {
+  try {
+    const { sources, manifest } = readDossier(dir);
+    return webSearchWorklist(dir, sources, manifest, refused?.length ? { refused } : {});
+  } catch {
+    return [];
   }
 }
 
@@ -257,6 +337,13 @@ export interface HandOffDuringRunOptions {
   ask?: (pages: HumanAskPage[]) => Promise<HumanAnswer>;
   /** The notification once a batch the person said yes to is done; the engine's (notifyHumanDone) by default. */
   notify?: (cleared: number, total: number) => Promise<boolean>;
+  /**
+   * The command was driven by an agent's web search (a gather fed --web-results,
+   * every ingest and fetch): under ULTRASEARCH_HUMAN_ASK=ask nothing is asked or
+   * opened, and every page comes back skipped — the agent looks for another copy
+   * first, and asks the person afterwards. `always` still hands them over.
+   */
+  searchFirst?: boolean;
 }
 
 /**
@@ -264,8 +351,9 @@ export interface HandOffDuringRunOptions {
  * run ends (see the head of this file), once they said yes to the question.
  * Nothing happens — and nobody is waited for — when the rung is off,
  * ULTRASEARCH_HUMAN_ASK is never, ULTRASEARCH_HUMAN_TIMEOUT_MS is 0, no window
- * can be shown, or no page needs it. On "Later", or no answer, every page comes
- * back `skipped`, and nothing came forward.
+ * can be shown, or no page needs it. On "Later", or no answer — and, unasked,
+ * under `searchFirst` with ULTRASEARCH_HUMAN_ASK=ask — every page comes back
+ * `skipped`, and nothing came forward.
  */
 export async function handOffDuringRun(dir: string, opts: HandOffDuringRunOptions): Promise<HumanResult[]> {
   if (opts.browser === "off") return [];
@@ -290,6 +378,14 @@ export async function handOffDuringRun(dir: string, opts: HandOffDuringRunOption
     candidates.push(c);
   }
   if (!candidates.length) return [];
+  // An agent's run: its web search finds another copy sooner than a person
+  // solves a challenge, and the person is asked only about what it cannot find.
+  if (opts.searchFirst && mode === "ask") {
+    const note =
+      `look for another copy with your web search first (ingest it with "citeUrl" set to this page), ` +
+      `then \`ultrasearch human --run ${dir}\` for what is still walled`;
+    return candidates.map((c) => ({ ...c, outcome: "skipped" as const, note }));
+  }
   let answer: HumanAnswer | undefined;
   if (mode === "ask") {
     opts.tell(

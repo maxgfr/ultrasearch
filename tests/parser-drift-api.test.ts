@@ -9,6 +9,7 @@ import { stackexchangeBackend } from "../src/backends/stackexchange.js";
 import { githubBackend } from "../src/backends/github.js";
 import { wikipediaBackend } from "../src/backends/wikipedia.js";
 import { dblpBackend } from "../src/backends/dblp.js";
+import { zenodoBackend } from "../src/backends/zenodo.js";
 import { semanticscholarBackend } from "../src/backends/semanticscholar.js";
 import { europepmcBackend } from "../src/backends/europepmc.js";
 import { clinicaltrialsBackend } from "../src/backends/clinicaltrials.js";
@@ -65,6 +66,8 @@ const CANARIES: Canary[] = [
   // A one-result dblp response returns `hits.hit` as an OBJECT, not an array —
   // the shape that used to be silently dropped (see dblp.ts). Guard it too.
   { name: "dblp (single hit)", backend: dblpBackend, fixtures: [["dblp.org/search/publ", "dblp-single.json"]], min: 1 },
+  // Saved 2026-11-23 from the Zenodo records API (type=publication, four hits).
+  { name: "zenodo", backend: zenodoBackend, fixtures: [["zenodo.org/api/records", "zenodo.json"]], min: 4 },
   { name: "semanticscholar", backend: semanticscholarBackend, fixtures: [["api.semanticscholar.org", "semanticscholar.json"]], min: 2 },
   { name: "europepmc", backend: europepmcBackend, fixtures: [["ebi.ac.uk/europepmc", "europepmc.json"]], min: 2 },
   // Saved 2026-10-10 from the ClinicalTrials.gov API v2 (three PRP / knee OA studies).

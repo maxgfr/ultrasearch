@@ -258,8 +258,9 @@ not hand control back mid-retrieval.
    automatically in every profile and needs no flag; it extracts pages, it does
    not find them. So does the **browser rung**, keylessly: a Chrome or Brave
    window may open during the run to read a walled or JS-only page, and closes
-   when the command ends (`--browser off` to prevent it). A page that needs the
-   user comes forward before the run ends ([Human handoff](#human-handoff)).
+   when the command ends (`--browser off` to prevent it). A page behind a wall
+   or a challenge is left for your web search: the `walled:` worklist names it
+   ([Human handoff](#human-handoff)).
 
    **Widen only when it pays** (measured on two real runs, same engine):
 
@@ -385,38 +386,55 @@ not hand control back mid-retrieval.
 
 ## Human handoff
 
-**During a run.** When `gather`, `ingest` or `fetch` met a CAPTCHA or an
-anti-bot check, it asks the person at the machine before it ends — once for the
-whole batch, with a native dialog titled "ultrasearch" (macOS `osascript`,
-Linux `zenity` / `kdialog` / `notify-send`, Windows a PowerShell popup, in
-French or English after the locale) that names the blocked sites, what blocks
-them and how many pages wait, with **Later** and **Solve it**. It gives up after
-`ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS` (default 120000, 2 minutes). On **Solve it**
-the browser comes forward on each page in turn (only then), and the command
-waits until they are past it — up to `ULTRASEARCH_HUMAN_TIMEOUT_MS` per page
-(default 300000, 5 minutes) — then repairs the source under its own `[S#]`; a
-notification says when it is done. The first page nobody gets past ends the
-wait: nobody is there, and the rest are left for `human`. On **Later**, or no
-answer, nothing comes forward and the run ends with the `human --run` hint
-below. Tell the user when you start such a run that a dialog may ask them to
-solve a human check. `ULTRASEARCH_HUMAN_ASK=always` hands the pages over without
-asking, `never` (or `ULTRASEARCH_HUMAN_TIMEOUT_MS=0`) hands nothing over during
-a run — set one for a run nobody is watching. Nothing happens with `--browser
-off`, under `--stdout`, or with no window to show (no display, a CI run); with
-no tool to ask with, the pages are handed over unasked. A sign-in or consent
-wall is never handed over this way.
+A walled page is seldom the only copy of its document: a paper behind SSRN's
+Cloudflare check is often on arXiv, an article behind an anti-bot page in
+PubMed Central. **The recovery order is fixed: (1) your own web search for
+another copy, folded in with `citeUrl`; (2) only then the user, with `human
+--run`.** Never solve, click through or script past a challenge yourself.
 
-**After a run.** When a run ends with `N page(s) need a human: ultrasearch human --run <dir>`
-(gather, ingest and fetch print it), some sources sit behind a CAPTCHA, an
-anti-bot check or a sign-in only the user can pass. Ask the user — with your
-host's ask-the-user tool if it has one — whether they can solve them now. If
-yes, run `human --run <dir>` (`--list` first to name the pages) and tell them
-the browser window is open on the page that needs them; it waits up to
-`--timeout` seconds per page (else `ULTRASEARCH_HUMAN_TIMEOUT_MS`, else 300), then reads the page and repairs the source under
-its own `[S#]`. If no, carry on without those sources. **Never solve, click
-through or script past a challenge yourself.** With no window to show (no
-display, a CI run) every page is skipped and nobody is waited for. `human`
-asks no dialog of its own: you asked the user already.
+**During a run.** When the command was driven by your web search — `gather`
+with a `--web-results` lane, and every `ingest` and `fetch` — a CAPTCHA or an
+anti-bot check asks nobody and opens nothing (`ULTRASEARCH_HUMAN_ASK=ask`, the
+default): the pages are left for your search. A `gather` without a lane (a
+person at the CLI) still asks the person at the machine before it ends — once
+for the whole batch, with a native dialog titled "ultrasearch" (macOS
+`osascript`, Linux `zenity` / `kdialog` / `notify-send`, Windows a PowerShell
+popup, in French or English after the locale) that names the blocked sites,
+with **Later** and **Solve it**; it gives up after
+`ULTRASEARCH_HUMAN_ASK_TIMEOUT_MS` (default 120000). On **Solve it** the
+browser comes forward on each page in turn and the command waits up to
+`ULTRASEARCH_HUMAN_TIMEOUT_MS` per page (default 300000), then repairs the
+source under its own `[S#]`; the first page nobody gets past ends the wait.
+`ULTRASEARCH_HUMAN_ASK=always` hands the pages over unasked in every run, yours
+included; `never` (or `ULTRASEARCH_HUMAN_TIMEOUT_MS=0`) hands nothing over
+during a run. Nothing happens with `--browser off`, under `--stdout`, or with
+no window to show (no display, a CI run). A sign-in or consent wall is never
+handed over this way.
+
+**After a run.** When pages sit behind a wall or a human check, gather, ingest
+and fetch end with a web-search worklist, then the `human` hint:
+```
+walled:   2 page(s) stopped at a wall or a human check — look for another copy with your web search first:
+          S11 · "<title>" · doi:10.2139/ssrn.4670347 · snippet only — cloudflare challenge · https://doi.org/10.2139/ssrn.4670347
+          → web search each title (or DOI) for another copy — arXiv, PubMed Central / Europe PMC, … — and fold them in: ultrasearch ingest --run <dir> --web-results <copies.json>, each hit carrying "citeUrl": "<walled url>" …
+human:    2 page(s) need a human: ultrasearch human --run <dir>
+```
+1. **Search first.** Web search each title (or DOI) for another copy — arXiv,
+   PubMed Central / Europe PMC, an institutional repository, Zenodo, the
+   author's page — and pin each with `ingest --run <dir> --web-results
+   <copies.json>`, the hit carrying `"citeUrl": "<walled url>"` when it is the
+   same work: that repairs the walled `[S#]` in place (same id, its DOI and
+   authors kept, the copy recorded as `meta.textVia`). Under `--stdout` there is
+   no dossier: read the copy directly and cite it by its own address.
+2. **Then the user, for what is still walled.** Ask them — with your host's
+   ask-the-user tool if it has one — whether they can solve those pages now. If
+   yes, run `human --run <dir>` (`--list` first to name the pages) and tell them
+   the browser window is open on the page that needs them; it waits up to
+   `--timeout` seconds per page (else `ULTRASEARCH_HUMAN_TIMEOUT_MS`, else
+   300), then reads the page and repairs the source under its own `[S#]`. If
+   no, carry on without those sources. With no window to show every page is
+   skipped and nobody is waited for. `human` asks no dialog of its own: you
+   asked the user already.
 
 ## Deals — discount codes for a merchant
 
@@ -583,12 +601,16 @@ in `references/operations.md`.
   a window can be shown, `off` otherwise; `doctor` says which and why. **A window
   may appear during a run**; every command closes it on the way out. It **never
   accepts a consent wall** on the user's behalf — it reads what the page shows,
-  and a page still walled stays refused. A CAPTCHA or anti-bot **challenge is
-  handed to the human, never bypassed**: the note names
-  `ultrasearch browser open <url>`; tell the user, and re-read once they have
-  passed it — or let `human --run <dir>` open each such page, wait for them and
-  repair the source ([Human handoff](#human-handoff)). `--browser off` for a run that must open nothing; under `--stdout`
-  it is off unless you ask for it.
+  and a page still walled stays refused. A CAPTCHA, an anti-bot or a Cloudflare
+  **challenge is never bypassed**, and the recovery order is: (1) **your web
+  search** for another copy of the walled page (arXiv, PubMed Central / Europe
+  PMC, a repository, Zenodo, the author's page) → `ingest --web-results` with
+  `"citeUrl": "<walled url>"`, which repairs the `[S#]` in place — the run's
+  closing worklist names each page, its title and DOI; (2) only for what is
+  still walled, ask the user, then `human --run <dir>` opens each page, waits
+  for them and repairs the source ([Human handoff](#human-handoff)). `--browser
+  off` for a run that must open nothing; under `--stdout` it is off unless you
+  ask for it.
 - **Fetch anywhere, cite a page.** Feeding `fetch` a data endpoint is fine —
   going through an API to get past a wall is the smart move. It records the URL
   the payload names for itself (canonical link → DOI → arXiv id → PMID) and

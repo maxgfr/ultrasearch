@@ -1,0 +1,251 @@
+{
+  "hits": {
+    "hits": [
+      {
+        "created": "2022-09-14T12:10:24.098515+00:00",
+        "modified": "2024-07-16T03:09:10.212236+00:00",
+        "id": 7079003,
+        "conceptrecid": "7079002",
+        "doi": "10.5121/mlaij.2022.9201",
+        "doi_url": "https://doi.org/10.5121/mlaij.2022.9201",
+        "metadata": {
+          "title": "DSAGLSTM-DTA: Prediction of Drug-Target Affinity using Dual Self-Attention and LSTM",
+          "doi": "10.5121/mlaij.2022.9201",
+          "publication_date": "2022-09-14",
+          "description": "<p>The research on affinity between drugs and targets (DTA) aims to effectively narrow the target search space for drug repurposing. Therefore, reasonable prediction of drug and target affinities can minimize the waste of resources such as human and material resources. In this work, a novel graph-based model called DSAGLSTM-DTA was proposed for DTA prediction.</p>",
+          "access_right": "open",
+          "creators": [
+            {
+              "name": "Graph Neural Network",
+              "affiliation": "Self-Attention"
+            }
+          ],
+          "language": "ang",
+          "resource_type": {
+            "title": "Journal article",
+            "type": "publication",
+            "subtype": "article"
+          },
+          "license": {
+            "id": "cc-by-4.0"
+          }
+        },
+        "title": "DSAGLSTM-DTA: Prediction of Drug-Target Affinity using Dual Self-Attention and LSTM",
+        "links": {
+          "self": "https://zenodo.org/api/records/7079003",
+          "self_html": "https://zenodo.org/records/7079003",
+          "doi": "https://doi.org/10.5121/mlaij.2022.9201",
+          "self_doi": "https://doi.org/10.5121/mlaij.2022.9201",
+          "files": "https://zenodo.org/api/records/7079003/files"
+        },
+        "updated": "2024-07-16T03:09:10.212236+00:00",
+        "recid": "7079003",
+        "revision": 5,
+        "files": [
+          {
+            "id": "819779eb-e042-49d0-a69d-941ae3fe21ad",
+            "key": "9222mlaij01 (1).pdf",
+            "size": 1144066,
+            "checksum": "md5:416c1e8d632aafce1193bb1cd7282f11",
+            "links": {
+              "self": "https://zenodo.org/api/records/7079003/files/9222mlaij01%20(1).pdf/content"
+            }
+          }
+        ],
+        "status": "published",
+        "state": "done",
+        "submitted": true
+      },
+      {
+        "created": "2025-11-07T12:24:52.616267+00:00",
+        "modified": "2025-11-07T12:24:52.988773+00:00",
+        "id": 17551461,
+        "conceptrecid": "17551459",
+        "doi": "10.5281/zenodo.17551461",
+        "conceptdoi": "10.5281/zenodo.17551459",
+        "doi_url": "https://doi.org/10.5281/zenodo.17551461",
+        "metadata": {
+          "title": "Graph Neural Networks : Graph Representation Learning using Neural Networks",
+          "doi": "10.5281/zenodo.17551461",
+          "publication_date": "2025-10-01",
+          "description": "<p>This book, \"Graph Neural Networks: Graph Representation Learning with a Neural Network Approach,\" offers a comprehensive and up-to-date guide to the dynamic field of Graph Neural Networks (GNNs). It serves as an essential Persian-language resource for students, researchers, and AI practitioners.</p>",
+          "access_right": "open",
+          "creators": [
+            {
+              "name": "Boreiri, Zahra",
+              "affiliation": "University of Tehran",
+              "orcid": "0000-0002-5775-5389"
+            },
+            {
+              "name": "Moeini, Ali",
+              "affiliation": "University of Tehran College of Engineering",
+              "orcid": "0000-0002-6408-3525"
+            },
+            {
+              "name": "Abedian, Rooholah",
+              "affiliation": "University of Tehran",
+              "orcid": "0000-0002-1739-5964"
+            }
+          ],
+          "language": "fas",
+          "resource_type": {
+            "title": "Book",
+            "type": "publication",
+            "subtype": "book"
+          },
+          "license": {
+            "id": "cc-by-4.0"
+          }
+        },
+        "title": "Graph Neural Networks : Graph Representation Learning using Neural Networks",
+        "links": {
+          "self": "https://zenodo.org/api/records/17551461",
+          "self_html": "https://zenodo.org/records/17551461",
+          "doi": "https://doi.org/10.5281/zenodo.17551461",
+          "self_doi": "https://doi.org/10.5281/zenodo.17551461",
+          "files": "https://zenodo.org/api/records/17551461/files"
+        },
+        "updated": "2025-11-07T12:24:52.988773+00:00",
+        "recid": "17551461",
+        "revision": 4,
+        "files": [
+          {
+            "id": "4f9f5f49-b3bb-4aa1-b75d-8d9515ebf931",
+            "key": "Graph Neural Networks.pdf",
+            "size": 1201296,
+            "checksum": "md5:5ba65ca8dfd2b55f77f2401a857b0101",
+            "links": {
+              "self": "https://zenodo.org/api/records/17551461/files/Graph%20Neural%20Networks.pdf/content"
+            }
+          }
+        ],
+        "status": "published",
+        "state": "done",
+        "submitted": true
+      },
+      {
+        "created": "2025-12-06T13:35:25.467246+00:00",
+        "modified": "2025-12-06T13:35:25.835807+00:00",
+        "id": 17840717,
+        "conceptrecid": "17840716",
+        "doi": "10.5281/zenodo.17840717",
+        "conceptdoi": "10.5281/zenodo.17840716",
+        "doi_url": "https://doi.org/10.5281/zenodo.17840717",
+        "metadata": {
+          "title": "AI-Driven Cyber Threat Prediction System Using Dynamic Graph-Based Anomaly Detection in Enterprise Networks",
+          "doi": "10.5281/zenodo.17840717",
+          "publication_date": "2025-12-06",
+          "description": "<p><span>Enterprise networks are increasingly exposed to sophisticated cyber threats that evolve dynamically and are capable of bypassing traditional intrusion detection systems. Recent advances in Artificial Intelligence (AI) and Machine Learning (ML) have introduced new ways of analyzing network behavior using anomaly detection models. However, a major limitation in many existing approaches is the reliance on static data representations and supervised learning methods that require labeled datasets. This restricts detection of previously unseen or zero-day attacks and hinders scalability in large-scale network environments.</span></p>",
+          "access_right": "open",
+          "creators": [
+            {
+              "name": "Sourav Mandal, Sagar Choudhary",
+              "affiliation": null
+            }
+          ],
+          "language": "eng",
+          "resource_type": {
+            "title": "Publication",
+            "type": "publication"
+          },
+          "journal": {
+            "issue": "12",
+            "pages": "1-6",
+            "title": "AI-Driven Cyber Threat Prediction System Using Dynamic Graph-Based Anomaly Detection in Enterprise Networks",
+            "volume": "03"
+          },
+          "license": {
+            "id": "cc-by-4.0"
+          }
+        },
+        "title": "AI-Driven Cyber Threat Prediction System Using Dynamic Graph-Based Anomaly Detection in Enterprise Networks",
+        "links": {
+          "self": "https://zenodo.org/api/records/17840717",
+          "self_html": "https://zenodo.org/records/17840717",
+          "doi": "https://doi.org/10.5281/zenodo.17840717",
+          "self_doi": "https://doi.org/10.5281/zenodo.17840717",
+          "files": "https://zenodo.org/api/records/17840717/files"
+        },
+        "updated": "2025-12-06T13:35:25.835807+00:00",
+        "recid": "17840717",
+        "revision": 4,
+        "files": [
+          {
+            "id": "136e975f-5afd-4f41-b3cd-c324b5bbc55a",
+            "key": "AI-Driven Cyber Threat Prediction System Using Dynamic Graph-Based Anomaly Detection in Enterprise Networks.pdf",
+            "size": 889486,
+            "checksum": "md5:395ed2c7d45c6f0471e41d1d6d0101b1",
+            "links": {
+              "self": "https://zenodo.org/api/records/17840717/files/AI-Driven%20Cyber%20Threat%20Prediction%20System%20Using%20Dynamic%20Graph-Based%20Anomaly%20Detection%20in%20Enterprise%20Networks.pdf/content"
+            }
+          }
+        ],
+        "status": "published",
+        "state": "done",
+        "submitted": true
+      },
+      {
+        "created": "2026-11-08T14:41:13.370956+00:00",
+        "modified": "2026-11-08T14:41:13.687690+00:00",
+        "id": 24054250,
+        "conceptrecid": "24054249",
+        "doi": "10.5281/zenodo.24054250",
+        "conceptdoi": "10.5281/zenodo.24054249",
+        "doi_url": "https://doi.org/10.5281/zenodo.24054250",
+        "metadata": {
+          "title": "Graph Convolutional Networks: Message Passing, Oversmoothing, and Depth-Based Performance Analysis",
+          "doi": "10.5281/zenodo.24054250",
+          "publication_date": "2026-11-08",
+          "description": "<p>This work investigates Graph Convolutional Networks (GCNs) from their spectral foundations to their practical behavior under increasing network depth.</p>\n<p>First, the mathematical foundations of graph convolution and message passing are examined, including adjacency matrix construction, self-loop addition, symmetric degree normalization, and the propagation of node features across graph layers.</p>",
+          "access_right": "open",
+          "creators": [
+            {
+              "name": "Francky, Saah",
+              "affiliation": null,
+              "orcid": "0009-0008-5199-0207"
+            }
+          ],
+          "language": "eng",
+          "resource_type": {
+            "title": "Report",
+            "type": "publication",
+            "subtype": "report"
+          },
+          "license": {
+            "id": "cc-by-4.0"
+          }
+        },
+        "title": "Graph Convolutional Networks: Message Passing, Oversmoothing, and Depth-Based Performance Analysis",
+        "links": {
+          "self": "https://zenodo.org/api/records/24054250",
+          "self_html": "https://zenodo.org/records/24054250",
+          "doi": "https://doi.org/10.5281/zenodo.24054250",
+          "self_doi": "https://doi.org/10.5281/zenodo.24054250",
+          "files": "https://zenodo.org/api/records/24054250/files"
+        },
+        "updated": "2026-11-08T14:41:13.687690+00:00",
+        "recid": "24054250",
+        "revision": 4,
+        "files": [
+          {
+            "id": "d0362021-02e3-4397-b811-a5f1d85dce93",
+            "key": "GCN_IEEE_Report_v2.pdf",
+            "size": 651667,
+            "checksum": "md5:7caa00ab2608ac2809edd0561dfde36d",
+            "links": {
+              "self": "https://zenodo.org/api/records/24054250/files/GCN_IEEE_Report_v2.pdf/content"
+            }
+          }
+        ],
+        "status": "published",
+        "state": "done",
+        "submitted": true
+      }
+    ],
+    "total": 141765
+  },
+  "links": {
+    "self": "https://zenodo.org/api/records?page=1&q=graph+neural+networks&size=4&sort=bestmatch&type=publication",
+    "next": "https://zenodo.org/api/records?page=2&q=graph+neural+networks&size=4&sort=bestmatch&type=publication"
+  }
+}

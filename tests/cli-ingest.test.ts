@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { main } from "../src/cli.js";
 import { installFetchMock } from "./fetchmock.js";
+import { canonicalizeUrl } from "../src/util.js";
 import type { Source } from "../src/types.js";
 
 // Same in-process capture harness as cli-fetch.test.ts, so V8 coverage sees the
@@ -192,6 +193,69 @@ describe("main() — gather --web-results (the lane, end to end)", () => {
       const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")) as { webSearch: { supplied: number } };
       expect(manifest.webSearch.supplied).toBe(0);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("main() — ingest repairing a walled source in place", () => {
+  // Reproduced live: a Crossref source on an SSRN DOI sat snippet-only behind a
+  // Cloudflare challenge, and a web-search hit on its arXiv copy, carrying the
+  // walled url as citeUrl, repaired it — but the repair kept only the read's
+  // `textVia`: the DOI, authors and year were gone, so refs.bib lost the entry
+  // and DOI dedup no longer saw it.
+  it("keeps the source's identity fields and records how the new text was read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "us-ingest-repair-"));
+    const prev = process.env.ULTRASEARCH_NO_WAYBACK;
+    process.env.ULTRASEARCH_NO_WAYBACK = "1";
+    try {
+      await run(["gather", "--q", "rate limiting", "--backends", "fixture", "--out", dir]);
+      const doiUrl = "https://doi.org/10.2139/ssrn.4670347";
+      const sources = JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[];
+      const id = `S${sources.length + 1}`;
+      const walled: Source = {
+        ...sources[0]!,
+        id,
+        url: doiUrl,
+        canonicalUrl: canonicalizeUrl(doiUrl),
+        domain: "doi.org",
+        title: "Rate Limits and Their Discontents",
+        backend: "crossref",
+        extract: `sources/${id}.md`,
+        snippet: "A study of rate limits.",
+        fullText: false,
+        meta: { doi: "10.2139/ssrn.4670347", authors: ["Doe, Jane", "Roe, Richard"], year: 2023, venue: "SSRN Electronic Journal" },
+      };
+      writeFileSync(join(dir, walled.extract), `# ${id}\nA study of rate limits.\n`);
+      writeFileSync(join(dir, "sources.json"), JSON.stringify([...sources, walled], null, 2));
+      installFetchMock((url) => (url.includes("arxiv.org") ? { body: page("Rate limits on arXiv"), contentType: "text/html" } : undefined));
+      const hits = join(dir, "copies.json");
+      writeFileSync(hits, JSON.stringify([{ url: "https://arxiv.org/abs/2308.15568", citeUrl: doiUrl }]));
+
+      const r = await run(["ingest", "--run", dir, "--web-results", hits]);
+      expect(r.exit).toBeUndefined();
+      expect(r.out).toContain(`${id}\thttps://arxiv.org/abs/2308.15568\trepaired`);
+
+      const after = (JSON.parse(readFileSync(join(dir, "sources.json"), "utf8")) as Source[]).find((s) => s.id === id)!;
+      expect(after.url).toBe(doiUrl);
+      expect(after.backend).toBe("crossref");
+      expect(after.fullText).not.toBe(false);
+      expect(after.meta).toMatchObject({
+        doi: "10.2139/ssrn.4670347",
+        authors: ["Doe, Jane", "Roe, Richard"],
+        year: 2023,
+        venue: "SSRN Electronic Journal",
+        textVia: "https://arxiv.org/abs/2308.15568",
+      });
+      expect(readFileSync(join(dir, after.extract), "utf8")).toContain("Rate limiting caps");
+      // Still the same paper to the dedup: a hit on its DOI finds it.
+      const again = join(dir, "again.json");
+      writeFileSync(again, JSON.stringify([{ url: doiUrl }]));
+      const twice = await run(["ingest", "--run", dir, "--web-results", again, "--json"]);
+      expect((JSON.parse(twice.out) as { results: { id: string; note?: string }[] }).results[0]).toMatchObject({ id, note: `already in dossier as ${id}` });
+    } finally {
+      if (prev === undefined) delete process.env.ULTRASEARCH_NO_WAYBACK;
+      else process.env.ULTRASEARCH_NO_WAYBACK = prev;
       rmSync(dir, { recursive: true, force: true });
     }
   });

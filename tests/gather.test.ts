@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { hostList, mergeSameRecord, runGather } from "../src/gather.js";
-import type { GatherOptions, Manifest, RawSource, Source } from "../src/types.js";
+import { dropHomonyms, hostList, mergeSameRecord, runGather } from "../src/gather.js";
+import type { BackendResult, GatherOptions, Manifest, RawSource, Source } from "../src/types.js";
 import { installFetchMock, routes } from "./fetchmock.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -317,6 +317,32 @@ describe("runGather (research mode: a lone homonym cannot carry a scholarly resu
     }
     expect(r.manifest.notes.join("\n")).toMatch(/Dropped 4 arXiv\/Crossref record\(s\) that matched only one distinctive word of the question/);
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("filters Zenodo too (its search ORs the words) and names only the backends that lost records", () => {
+    const rec = (backend: RawSource["backend"], title: string, i: number): RawSource => ({
+      url: `https://r.test/${i}`,
+      title,
+      backend,
+      score: 1,
+      snippet: title,
+    });
+    const results: BackendResult[] = [
+      {
+        backend: "zenodo",
+        items: [rec("zenodo", "Muon scattering radiography of concrete cylinders", 1), rec("zenodo", "The Muon optimizer at scale", 2)],
+        notes: [],
+      },
+      {
+        backend: "openalex",
+        items: [rec("openalex", "Muon optimizer for LLM training", 3), rec("openalex", "Optimizer choice in LLM training", 4)],
+        notes: [],
+      },
+    ];
+    const note = dropHomonyms(results, "Muon optimizer");
+    expect(results[0]!.items.map((i) => i.title)).toEqual(["The Muon optimizer at scale"]);
+    expect(results[1]!.items).toHaveLength(2); // not an any-word backend: left alone
+    expect(note).toMatch(/^Dropped 1 Zenodo record\(s\) that matched only one distinctive word/);
   });
 });
 

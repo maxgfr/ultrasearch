@@ -21,6 +21,7 @@ import { europepmcBackend } from "./europepmc.js";
 import { pubmedBackend } from "./pubmed.js";
 import { clinicaltrialsBackend } from "./clinicaltrials.js";
 import { dblpBackend } from "./dblp.js";
+import { zenodoBackend } from "./zenodo.js";
 import { standardsBackend } from "./standards.js";
 import { websearchBackend } from "./websearch.js";
 import { redditBackend } from "./reddit.js";
@@ -53,6 +54,7 @@ const HANDLERS: Partial<Record<BackendKind, Backend>> = {
   pubmed: pubmedBackend,
   clinicaltrials: clinicaltrialsBackend,
   dblp: dblpBackend,
+  zenodo: zenodoBackend,
   standards: standardsBackend,
   reddit: redditBackend,
   pepper: pepperBackend,
@@ -79,11 +81,12 @@ const SINGLE_QUERY = new Set<BackendKind>([
 
 // Backends that DO fan out across query variants but whose polite public APIs
 // dislike a burst of concurrent requests (Crossref/OpenAlex/arXiv/Europe PMC
-// throttle by IP; so does ClinicalTrials.gov). For these, run the per-variant
+// throttle by IP; so does ClinicalTrials.gov, and Zenodo allows an anonymous
+// client 30 requests a minute). For these, run the per-variant
 // calls SEQUENTIALLY with a small gap instead of Promise.all-ing them, so we never open N connections to
 // the same rate-limited host at once. They still run concurrently with OTHER
 // backends — only the intra-backend variant fan-out serializes.
-const POLITE_SEQUENTIAL = new Set<BackendKind>(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp"]);
+const POLITE_SEQUENTIAL = new Set<BackendKind>(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp", "zenodo"]);
 
 // Fan a backend across query variants, either concurrently (default) or
 // sequentially with a polite delay (rate-limited scholarly APIs). Returns the

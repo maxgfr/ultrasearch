@@ -128,7 +128,8 @@ export function describeBrowserRung(r: BrowserRung): { name: "browser"; ok: bool
     detail:
       `${r.mode} (${originOf(r)}) — ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). ` +
       "Pages are read in background tabs of a small window that never takes the focus (`--browser off` to disable). " +
-      "When a CAPTCHA or an anti-bot check stops a page, the run asks you before bringing it forward (ULTRASEARCH_HUMAN_ASK=ask|always|never); " +
+      "When a CAPTCHA or an anti-bot check stops a page, an agent's run leaves it for its web search to find another copy, " +
+      "and a gather you run yourself asks you before bringing it forward (ULTRASEARCH_HUMAN_ASK=ask|always|never); " +
       "`ultrasearch human --run <dir>` hands you sign-in walls and whatever is left.",
   };
 }

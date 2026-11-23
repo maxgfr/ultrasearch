@@ -9,7 +9,7 @@ modes`.
 |------|--------------------|-------------|--------|
 | `topic` | wikipedia, searxng, duckduckgo, standards | — | — |
 | `bug` | stackexchange, github, duckduckgo, hackernews, standards | searxng, reddit | — |
-| `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, duckduckgo, wikipedia | `bibtex` (refs.bib) |
+| `research` | arxiv, openalex, crossref, semanticscholar, europepmc | pubmed, dblp, zenodo, duckduckgo, wikipedia | `bibtex` (refs.bib) |
 | `clinical` | pubmed, europepmc, clinicaltrials, crossref | openalex, semanticscholar, duckduckgo | `bibtex` (refs.bib) |
 | `learn` | wikipedia, duckduckgo, searxng | standards | `glossary`, `exercises` |
 | `startup` | duckduckgo, searxng, hackernews | wikipedia, reddit | — |
@@ -21,9 +21,10 @@ directly, else a title search) and MDN Web Docs search — so a normative claim
 (HTTP 429 → RFC 6585 + MDN) rests on the standard, not a secondary blog.
 `stackexchange` fans out across Stack Overflow + Server Fault + Super User +
 Ask Ubuntu + Unix & Linux. `europepmc` adds biomedical/life-sciences papers,
-`pubmed` (deep) adds MeSH-indexed/clinical records, and `dblp` (deep) adds the
-computer-science bibliography — so research mode spans physics/CS, biomed and
-clinical literature.
+`pubmed` (deep) adds MeSH-indexed/clinical records, `dblp` (deep) adds the
+computer-science bibliography, and `zenodo` (deep) adds the publications
+deposited on Zenodo (articles, preprints, reports, books — not its datasets or
+software) — so research mode spans physics/CS, biomed and clinical literature.
 
 For a **clinical or biomedical question** use `clinical`, not `research`: it
 leads with `pubmed` (E-utilities, MeSH-indexed), `europepmc` and

@@ -80,7 +80,7 @@ export function mergeSameRecord(items: RawSource[]): { kept: RawSource[]; merged
 
 // The backends whose `text` is a record's title + abstract, not a page read:
 // their text is only as good as the abstract they had.
-const ABSTRACT_BACKENDS = new Set<string>(["crossref", "europepmc", "semanticscholar", "openalex", "dblp"]);
+const ABSTRACT_BACKENDS = new Set<string>(["crossref", "europepmc", "semanticscholar", "openalex", "dblp", "zenodo"]);
 import { ncbiDocument, readNcbiDocument, type NcbiDocument, type NcbiRead } from "./providers/ncbi.js";
 import { resolveProvider } from "./providers.js";
 import { acceptLanguageHeader } from "./locale.js";
@@ -147,15 +147,22 @@ export function idfShare(matched: readonly string[], terms: readonly string[], i
 
 // The scholarly search backends that rank on any ONE query word: arXiv's API
 // joins words with OR once its AND queries come back empty, Crossref ranks by
-// any-word relevance. A real research run on efficient LLM training banked ~25
-// of their records that shared a single ambiguous word with the question —
-// muon physics for "Muon optimizer", the 1990 BITNET network for "BitNet",
-// stellar parallax for "Parallax attention".
-const HOMONYM_BACKENDS = new Set<string>(["arxiv", "crossref"]);
+// any-word relevance, and so does Zenodo (its search ORs the words: probed
+// live, "muon optimizer" counted the "muon" hits plus the "optimizer" ones). A
+// real research run on efficient LLM training banked ~25 of their records that
+// shared a single ambiguous word with the question — muon physics for "Muon
+// optimizer", the 1990 BITNET network for "BitNet", stellar parallax for
+// "Parallax attention". Each maps to the name its note gives it.
+const HOMONYM_BACKENDS = new Map<string, string>([
+  ["arxiv", "arXiv"],
+  ["crossref", "Crossref"],
+  ["zenodo", "Zenodo"],
+]);
 
 /**
- * Drop, from the arXiv and Crossref lists, the records that match fewer than
- * two DISTINCTIVE query terms — so a lone homonym cannot carry a record in.
+ * Drop, from the arXiv, Crossref and Zenodo lists, the records that match
+ * fewer than two DISTINCTIVE query terms — so a lone homonym cannot carry a
+ * record in.
  * Distinctive is weighted as the off-topic flag weights it: by IDF, over the
  * whole pool every backend returned (title, snippet, abstract). A term at or
  * above the query's median IDF is distinctive; one every record shares
@@ -179,18 +186,21 @@ export function dropHomonyms(results: BackendResult[], question: string): string
   const median = sorted[Math.floor((sorted.length - 1) / 2)]!;
   const distinctive = new Set(terms.filter((t) => idfOf(t) >= median));
   let dropped = 0;
+  const from = new Set<string>();
   for (const r of results) {
-    if (!HOMONYM_BACKENDS.has(r.backend)) continue;
+    const label = HOMONYM_BACKENDS.get(r.backend);
+    if (!label) continue;
     const before = r.items.length;
     r.items = r.items.filter((it) => {
       const matched = bm25MatchedTerms(bm25, docOf(it)).filter((t) => /\p{L}/u.test(t));
       return distinctive.size >= 2 ? matched.filter((t) => distinctive.has(t)).length >= 2 : matched.length >= 2;
     });
     dropped += before - r.items.length;
+    if (r.items.length < before) from.add(label);
   }
-  return dropped
-    ? `Dropped ${dropped} arXiv/Crossref record(s) that matched only one distinctive word of the question — a homonym is not the subject.`
-    : undefined;
+  // Named by the backends that actually lost records, in the table's order.
+  const names = [...HOMONYM_BACKENDS.values()].filter((l) => from.has(l)).join("/");
+  return dropped ? `Dropped ${dropped} ${names} record(s) that matched only one distinctive word of the question — a homonym is not the subject.` : undefined;
 }
 
 /** The question's named terms, tokenised as BM25 tokenises them: capitalised words past the first (and not mere function words), acronyms anywhere. */

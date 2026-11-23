@@ -259,7 +259,7 @@ extracts, so it costs no extra retrieval. See
 - `backends/` — `fetch.ts` (HTTP + the extraction seam + HTML→text + excerpting
   + junk detection + Wayback rescue), the `registry.ts` runner (with the
   polite-sequential fan-out), and one file per backend (web discovery, scholarly
-  incl. `dblp` and `clinicaltrials`, community).
+  incl. `dblp`, `zenodo` and `clinicaltrials`, community).
 - `backends/backoff.ts` — `withBackoff` / `apiGet`: the scholarly APIs' 429/503
   handling (3 attempts, `Retry-After` ≤ 30 s honoured, else exponential from
   `ULTRASEARCH_BACKOFF_MS`), with the engine's own retry switched off underneath

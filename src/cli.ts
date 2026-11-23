@@ -57,6 +57,9 @@ import {
   refusedForChallenge,
   runHuman,
   selectForHuman,
+  webSearchHint,
+  webSearchWorklist,
+  type HumanCandidate,
   type HumanResult,
 } from "./human.js";
 import { ultrasearchAdapter } from "./mcp/adapter.js";
@@ -685,7 +688,10 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
   const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
-  // Pages only a person can get past (a CAPTCHA, a sign-in): said once, with the command that hands them over.
+  // Pages behind a wall or a human check (a CAPTCHA, a sign-in): first the web
+  // search worklist — another copy is usually one search away — then, once, the
+  // command that hands what is still walled to the person.
+  const worklist = webSearchWorklist(r.dir, r.sources, r.manifest, { stdout: !!options.stdout });
   const needHuman = options.stdout ? 0 : humanCandidates(r.sources, r.manifest).length;
   // Say which lane drove discovery, and say it when there was none: an agent
   // that owns a web search tool and did not use it should learn that from the
@@ -711,6 +717,7 @@ export function gatherReport(r: GatherResult, options: GatherOptions): { lines: 
               (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`),
           ]
         : []),
+      ...(worklist.length ? [`  walled:   ${worklist[0]}`, ...worklist.slice(1).map((l) => `            ${l}`)] : []),
       ...(needHuman ? [`  human:    ${needHuman} page(s) need a human: ultrasearch human --run ${r.dir}`] : []),
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
@@ -916,6 +923,22 @@ function rootOf(raw: string | undefined, defaultRun: string | undefined): { root
 /** One line for the person at the terminal. */
 const say = (line: string): void => void process.stderr.write(`${line}\n`);
 
+/**
+ * How fetch and ingest end when pages need a person: the web-search worklist
+ * first (another copy is usually one search away), then the `human` hint.
+ * `refused` are the pages this command refused for a challenge and nobody got
+ * past: not in the dossier, still worth a search.
+ */
+function sayWalled(dir: string, refused: HumanCandidate[]): void {
+  const [head, ...rest] = webSearchHint(dir, refused);
+  if (head) {
+    say(`ultrasearch: ${head}`);
+    for (const l of rest) say(`  ${l}`);
+  }
+  const hint = humanHint(dir);
+  if (hint) say(`ultrasearch: ${hint}`);
+}
+
 async function dispatch(p: Parsed): Promise<void> {
   switch (p.command) {
     case "gather": {
@@ -938,9 +961,16 @@ async function dispatch(p: Parsed): Promise<void> {
       }
       let r = await runGather(options);
       // A page a challenge stopped is handed to the person now, while they are
-      // here, instead of in a window that closed seconds after it came up.
+      // here, instead of in a window that closed seconds after it came up —
+      // unless an agent's web search drove the run: it looks for another copy
+      // first (the worklist gatherReport prints), and asks the person after.
       if (!options.stdout) {
-        const handed = await handOffDuringRun(r.dir, { browser: options.browser ?? "off", firecrawl: options.firecrawl, tell: say });
+        const handed = await handOffDuringRun(r.dir, {
+          browser: options.browser ?? "off",
+          firecrawl: options.firecrawl,
+          tell: say,
+          searchFirst: !!options.webResults?.length,
+        });
         if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
       }
       const report = gatherReport(r, options);
@@ -1269,12 +1299,15 @@ async function dispatch(p: Parsed): Promise<void> {
         cache: !p.bools.has("no-cache"), // same default-on policy as gather
         browser,
       });
-      // A page a challenge stopped goes to the person now (see src/human.ts).
+      // A page a challenge stopped goes to the person now only when they asked
+      // for that (ULTRASEARCH_HUMAN_ASK=always): fetch is an agent's command,
+      // and its web search looks for another copy first (see src/human.ts).
       const refused = r.added ? undefined : refusedForChallenge(url, r.note);
       const handed = await handOffDuringRun(resolve(dir), {
         browser,
         firecrawl: p.values.firecrawl,
         tell: say,
+        searchFirst: true,
         ...(refused ? { refused: [refused] } : {}),
       });
       const mine = handed.find((h) => h.url === url && (h.outcome === "added" || h.outcome === "repaired"));
@@ -1290,8 +1323,7 @@ async function dispatch(p: Parsed): Promise<void> {
         process.stderr.write(`ultrasearch: ${r.note ?? "not added"}\n`);
         if (r.id) process.stdout.write(`${r.id}\n`);
       }
-      const fetchHint = humanHint(resolve(dir));
-      if (fetchHint) process.stderr.write(`ultrasearch: ${fetchHint}\n`);
+      sayWalled(resolve(dir), refused && !mine ? [refused] : []);
       if (!r.id) await exitClosed(1);
       return;
     }
@@ -1334,10 +1366,18 @@ async function dispatch(p: Parsed): Promise<void> {
       // both allocate [S#] ids by read-then-write.
       const web = hits.length ? await addSources(resolve(dir), hits, enrichOpts) : undefined;
       const local = files.length ? await addFiles(resolve(dir), files, enrichOpts) : undefined;
-      // The pages a challenge stopped go to the person now (see src/human.ts);
-      // what they get past counts as this ingest's own.
+      // The pages a challenge stopped go to the person now only under
+      // ULTRASEARCH_HUMAN_ASK=always: ingest is an agent's command, and its web
+      // search looks for another copy first (see src/human.ts). What the person
+      // gets past counts as this ingest's own.
       const refused = (web?.results ?? []).flatMap((o) => (o.added || o.repaired ? [] : (refusedForChallenge(o.url, o.note) ?? [])));
-      const handed = await handOffDuringRun(resolve(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const handed = await handOffDuringRun(resolve(dir), {
+        browser: enrichOpts.browser,
+        firecrawl: enrichOpts.firecrawl,
+        tell: say,
+        refused,
+        searchFirst: true,
+      });
       const results = [...(web?.results ?? []), ...(local?.results ?? [])].map((o) => {
         const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
         if (!h || o.added || o.repaired) return o;
@@ -1372,8 +1412,10 @@ async function dispatch(p: Parsed): Promise<void> {
         const fixed = repaired ? `, repaired ${repaired} in place` : "";
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} → ${resolve(dir)}\n`);
       }
-      const ingestHint = humanHint(resolve(dir));
-      if (ingestHint) process.stderr.write(`ultrasearch: ${ingestHint}\n`);
+      sayWalled(
+        resolve(dir),
+        refused.filter((c) => !handed.some((h) => h.url === c.url && (h.outcome === "added" || h.outcome === "repaired"))),
+      );
       // Nothing added (or repaired) at all is a failed acquisition, not a quiet success.
       if (!r.added && !repaired) await exitClosed(1);
       return;

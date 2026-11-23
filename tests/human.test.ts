@@ -15,6 +15,7 @@ import {
   refusedForChallenge,
   runHuman,
   selectForHuman,
+  webSearchWorklist,
 } from "../src/human.js";
 import type { HumanCandidate } from "../src/human.js";
 import type { Source } from "../src/types.js";
@@ -93,6 +94,42 @@ describe("humanCandidates", () => {
     const s = { id: "S1", url: "https://x.test/a", fullText: false } as Source;
     expect(humanCandidates([s], { notes: ["cloudflare challenge — open it with `ultrasearch browser open https://x.test/ab`"] })).toEqual([]);
     expect(humanCandidates([s], { notes: ["cloudflare challenge — open it with `ultrasearch browser open https://x.test/a`"] })).toHaveLength(1);
+  });
+});
+
+describe("webSearchWorklist", () => {
+  const SSRN = "https://doi.org/10.2139/ssrn.4670347";
+  const ssrn = {
+    id: "S11",
+    url: SSRN,
+    title: "Rate Limits and Their Discontents",
+    fullText: false,
+    meta: { doi: "10.2139/ssrn.4670347", pmid: "38012345" },
+  } as unknown as Source;
+  const wall = { id: "S4", url: "https://walled.test/article", title: "Cookies", wall: true } as Source;
+  const notes = [`The browser got HTTP 403 for ${SSRN}. cloudflare challenge — open it with \`ultrasearch browser open ${SSRN}\` and let the human solve it`];
+
+  it("names each page — S#, title, identifiers, what stopped it, url — then says to search for a copy and ingest it with citeUrl", () => {
+    const lines = webSearchWorklist("/runs/x", [wall, ssrn], { notes }, { refused: [{ id: "-", url: "https://cf.test/other", why: "refused — challenge" }] });
+    expect(lines).toEqual([
+      "3 page(s) stopped at a wall or a human check — look for another copy with your web search first:",
+      'S4 · "Cookies" · ⛔ wall · https://walled.test/article',
+      `S11 · "Rate Limits and Their Discontents" · doi:10.2139/ssrn.4670347 · pmid:38012345 · snippet only — cloudflare challenge · ${SSRN}`,
+      "not in the dossier · refused — challenge · https://cf.test/other",
+      "→ web search each title (or DOI) for another copy — arXiv, PubMed Central / Europe PMC, an institutional repository, Zenodo, the author's page — and fold them in: " +
+        'ultrasearch ingest --run /runs/x --web-results <copies.json>, each hit carrying "citeUrl": "<walled url>" when it is the same work ' +
+        "(that repairs its S# in place). Only for what is still walled, after asking the user: ultrasearch human --run /runs/x",
+    ]);
+  });
+
+  it("under --stdout says to read the copy directly — there is no dossier to ingest into", () => {
+    const lines = webSearchWorklist("/runs/x", [ssrn], { notes }, { stdout: true });
+    expect(lines.at(-1)).toContain("read that copy directly");
+    expect(lines.join("\n")).not.toMatch(/ultrasearch (ingest|human)/);
+  });
+
+  it("is empty when no page needs a person", () => {
+    expect(webSearchWorklist("/runs/x", [{ ...ssrn, fullText: true } as Source], { notes })).toEqual([]);
   });
 });
 
@@ -320,6 +357,57 @@ describe("the handoff at the end of a run", () => {
       expect(always.map((r) => r.outcome)).toEqual(["repaired"]);
       expect(unasked).not.toHaveBeenCalled();
     });
+
+    it("asks nobody and opens nothing in an agent's run (searchFirst): every page is left for its web search", async () => {
+      await dossier();
+      fetchPage.mockImplementation(cleared);
+      const ask = vi.fn(async (): Promise<"solve"> => "solve");
+      const notify = vi.fn(async () => true);
+      const got = await handOffDuringRun(dir, {
+        browser: "fallback",
+        tell,
+        env: asking,
+        canShow: shown,
+        ask,
+        notify,
+        searchFirst: true,
+        refused: [{ id: "-", url: OTHER, why: "refused — challenge" }],
+      });
+      expect(ask).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+      expect(fetchPage).not.toHaveBeenCalled();
+      expect(got.map((r) => [r.url, r.outcome])).toEqual([
+        [CHALLENGED, "skipped"],
+        [OTHER, "skipped"],
+      ]);
+      for (const r of got) {
+        expect(r.note).toMatch(/^look for another copy with your web search first/);
+        expect(r.note).toContain(`\`ultrasearch human --run ${dir}\` for what is still walled`);
+      }
+      // Still there for the search, then for `human`.
+      expect(humanHint(dir)).toBe(`2 page(s) need a human: ultrasearch human --run ${dir}`);
+    });
+
+    it("still hands over in an agent's run under always, and asks as before without searchFirst", async () => {
+      await dossier();
+      fetchPage.mockImplementation(cleared);
+      const unasked = vi.fn(async (): Promise<"solve"> => "solve");
+      const always = await handOffDuringRun(dir, {
+        browser: "fallback",
+        tell,
+        env: { ...asking, ULTRASEARCH_HUMAN_ASK: "always" },
+        canShow: shown,
+        ask: unasked,
+        searchFirst: true,
+      });
+      expect(always.map((r) => r.outcome)).toEqual(["repaired"]);
+      expect(unasked).not.toHaveBeenCalled();
+      await dossier();
+      const ask = vi.fn(async (): Promise<"solve"> => "solve");
+      const person = await handOffDuringRun(dir, { browser: "fallback", tell, env: asking, canShow: shown, ask, notify: async () => true, searchFirst: false });
+      expect(ask).toHaveBeenCalledTimes(1);
+      expect(person.map((r) => r.outcome)).toEqual(["repaired"]);
+    });
   });
 
   it("waits for nobody when the rung is off, the env says 0, or no window can be shown", async () => {
@@ -439,9 +527,40 @@ describe("main() — human", () => {
     const hint = `2 page(s) need a human: ultrasearch human --run ${out}`;
     const g = await run(["gather", "--q", "rate limiting", "--backends", "host", "--web-results", web, "--out", out, "--browser", "fallback"]);
     expect(g.err).toContain(`  human:    ${hint}`);
+    // The web-search worklist comes first: each page, then how to fold a copy in.
+    const search = "page(s) stopped at a wall or a human check — look for another copy with your web search first:";
+    expect(g.err).toContain(`  walled:   2 ${search}`);
+    expect(g.err).toMatch(/\n {12}S\d+ · "Rate limiting explained" · snippet only — cloudflare challenge · https:\/\/cf\.test\/rate-limits\n/);
+    expect(g.err).toContain(`ultrasearch ingest --run ${out} --web-results <copies.json>, each hit carrying "citeUrl": "<walled url>"`);
+    expect(g.err.indexOf("  walled:")).toBeLessThan(g.err.indexOf("  human:"));
     const f = await run(["fetch", "--out", out, "--url", "https://walled.test/other"]);
     expect(f.err).toContain(`ultrasearch: ${hint}`);
+    expect(f.err).toContain(`ultrasearch: 2 ${search}`);
     const i = await run(["ingest", "--run", out, "--urls", "https://walled.test/third"]);
     expect(i.err).toContain(`ultrasearch: ${hint}`);
+    expect(i.err.indexOf(`ultrasearch: 2 ${search}`)).toBeLessThan(i.err.indexOf(`ultrasearch: ${hint}`));
+  });
+
+  it("an agent's gather, fetch and ingest ask nobody under ULTRASEARCH_HUMAN_ASK=ask: the worklist names what to search for", async () => {
+    vi.stubEnv("ULTRASEARCH_HUMAN_TIMEOUT_MS", "30000");
+    vi.stubEnv("ULTRASEARCH_HUMAN_ASK", "ask");
+    vi.stubEnv("CI", "");
+    vi.stubEnv("DISPLAY", ":0");
+    const { writeFileSync } = await import("node:fs");
+    const web = join(dir, "web.json");
+    writeFileSync(web, JSON.stringify([{ url: CHALLENGED, title: "Rate limiting explained", snippet: "Rate limiting caps requests." }]));
+    const out = join(dir, "run");
+    const g = await run(["gather", "--q", "rate limiting", "--backends", "host", "--web-results", web, "--out", out, "--browser", "fallback"]);
+    const f = await run(["fetch", "--out", out, "--url", "https://cf.test/fresh", "--browser", "fallback"]);
+    const i = await run(["ingest", "--run", out, "--urls", "https://cf.test/third", "--browser", "fallback"]);
+    for (const r of [g, f, i]) {
+      expect(r.err).not.toContain("stopped at a human check (a CAPTCHA");
+      expect(r.err).toContain("look for another copy with your web search first");
+    }
+    expect(fetchPage.mock.calls.filter((c) => c[1]?.human)).toEqual([]);
+    // A page fetch refused is not in the dossier, and is still worth a search.
+    expect(f.err).toMatch(/\n {2}not in the dossier · refused — challenge · https:\/\/cf\.test\/fresh\n/);
+    expect(f.exit).toBe(1);
+    expect(i.err).toContain("not in the dossier · refused — challenge · https://cf.test/third");
   });
 });

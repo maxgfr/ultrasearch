@@ -12776,6 +12776,7 @@ var ALL_BACKENDS = [
   "pubmed",
   "clinicaltrials",
   "dblp",
+  "zenodo",
   "standards",
   "reddit",
   "pepper",
@@ -12996,9 +12997,9 @@ var bugMode = {
 // src/modes/research.ts
 var researchMode = {
   name: "research",
-  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp at deep) + refs.bib.",
+  description: "Scholarly literature review (arXiv, Crossref, OpenAlex, Semantic Scholar, Europe PMC; +PubMed/dblp/Zenodo at deep) + refs.bib.",
   backends: ["arxiv", "openalex", "crossref", "semanticscholar", "europepmc"],
-  deepOnly: ["pubmed", "dblp", "duckduckgo", "wikipedia"],
+  deepOnly: ["pubmed", "dblp", "zenodo", "duckduckgo", "wikipedia"],
   extras: ["bibtex"],
   searchAngles: [
     "the topic + 'survey' or 'systematic review'",
@@ -13206,6 +13207,7 @@ var BACKEND_TRUST = {
   pubmed: 0.9,
   clinicaltrials: 0.9,
   dblp: 0.9,
+  zenodo: 0.9,
   standards: 0.9,
   wikipedia: 0.85,
   github: 0.8,
@@ -13726,7 +13728,7 @@ function describeBrowserRung(r) {
   return {
     name: "browser",
     ok: true,
-    detail: `${r.mode} (${originOf(r)}) \u2014 ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). Pages are read in background tabs of a small window that never takes the focus (\`--browser off\` to disable). When a CAPTCHA or an anti-bot check stops a page, the run asks you before bringing it forward (ULTRASEARCH_HUMAN_ASK=ask|always|never); \`ultrasearch human --run <dir>\` hands you sign-in walls and whatever is left.`
+    detail: `${r.mode} (${originOf(r)}) \u2014 ${r.binary.kind} at ${r.binary.path}; ${what}, in its own profile (${browserHome()}). Pages are read in background tabs of a small window that never takes the focus (\`--browser off\` to disable). When a CAPTCHA or an anti-bot check stops a page, an agent's run leaves it for its web search to find another copy, and a gather you run yourself asks you before bringing it forward (ULTRASEARCH_HUMAN_ASK=ask|always|never); \`ultrasearch human --run <dir>\` hands you sign-in walls and whatever is left.`
   };
 }
 function originOf(r) {
@@ -14222,7 +14224,7 @@ var openalexBackend = async (ctx) => {
   const n = Math.max(3, Math.min(15, ctx.options.perSource));
   const since = sinceDate(ctx.options.since);
   const url = `https://api.openalex.org/works?search=${encodeURIComponent(ctx.question)}&per_page=${n}` + (since ? `&filter=from_publication_date:${since}` : "");
-  const r = await apiGet(url);
+  const r = await apiGet(url, { userAgent: contactUa() });
   const results = r.ok && Array.isArray(r.data?.results) ? r.data.results : [];
   if (!r.ok || !results.length) {
     return { backend: "openalex", items: [], notes: [apiFailure("OpenAlex search", r, ctx.question)] };
@@ -14515,6 +14517,46 @@ ${desc}`,
     items,
     notes: [`dblp returned ${items.length} publication(s).`]
   };
+};
+
+// src/backends/zenodo.ts
+function plainQuery(question) {
+  return question.replace(/[+\-!(){}[\]^"~*?:\\/&|<>=]/g, " ").replace(/\b(AND|OR|NOT)\b/g, (w) => w.toLowerCase()).replace(/\s+/g, " ").trim();
+}
+var zenodoBackend = async (ctx) => {
+  const n = Math.max(3, Math.min(15, ctx.options.perSource));
+  const words = plainQuery(ctx.question) || ctx.question;
+  const since = sinceDate(ctx.options.since);
+  const query = since ? `(${words}) AND publication_date:[${since} TO *]` : words;
+  const url = `https://zenodo.org/api/records?q=${encodeURIComponent(query)}&type=publication&size=${n}`;
+  const r = await apiGet(url, { userAgent: contactUa() });
+  const hits = r.ok && Array.isArray(r.data?.hits?.hits) ? r.data.hits.hits : [];
+  if (!r.ok || !hits.length) {
+    return { backend: "zenodo", items: [], notes: [apiFailure("Zenodo search", r, ctx.question)] };
+  }
+  const items = hits.slice(0, n).map((h, i) => {
+    const m = h?.metadata ?? {};
+    const title = cleanInline(String(m.title ?? h.title ?? "Untitled")) || "Untitled";
+    const abstract = m.description ? htmlToText(String(m.description)) : "";
+    const authors = Array.isArray(m.creators) ? m.creators.map((c) => cleanInline(String(c?.name ?? ""))).filter(Boolean) : [];
+    const year = Number(String(m.publication_date ?? "").slice(0, 4)) || void 0;
+    const journal = cleanInline(String(m.journal?.title ?? ""));
+    const venue = journal && journal.toLowerCase() !== title.toLowerCase() ? journal : void 0;
+    const doi = typeof h.doi === "string" && h.doi ? h.doi : typeof m.doi === "string" && m.doi ? m.doi : void 0;
+    const url2 = h.links?.self_html || (doi ? `https://doi.org/${doi}` : h.id ? `https://zenodo.org/records/${h.id}` : "");
+    return {
+      url: String(url2),
+      title,
+      backend: "zenodo",
+      score: n - i,
+      snippet: (abstract || [title, venue, year].filter(Boolean).join(" \u2014 ")).slice(0, 360),
+      text: `${title}
+
+${abstract || "(no abstract provided by Zenodo)"}`,
+      meta: { doi, authors, year, venue }
+    };
+  });
+  return { backend: "zenodo", items, notes: [`Zenodo returned ${items.length} publication(s).`] };
 };
 
 // src/backends/standards.ts
@@ -15603,6 +15645,7 @@ var HANDLERS = {
   pubmed: pubmedBackend,
   clinicaltrials: clinicaltrialsBackend,
   dblp: dblpBackend,
+  zenodo: zenodoBackend,
   standards: standardsBackend,
   reddit: redditBackend,
   pepper: pepperBackend
@@ -15619,7 +15662,7 @@ var SINGLE_QUERY = /* @__PURE__ */ new Set([
   "reddit",
   "pepper"
 ]);
-var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp"]);
+var POLITE_SEQUENTIAL = /* @__PURE__ */ new Set(["arxiv", "crossref", "openalex", "europepmc", "clinicaltrials", "dblp", "zenodo"]);
 async function fanOutVariants(handler, ctx, variants, polite2) {
   if (!polite2) return Promise.all(variants.map((q) => handler({ ...ctx, question: q })));
   const out = [];
@@ -16559,7 +16602,7 @@ function mergeSameRecord(items) {
   }
   return { kept: out, merged };
 }
-var ABSTRACT_BACKENDS = /* @__PURE__ */ new Set(["crossref", "europepmc", "semanticscholar", "openalex", "dblp"]);
+var ABSTRACT_BACKENDS = /* @__PURE__ */ new Set(["crossref", "europepmc", "semanticscholar", "openalex", "dblp", "zenodo"]);
 var OVERSHOOT = { summary: 5, standard: 10, deep: 20 };
 var HYDRATE_CONCURRENCY = 6;
 var OFF_TOPIC_TERM_SHARE = 1 / 3;
@@ -16577,7 +16620,11 @@ function idfShare(matched, terms, idf) {
   const hit = new Set(matched);
   return terms.reduce((sum, t) => sum + (hit.has(t) ? weight(t) : 0), 0) / total;
 }
-var HOMONYM_BACKENDS = /* @__PURE__ */ new Set(["arxiv", "crossref"]);
+var HOMONYM_BACKENDS = /* @__PURE__ */ new Map([
+  ["arxiv", "arXiv"],
+  ["crossref", "Crossref"],
+  ["zenodo", "Zenodo"]
+]);
 function dropHomonyms(results, question) {
   const docOf = (it) => ({ id: it.url, title: it.title || "", headings: "", body: [it.snippet, it.text].filter(Boolean).join("\n") });
   const docs = results.flatMap((r) => r.items.map(docOf));
@@ -16590,16 +16637,20 @@ function dropHomonyms(results, question) {
   const median = sorted[Math.floor((sorted.length - 1) / 2)];
   const distinctive = new Set(terms.filter((t) => idfOf(t) >= median));
   let dropped = 0;
+  const from = /* @__PURE__ */ new Set();
   for (const r of results) {
-    if (!HOMONYM_BACKENDS.has(r.backend)) continue;
+    const label = HOMONYM_BACKENDS.get(r.backend);
+    if (!label) continue;
     const before = r.items.length;
     r.items = r.items.filter((it) => {
       const matched = bm25MatchedTerms(bm25, docOf(it)).filter((t) => new RegExp("\\p{L}", "u").test(t));
       return distinctive.size >= 2 ? matched.filter((t) => distinctive.has(t)).length >= 2 : matched.length >= 2;
     });
     dropped += before - r.items.length;
+    if (r.items.length < before) from.add(label);
   }
-  return dropped ? `Dropped ${dropped} arXiv/Crossref record(s) that matched only one distinctive word of the question \u2014 a homonym is not the subject.` : void 0;
+  const names = [...HOMONYM_BACKENDS.values()].filter((l) => from.has(l)).join("/");
+  return dropped ? `Dropped ${dropped} ${names} record(s) that matched only one distinctive word of the question \u2014 a homonym is not the subject.` : void 0;
 }
 function namedTerms(question) {
   const words = question.split(/[\s,;:?!()"«»]+/).filter(Boolean);
@@ -17251,13 +17302,27 @@ function commit(dir, state, p) {
   state.manifest = { ...state.manifest, sourceCount: state.sources.length, backendsUsed: [.../* @__PURE__ */ new Set([...state.manifest.backendsUsed, p.backend])] };
   return { id, added: true, ...p.note ? { note: p.note } : {} };
 }
+var READ_META = ["textVia", "extractor", "waybackSnapshot"];
+function blankMeta(v) {
+  return v === void 0 || v === null || v === "" || Array.isArray(v) && v.length === 0;
+}
+function mergeRepairMeta(old, read2) {
+  const merged = {};
+  for (const [k, v] of Object.entries(read2 ?? {})) if (!blankMeta(v)) merged[k] = v;
+  for (const [k, v] of Object.entries(old ?? {})) {
+    if (READ_META.includes(k) || blankMeta(v)) continue;
+    merged[k] = v;
+  }
+  return Object.keys(merged).length ? merged : void 0;
+}
 function repair(dir, state, p, old) {
   const raw = {
     ...p.raw,
     url: old.url,
     backend: old.backend,
     score: old.score,
-    title: p.raw.title && p.raw.title !== p.raw.url ? p.raw.title : old.title
+    title: p.raw.title && p.raw.title !== p.raw.url ? p.raw.title : old.title,
+    meta: mergeRepairMeta(old.meta, p.raw.meta)
   };
   const s = annotateExtras(p.text, buildSource(raw, old.id, (/* @__PURE__ */ new Date()).toISOString(), p.question), state.manifest);
   writeSourceExtract(dir, s, p.text, state.manifest.depth, p.question);
@@ -19925,6 +19990,41 @@ function humanHint(dir) {
     return void 0;
   }
 }
+var WORKLIST_CAP = 15;
+function identifiersOf(s) {
+  const keys = new Set(identityKeys(s.url, s.meta));
+  for (const k of ["pmid", "pmcid"]) {
+    const v = s.meta?.[k];
+    if ((typeof v === "string" || typeof v === "number") && String(v).trim()) keys.add(`${k}:${String(v).trim()}`);
+  }
+  return [...keys];
+}
+function webSearchWorklist(dir, sources, manifest, opts = {}) {
+  const candidates2 = humanCandidates(sources, manifest);
+  const refused = (opts.refused ?? []).filter((c, i, all) => !sources.some((s) => s.url === c.url) && all.findIndex((x) => x.url === c.url) === i);
+  const items = [];
+  for (const c of candidates2) {
+    const s = sources.find((x) => x.id === c.id);
+    const title = s?.title && s.title !== s.url ? `"${s.title.length > 140 ? `${s.title.slice(0, 139)}\u2026` : s.title}"` : void 0;
+    items.push([c.id, title, ...s ? identifiersOf(s) : [], c.why, c.url].filter(Boolean).join(" \xB7 "));
+  }
+  for (const c of refused) items.push(`not in the dossier \xB7 ${c.why} \xB7 ${c.url}`);
+  if (!items.length) return [];
+  const shown = items.slice(0, WORKLIST_CAP);
+  if (items.length > shown.length)
+    shown.push(`\u2026 and ${items.length - shown.length} more${opts.stdout ? "" : ` (ultrasearch human --run ${dir} --list names them all)`}`);
+  const where = "arXiv, PubMed Central / Europe PMC, an institutional repository, Zenodo, the author's page";
+  const instruction = opts.stdout ? `\u2192 web search each title (or DOI) for another copy \u2014 ${where} \u2014 and read that copy directly: with --stdout there is no dossier to ingest it into, so cite it by its own address.` : `\u2192 web search each title (or DOI) for another copy \u2014 ${where} \u2014 and fold them in: ultrasearch ingest --run ${dir} --web-results <copies.json>, each hit carrying "citeUrl": "<walled url>" when it is the same work (that repairs its S# in place). Only for what is still walled, after asking the user: ultrasearch human --run ${dir}`;
+  return [`${items.length} page(s) stopped at a wall or a human check \u2014 look for another copy with your web search first:`, ...shown, instruction];
+}
+function webSearchHint(dir, refused) {
+  try {
+    const { sources, manifest } = readDossier(dir);
+    return webSearchWorklist(dir, sources, manifest, refused?.length ? { refused } : {});
+  } catch {
+    return [];
+  }
+}
 function selectForHuman(dir, ids) {
   const { sources, manifest } = readDossier(dir);
   const flagged2 = humanCandidates(sources, manifest);
@@ -20025,6 +20125,10 @@ async function handOffDuringRun(dir, opts) {
     candidates2.push(c);
   }
   if (!candidates2.length) return [];
+  if (opts.searchFirst && mode2 === "ask") {
+    const note = `look for another copy with your web search first (ingest it with "citeUrl" set to this page), then \`ultrasearch human --run ${dir}\` for what is still walled`;
+    return candidates2.map((c) => ({ ...c, outcome: "skipped", note }));
+  }
   let answer;
   if (mode2 === "ask") {
     opts.tell(
@@ -21328,7 +21432,7 @@ var TOOLS = [
         backend: {
           type: "string",
           enum: BACKEND_ENUM,
-          description: "Which backend to query. There is no default: a general web sweep is what ultrasearch_gather does, and picking one here is the point of this tool. Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web."
+          description: "Which backend to query. There is no default: a general web sweep is what ultrasearch_gather does, and picking one here is the point of this tool. Use stackexchange/github/hackernews for a bug, arxiv/openalex/pubmed/crossref/zenodo for research, wikipedia for a definition, duckduckgo/mojeek/marginalia for the open web."
         },
         lang: langProp,
         max_sources: { type: "number", description: "Cap on results returned (default 10)." },
@@ -22934,6 +23038,7 @@ function gatherReport(r, options) {
   const ignored = ignoredByExplicitBackends(options);
   const under = r.manifest.coverage?.under ?? [];
   const offTopicIds = r.sources.filter((s) => s.offTopic).map((s) => s.id);
+  const worklist = webSearchWorklist(r.dir, r.sources, r.manifest, { stdout: !!options.stdout });
   const needHuman = options.stdout ? 0 : humanCandidates(r.sources, r.manifest).length;
   const ws = r.manifest.webSearch;
   const laneLine = ws?.supplied ? `  websearch: ${ws.supplied} hit(s) supplied \u2192 ${ws.kept} kept${ws.rejected ? ` (${ws.rejected} rejected)` : ""}` : `  websearch: none supplied \u2014 pass your own hits with --web-results <f.json> for the strongest lane`;
@@ -22951,6 +23056,7 @@ function gatherReport(r, options) {
       ...offTopicIds.length ? [
         `  offtopic: ${offTopicIds.slice(0, 8).join(", ")}${offTopicIds.length > 8 ? ", \u2026" : ""} \u2014 probably unrelated` + (options.stdout ? "" : `; clear them: ultrasearch drop --run ${r.dir} --where offtopic`)
       ] : [],
+      ...worklist.length ? [`  walled:   ${worklist[0]}`, ...worklist.slice(1).map((l) => `            ${l}`)] : [],
       ...needHuman ? [`  human:    ${needHuman} page(s) need a human: ultrasearch human --run ${r.dir}`] : [],
       // What the mode's extras found (the codes to try, for deals), up front.
       ...extraSummaries(r.sources, r.manifest).flatMap((s) => s.lines),
@@ -23090,6 +23196,15 @@ function rootOf(raw, defaultRun2) {
 }
 var say = (line) => void process.stderr.write(`${line}
 `);
+function sayWalled(dir, refused) {
+  const [head, ...rest] = webSearchHint(dir, refused);
+  if (head) {
+    say(`ultrasearch: ${head}`);
+    for (const l of rest) say(`  ${l}`);
+  }
+  const hint = humanHint(dir);
+  if (hint) say(`ultrasearch: ${hint}`);
+}
 async function dispatch2(p) {
   switch (p.command) {
     case "gather": {
@@ -23107,7 +23222,12 @@ async function dispatch2(p) {
       }
       let r = await runGather(options);
       if (!options.stdout) {
-        const handed = await handOffDuringRun(r.dir, { browser: options.browser ?? "off", firecrawl: options.firecrawl, tell: say });
+        const handed = await handOffDuringRun(r.dir, {
+          browser: options.browser ?? "off",
+          firecrawl: options.firecrawl,
+          tell: say,
+          searchFirst: !!options.webResults?.length
+        });
         if (handed.some((h) => h.outcome === "repaired")) r = { ...r, ...readDossier(r.dir) };
       }
       const report = gatherReport(r, options);
@@ -23408,6 +23528,7 @@ ${formatServices(rows)}
         browser,
         firecrawl: p.values.firecrawl,
         tell: say,
+        searchFirst: true,
         ...refused ? { refused: [refused] } : {}
       });
       const mine = handed.find((h) => h.url === url && (h.outcome === "added" || h.outcome === "repaired"));
@@ -23428,9 +23549,7 @@ ${formatServices(rows)}
         if (r.id) process.stdout.write(`${r.id}
 `);
       }
-      const fetchHint = humanHint(resolve9(dir));
-      if (fetchHint) process.stderr.write(`ultrasearch: ${fetchHint}
-`);
+      sayWalled(resolve9(dir), refused && !mine ? [refused] : []);
       if (!r.id) await exitClosed(1);
       return;
     }
@@ -23468,7 +23587,13 @@ ${formatServices(rows)}
       const web = hits.length ? await addSources(resolve9(dir), hits, enrichOpts) : void 0;
       const local2 = files.length ? await addFiles(resolve9(dir), files, enrichOpts) : void 0;
       const refused = (web?.results ?? []).flatMap((o) => o.added || o.repaired ? [] : refusedForChallenge(o.url, o.note) ?? []);
-      const handed = await handOffDuringRun(resolve9(dir), { browser: enrichOpts.browser, firecrawl: enrichOpts.firecrawl, tell: say, refused });
+      const handed = await handOffDuringRun(resolve9(dir), {
+        browser: enrichOpts.browser,
+        firecrawl: enrichOpts.firecrawl,
+        tell: say,
+        refused,
+        searchFirst: true
+      });
       const results = [...web?.results ?? [], ...local2?.results ?? []].map((o) => {
         const h = handed.find((x) => x.url === o.url && (x.outcome === "added" || x.outcome === "repaired"));
         if (!h || o.added || o.repaired) return o;
@@ -23503,9 +23628,10 @@ ${formatServices(rows)}
         process.stderr.write(`ultrasearch: ingested ${r.added} source(s)${fixed}, skipped ${r.skipped} of ${r.results.length} ${what} \u2192 ${resolve9(dir)}
 `);
       }
-      const ingestHint = humanHint(resolve9(dir));
-      if (ingestHint) process.stderr.write(`ultrasearch: ${ingestHint}
-`);
+      sayWalled(
+        resolve9(dir),
+        refused.filter((c) => !handed.some((h) => h.url === c.url && (h.outcome === "added" || h.outcome === "repaired")))
+      );
       if (!r.added && !repaired) await exitClosed(1);
       return;
     }
