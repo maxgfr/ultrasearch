@@ -12756,7 +12756,7 @@ configure({
 });
 
 // src/types.ts
-var VERSION = "1.46.2";
+var VERSION = "1.47.0";
 var ALL_BACKENDS = [
   "searxng",
   "firecrawl",

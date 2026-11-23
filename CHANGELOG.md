@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the [Conventional Commits](https://www.conventionalcommits.org/) by [semantic-release](https://github.com/semantic-release/semantic-release).
 
+# [1.47.0](https://github.com/maxgfr/ultrasearch/compare/v1.46.2...v1.47.0) (2026-11-23)
+
+
+### Features
+
+* **backends:** add zenodo, and search the web before asking a human ([ae628e4](https://github.com/maxgfr/ultrasearch/commit/ae628e4ff735ca464c704705fe9a25cb87e3f3d0))
+
 ## [1.46.2](https://github.com/maxgfr/ultrasearch/compare/v1.46.1...v1.46.2) (2026-11-11)
 
 
